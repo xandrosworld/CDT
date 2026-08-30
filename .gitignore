@@ -1,0 +1,64 @@
+# Secrets and local environments
+.env
+.env.*
+!.env.example
+.venv*/
+venv/
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime data, logs, backups and generated files
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.log
+tdp_system/data/
+tdp_system/uploads/
+tdp_system/exports/
+tdp_system/backups/
+tdp_system/static/generated/
+
+# Build and portable artifacts
+build/
+dist/
+build_portable/
+BAN_PC_TDP/
+*.exe
+*.zip
+*.spec
+
+# Customer source files and commercial documents
+_HANDOFF/
+bosung.30.8.26/
+hoadon/
+HOP_DONG_BAO_GIA_*/
+demo_tdp/
+*.xlsx
+*.xls
+*.docx
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.mp4
+transcript*.txt
+BIEN_BAN_CHOT_YEU_CAU_*.md
+KICH_BAN_DEMO_*.txt
+YEU_CAU_MSMI_OPENAPI.txt
+requirements_transcribe.txt
+transcribe_recording.py
+TAO_TRANSCRIPT.bat
+MO_DEMO_TDP.bat
+
+# Office temporary files and OS/editor metadata
+~$*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
