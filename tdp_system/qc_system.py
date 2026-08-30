@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from shutil import rmtree
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
@@ -24,6 +24,32 @@ def clean_test_db(path: Path):
             target.unlink()
 
 
+def mapping_workbook_bytes(headers, rows, header_row=3, sheet_name="Mapping"):
+    workbook = Workbook()
+    notes = workbook.active
+    notes.title = "Hướng dẫn"
+    notes["A1"] = "Sheet này không phải dữ liệu"
+    sheet = workbook.create_sheet(sheet_name)
+    sheet.cell(header_row - 1, 1, "Danh sách khách xác nhận")
+    for column, header in enumerate(headers, start=1):
+        sheet.cell(header_row, column, header)
+    for row_index, values in enumerate(rows, start=header_row + 1):
+        for column, value in enumerate(values, start=1):
+            sheet.cell(row_index, column, value)
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()
+
+
+def preview_mapping(client, mapping_type, payload, filename="mapping.xlsx"):
+    return client.post(
+        "/api/mappings/import/preview",
+        data={"mapping_type": mapping_type, "file": (io.BytesIO(payload), filename)},
+        content_type="multipart/form-data",
+    )
+
+
 def main():
     qc_db = APP_DIR / "data" / "qc_test.sqlite3"
     clean_test_db(qc_db)
@@ -36,6 +62,159 @@ def main():
     bootstrap = client.get("/api/bootstrap").get_json()
     assert bootstrap["master"]["product_count"] >= 800
     assert len(bootstrap["master"]["kitchens"]) >= 20
+
+    with server.db() as conn:
+        mapping_products = [dict(row) for row in conn.execute(
+            """SELECT code,name FROM products
+               WHERE code!='I000060' AND name IN (
+                   SELECT name FROM products WHERE trim(name)!='' GROUP BY name HAVING COUNT(*)=1
+               ) ORDER BY code LIMIT 4"""
+        )]
+        mapping_kitchens = [dict(row) for row in conn.execute(
+            """SELECT code,name FROM kitchens
+               WHERE code!='POT' AND trim(COALESCE(name,''))!='' AND name IN (
+                   SELECT name FROM kitchens WHERE trim(COALESCE(name,''))!='' GROUP BY name HAVING COUNT(*)=1
+               ) ORDER BY code LIMIT 2"""
+        )]
+    assert len(mapping_products) == 4 and len(mapping_kitchens) == 2
+
+    invoice_mapping_file = mapping_workbook_bytes(
+        ["Mã hàng", "Tên Thành Đạt Phát", "Tên xuất hóa đơn"],
+        [
+            [mapping_products[0]["code"], "", "TÊN HÓA ĐƠN QC 01"],
+            ["", mapping_products[1]["name"], "Tên hóa đơn QC 02"],
+            [mapping_products[0]["code"], "", "TÊN HÓA ĐƠN QC 01"],
+        ],
+        header_row=3,
+        sheet_name="Tên đầu ra",
+    )
+    mapping_preview = preview_mapping(client, "invoice_names", invoice_mapping_file)
+    assert mapping_preview.status_code == 200, mapping_preview.get_data(as_text=True)
+    mapping_preview_data = mapping_preview.get_json()
+    assert mapping_preview_data["sheet"] == "Tên đầu ra"
+    assert mapping_preview_data["header_row"] == 3
+    assert mapping_preview_data["can_confirm"] is True
+    assert mapping_preview_data["counts"] == {
+        "total": 3, "new": 2, "update": 0, "unchanged": 0, "duplicate": 1, "error": 0,
+    }
+    no_confirmation = client.post(
+        "/api/mappings/import/confirm", json={"token": mapping_preview_data["token"]}
+    )
+    assert no_confirmation.status_code == 400
+    mapping_confirm = client.post(
+        "/api/mappings/import/confirm",
+        json={"token": mapping_preview_data["token"], "confirmed": True},
+    )
+    assert mapping_confirm.status_code == 200, mapping_confirm.get_data(as_text=True)
+    assert mapping_confirm.get_json()["inserted"] == 2
+    assert mapping_confirm.get_json()["processed"] == 2
+    assert client.post(
+        "/api/mappings/import/confirm",
+        json={"token": mapping_preview_data["token"], "confirmed": True},
+    ).status_code == 410
+
+    mapping_repeat = preview_mapping(client, "invoice_names", invoice_mapping_file).get_json()
+    assert mapping_repeat["counts"]["unchanged"] == 2 and mapping_repeat["counts"]["duplicate"] == 1
+    mapping_repeat_confirm = client.post(
+        "/api/mappings/import/confirm", json={"token": mapping_repeat["token"], "confirmed": True}
+    )
+    assert mapping_repeat_confirm.status_code == 200
+    assert mapping_repeat_confirm.get_json()["unchanged"] == 2
+
+    update_mapping_file = mapping_workbook_bytes(
+        ["Mã HH", "Tên XHĐ"],
+        [[mapping_products[0]["code"], "TÊN HÓA ĐƠN QC 01 - ĐÃ SỬA"]],
+    )
+    update_preview = preview_mapping(client, "invoice_names", update_mapping_file).get_json()
+    assert update_preview["can_confirm"] is True and update_preview["counts"]["update"] == 1
+    update_confirm = client.post(
+        "/api/mappings/import/confirm", json={"token": update_preview["token"], "confirmed": True}
+    )
+    assert update_confirm.status_code == 200 and update_confirm.get_json()["updated"] == 1
+
+    invalid_mapping_file = mapping_workbook_bytes(
+        ["Mã SP", "Tên xuất hóa đơn"],
+        [
+            [mapping_products[2]["code"], "DÒNG HỢP LỆ KHÔNG ĐƯỢC GHI DỞ"],
+            ["MA-KHONG-TON-TAI", "DÒNG LỖI"],
+        ],
+    )
+    invalid_preview_response = preview_mapping(client, "invoice_names", invalid_mapping_file)
+    assert invalid_preview_response.status_code == 200
+    invalid_preview = invalid_preview_response.get_json()
+    assert invalid_preview["can_confirm"] is False and invalid_preview["counts"]["error"] == 1
+    assert client.post(
+        "/api/mappings/import/confirm",
+        json={"token": invalid_preview["token"], "confirmed": True},
+    ).status_code == 400
+    with server.db() as conn:
+        assert not conn.execute(
+            "SELECT 1 FROM outgoing_product_names WHERE product_code=?", (mapping_products[2]["code"],)
+        ).fetchone(), "Không được ghi một phần khi file còn lỗi"
+
+    conflict_mapping_file = mapping_workbook_bytes(
+        ["Mã vật tư", "Invoice name"],
+        [
+            [mapping_products[2]["code"], "TÊN A"],
+            [mapping_products[2]["code"], "TÊN B"],
+        ],
+    )
+    conflict_preview = preview_mapping(client, "invoice_names", conflict_mapping_file).get_json()
+    assert conflict_preview["can_confirm"] is False and conflict_preview["counts"]["error"] == 2
+
+    kitchen_mapping_file = mapping_workbook_bytes(
+        ["Tên bếp", "Mã bếp", "Unit"],
+        [
+            [mapping_kitchens[0]["name"], "", "UNIT-QC-01"],
+            ["", mapping_kitchens[1]["code"], "unit-qc-02"],
+            [mapping_kitchens[0]["name"], "", "UNIT-QC-01"],
+        ],
+        sheet_name="Bếp - Unit",
+    )
+    kitchen_preview_response = preview_mapping(client, "kitchen_units", kitchen_mapping_file)
+    assert kitchen_preview_response.status_code == 200, kitchen_preview_response.get_data(as_text=True)
+    kitchen_preview = kitchen_preview_response.get_json()
+    assert kitchen_preview["can_confirm"] is True and kitchen_preview["counts"]["duplicate"] == 1
+    kitchen_confirm = client.post(
+        "/api/mappings/import/confirm", json={"token": kitchen_preview["token"], "confirmed": True}
+    )
+    assert kitchen_confirm.status_code == 200 and kitchen_confirm.get_json()["inserted"] == 2
+    kitchen_list = client.get("/api/mappings/kitchen_units").get_json()["items"]
+    assert any(item["code"] == mapping_kitchens[1]["code"] and item["target_value"] == "UNIT-QC-02" for item in kitchen_list)
+
+    # Force a catalogue change between preview and confirmation to prove the SQL transaction rolls back.
+    with server.db() as conn:
+        conn.execute("INSERT INTO products(code,name) VALUES('QC-MAP-A','Hàng tạm QC A')")
+        conn.execute("INSERT INTO products(code,name) VALUES('QC-MAP-B','Hàng tạm QC B')")
+    rollback_file = mapping_workbook_bytes(
+        ["Mã hàng", "Tên hóa đơn"],
+        [["QC-MAP-A", "Tên tạm A"], ["QC-MAP-B", "Tên tạm B"]],
+    )
+    rollback_preview = preview_mapping(client, "invoice_names", rollback_file).get_json()
+    assert rollback_preview["can_confirm"] is True
+    with server.db() as conn:
+        conn.execute("DELETE FROM products WHERE code='QC-MAP-B'")
+    rollback_confirm = client.post(
+        "/api/mappings/import/confirm", json={"token": rollback_preview["token"], "confirmed": True}
+    )
+    assert rollback_confirm.status_code == 409
+    with server.db() as conn:
+        assert not conn.execute(
+            "SELECT 1 FROM outgoing_product_names WHERE product_code='QC-MAP-A'"
+        ).fetchone(), "Transaction phải rollback toàn bộ nếu danh mục thay đổi giữa chừng"
+        conn.execute("DELETE FROM products WHERE code IN ('QC-MAP-A','QC-MAP-B')")
+        batch_audits = conn.execute(
+            "SELECT COUNT(*) count FROM audit_log WHERE event_type='mapping.bulk_import' AND status='ok'"
+        ).fetchone()["count"]
+    assert batch_audits == 4
+    print("MAPPING_IMPORT", json.dumps({
+        "invoice": mapping_confirm.get_json(),
+        "repeat": mapping_repeat_confirm.get_json(),
+        "update": update_confirm.get_json(),
+        "kitchen": kitchen_confirm.get_json(),
+        "invalidBlocked": True,
+        "rollbackVerified": True,
+    }, ensure_ascii=False, indent=2))
 
     master_source = ROOT / "Em Thành.xlsx"
     with master_source.open("rb") as handle:

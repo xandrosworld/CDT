@@ -906,6 +906,12 @@ def api_bootstrap():
             "kitchens": rows_dict(conn.execute("SELECT * FROM kitchens ORDER BY code")),
             "suppliers": rows_dict(conn.execute("SELECT * FROM suppliers ORDER BY code")),
             "product_count": conn.execute("SELECT COUNT(*) n FROM products").fetchone()["n"],
+            "outgoing_name_count": conn.execute("SELECT COUNT(*) n FROM outgoing_product_names").fetchone()["n"],
+            "outgoing_names": rows_dict(conn.execute(
+                """SELECT m.product_code,p.name source_name,m.invoice_name,m.updated_at
+                   FROM outgoing_product_names m JOIN products p ON p.code=m.product_code
+                   ORDER BY m.updated_at DESC,m.product_code LIMIT 100"""
+            )),
             "settings": {row["key"]: row["value"] for row in conn.execute("SELECT * FROM settings")},
         }
         payload["payments"] = rows_dict(conn.execute("SELECT * FROM payments ORDER BY payment_date DESC,id DESC LIMIT 100"))

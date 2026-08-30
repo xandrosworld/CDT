@@ -5,7 +5,11 @@ import json
 import os
 import re
 import subprocess
+import threading
+import time
 import unicodedata
+import uuid
+import zipfile
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -276,6 +280,45 @@ CREATE TABLE IF NOT EXISTS print_jobs (
 """
 
 
+MAPPING_IMPORT_MAX_BYTES = 10 * 1024 * 1024
+MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+MAPPING_IMPORT_MAX_ROWS = 10_000
+MAPPING_IMPORT_TTL_SECONDS = 30 * 60
+PENDING_MAPPING_IMPORTS = {}
+MAPPING_IMPORT_LOCK = threading.Lock()
+
+MAPPING_ALIASES = {
+    "invoice_names": {
+        "product_code": {
+            "mahang", "mahanghoa", "mahh", "mavt", "mavattu", "mavattutdp", "masp",
+            "masanpham", "matdp", "masptdp", "mahhtdp",
+            "productcode", "itemcode", "code",
+        },
+        "product_name": {
+            "tenhang", "tenhanghoa", "tenhanghoatdp", "tenhh", "tenvattu", "tensp",
+            "tensanpham", "tentdp", "tenthanhdatphat", "tentrenphanmem", "tenhientai",
+            "tengoc", "productname", "itemname",
+        },
+        "target_value": {
+            "tenxuathoadon", "tenxuathd", "tenxhd", "tenhoadon", "tenhd", "tendaura",
+            "tenhangxuathoadon", "tenhanghoaxuathoadon", "tenhangxhd", "tenhanghoadon",
+            "tenchuanhoadon", "invoicename",
+        },
+    },
+    "kitchen_units": {
+        "source_code": {
+            "mabep", "bep", "kitchen", "kitchencode", "code",
+        },
+        "source_name": {
+            "tenbep", "tennhabep", "kitchenname",
+        },
+        "target_value": {
+            "unit", "maunit", "unitcode", "donvi", "donvigop", "nhomunit",
+        },
+    },
+}
+
+
 def ensure_column(conn, table: str, name: str, definition: str):
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
     if name not in columns:
@@ -351,6 +394,221 @@ def audit(conn, now_iso, event_type: str, status: str, message: str = "", entity
         (event_type, entity_type, str(entity_id or ""), status, message,
          json.dumps(metadata or {}, ensure_ascii=False), now_iso()),
     )
+
+
+def mapping_key(value) -> str:
+    text = str(value or "").strip().lower().replace("đ", "d")
+    text = "".join(
+        char for char in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(char)
+    )
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def mapping_cell_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return re.sub(r"\s+", " ", str(value).strip())
+
+
+def mapping_header_fields(row, mapping_type: str) -> dict:
+    aliases = MAPPING_ALIASES[mapping_type]
+    found = {}
+    for column_index, value in enumerate(row, start=1):
+        key = mapping_key(value)
+        if not key:
+            continue
+        for field_name, accepted in aliases.items():
+            if field_name not in found and key in accepted:
+                found[field_name] = column_index
+                break
+    return found
+
+
+def mapping_header_is_valid(fields: dict, mapping_type: str) -> bool:
+    if "target_value" not in fields:
+        return False
+    if mapping_type == "invoice_names":
+        return "product_code" in fields or "product_name" in fields
+    return "source_code" in fields or "source_name" in fields
+
+
+def find_mapping_sheet(workbook, mapping_type: str):
+    candidates = []
+    for sheet_index, worksheet in enumerate(workbook.worksheets):
+        for row_index, row in enumerate(
+            worksheet.iter_rows(min_row=1, max_row=25, max_col=30, values_only=True),
+            start=1,
+        ):
+            fields = mapping_header_fields(row, mapping_type)
+            if mapping_header_is_valid(fields, mapping_type):
+                candidates.append((len(fields), -sheet_index, -row_index, worksheet, row_index, fields))
+    if not candidates:
+        return None
+    _, _, _, worksheet, row_index, fields = max(candidates, key=lambda item: item[:3])
+    return worksheet, row_index, fields
+
+
+def mapping_catalog(conn, mapping_type: str) -> dict:
+    if mapping_type == "invoice_names":
+        rows = [dict(row) for row in conn.execute("SELECT code,name FROM products ORDER BY code")]
+    else:
+        rows = [dict(row) for row in conn.execute("SELECT code,name FROM kitchens ORDER BY code")]
+    by_code = {mapping_cell_text(row["code"]).upper(): row for row in rows}
+    by_name = defaultdict(list)
+    for row in rows:
+        name_key = mapping_key(row.get("name"))
+        if name_key:
+            by_name[name_key].append(row)
+    return {"by_code": by_code, "by_name": by_name}
+
+
+def resolve_mapping_source(raw_code: str, raw_name: str, catalog: dict) -> tuple[dict | None, list, list]:
+    warnings = []
+    errors = []
+    code = mapping_cell_text(raw_code).upper()
+    name = mapping_cell_text(raw_name)
+    resolved = catalog["by_code"].get(code) if code else None
+    if resolved:
+        if name and mapping_key(name) != mapping_key(resolved.get("name")):
+            warnings.append("Tên trong file khác danh mục; hệ thống dùng mã để ghép")
+        return resolved, warnings, errors
+
+    lookup_name = name or (raw_code if code else "")
+    matches = catalog["by_name"].get(mapping_key(lookup_name), []) if lookup_name else []
+    if len(matches) == 1:
+        if code:
+            warnings.append(f"Mã/giá trị {code} chưa có trong danh mục; hệ thống ghép theo tên")
+        return matches[0], warnings, errors
+    if len(matches) > 1:
+        errors.append("Tên nguồn trùng nhiều mã trong danh mục; cần bổ sung mã")
+    elif code:
+        errors.append(f"Mã {code} chưa có trong danh mục")
+    elif name:
+        errors.append("Tên nguồn chưa khớp danh mục")
+    else:
+        errors.append("Thiếu mã hoặc tên nguồn")
+    return None, warnings, errors
+
+
+def parse_mapping_workbook(conn, workbook, mapping_type: str) -> dict:
+    found = find_mapping_sheet(workbook, mapping_type)
+    if not found:
+        expected = "Mã/Tên hàng và Tên xuất hóa đơn" if mapping_type == "invoice_names" else "Mã/Tên bếp và Unit"
+        raise ValueError(f"Không tìm thấy dòng tiêu đề có {expected}")
+    worksheet, header_row, fields = found
+    catalog = mapping_catalog(conn, mapping_type)
+    existing_table = "outgoing_product_names" if mapping_type == "invoice_names" else "kitchen_units"
+    existing_key = "product_code" if mapping_type == "invoice_names" else "kitchen_code"
+    existing_value = "invoice_name" if mapping_type == "invoice_names" else "unit_code"
+    existing = {
+        row[existing_key]: row[existing_value]
+        for row in conn.execute(f"SELECT {existing_key},{existing_value} FROM {existing_table}")
+    }
+    source_code_field = "product_code" if mapping_type == "invoice_names" else "source_code"
+    source_name_field = "product_name" if mapping_type == "invoice_names" else "source_name"
+    rows = []
+    seen = {}
+    scanned = 0
+    for row_index, row in enumerate(
+        worksheet.iter_rows(
+            min_row=header_row + 1,
+            max_row=header_row + MAPPING_IMPORT_MAX_ROWS + 1,
+            max_col=max(fields.values()),
+            values_only=True,
+        ),
+        start=header_row + 1,
+    ):
+        raw_code = mapping_cell_text(row[fields[source_code_field] - 1]) if source_code_field in fields else ""
+        raw_name = mapping_cell_text(row[fields[source_name_field] - 1]) if source_name_field in fields else ""
+        target = mapping_cell_text(row[fields["target_value"] - 1])
+        if not raw_code and not raw_name and not target:
+            continue
+        if mapping_key(target) in MAPPING_ALIASES[mapping_type]["target_value"]:
+            continue
+        scanned += 1
+        item = {
+            "source_row": row_index,
+            "source_code": raw_code,
+            "source_name": raw_name,
+            "resolved_code": "",
+            "resolved_name": "",
+            "target_value": target.upper() if mapping_type == "kitchen_units" else target,
+            "current_value": "",
+            "status": "error",
+            "warnings": [],
+            "errors": [],
+            "apply": False,
+        }
+        if not target:
+            item["errors"].append("Thiếu giá trị cần nhập")
+        resolved, warnings, errors = resolve_mapping_source(raw_code, raw_name, catalog)
+        item["warnings"].extend(warnings)
+        item["errors"].extend(errors)
+        if resolved:
+            code = mapping_cell_text(resolved["code"]).upper()
+            item["resolved_code"] = code
+            item["resolved_name"] = mapping_cell_text(resolved.get("name"))
+            item["current_value"] = mapping_cell_text(existing.get(code))
+        if item["errors"]:
+            rows.append(item)
+            continue
+
+        code = item["resolved_code"]
+        target_compare = mapping_key(item["target_value"])
+        previous = seen.get(code)
+        if previous:
+            if mapping_key(previous["target_value"]) == target_compare:
+                item["status"] = "duplicate"
+                item["warnings"].append(f"Trùng nội dung với dòng {previous['source_row']}; chỉ nhập một lần")
+                previous["warnings"].append(f"Có dòng trùng {row_index}; chỉ nhập một lần")
+            else:
+                message = f"Cùng mã nhưng khác giá trị với dòng {previous['source_row']}"
+                item["errors"].append(message)
+                item["status"] = "error"
+                previous["errors"].append(f"Cùng mã nhưng khác giá trị với dòng {row_index}")
+                previous["status"] = "error"
+                previous["apply"] = False
+            rows.append(item)
+            continue
+
+        seen[code] = item
+        if not item["current_value"]:
+            item["status"] = "new"
+        elif mapping_key(item["current_value"]) == target_compare:
+            item["status"] = "unchanged"
+        else:
+            item["status"] = "update"
+            item["warnings"].append("Sẽ thay giá trị đang lưu sau khi xác nhận")
+        item["apply"] = True
+        rows.append(item)
+
+    if scanned > MAPPING_IMPORT_MAX_ROWS:
+        raise ValueError(f"File vượt quá giới hạn {MAPPING_IMPORT_MAX_ROWS:,} dòng dữ liệu")
+    if not rows:
+        raise ValueError("Sheet được nhận diện nhưng không có dòng dữ liệu")
+
+    counts = {
+        "total": len(rows),
+        "new": sum(item["status"] == "new" for item in rows),
+        "update": sum(item["status"] == "update" for item in rows),
+        "unchanged": sum(item["status"] == "unchanged" for item in rows),
+        "duplicate": sum(item["status"] == "duplicate" for item in rows),
+        "error": sum(bool(item["errors"]) for item in rows),
+    }
+    return {
+        "sheet": worksheet.title,
+        "header_row": header_row,
+        "rows": rows,
+        "items": [
+            {"code": item["resolved_code"], "target_value": item["target_value"]}
+            for item in rows if item["apply"] and not item["errors"]
+        ],
+        "counts": counts,
+        "can_confirm": counts["error"] == 0,
+    }
 
 
 def net_received(order) -> float:
@@ -731,6 +989,156 @@ def register_contract_routes(app, ctx):
                 (item["id"],),
             )]
         return invoices
+
+    @app.post("/api/mappings/import/preview")
+    def api_mapping_import_preview():
+        mapping_type = clean_text(request.form.get("mapping_type"))
+        if mapping_type not in MAPPING_ALIASES:
+            return jsonify({"ok": False, "error": "Loại dữ liệu mapping không hợp lệ"}), 400
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file Excel"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file .xlsx hoặc .xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                expanded_size = sum(item.file_size for item in entries)
+                if len(entries) > 2_000 or expanded_size > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                    return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn để đọc an toàn"}), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with MAPPING_IMPORT_LOCK:
+            for old_token, item in list(PENDING_MAPPING_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_MAPPING_IMPORTS.pop(old_token, None)
+        workbook = None
+        try:
+            workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True, keep_links=False)
+            with db_factory() as conn:
+                preview = parse_mapping_workbook(conn, workbook, mapping_type)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Không đọc được file Excel; vui lòng kiểm tra lại file"}), 400
+        finally:
+            if workbook is not None:
+                workbook.close()
+
+        token = uuid.uuid4().hex
+        pending = {
+            "created": time.time(),
+            "mapping_type": mapping_type,
+            "filename": filename,
+            "sheet": preview["sheet"],
+            "header_row": preview["header_row"],
+            "items": preview.pop("items"),
+            "counts": preview["counts"],
+            "has_errors": not preview["can_confirm"],
+        }
+        with MAPPING_IMPORT_LOCK:
+            PENDING_MAPPING_IMPORTS[token] = pending
+        return jsonify({
+            "ok": True,
+            "token": token,
+            "mapping_type": mapping_type,
+            "filename": filename,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            **preview,
+        })
+
+    @app.post("/api/mappings/import/confirm")
+    def api_mapping_import_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi dữ liệu"}), 400
+        token = clean_text(body.get("token"))
+        with MAPPING_IMPORT_LOCK:
+            pending = PENDING_MAPPING_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file"}), 410
+        if pending["has_errors"]:
+            return jsonify({"ok": False, "error": "File còn dòng lỗi nên chưa thể nhập"}), 400
+
+        mapping_type = pending["mapping_type"]
+        is_invoice = mapping_type == "invoice_names"
+        catalog_table = "products" if is_invoice else "kitchens"
+        mapping_table = "outgoing_product_names" if is_invoice else "kitchen_units"
+        mapping_key_column = "product_code" if is_invoice else "kitchen_code"
+        mapping_value_column = "invoice_name" if is_invoice else "unit_code"
+        inserted = updated = unchanged = 0
+        try:
+            with db_factory() as conn:
+                for item in pending["items"]:
+                    code = item["code"]
+                    target_value = item["target_value"]
+                    if not conn.execute(f"SELECT 1 FROM {catalog_table} WHERE code=?", (code,)).fetchone():
+                        raise ValueError(f"Mã {code} không còn trong danh mục; dữ liệu chưa được ghi")
+                    current = conn.execute(
+                        f"SELECT {mapping_value_column} value FROM {mapping_table} WHERE {mapping_key_column}=?",
+                        (code,),
+                    ).fetchone()
+                    if current and mapping_key(current["value"]) == mapping_key(target_value):
+                        unchanged += 1
+                        continue
+                    if current:
+                        updated += 1
+                    else:
+                        inserted += 1
+                    conn.execute(
+                        f"""INSERT INTO {mapping_table}({mapping_key_column},{mapping_value_column},updated_at)
+                            VALUES(?,?,?) ON CONFLICT({mapping_key_column}) DO UPDATE SET
+                            {mapping_value_column}=excluded.{mapping_value_column},updated_at=excluded.updated_at""",
+                        (code, target_value, now_iso()),
+                    )
+                result_counts = {
+                    "inserted": inserted,
+                    "updated": updated,
+                    "unchanged": unchanged,
+                    "processed": len(pending["items"]),
+                }
+                audit(
+                    conn,
+                    now_iso,
+                    "mapping.bulk_import",
+                    "ok",
+                    entity_type="mapping",
+                    entity_id=mapping_type,
+                    metadata={
+                        "filename": pending["filename"],
+                        "sheet": pending["sheet"],
+                        "header_row": pending["header_row"],
+                        **result_counts,
+                    },
+                )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 409
+        return jsonify({"ok": True, "mapping_type": mapping_type, **result_counts})
+
+    @app.get("/api/mappings/<mapping_type>")
+    def api_mapping_list(mapping_type):
+        with db_factory() as conn:
+            if mapping_type == "invoice_names":
+                rows = [dict(row) for row in conn.execute(
+                    """SELECT m.product_code code,p.name source_name,m.invoice_name target_value,m.updated_at
+                       FROM outgoing_product_names m JOIN products p ON p.code=m.product_code
+                       ORDER BY m.product_code"""
+                )]
+            elif mapping_type == "kitchen_units":
+                rows = [dict(row) for row in conn.execute(
+                    """SELECT m.kitchen_code code,k.name source_name,m.unit_code target_value,m.updated_at
+                       FROM kitchen_units m LEFT JOIN kitchens k ON k.code=m.kitchen_code
+                       ORDER BY m.kitchen_code"""
+                )]
+            else:
+                return jsonify({"ok": False, "error": "Loại dữ liệu mapping không hợp lệ"}), 404
+            return jsonify({"ok": True, "mapping_type": mapping_type, "items": rows})
 
     @app.get("/api/operations/bootstrap")
     def api_operations_bootstrap():

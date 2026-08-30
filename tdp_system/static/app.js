@@ -12,6 +12,8 @@
     quoteMode: "group",
     modalMode: "order",
     pendingImport: null,
+    mappingImportType: "",
+    mappingPreview: null,
     minvoiceStatus: null,
     operations: null,
     supplierNeeds: null,
@@ -43,6 +45,7 @@
   var batchSelect = document.getElementById("batchSelect");
   var excelInput = document.getElementById("excelInput");
   var attendanceInput = document.getElementById("attendanceInput");
+  var mappingFileInput = document.getElementById("mappingFileInput");
   var backdrop = document.getElementById("modalBackdrop");
   var orderForm = document.getElementById("orderForm");
   var toastTimer;
@@ -158,6 +161,36 @@
     return '<div class="stat-card"><div class="stat-head"><span class="label">' + esc(label) +
       '</span><div class="stat-icon">' + icon + '</div></div><span class="value">' + esc(value) +
       '</span><div class="sub">' + esc(sub) + "</div></div>";
+  }
+
+  function mappingPreviewHtml(mappingType) {
+    var preview = state.mappingPreview;
+    if (!preview || preview.mapping_type !== mappingType) return "";
+    var statusNames = { "new": "Thêm mới", "update": "Cập nhật", "unchanged": "Không đổi", "duplicate": "Dòng trùng", "error": "Lỗi" };
+    var visibleRows = preview.rows.slice(0, 200).map(function (item) {
+      var messages = item.errors.concat(item.warnings);
+      var tagClass = item.errors.length ? "tag-red" : item.status === "new" ? "tag-ok" : "tag-warn";
+      return '<tr><td>' + item.source_row + '</td><td><strong>' + esc(item.resolved_code || item.source_code) +
+        '</strong><div class="muted">' + esc(item.resolved_name || item.source_name) + '</div></td><td>' +
+        esc(item.current_value || "—") + '</td><td><strong>' + esc(item.target_value || "—") +
+        '</strong></td><td><span class="tag ' + tagClass + '">' + esc(statusNames[item.status] || item.status) +
+        '</span><div class="muted">' + esc(messages.join(" · ")) + '</div></td></tr>';
+    }).join("");
+    var count = preview.counts;
+    return html([
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước file ', esc(preview.filename),
+      '</h3><p>Sheet ', esc(preview.sheet), ' · tiêu đề dòng ', preview.header_row,
+      ' · dữ liệu chỉ được ghi sau khi xác nhận</p></div><button class="btn btn-small btn-outline" data-action="cancel-mapping-import">Bỏ file</button></div>',
+      '<div class="card-body"><div class="status-bar">', count.total, ' dòng · ', count.new, ' thêm · ', count.update,
+      ' sửa · ', count.unchanged, ' không đổi · ', count.duplicate, ' trùng · ', count.error, ' lỗi</div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>Dòng</th><th>Mã / tên đã ghép</th><th>Đang lưu</th><th>Sẽ lưu</th><th>Kiểm tra</th></tr></thead><tbody>',
+      visibleRows, '</tbody></table></div>',
+      preview.rows.length > 200 ? '<div class="card-body muted">Chỉ hiển thị 200 dòng đầu; toàn bộ file vẫn được kiểm tra.</div>' : '',
+      '<div class="card-body"><div class="form-actions"><button class="btn btn-primary" data-action="confirm-mapping-import" ',
+      preview.can_confirm ? '' : 'disabled', '>Xác nhận nhập dữ liệu</button></div>',
+      preview.can_confirm ? '' : '<div class="code-note"><strong>Chưa thể nhập:</strong> sửa hết dòng lỗi trong Excel rồi chọn lại file.</div>',
+      '</div></div>'
+    ]);
   }
 
   function emptyBatch(title, description) {
@@ -618,6 +651,10 @@
         '</span><strong>' + money(plan.total_cost) + '</strong></div>' +
         (plan.status !== "approved" ? '<button class="btn btn-small btn-primary" data-action="approve-meal-plan" data-id="' + plan.id + '">Duyệt kế hoạch</button>' : '') + '</div>';
     }).join("");
+    var unitRows = o.kitchen_units.map(function (item) {
+      return '<div class="group-line"><div><strong>' + esc(item.kitchen_code) +
+        '</strong></div><strong>' + esc(item.unit_code) + '</strong></div>';
+    }).join("");
     content.innerHTML = html([
       '<div class="toolbar fade-in"><div class="status-bar">Menu → suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → Unit → PO</div>',
       '<div class="compact-controls"><input id="kitchenDate" type="date" value="', esc(state.opsDate), '"><a class="btn btn-primary" href="/api/kitchen/po?date=', encodeURIComponent(state.opsDate), '">Tải PO</a></div></div>',
@@ -630,7 +667,9 @@
       '<div class="form-actions"><button class="btn btn-primary" type="submit">Lưu và tính cost</button></div></form></div></div>',
       '<div class="card"><div class="card-head"><div><h3>Ghép bếp vào Unit</h3><p>Chỉ cần làm một lần, có thể sửa</p></div></div><div class="card-body"><form id="kitchenUnitForm" class="payment-grid">',
       '<div class="form-field"><label>Mã bếp</label><input name="kitchen_code" required></div><div class="form-field"><label>Unit</label><input name="unit_code" required></div>',
-      '<button class="btn btn-outline" type="submit">Lưu mapping</button></form></div></div></div>',
+      '<button class="btn btn-outline" type="submit">Lưu mapping</button><button class="btn btn-primary" type="button" data-action="choose-mapping-file" data-mapping-type="kitchen_units">Nạp danh sách từ Excel</button></form>',
+      '<div class="group-list" style="margin-top:16px">', unitRows || '<div class="muted">Chưa ghép bếp nào vào Unit.</div>', '</div></div></div></div>',
+      mappingPreviewHtml("kitchen_units"),
       '<div class="group-grid" style="margin-top:18px">', cards || '<div class="card"><div class="empty">Ngày này chưa có kế hoạch xưởng cơm.</div></div>', '</div>'
     ]);
   }
@@ -709,6 +748,10 @@
     var minvoiceCard = '<div class="card fade-in" style="margin-bottom:18px"><div class="card-head"><div><h3>' +
       esc(minvoiceTitle) + '</h3><p>' + esc(minvoiceText) + '</p></div><button class="btn btn-primary" data-action="check-minvoice">' +
       (m && m.connected ? "Kiểm tra lại" : "Kiểm tra ngay") + '</button></div></div>';
+    var outgoingRows = (d.master.outgoing_names || []).map(function (item) {
+      return '<div class="group-line"><div><strong>' + esc(item.product_code) + '</strong><span>' +
+        esc(item.source_name) + '</span></div><strong>' + esc(item.invoice_name) + '</strong></div>';
+    }).join("");
     content.innerHTML = html([
       minvoiceCard,
       '<div class="stats-grid fade-in">',
@@ -726,7 +769,11 @@
       '<div class="form-actions"><a class="btn btn-primary" href="/api/backup">Tải bản sao lưu SQLite</a></div></div></div></div>',
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Tên xuất hóa đơn</h3><p>Ghi nhớ tên đầu ra chuẩn theo mã hàng; nếu chưa khai báo sẽ dùng tên danh mục TĐP</p></div></div><div class="card-body">',
       '<form id="outgoingNameForm" class="payment-grid"><div class="form-field"><label>Mã hàng</label><input name="product_code" required></div>',
-      '<div class="form-field span-2"><label>Tên xuất hóa đơn</label><input name="invoice_name" required></div><button class="btn btn-outline" type="submit">Lưu tên đầu ra</button></form></div></div>',
+      '<div class="form-field span-2"><label>Tên xuất hóa đơn</label><input name="invoice_name" required></div><button class="btn btn-outline" type="submit">Lưu tên đầu ra</button>',
+      '<button class="btn btn-primary" type="button" data-action="choose-mapping-file" data-mapping-type="invoice_names">Nạp danh sách từ Excel</button></form>',
+      '<div class="status-bar" style="margin-top:16px">Đã lưu ', num(d.master.outgoing_name_count || 0), ' tên đầu ra</div>',
+      '<div class="group-list" style="margin-top:12px">', outgoingRows || '<div class="muted">Chưa có tên đầu ra riêng; hệ thống đang dùng tên danh mục TĐP.</div>', '</div></div></div>',
+      mappingPreviewHtml("invoice_names"),
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Ranh giới tích hợp</h3><p>Trạng thái kỹ thuật minh bạch</p></div></div>',
       '<div class="card-body"><div class="flow">',
       '<div class="flow-step done"><div class="num">✓</div><div><strong>Excel & dữ liệu vận hành</strong><span>Đã chạy thật: nhập, sửa, lưu, tính và xuất động</span></div></div>',
@@ -1097,6 +1144,49 @@
     } catch (error) { showToast(error.message, true); }
   }
 
+  async function previewMappingFile(file) {
+    if (!file || !state.mappingImportType) return;
+    try {
+      var form = new FormData();
+      form.append("mapping_type", state.mappingImportType);
+      form.append("file", file);
+      state.mappingPreview = await api("/api/mappings/import/preview", { method: "POST", body: form });
+      if (state.mappingImportType === "kitchen_units") renderKitchen();
+      else renderSettings();
+      showToast("Đã kiểm tra file · xem kỹ rồi xác nhận nhập");
+    } catch (error) {
+      state.mappingPreview = null;
+      showToast(error.message, true);
+    }
+  }
+
+  async function confirmMappingImport(button) {
+    var preview = state.mappingPreview;
+    if (!preview || !preview.can_confirm) return;
+    try {
+      button.disabled = true;
+      button.textContent = "Đang ghi dữ liệu…";
+      var result = await api("/api/mappings/import/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: preview.token, confirmed: true })
+      });
+      var mappingType = preview.mapping_type;
+      state.mappingPreview = null;
+      state.mappingImportType = "";
+      if (mappingType === "kitchen_units") {
+        await refreshOperations("Đã nhập " + result.processed + " bếp → Unit");
+      } else {
+        await loadData(state.batchId, true);
+        showToast("Đã nhập " + result.processed + " tên xuất hóa đơn");
+      }
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Xác nhận nhập dữ liệu";
+      showToast(error.message, true);
+    }
+  }
+
   async function jsonWrite(url, method, body, success) {
     try {
       await api(url, { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
@@ -1127,6 +1217,11 @@
     var file = attendanceInput.files[0];
     attendanceInput.value = "";
     importAttendance(file);
+  });
+  mappingFileInput.addEventListener("change", function () {
+    var file = mappingFileInput.files[0];
+    mappingFileInput.value = "";
+    previewMappingFile(file);
   });
   orderForm.addEventListener("submit", saveOrder);
   backdrop.addEventListener("click", function (event) {
@@ -1200,6 +1295,7 @@
           body: JSON.stringify({ invoice_name: outgoingName.invoice_name })
         });
         event.target.reset();
+        await loadData(state.batchId, true);
         showToast("Đã ghi nhớ tên xuất hóa đơn");
       } catch (error) { showToast(error.message, true); }
     }
@@ -1244,6 +1340,18 @@
     if (action === "reload-operations") { state.operations = null; loadOperations(); }
     if (action === "choose-excel") excelInput.click();
     if (action === "choose-attendance") attendanceInput.click();
+    if (action === "choose-mapping-file") {
+      state.mappingImportType = button.dataset.mappingType || "";
+      state.mappingPreview = null;
+      mappingFileInput.click();
+    }
+    if (action === "cancel-mapping-import") {
+      var cancelledType = state.mappingPreview && state.mappingPreview.mapping_type;
+      state.mappingPreview = null;
+      state.mappingImportType = "";
+      if (cancelledType === "kitchen_units") renderKitchen(); else renderSettings();
+    }
+    if (action === "confirm-mapping-import") await confirmMappingImport(button);
     if (action === "new-batch") newBatch();
     if (action === "paste-orders") openPasteModal();
     if (action === "add-order") openOrderModal(null);
