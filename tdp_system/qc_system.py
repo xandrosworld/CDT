@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import sys
 import zipfile
@@ -50,7 +51,7 @@ def preview_mapping(client, mapping_type, payload, filename="mapping.xlsx"):
     )
 
 
-def kitchen_workbook_bytes(product_code="A000047"):
+def kitchen_workbook_bytes(product_code="A000047", duplicate_first=False):
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "T2"
@@ -63,15 +64,25 @@ def kitchen_workbook_bytes(product_code="A000047"):
              100, 1, "Kg", 105000, 105000]
     for column, value in enumerate(first, start=1):
         sheet.cell(5, column, value)
+    next_row = 6
+    if duplicate_first:
+        duplicate = list(first)
+        duplicate[6] = 0.5
+        duplicate[9] = 52500
+        for column, value in enumerate(duplicate, start=1):
+            sheet.cell(next_row, column, value)
+        next_row += 1
     placeholder = ["HATRAN", "-", "VINA", None, None, None, 0, "-", 0, 0]
     for column, value in enumerate(placeholder, start=1):
-        sheet.cell(6, column, value)
-    sheet.cell(7, 5, "CA SÁNG")
-    sheet.cell(7, 6, 4)
+        sheet.cell(next_row, column, value)
+    next_row += 1
+    sheet.cell(next_row, 5, "CA SÁNG")
+    sheet.cell(next_row, 6, 4)
+    next_row += 1
     second = ["HATRAN", "H000007", "MAZDA", "TRỨNG ỐP LA", "Trứng gà CN",
               1000, 8, "Quả", 3000, 24000]
     for column, value in enumerate(second, start=1):
-        sheet.cell(8, column, value)
+        sheet.cell(next_row, column, value)
     output = io.BytesIO()
     workbook.save(output)
     workbook.close()
@@ -516,10 +527,37 @@ def main():
         json={"token": invalid_kitchen_data["token"], "confirmed": True},
     ).status_code == 400
     assert not client.get("/api/kitchen/plans?date=2026-09-03").get_json()["items"]
+    assert preview_kitchen(client, kitchen_file, work_date="2026-02-30").status_code == 400
+    assert preview_kitchen(client, b"not-an-xlsx", work_date="2026-09-03").status_code == 400
+    duplicate_kitchen = preview_kitchen(
+        client, kitchen_workbook_bytes(duplicate_first=True), work_date="2026-09-03"
+    ).get_json()
+    assert duplicate_kitchen["can_confirm"] is False and duplicate_kitchen["counts"]["errors"] == 1
+
+    with server.db() as conn:
+        conn.execute(
+            """INSERT INTO products(code,name,unit,supplier,buy_price)
+               VALUES('QC-XCOM-ROLLBACK','Hàng rollback xưởng cơm','kg','QC',10000)"""
+        )
+    rollback_kitchen = preview_kitchen(
+        client, kitchen_workbook_bytes("QC-XCOM-ROLLBACK"), work_date="2026-09-04"
+    ).get_json()
+    assert rollback_kitchen["can_confirm"] is True
+    with server.db() as conn:
+        conn.execute("DELETE FROM products WHERE code='QC-XCOM-ROLLBACK'")
+    rollback_kitchen_confirm = client.post(
+        "/api/kitchen/import/confirm",
+        json={"token": rollback_kitchen["token"], "confirmed": True},
+    )
+    assert rollback_kitchen_confirm.status_code == 409
+    assert not client.get("/api/kitchen/plans?date=2026-09-04").get_json()["items"]
 
     actual_kitchen_source = ROOT / "_HANDOFF" / "EXTERNAL_INPUTS" / "xưởng cơm.xlsx"
     actual_kitchen_result = "not_present"
     if actual_kitchen_source.exists():
+        assert hashlib.sha256(actual_kitchen_source.read_bytes()).hexdigest().upper() == (
+            "4CCF1957C53DE932EF87EFEAEBBD398A3F45A60161FC04409BC6A471664ACE8B"
+        )
         with actual_kitchen_source.open("rb") as handle:
             actual_preview_response = client.post(
                 "/api/kitchen/import/preview",
@@ -532,8 +570,11 @@ def main():
         assert actual_preview["counts"]["plans"] == 5 and actual_preview["counts"]["items"] == 54
         assert [(plan["kitchen"], plan["xcom_code"], plan["meal_count"]) for plan in actual_preview["plans"]] == [
             ("VINA", "XCOM", 28), ("SUNBY", "XCOM", 32), ("DAINAM", "XCOM", 48),
-            ("MAZDA", "MAZDA", 23), ("TTS", "TTS", 40),
+            ("MAZDA", "MAZDA", 46), ("TTS", "TTS", 40),
         ]
+        mazda_preview = next(plan for plan in actual_preview["plans"] if plan["kitchen"] == "MAZDA")
+        assert mazda_preview["menu_count"] == 2 and mazda_preview["servings_per_menu"] == 23
+        assert mazda_preview["meal_price"] == 35000
         actual_confirm = client.post(
             "/api/kitchen/import/confirm",
             json={"token": actual_preview["token"], "confirmed": True},
@@ -541,7 +582,71 @@ def main():
         assert actual_confirm.status_code == 200 and actual_confirm.get_json()["inserted"] == 5
         actual_plans = client.get("/api/kitchen/plans?date=2026-09-01").get_json()["items"]
         assert len(actual_plans) == 5 and sum(len(plan["items"]) for plan in actual_plans) == 54
-        actual_kitchen_result = "5 plans / 54 items / passed"
+        actual_by_kitchen = {plan["kitchen"]: plan for plan in actual_plans}
+        expected_financials = {
+            "VINA": (28, 30000, 503580, 297962.962962963),
+            "SUNBY": (32, 25000, 488000, 338814.814814815),
+            "DAINAM": (48, 25000, 710880, 502222.222222222),
+            "MAZDA": (46, 35000, 821100, 576538.461538462),
+            "TTS": (40, 40000, 1327640, 190909.090909091),
+        }
+        for kitchen, (meals, price, food_cost, other_cost) in expected_financials.items():
+            plan = actual_by_kitchen[kitchen]
+            assert plan["meal_count"] == meals and plan["meal_price"] == price
+            assert abs(plan["food_cost"] - food_cost) < 0.01
+            assert abs(plan["other_cost"] - other_cost) < 0.01
+            assert abs(plan["revenue"] - meals * price) < 0.01
+            assert abs(plan["total_cost"] - (food_cost + other_cost)) < 0.01
+            assert abs(plan["profit"] - (meals * price - food_cost - other_cost)) < 0.01
+        assert client.put("/api/kitchen-units/VINA", json={"xcom_code": "XCOM-NEW"}).status_code == 200
+        historic_vina = next(
+            plan for plan in client.get("/api/kitchen/plans?date=2026-09-01").get_json()["items"]
+            if plan["kitchen"] == "VINA"
+        )
+        assert historic_vina["mapped_unit"] == "XCOM", "Kế hoạch cũ phải giữ XCOM tại thời điểm nhập"
+        assert client.put("/api/kitchen-units/VINA", json={"xcom_code": "XCOM"}).status_code == 200
+        mazda_items = actual_by_kitchen["MAZDA"]["items"]
+        assert {round(item["applicable_meal_count"]) for item in mazda_items} == {23, 46}
+        assert next(item for item in mazda_items if item["product_code"] == "H000007")["required_qty"] == 46
+
+        actual_po_response = client.get("/api/kitchen/po?date=2026-09-01")
+        assert actual_po_response.status_code == 200 and len(actual_po_response.data) > 1000
+        assert "PO_xuong_com_NHAP_2026-09-01.xlsx" in actual_po_response.headers["Content-Disposition"]
+        actual_po_book = load_workbook(io.BytesIO(actual_po_response.data), data_only=True)
+        assert set(actual_po_book.sheetnames) == {"XCOM", "MAZDA", "TTS"}
+        expected_headers = [
+            "STT", "Bếp / ca", "Mã hàng", "Tên nguyên liệu", "ĐVT", "Suất áp dụng",
+            "Định lượng/1.000 suất", "Số lượng cần", "Đơn giá", "Thành tiền", "NCC", "Nguồn giá",
+        ]
+        po_rows = []
+        for sheet in actual_po_book.worksheets:
+            assert sheet.cell(1, 1).value == "PO XƯỞNG CƠM – BẢN NHÁP"
+            assert [sheet.cell(3, col).value for col in range(1, 13)] == expected_headers
+            assert sheet.cell(2, 4).value == f"XCOM {sheet.title}"
+            row = 4
+            while sheet.cell(row, 1).value is not None:
+                po_rows.append(tuple(sheet.cell(row, col).value for col in range(1, 13)))
+                row += 1
+            assert sheet.cell(row + 1, 1).value == "TỔNG HỢP SUẤT ĂN / COST"
+        actual_po_book.close()
+        assert len(po_rows) == 54
+        assert abs(sum(float(row[9] or 0) for row in po_rows) - 3851200) < 0.01
+        assert all(row[7] and row[8] and row[9] and row[10] and "HATRAN" in row[11] for row in po_rows)
+        with actual_kitchen_source.open("rb") as handle:
+            repeat_actual_response = client.post(
+                "/api/kitchen/import/preview",
+                data={"work_date": "2026-09-01", "file": (handle, "renamed-kitchen-file.xlsx")},
+                content_type="multipart/form-data",
+            )
+        repeat_actual = repeat_actual_response.get_json()
+        assert repeat_actual["counts"]["new"] == 0 and repeat_actual["counts"]["update"] == 5
+        repeat_actual_confirm = client.post(
+            "/api/kitchen/import/confirm",
+            json={"token": repeat_actual["token"], "confirmed": True},
+        )
+        assert repeat_actual_confirm.status_code == 200 and repeat_actual_confirm.get_json()["updated"] == 5
+        assert len(client.get("/api/kitchen/plans?date=2026-09-01").get_json()["items"]) == 5
+        actual_kitchen_result = "5 plans / 54 items / 3 XCOM sheets / financial reconciliation passed"
 
     # Normalized kitchen/menu/cost/XCOM/PO manual flow remains backward compatible.
     assert client.put("/api/kitchen-units/POT", json={"xcom_code": "XCOM-POT"}).status_code == 200
@@ -554,9 +659,31 @@ def main():
     })
     assert meal.status_code == 200, meal.get_data(as_text=True)
     meal_id = meal.get_json()["id"]
+    missing_meal_price = client.post(f"/api/kitchen/plans/{meal_id}/approve")
+    assert missing_meal_price.status_code == 400 and "đơn giá suất ăn" in missing_meal_price.get_json()["error"]
+    meal = client.post("/api/kitchen/plans", json={
+        "id": meal_id, "work_date": "2026-08-30", "kitchen": "POT", "shift": "Trưa",
+        "meal_count": 100, "meal_price": 25000,
+        "items": [{"dish_name": "Canh", "product_code": "I000060", "norm_qty": 0.08}],
+    })
+    assert meal.status_code == 200, meal.get_data(as_text=True)
     assert client.post(f"/api/kitchen/plans/{meal_id}/approve").status_code == 200
     kitchen_po = client.get("/api/kitchen/po?date=2026-08-30")
     assert kitchen_po.status_code == 200 and len(kitchen_po.data) > 1000
+    assert "PO_xuong_com_DA_DUYET_2026-08-30.xlsx" in kitchen_po.headers["Content-Disposition"]
+    approved_po_book = load_workbook(io.BytesIO(kitchen_po.data), data_only=True)
+    assert approved_po_book.active.cell(1, 1).value == "PO XƯỞNG CƠM – ĐÃ DUYỆT"
+    approved_po_book.close()
+    unmapped_plan = client.post("/api/kitchen/plans", json={
+        "work_date": "2026-08-31", "kitchen": "CHUA-GHEP", "shift": "Trưa",
+        "meal_count": 10, "meal_price": 25000,
+        "items": [{"dish_name": "Canh", "product_code": "I000060", "norm_qty": 0.08}],
+    })
+    assert unmapped_plan.status_code == 200
+    unmapped_approval = client.post(
+        f"/api/kitchen/plans/{unmapped_plan.get_json()['id']}/approve"
+    )
+    assert unmapped_approval.status_code == 400 and "XCOM" in unmapped_approval.get_json()["error"]
 
     # Attendance/payroll manual flow and real legacy workbook import.
     assert client.post("/api/staff", json={

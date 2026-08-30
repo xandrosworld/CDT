@@ -342,6 +342,15 @@ def init_contract_schema(conn):
     ensure_column(conn, "meal_plans", "source_sheet", "TEXT")
     ensure_column(conn, "meal_plans", "source_row_start", "INTEGER")
     ensure_column(conn, "meal_plans", "source_row_end", "INTEGER")
+    ensure_column(conn, "meal_plans", "menu_count", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "meal_plans", "servings_per_menu", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "meal_plans", "meal_price", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "meal_plans", "other_cost", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "meal_plans", "source_financials_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "meal_plan_items", "source_norm_per_1000", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "meal_plan_items", "applicable_meal_count", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "meal_plan_items", "source_row", "INTEGER")
+    ensure_column(conn, "meal_plan_items", "source_amount", "REAL NOT NULL DEFAULT 0")
     conn.execute(
         """CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_plan_import_key
            ON meal_plans(import_key) WHERE import_key IS NOT NULL AND import_key!=''"""
@@ -650,6 +659,43 @@ def kitchen_block_name(segment, xcom_code: str) -> str:
     return re.sub(r"^(BẾP|BEP)\s+", "", name, flags=re.IGNORECASE).strip().upper()
 
 
+def kitchen_financials(block_rows) -> dict:
+    result = {
+        "meal_price": 0,
+        "source_revenue": 0,
+        "source_food_cost": 0,
+        "source_total_cost": 0,
+        "source_profit": 0,
+        "other_cost": 0,
+        "components": [],
+        "warnings": [],
+    }
+    for row in block_rows:
+        label = mapping_cell_text(row[10])
+        if not label:
+            continue
+        key = mapping_key(label)
+        raw_value = row[11]
+        value = as_number(raw_value)
+        result["components"].append({"label": label, "value": value if raw_value not in (None, "") else None})
+        if "tientinhcost" in key or key == "suatan":
+            result["meal_price"] = value
+        elif "doanhthu" in key or "tienthukhachhang" in key:
+            result["source_revenue"] = value
+        elif "tienchiphithucpham" in key:
+            result["source_food_cost"] = value
+        elif "tongchi" in key:
+            result["source_total_cost"] = value
+        elif "loinhuan" in key or "costca" in key:
+            result["source_profit"] = value
+        elif any(token in key for token in ("giavi", "matbang", "nhancong", "vanchuyen")) or key.startswith("gachi"):
+            if raw_value in (None, ""):
+                result["warnings"].append(f"{label}: chưa có số tiền")
+            else:
+                result["other_cost"] += value
+    return result
+
+
 def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
     products = {
         row["code"]: dict(row)
@@ -657,6 +703,7 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
     }
     known_kitchens = {row["code"] for row in conn.execute("SELECT code FROM kitchens")}
     plans = []
+    plan_occurrences = Counter()
     for worksheet in workbook.worksheets:
         values = [
             list(row)
@@ -699,7 +746,11 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
             marker = values[marker_row - 1]
             marker_label = mapping_cell_text(marker[4])
             previous_shift = kitchen_shift_label([marker_label], previous_shift)
-            meal_count = as_number(marker[5])
+            servings_per_menu = as_number(marker[5])
+            marker_total = as_number(marker[6])
+            meal_count = marker_total if marker_total >= servings_per_menu > 0 else servings_per_menu
+            ratio = meal_count / servings_per_menu if servings_per_menu > 0 else 1
+            menu_count = max(int(round(ratio)), 1) if abs(ratio - round(ratio)) <= 0.01 else 1
             xcom_counts = Counter(
                 mapping_cell_text(values[row_number - 1][2]).upper() for row_number in run
             )
@@ -718,6 +769,8 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
             plan_warnings = []
             if meal_count <= 0:
                 plan_errors.append("Không tìm thấy số suất của nhóm")
+            if servings_per_menu > 0 and marker_total > 0 and abs(ratio - round(ratio)) > 0.01:
+                plan_warnings.append("Tổng suất không chia hết cho số suất/thực đơn; cần kiểm tra lại")
             if kitchen not in known_kitchens:
                 plan_warnings.append(f"{kitchen}: chưa có trong danh mục bếp; sẽ ghi nhận từ file xưởng cơm")
             if len(xcom_counts) > 1:
@@ -738,8 +791,14 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 formula_required = formula_norm_qty * meal_count
                 required_qty = file_required if file_required > 0 else formula_required
                 norm_qty = required_qty / meal_count if meal_count > 0 else formula_norm_qty
+                applicable_meal_count = (
+                    required_qty * 1000 / norm_raw if norm_raw > 0 and required_qty > 0 else meal_count
+                )
                 price = as_number(row[8])
                 price_group = mapping_cell_text(row[0]).upper()
+                source_amount_raw = row[9]
+                source_amount = as_number(source_amount_raw)
+                calculated_amount = required_qty * price
                 item_errors = []
                 item_warnings = []
                 product = products.get(code)
@@ -752,7 +811,11 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 if price <= 0:
                     item_warnings.append("Thiếu giá nguyên liệu")
                 if file_required > 0 and abs(file_required - formula_required) > max(0.01, formula_required * 0.01):
-                    item_warnings.append("Số lượng cần đã được chỉnh trong file; hệ thống ưu tiên số này và quy đổi lại định lượng/suất")
+                    item_warnings.append("Số lượng áp dụng khác tổng suất (có thể do chia thực đơn); hệ thống giữ đúng số trong file")
+                if calculated_amount > 0 and source_amount_raw in (None, ""):
+                    item_warnings.append("Cột Thành tiền đang trống; hệ thống tự tính Số lượng × Đơn giá")
+                elif source_amount_raw not in (None, "") and abs(source_amount - calculated_amount) > max(1, calculated_amount * 0.001):
+                    item_warnings.append("Thành tiền trong file lệch Số lượng × Đơn giá; hệ thống dùng số tính lại")
                 item = {
                     "source_row": row_number,
                     "product_code": code,
@@ -761,8 +824,11 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                     "dish_name": current_dish,
                     "norm_per_1000": norm_raw,
                     "norm_qty": norm_qty,
+                    "applicable_meal_count": applicable_meal_count,
                     "required_qty": required_qty,
                     "file_required_qty": file_required,
+                    "source_amount": source_amount,
+                    "calculated_amount": calculated_amount,
                     "unit": mapping_cell_text(row[7]) or (product["unit"] if product else ""),
                     "supplier": product["supplier"] if product else "",
                     "buy_price": price,
@@ -774,14 +840,47 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 plan_errors.extend(item_errors)
                 plan_warnings.extend(item_warnings)
 
+            financials = kitchen_financials(values[marker_row:block_end])
+            plan_warnings.extend(financials["warnings"])
+            food_cost = sum(item["calculated_amount"] for item in items)
+            calculated_revenue = meal_count * financials["meal_price"]
+            calculated_total_cost = food_cost + financials["other_cost"]
+            calculated_profit = calculated_revenue - calculated_total_cost
+            if financials["meal_price"] <= 0:
+                plan_warnings.append("Chưa tìm thấy đơn giá suất ăn trong bảng tính cost")
+            if financials["source_revenue"] > 0 and abs(financials["source_revenue"] - calculated_revenue) > 1:
+                plan_warnings.append("Doanh thu trong file lệch Tổng suất × Đơn giá suất")
+            if financials["source_food_cost"] > 0 and abs(financials["source_food_cost"] - food_cost) > 1:
+                plan_warnings.append("Chi phí thực phẩm tổng trong file bị thiếu/cũ; hệ thống đã tính lại từng nguyên liệu")
+            if financials["source_total_cost"] > 0 and abs(financials["source_total_cost"] - calculated_total_cost) > 1:
+                plan_warnings.append("Tổng chi trong file bị thiếu/cũ; hệ thống đã tính lại từ chi tiết")
+            financials.update({
+                "calculated_revenue": calculated_revenue,
+                "calculated_food_cost": food_cost,
+                "calculated_total_cost": calculated_total_cost,
+                "calculated_profit": calculated_profit,
+            })
+            financials["warnings"] = list(dict.fromkeys(
+                warning for warning in plan_warnings
+                if "chưa có trong danh mục bếp" not in warning
+            ))
+            occurrence_key = (kitchen, previous_shift)
+            plan_occurrences[occurrence_key] += 1
             key_source = "|".join([
-                work_date, worksheet.title, str(run_index), kitchen, xcom_code, previous_shift,
+                work_date, kitchen, previous_shift, str(plan_occurrences[occurrence_key]),
             ])
             import_key = hashlib.sha256(key_source.encode("utf-8")).hexdigest()
             existing = conn.execute("SELECT id FROM meal_plans WHERE import_key=?", (import_key,)).fetchone()
+            if not existing:
+                existing = conn.execute(
+                    """SELECT id FROM meal_plans WHERE work_date=? AND kitchen=? AND shift=?
+                       AND COALESCE(source_file,'')!='' ORDER BY id DESC LIMIT 1""",
+                    (work_date, kitchen, previous_shift),
+                ).fetchone()
             dishes = list(dict.fromkeys(item["dish_name"] for item in items if item["dish_name"]))
             plans.append({
                 "import_key": import_key,
+                "existing_id": existing["id"] if existing else None,
                 "status": "update" if existing else "new",
                 "sheet": worksheet.title,
                 "source_row_start": start_row,
@@ -790,6 +889,11 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 "xcom_code": xcom_code,
                 "shift": previous_shift,
                 "meal_count": meal_count,
+                "menu_count": menu_count,
+                "servings_per_menu": servings_per_menu,
+                "meal_price": financials["meal_price"],
+                "other_cost": financials["other_cost"],
+                "source_financials": financials,
                 "menu_name": " · ".join(dishes),
                 "items": items,
                 "errors": list(dict.fromkeys(plan_errors)),
@@ -797,6 +901,15 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
             })
     if not plans:
         raise ValueError("Không tìm thấy bảng xưởng cơm có Nhà thầu, Mã hàng, Mã bếp và định lượng")
+    xcom_by_kitchen = defaultdict(set)
+    for plan in plans:
+        xcom_by_kitchen[plan["kitchen"]].add(plan["xcom_code"])
+    for kitchen, xcom_codes in xcom_by_kitchen.items():
+        if len(xcom_codes) > 1:
+            message = f"Bếp {kitchen} có nhiều mã XCOM trong cùng file: {', '.join(sorted(xcom_codes))}"
+            for plan in plans:
+                if plan["kitchen"] == kitchen:
+                    plan["errors"].append(message)
     counts = {
         "plans": len(plans),
         "items": sum(len(plan["items"]) for plan in plans),
@@ -1413,15 +1526,23 @@ def register_contract_routes(app, ctx):
                     existing = conn.execute(
                         "SELECT id FROM meal_plans WHERE import_key=?", (plan["import_key"],)
                     ).fetchone()
+                    if not existing and plan.get("existing_id"):
+                        existing = conn.execute(
+                            "SELECT id FROM meal_plans WHERE id=?", (plan["existing_id"],)
+                        ).fetchone()
                     if existing:
                         plan_id = existing["id"]
                         conn.execute(
                             """UPDATE meal_plans SET work_date=?,kitchen=?,shift=?,meal_count=?,unit_code=?,
                                status='draft',note=?,source_file=?,source_sheet=?,source_row_start=?,
-                               source_row_end=?,updated_at=? WHERE id=?""",
+                               source_row_end=?,menu_count=?,servings_per_menu=?,meal_price=?,other_cost=?,
+                               source_financials_json=?,import_key=?,updated_at=? WHERE id=?""",
                             (pending["work_date"], plan["kitchen"], plan["shift"], plan["meal_count"],
                              plan["xcom_code"], plan["menu_name"], pending["filename"], plan["sheet"],
-                             plan["source_row_start"], plan["source_row_end"], now_iso(), plan_id),
+                             plan["source_row_start"], plan["source_row_end"], plan["menu_count"],
+                             plan["servings_per_menu"], plan["meal_price"], plan["other_cost"],
+                             json.dumps(plan["source_financials"], ensure_ascii=False), plan["import_key"],
+                             now_iso(), plan_id),
                         )
                         conn.execute("DELETE FROM meal_plan_items WHERE plan_id=?", (plan_id,))
                         updated += 1
@@ -1429,11 +1550,14 @@ def register_contract_routes(app, ctx):
                         cur = conn.execute(
                             """INSERT INTO meal_plans(
                                work_date,kitchen,shift,meal_count,unit_code,status,note,created_at,updated_at,
-                               import_key,source_file,source_sheet,source_row_start,source_row_end
-                               ) VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?)""",
+                               import_key,source_file,source_sheet,source_row_start,source_row_end,menu_count,
+                               servings_per_menu,meal_price,other_cost,source_financials_json
+                               ) VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (pending["work_date"], plan["kitchen"], plan["shift"], plan["meal_count"],
                              plan["xcom_code"], plan["menu_name"], now_iso(), now_iso(), plan["import_key"],
-                             pending["filename"], plan["sheet"], plan["source_row_start"], plan["source_row_end"]),
+                             pending["filename"], plan["sheet"], plan["source_row_start"], plan["source_row_end"],
+                             plan["menu_count"], plan["servings_per_menu"], plan["meal_price"], plan["other_cost"],
+                             json.dumps(plan["source_financials"], ensure_ascii=False)),
                         )
                         plan_id = cur.lastrowid
                         inserted += 1
@@ -1446,11 +1570,13 @@ def register_contract_routes(app, ctx):
                             )
                         conn.execute(
                             """INSERT INTO meal_plan_items(
-                               plan_id,dish_name,product_code,product_name,norm_qty,unit,supplier,buy_price,price_source
-                               ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                               plan_id,dish_name,product_code,product_name,norm_qty,unit,supplier,buy_price,
+                               price_source,source_norm_per_1000,applicable_meal_count,source_row,source_amount
+                               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (plan_id, item["dish_name"], item["product_code"], item["product_name"],
                              item["norm_qty"], item["unit"], item["supplier"], item["buy_price"],
-                             item["price_source"]),
+                             item["price_source"], item["norm_per_1000"], item["applicable_meal_count"],
+                             item["source_row"], item["source_amount"]),
                         )
                         saved_items += 1
                 result_counts = {
@@ -1955,22 +2081,31 @@ def register_contract_routes(app, ctx):
             kitchen = clean_text(body["kitchen"]).upper()
             unit = conn.execute("SELECT unit_code FROM kitchen_units WHERE kitchen_code=?", (kitchen,)).fetchone()
             unit_code = clean_text(body.get("xcom_code") or body.get("unit_code")) or (unit["unit_code"] if unit else "")
+            meal_count = number_value(body.get("meal_count"))
+            menu_count = max(int(number_value(body.get("menu_count"), 1)), 1)
+            servings_per_menu = number_value(body.get("servings_per_menu")) or meal_count / menu_count
+            meal_price = max(number_value(body.get("meal_price")), 0)
+            other_cost = max(number_value(body.get("other_cost")), 0)
             plan_id = int(body.get("id") or 0)
             if plan_id:
                 conn.execute(
                     """UPDATE meal_plans SET work_date=?,kitchen=?,shift=?,meal_count=?,unit_code=?,
-                       status='draft',note=?,updated_at=? WHERE id=?""",
-                    (body["work_date"], kitchen, clean_text(body["shift"]), number_value(body["meal_count"]),
-                     unit_code, clean_text(body.get("note")), now_iso(), plan_id),
+                       menu_count=?,servings_per_menu=?,meal_price=?,other_cost=?,status='draft',note=?,
+                       updated_at=? WHERE id=?""",
+                    (body["work_date"], kitchen, clean_text(body["shift"]), meal_count, unit_code,
+                     menu_count, servings_per_menu, meal_price, other_cost, clean_text(body.get("note")),
+                     now_iso(), plan_id),
                 )
                 conn.execute("DELETE FROM meal_plan_items WHERE plan_id=?", (plan_id,))
             else:
                 cur = conn.execute(
                     """INSERT INTO meal_plans(
-                        work_date,kitchen,shift,meal_count,unit_code,status,note,created_at,updated_at
-                    ) VALUES(?,?,?,?,?,'draft',?,?,?)""",
-                    (body["work_date"], kitchen, clean_text(body["shift"]), number_value(body["meal_count"]),
-                     unit_code, clean_text(body.get("note")), now_iso(), now_iso()),
+                        work_date,kitchen,shift,meal_count,unit_code,status,note,created_at,updated_at,
+                        menu_count,servings_per_menu,meal_price,other_cost
+                    ) VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?)""",
+                    (body["work_date"], kitchen, clean_text(body["shift"]), meal_count,
+                     unit_code, clean_text(body.get("note")), now_iso(), now_iso(), menu_count,
+                     servings_per_menu, meal_price, other_cost),
                 )
                 plan_id = cur.lastrowid
             period = body["work_date"][:7]
@@ -2001,11 +2136,14 @@ def register_contract_routes(app, ctx):
                         warnings.append(f"{code}: chưa có giá HATRAN đúng kỳ {period}")
                 conn.execute(
                     """INSERT INTO meal_plan_items(
-                        plan_id,dish_name,product_code,product_name,norm_qty,unit,supplier,buy_price,price_source
-                    ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                        plan_id,dish_name,product_code,product_name,norm_qty,unit,supplier,buy_price,price_source,
+                        source_norm_per_1000,applicable_meal_count,source_amount
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (plan_id, clean_text(raw.get("dish_name")), code, product["name"],
                      number_value(raw.get("norm_qty")), clean_text(raw.get("unit")) or product["unit"],
-                     clean_text(raw.get("supplier")) or product["supplier"], price, source),
+                     clean_text(raw.get("supplier")) or product["supplier"], price, source,
+                     number_value(raw.get("source_norm_per_1000")) or number_value(raw.get("norm_qty")) * 1000,
+                     number_value(raw.get("applicable_meal_count")) or meal_count, 0),
                 )
                 saved += 1
             audit(conn, now_iso, "kitchen.save_plan", "ok", entity_type="meal_plan", entity_id=plan_id,
@@ -2016,6 +2154,20 @@ def register_contract_routes(app, ctx):
     @app.post("/api/kitchen/plans/<int:plan_id>/approve")
     def api_approve_meal_plan(plan_id):
         with db_factory() as conn:
+            plan = conn.execute(
+                """SELECT mp.*,
+                          COALESCE(NULLIF(mp.unit_code,''),ku.unit_code,'') mapped_unit
+                   FROM meal_plans mp
+                   LEFT JOIN kitchen_units ku ON ku.kitchen_code=mp.kitchen
+                   WHERE mp.id=?""",
+                (plan_id,),
+            ).fetchone()
+            if not plan:
+                return jsonify({"ok": False, "error": "Không tìm thấy kế hoạch xưởng cơm"}), 404
+            if not clean_text(plan["mapped_unit"]):
+                return jsonify({"ok": False, "error": "Phải ghép bếp vào XCOM trước khi duyệt"}), 400
+            if number_value(plan["meal_price"]) <= 0:
+                return jsonify({"ok": False, "error": "Phải có đơn giá suất ăn trước khi duyệt"}), 400
             count = conn.execute("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?", (plan_id,)).fetchone()["n"]
             if count == 0:
                 return jsonify({"ok": False, "error": "Kế hoạch chưa có định lượng nguyên liệu"}), 400
@@ -2035,10 +2187,12 @@ def register_contract_routes(app, ctx):
             if not plans:
                 return jsonify({"ok": False, "error": "Ngày này chưa có kế hoạch xưởng cơm"}), 404
             wb = meal_po_workbook(plans, work_date)
+            approval_label = "DA_DUYET" if all(plan["status"] == "approved" for plan in plans) else "NHAP"
             stream = io.BytesIO()
             wb.save(stream)
             stream.seek(0)
-            return send_file(stream, as_attachment=True, download_name=f"PO_xuong_com_{work_date}.xlsx",
+            return send_file(stream, as_attachment=True,
+                             download_name=f"PO_xuong_com_{approval_label}_{work_date}.xlsx",
                              mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     @app.post("/api/staff")
@@ -2371,7 +2525,7 @@ def meal_plan_payload(conn, work_date=""):
         where = "WHERE mp.work_date=?"
         params.append(work_date)
     plans = [dict(row) for row in conn.execute(
-        f"""SELECT mp.*,COALESCE(ku.unit_code,mp.unit_code,'') mapped_unit
+        f"""SELECT mp.*,COALESCE(NULLIF(mp.unit_code,''),ku.unit_code,'') mapped_unit
              FROM meal_plans mp LEFT JOIN kitchen_units ku ON ku.kitchen_code=mp.kitchen
              {where} ORDER BY mp.work_date DESC,mp.kitchen,mp.shift,mp.id""", params
     )]
@@ -2382,14 +2536,29 @@ def meal_plan_payload(conn, work_date=""):
         for item in items:
             item["required_qty"] = plan["meal_count"] * item["norm_qty"]
             item["cost"] = item["required_qty"] * item["buy_price"]
+            if not item.get("applicable_meal_count"):
+                item["applicable_meal_count"] = plan["meal_count"]
+            if not item.get("source_norm_per_1000"):
+                item["source_norm_per_1000"] = item["norm_qty"] * 1000
         plan["items"] = items
-        plan["total_cost"] = sum(item["cost"] for item in items)
+        plan["food_cost"] = sum(item["cost"] for item in items)
+        plan["revenue"] = plan["meal_count"] * plan.get("meal_price", 0)
+        plan["total_cost"] = plan["food_cost"] + plan.get("other_cost", 0)
+        plan["profit"] = plan["revenue"] - plan["total_cost"]
+        plan["profit_margin"] = plan["profit"] / plan["revenue"] if plan["revenue"] else 0
         plan["cost_per_meal"] = plan["total_cost"] / plan["meal_count"] if plan["meal_count"] else 0
+        try:
+            plan["source_financials"] = json.loads(plan.get("source_financials_json") or "{}")
+        except (TypeError, ValueError):
+            plan["source_financials"] = {}
         plan["warnings"] = []
         if not plan["mapped_unit"]:
             plan["warnings"].append("Bếp chưa được ghép XCOM (xưởng cơm)")
         if any(item["buy_price"] <= 0 for item in items):
             plan["warnings"].append("Có nguyên liệu thiếu giá")
+        if plan.get("meal_price", 0) <= 0:
+            plan["warnings"].append("Chưa có đơn giá suất ăn")
+        plan["warnings"].extend(plan["source_financials"].get("warnings") or [])
     return plans
 
 
@@ -2397,41 +2566,77 @@ def meal_po_workbook(plans, work_date: str):
     groups = defaultdict(list)
     for plan in plans:
         for item in plan["items"]:
-            key = (plan["mapped_unit"] or "CHƯA CÓ XCOM", item["supplier"] or "CHƯA CÓ NCC")
-            groups[key].append((plan, item))
+            groups[plan["mapped_unit"] or "CHƯA CÓ XCOM"].append((plan, item))
     wb = Workbook()
     wb.remove(wb.active)
-    for (unit_code, supplier), rows in sorted(groups.items()):
-        title = re.sub(r"[\\/*?:\[\]]", "-", f"{unit_code}-{supplier}")[:31]
+    for unit_code, rows in sorted(groups.items()):
+        unique_plans = []
+        seen_plans = set()
+        for plan, _ in rows:
+            if plan["id"] not in seen_plans:
+                seen_plans.add(plan["id"])
+                unique_plans.append(plan)
+        approval_label = "ĐÃ DUYỆT" if all(
+            plan["status"] == "approved" for plan in unique_plans
+        ) else "BẢN NHÁP"
+        title = re.sub(r"[\\/*?:\[\]]", "-", unit_code)[:31]
         ws = wb.create_sheet(title or "PO")
-        ws.append(["PO XƯỞNG CƠM"])
-        ws.merge_cells("A1:K1")
+        ws.append([f"PO XƯỞNG CƠM – {approval_label}"])
+        ws.merge_cells("A1:L1")
         ws["A1"].font = Font(name="Arial", size=16, bold=True, color="FFFFFF")
         ws["A1"].fill = PatternFill("solid", fgColor="17324D")
         ws["A1"].alignment = Alignment(horizontal="center")
-        ws.append([f"Ngày {work_date}", "", "", f"XCOM {unit_code}", "", "", "", f"NCC {supplier}"])
+        price_sources = sorted({item["price_source"] for _, item in rows if item.get("price_source")})
+        ws.append([f"Ngày {work_date}", "", "", f"XCOM {unit_code}", "", "", "",
+                   f"Nguồn giá: {', '.join(price_sources)}"])
         for cell in ws[2]:
             cell.font = Font(name="Arial", bold=True)
-        ws.append(["STT", "Bếp / ca", "Mã hàng", "Tên nguyên liệu", "ĐVT", "Số suất", "Định lượng/suất",
-                   "Số lượng cần", "Đơn giá", "Thành tiền", "Nguồn giá"])
+        ws.append(["STT", "Bếp / ca", "Mã hàng", "Tên nguyên liệu", "ĐVT", "Suất áp dụng",
+                   "Định lượng/1.000 suất", "Số lượng cần", "Đơn giá", "Thành tiền", "NCC", "Nguồn giá"])
         for index, (plan, item) in enumerate(rows, 1):
             ws.append([
                 index, f"{plan['kitchen']} / {plan['shift']}", item["product_code"], item["product_name"],
-                item["unit"], plan["meal_count"], item["norm_qty"], item["required_qty"], item["buy_price"],
-                item["cost"], item["price_source"],
+                item["unit"], item["applicable_meal_count"], item["source_norm_per_1000"],
+                item["required_qty"], item["buy_price"], item["cost"], item["supplier"], item["price_source"],
             ])
         for cell in ws[3]:
             cell.font = Font(name="Arial", bold=True, color="FFFFFF")
             cell.fill = PatternFill("solid", fgColor="087F73")
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        detail_end = ws.max_row
+        ws.append([])
+        ws.append(["TỔNG HỢP SUẤT ĂN / COST"])
+        ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=12)
+        ws.cell(ws.max_row, 1).font = Font(name="Arial", bold=True, color="FFFFFF")
+        ws.cell(ws.max_row, 1).fill = PatternFill("solid", fgColor="17324D")
+        ws.cell(ws.max_row, 1).alignment = Alignment(horizontal="center")
+        ws.append(["Bếp / ca", "Số thực đơn", "Suất/thực đơn", "Tổng suất", "Đơn giá suất",
+                   "Doanh thu", "Chi phí thực phẩm", "Chi phí khác", "Tổng chi", "Lợi nhuận",
+                   "Biên lợi nhuận", "Thực đơn"])
+        summary_header = ws.max_row
+        for plan in unique_plans:
+            ws.append([
+                f"{plan['kitchen']} / {plan['shift']}", plan.get("menu_count", 1),
+                plan.get("servings_per_menu") or plan["meal_count"], plan["meal_count"],
+                plan.get("meal_price", 0), plan["revenue"], plan["food_cost"], plan.get("other_cost", 0),
+                plan["total_cost"], plan["profit"], plan["profit_margin"], plan.get("note", ""),
+            ])
+        for cell in ws[summary_header]:
+            cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="087F73")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws.freeze_panes = "A4"
-        ws.auto_filter.ref = f"A3:K{ws.max_row}"
-        widths = [7, 20, 14, 32, 10, 11, 16, 15, 14, 16, 20]
+        ws.auto_filter.ref = f"A3:L{detail_end}"
+        widths = [7, 20, 14, 30, 10, 14, 20, 15, 14, 16, 16, 32]
         for index, width in enumerate(widths, 1):
             ws.column_dimensions[chr(64 + index)].width = width
-        for row in range(4, ws.max_row + 1):
+        for row in range(4, detail_end + 1):
             for col in (9, 10):
                 ws.cell(row, col).number_format = "#,##0"
+        for row in range(summary_header + 1, ws.max_row + 1):
+            for col in range(5, 11):
+                ws.cell(row, col).number_format = "#,##0"
+            ws.cell(row, 11).number_format = "0.0%"
     if not wb.sheetnames:
         wb.create_sheet("PO")
     return wb

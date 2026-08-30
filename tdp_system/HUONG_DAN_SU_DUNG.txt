@@ -26,7 +26,10 @@ XƯỞNG CƠM, CHẤM CÔNG VÀ LƯƠNG
 - Xưởng cơm: ngày/bếp/ca → số suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → XCOM → PO.
 - Để nạp file menu/cost: chọn đúng ngày, bấm “Nạp file xưởng cơm”, kiểm tra từng bếp/ca và số nguyên liệu trên màn hình xem trước rồi mới xác nhận.
 - Hệ thống ưu tiên cột số lượng cần đã chốt trong file; nếu khác công thức định lượng × số suất / 1.000 thì có cảnh báo và tự quy đổi lại định lượng/suất để PO giữ đúng số lượng.
+- Với bếp có nhiều thực đơn, kiểm tra cả số thực đơn, suất/thực đơn và tổng suất. Ví dụ 2 thực đơn × 23 suất được tính là 46 suất tổng.
+- Thành tiền nguyên liệu, doanh thu, tổng chi và lợi nhuận được tính lại từ chi tiết; không lấy nguyên trạng tổng cũ nếu công thức trong file đang trống/lỗi.
 - Ghép bếp → XCOM có thể lưu từng bếp hoặc nạp file Excel có Mã/Tên bếp và XCOM; file cũ ghi tiêu đề Unit vẫn đọc được.
+- PO gộp các bếp cùng XCOM vào một sheet. Khi chưa duyệt, tên file và tiêu đề ghi rõ NHÁP/BẢN NHÁP; phải đủ XCOM, giá suất ăn và giá nguyên liệu mới duyệt được.
 - GIANHAPTAY và YLKHAN dùng giá theo ngày, không tự lấy giá ngày trước.
 - Nạp file chấm công hiện tại để chuẩn hóa ngày công, tăng ca, Chủ nhật và chi phí lao động theo bếp.
 - Bảng lương giữ các công thức lương, BHXH, tạm ứng và điều chỉnh theo tháng.

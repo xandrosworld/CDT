@@ -4,7 +4,7 @@
 
 Danh mục tên xuất hóa đơn và bếp → XCOM (xưởng cơm) hỗ trợ nạp Excel theo hai bước xem trước/xác nhận, ghép theo mã hoặc tên duy nhất, chặn toàn bộ file khi còn lỗi và nhập lại không tạo bản ghi trùng.
 
-Module xưởng cơm nhận trực tiếp file menu/cost của khách: tách bếp/ca, số suất, định lượng, nguyên liệu, giá và XCOM; ưu tiên số lượng cần đã chốt trong file, cho xem trước trước khi ghi và cập nhật đúng kế hoạch khi nạp lại.
+Module xưởng cơm nhận trực tiếp file menu/cost của khách: tách bếp/ca, số thực đơn, suất/thực đơn, tổng suất, định lượng, nguyên liệu, giá suất ăn và XCOM; ưu tiên số lượng cần đã chốt trong file, tự tính lại thành tiền/cost từ chi tiết, cho xem trước trước khi ghi và cập nhật đúng kế hoạch khi nạp lại. PO được gộp theo XCOM, ghi rõ trạng thái nháp/đã duyệt và không cho duyệt kế hoạch khi thiếu XCOM, giá suất ăn hoặc giá nguyên liệu.
 
 ## Chạy source
 

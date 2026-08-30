@@ -200,9 +200,12 @@
     if (!preview) return "";
     var planRows = preview.plans.map(function (plan) {
       var messages = plan.errors.concat(plan.warnings);
+      var servingText = plan.menu_count > 1
+        ? num(plan.meal_count) + ' suất tổng · ' + plan.menu_count + ' thực đơn × ' + num(plan.servings_per_menu) + ' suất'
+        : num(plan.meal_count) + ' suất';
       return '<div class="group-line"><div><strong>' + esc(plan.kitchen) + ' → XCOM ' +
-        esc(plan.xcom_code) + '</strong><span>' + esc(plan.shift) + ' · ' + num(plan.meal_count) +
-        ' suất · dòng ' + plan.source_row_start + '–' + plan.source_row_end + ' · ' +
+        esc(plan.xcom_code) + '</strong><span>' + esc(plan.shift) + ' · ' + servingText +
+        ' · dòng ' + plan.source_row_start + '–' + plan.source_row_end + ' · ' +
         plan.items.length + ' nguyên liệu</span><span>' + esc(plan.menu_name || "Chưa ghi tên món") +
         '</span></div><div><span class="tag ' + (plan.errors.length ? 'tag-red' : 'tag-ok') + '">' +
         (plan.status === "update" ? "Cập nhật" : "Thêm mới") + '</span><div class="muted">' +
@@ -667,6 +670,9 @@
   function renderKitchen() {
     var o = state.operations;
     if (!o) { loadOperations(); return; }
+    var poApproved = o.meal_plans.length && o.meal_plans.every(function (plan) {
+      return plan.status === "approved";
+    });
     var cards = o.meal_plans.map(function (plan) {
       var lines = plan.items.map(function (item) {
         return '<div class="group-line"><div><strong>' + esc(item.product_name) + '</strong><span>' +
@@ -674,12 +680,14 @@
           num(item.required_qty) + ' ' + esc(item.unit) + ' · ' + money(item.cost) + '</strong></div>';
       }).join("");
       return '<div class="group-card"><div class="group-title"><div><strong>' + esc(plan.kitchen) +
-        ' · ' + esc(plan.shift) + '</strong><span>' + num(plan.meal_count) + ' suất · XCOM ' +
+        ' · ' + esc(plan.shift) + '</strong><span>' + num(plan.meal_count) + ' suất tổng' +
+        (plan.menu_count > 1 ? ' · ' + plan.menu_count + ' thực đơn × ' + num(plan.servings_per_menu) : '') + ' · XCOM ' +
         esc(plan.mapped_unit || "CHƯA GHÉP") + '</span></div><span class="tag ' +
         (plan.status === "approved" ? "tag-ok" : plan.warnings.length ? "tag-red" : "tag-warn") + '">' +
         esc(plan.status) + '</span></div><div class="group-list">' + lines +
-        '</div><div class="group-total"><span>Cost / suất ' + money(plan.cost_per_meal) +
-        '</span><strong>' + money(plan.total_cost) + '</strong></div>' +
+        '</div><div class="group-total"><span>Doanh thu ' + money(plan.revenue) + ' · Tổng chi/suất ' + money(plan.cost_per_meal) +
+        '</span><strong>LN ' + money(plan.profit) + '</strong></div>' +
+        (plan.warnings.length ? '<div class="code-note"><strong>Cần kiểm tra:</strong> ' + esc(plan.warnings.join(' · ')) + '</div>' : '') +
         (plan.status !== "approved" ? '<button class="btn btn-small btn-primary" data-action="approve-meal-plan" data-id="' + plan.id + '">Duyệt kế hoạch</button>' : '') + '</div>';
     }).join("");
     var unitRows = o.kitchen_units.map(function (item) {
@@ -688,12 +696,17 @@
     }).join("");
     content.innerHTML = html([
       '<div class="toolbar fade-in"><div class="status-bar">Menu → suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → XCOM → PO</div>',
-      '<div class="compact-controls"><input id="kitchenDate" type="date" value="', esc(state.opsDate), '"><button class="btn btn-outline" data-action="choose-kitchen-workbook">Nạp file xưởng cơm</button><a class="btn btn-primary" href="/api/kitchen/po?date=', encodeURIComponent(state.opsDate), '">Tải PO</a></div></div>',
+      '<div class="compact-controls"><input id="kitchenDate" type="date" value="', esc(state.opsDate), '"><button class="btn btn-outline" data-action="choose-kitchen-workbook">Nạp file xưởng cơm</button><a class="btn btn-primary" href="/api/kitchen/po?date=', encodeURIComponent(state.opsDate), '">',
+      poApproved ? 'Tải PO đã duyệt' : 'Tải PO nháp', '</a></div></div>',
       '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Tạo kế hoạch bếp/ca</h3><p>Mỗi dòng nguyên liệu: mã | định lượng/suất | món | ĐVT | NCC | giá tùy chọn</p></div></div><div class="card-body">',
       '<form id="mealPlanForm"><div class="payment-grid"><div class="form-field"><label>Ngày</label><input name="work_date" type="date" value="', esc(state.opsDate), '" required></div>',
       '<div class="form-field"><label>Mã bếp</label><input name="kitchen" placeholder="POT" required></div>',
       '<div class="form-field"><label>Ca</label><input name="shift" placeholder="Sáng / trưa / chiều" required></div>',
-      '<div class="form-field"><label>Số suất</label><input name="meal_count" type="number" min="1" required></div></div>',
+      '<div class="form-field"><label>Tổng số suất</label><input name="meal_count" type="number" min="1" required></div>',
+      '<div class="form-field"><label>Số thực đơn</label><input name="menu_count" type="number" min="1" value="1"></div>',
+      '<div class="form-field"><label>Suất/thực đơn</label><input name="servings_per_menu" type="number" min="0"></div>',
+      '<div class="form-field"><label>Đơn giá suất ăn</label><input name="meal_price" type="number" min="0"></div>',
+      '<div class="form-field"><label>Chi phí khác</label><input name="other_cost" type="number" min="0"></div></div>',
       '<div class="form-field"><label>Nguyên liệu</label><textarea name="items" style="min-height:180px" placeholder="I000060&#9;0.08&#9;Canh rau&#9;kg&#9;kho&#9;16000"></textarea></div>',
       '<div class="form-actions"><button class="btn btn-primary" type="submit">Lưu và tính cost</button></div></form></div></div>',
       '<div class="card"><div class="card-head"><div><h3>Ghép bếp vào XCOM (xưởng cơm)</h3><p>Chỉ cần làm một lần, có thể sửa</p></div></div><div class="card-body"><form id="kitchenUnitForm" class="payment-grid">',
@@ -1331,6 +1344,10 @@
       event.preventDefault();
       var plan = Object.fromEntries(new FormData(event.target).entries());
       plan.meal_count = n(plan.meal_count);
+      plan.menu_count = n(plan.menu_count) || 1;
+      plan.servings_per_menu = n(plan.servings_per_menu);
+      plan.meal_price = n(plan.meal_price);
+      plan.other_cost = n(plan.other_cost);
       plan.items = String(plan.items || "").split(/\r?\n/).filter(Boolean).map(function (line) {
         var cells = line.split("\t");
         return { product_code: cells[0] || "", norm_qty: n(cells[1]), dish_name: cells[2] || "",
