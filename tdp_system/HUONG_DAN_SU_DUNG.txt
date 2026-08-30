@@ -23,8 +23,10 @@ KHO, CÔNG NỢ VÀ HÓA ĐƠN
 - Công nợ hỗ trợ số dư đầu kỳ, thu/chi, điều chỉnh và xem nhiều kỳ.
 
 XƯỞNG CƠM, CHẤM CÔNG VÀ LƯƠNG
-- Xưởng cơm: ngày/bếp/ca → số suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → Unit → PO.
-- Ghép bếp → Unit có thể lưu từng bếp hoặc nạp file Excel có Mã/Tên bếp và Unit; kiểm tra màn hình xem trước trước khi xác nhận.
+- Xưởng cơm: ngày/bếp/ca → số suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → XCOM → PO.
+- Để nạp file menu/cost: chọn đúng ngày, bấm “Nạp file xưởng cơm”, kiểm tra từng bếp/ca và số nguyên liệu trên màn hình xem trước rồi mới xác nhận.
+- Hệ thống ưu tiên cột số lượng cần đã chốt trong file; nếu khác công thức định lượng × số suất / 1.000 thì có cảnh báo và tự quy đổi lại định lượng/suất để PO giữ đúng số lượng.
+- Ghép bếp → XCOM có thể lưu từng bếp hoặc nạp file Excel có Mã/Tên bếp và XCOM; file cũ ghi tiêu đề Unit vẫn đọc được.
 - GIANHAPTAY và YLKHAN dùng giá theo ngày, không tự lấy giá ngày trước.
 - Nạp file chấm công hiện tại để chuẩn hóa ngày công, tăng ca, Chủ nhật và chi phí lao động theo bếp.
 - Bảng lương giữ các công thức lương, BHXH, tạm ứng và điều chỉnh theo tháng.

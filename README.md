@@ -2,7 +2,9 @@
 
 Ứng dụng Flask/SQLite chạy tại Windows hoặc trong mạng LAN, gồm nhập đơn Excel, đặt NCC sau khi trừ tồn, phiếu giao, kho sổ sách, công nợ, mSMI, dự thảo hóa đơn đầu ra, xưởng cơm/PO, chấm công/lương và luồng duyệt-in.
 
-Danh mục tên xuất hóa đơn và bếp → Unit hỗ trợ nạp Excel theo hai bước xem trước/xác nhận, ghép theo mã hoặc tên duy nhất, chặn toàn bộ file khi còn lỗi và nhập lại không tạo bản ghi trùng.
+Danh mục tên xuất hóa đơn và bếp → XCOM (xưởng cơm) hỗ trợ nạp Excel theo hai bước xem trước/xác nhận, ghép theo mã hoặc tên duy nhất, chặn toàn bộ file khi còn lỗi và nhập lại không tạo bản ghi trùng.
+
+Module xưởng cơm nhận trực tiếp file menu/cost của khách: tách bếp/ca, số suất, định lượng, nguyên liệu, giá và XCOM; ưu tiên số lượng cần đã chốt trong file, cho xem trước trước khi ghi và cập nhật đúng kế hoạch khi nạp lại.
 
 ## Chạy source
 

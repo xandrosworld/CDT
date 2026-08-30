@@ -14,6 +14,7 @@
     pendingImport: null,
     mappingImportType: "",
     mappingPreview: null,
+    kitchenImportPreview: null,
     minvoiceStatus: null,
     operations: null,
     supplierNeeds: null,
@@ -46,6 +47,7 @@
   var excelInput = document.getElementById("excelInput");
   var attendanceInput = document.getElementById("attendanceInput");
   var mappingFileInput = document.getElementById("mappingFileInput");
+  var kitchenWorkbookInput = document.getElementById("kitchenWorkbookInput");
   var backdrop = document.getElementById("modalBackdrop");
   var orderForm = document.getElementById("orderForm");
   var toastTimer;
@@ -189,6 +191,35 @@
       '<div class="card-body"><div class="form-actions"><button class="btn btn-primary" data-action="confirm-mapping-import" ',
       preview.can_confirm ? '' : 'disabled', '>Xác nhận nhập dữ liệu</button></div>',
       preview.can_confirm ? '' : '<div class="code-note"><strong>Chưa thể nhập:</strong> sửa hết dòng lỗi trong Excel rồi chọn lại file.</div>',
+      '</div></div>'
+    ]);
+  }
+
+  function kitchenImportPreviewHtml() {
+    var preview = state.kitchenImportPreview;
+    if (!preview) return "";
+    var planRows = preview.plans.map(function (plan) {
+      var messages = plan.errors.concat(plan.warnings);
+      return '<div class="group-line"><div><strong>' + esc(plan.kitchen) + ' → XCOM ' +
+        esc(plan.xcom_code) + '</strong><span>' + esc(plan.shift) + ' · ' + num(plan.meal_count) +
+        ' suất · dòng ' + plan.source_row_start + '–' + plan.source_row_end + ' · ' +
+        plan.items.length + ' nguyên liệu</span><span>' + esc(plan.menu_name || "Chưa ghi tên món") +
+        '</span></div><div><span class="tag ' + (plan.errors.length ? 'tag-red' : 'tag-ok') + '">' +
+        (plan.status === "update" ? "Cập nhật" : "Thêm mới") + '</span><div class="muted">' +
+        esc(messages.join(" · ")) + '</div></div></div>';
+    }).join("");
+    var count = preview.counts;
+    return html([
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước file ',
+      esc(preview.filename), '</h3><p>Ngày ', dateVN(preview.work_date),
+      ' · chỉ ghi dữ liệu sau khi xác nhận</p></div><button class="btn btn-small btn-outline" data-action="cancel-kitchen-import">Bỏ file</button></div>',
+      '<div class="card-body"><div class="status-bar">', count.plans, ' nhóm bếp/ca · ', count.items,
+      ' nguyên liệu · ', count.new, ' thêm · ', count.update, ' cập nhật · ', count.errors,
+      ' nhóm lỗi · ', count.warnings, ' nhóm cần lưu ý</div><div class="group-list" style="margin-top:16px">',
+      planRows, '</div><div class="form-actions"><button class="btn btn-primary" data-action="confirm-kitchen-import" ',
+      preview.can_confirm ? '' : 'disabled', '>Xác nhận nạp file xưởng cơm</button></div>',
+      preview.can_confirm ? '<div class="code-note"><strong>Kiểm soát:</strong> file có cảnh báo vẫn được nhập; hệ thống ưu tiên số lượng cần đã chốt trong file và không tạo trùng khi nạp lại.</div>' :
+        '<div class="code-note"><strong>Chưa thể nhập:</strong> bổ sung các mã hàng còn thiếu trong danh mục rồi chọn lại file.</div>',
       '</div></div>'
     ]);
   }
@@ -643,7 +674,7 @@
           num(item.required_qty) + ' ' + esc(item.unit) + ' · ' + money(item.cost) + '</strong></div>';
       }).join("");
       return '<div class="group-card"><div class="group-title"><div><strong>' + esc(plan.kitchen) +
-        ' · ' + esc(plan.shift) + '</strong><span>' + num(plan.meal_count) + ' suất · Unit ' +
+        ' · ' + esc(plan.shift) + '</strong><span>' + num(plan.meal_count) + ' suất · XCOM ' +
         esc(plan.mapped_unit || "CHƯA GHÉP") + '</span></div><span class="tag ' +
         (plan.status === "approved" ? "tag-ok" : plan.warnings.length ? "tag-red" : "tag-warn") + '">' +
         esc(plan.status) + '</span></div><div class="group-list">' + lines +
@@ -656,8 +687,8 @@
         '</strong></div><strong>' + esc(item.unit_code) + '</strong></div>';
     }).join("");
     content.innerHTML = html([
-      '<div class="toolbar fade-in"><div class="status-bar">Menu → suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → Unit → PO</div>',
-      '<div class="compact-controls"><input id="kitchenDate" type="date" value="', esc(state.opsDate), '"><a class="btn btn-primary" href="/api/kitchen/po?date=', encodeURIComponent(state.opsDate), '">Tải PO</a></div></div>',
+      '<div class="toolbar fade-in"><div class="status-bar">Menu → suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → XCOM → PO</div>',
+      '<div class="compact-controls"><input id="kitchenDate" type="date" value="', esc(state.opsDate), '"><button class="btn btn-outline" data-action="choose-kitchen-workbook">Nạp file xưởng cơm</button><a class="btn btn-primary" href="/api/kitchen/po?date=', encodeURIComponent(state.opsDate), '">Tải PO</a></div></div>',
       '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Tạo kế hoạch bếp/ca</h3><p>Mỗi dòng nguyên liệu: mã | định lượng/suất | món | ĐVT | NCC | giá tùy chọn</p></div></div><div class="card-body">',
       '<form id="mealPlanForm"><div class="payment-grid"><div class="form-field"><label>Ngày</label><input name="work_date" type="date" value="', esc(state.opsDate), '" required></div>',
       '<div class="form-field"><label>Mã bếp</label><input name="kitchen" placeholder="POT" required></div>',
@@ -665,11 +696,12 @@
       '<div class="form-field"><label>Số suất</label><input name="meal_count" type="number" min="1" required></div></div>',
       '<div class="form-field"><label>Nguyên liệu</label><textarea name="items" style="min-height:180px" placeholder="I000060&#9;0.08&#9;Canh rau&#9;kg&#9;kho&#9;16000"></textarea></div>',
       '<div class="form-actions"><button class="btn btn-primary" type="submit">Lưu và tính cost</button></div></form></div></div>',
-      '<div class="card"><div class="card-head"><div><h3>Ghép bếp vào Unit</h3><p>Chỉ cần làm một lần, có thể sửa</p></div></div><div class="card-body"><form id="kitchenUnitForm" class="payment-grid">',
-      '<div class="form-field"><label>Mã bếp</label><input name="kitchen_code" required></div><div class="form-field"><label>Unit</label><input name="unit_code" required></div>',
-      '<button class="btn btn-outline" type="submit">Lưu mapping</button><button class="btn btn-primary" type="button" data-action="choose-mapping-file" data-mapping-type="kitchen_units">Nạp danh sách từ Excel</button></form>',
-      '<div class="group-list" style="margin-top:16px">', unitRows || '<div class="muted">Chưa ghép bếp nào vào Unit.</div>', '</div></div></div></div>',
+      '<div class="card"><div class="card-head"><div><h3>Ghép bếp vào XCOM (xưởng cơm)</h3><p>Chỉ cần làm một lần, có thể sửa</p></div></div><div class="card-body"><form id="kitchenUnitForm" class="payment-grid">',
+      '<div class="form-field"><label>Mã bếp</label><input name="kitchen_code" required></div><div class="form-field"><label>Mã XCOM</label><input name="unit_code" required></div>',
+      '<button class="btn btn-outline" type="submit">Lưu mapping</button><button class="btn btn-primary" type="button" data-action="choose-mapping-file" data-mapping-type="kitchen_units">Nạp danh sách bếp → XCOM</button></form>',
+      '<div class="group-list" style="margin-top:16px">', unitRows || '<div class="muted">Chưa ghép bếp nào vào XCOM.</div>', '</div></div></div></div>',
       mappingPreviewHtml("kitchen_units"),
+      kitchenImportPreviewHtml(),
       '<div class="group-grid" style="margin-top:18px">', cards || '<div class="card"><div class="empty">Ngày này chưa có kế hoạch xưởng cơm.</div></div>', '</div>'
     ]);
   }
@@ -1175,7 +1207,7 @@
       state.mappingPreview = null;
       state.mappingImportType = "";
       if (mappingType === "kitchen_units") {
-        await refreshOperations("Đã nhập " + result.processed + " bếp → Unit");
+        await refreshOperations("Đã nhập " + result.processed + " bếp → XCOM");
       } else {
         await loadData(state.batchId, true);
         showToast("Đã nhập " + result.processed + " tên xuất hóa đơn");
@@ -1183,6 +1215,41 @@
     } catch (error) {
       button.disabled = false;
       button.textContent = "Xác nhận nhập dữ liệu";
+      showToast(error.message, true);
+    }
+  }
+
+  async function previewKitchenWorkbook(file) {
+    if (!file) return;
+    try {
+      var form = new FormData();
+      form.append("work_date", state.opsDate);
+      form.append("file", file);
+      state.kitchenImportPreview = await api("/api/kitchen/import/preview", { method: "POST", body: form });
+      renderKitchen();
+      showToast("Đã kiểm tra file xưởng cơm · xem kỹ rồi xác nhận nhập");
+    } catch (error) {
+      state.kitchenImportPreview = null;
+      showToast(error.message, true);
+    }
+  }
+
+  async function confirmKitchenImport(button) {
+    var preview = state.kitchenImportPreview;
+    if (!preview || !preview.can_confirm) return;
+    try {
+      button.disabled = true;
+      button.textContent = "Đang ghi dữ liệu…";
+      var result = await api("/api/kitchen/import/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: preview.token, confirmed: true })
+      });
+      state.kitchenImportPreview = null;
+      await refreshOperations("Đã nạp " + (result.inserted + result.updated) + " nhóm xưởng cơm và " + result.items + " nguyên liệu");
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Xác nhận nạp file xưởng cơm";
       showToast(error.message, true);
     }
   }
@@ -1223,6 +1290,11 @@
     mappingFileInput.value = "";
     previewMappingFile(file);
   });
+  kitchenWorkbookInput.addEventListener("change", function () {
+    var file = kitchenWorkbookInput.files[0];
+    kitchenWorkbookInput.value = "";
+    previewKitchenWorkbook(file);
+  });
   orderForm.addEventListener("submit", saveOrder);
   backdrop.addEventListener("click", function (event) {
     if (event.target === backdrop) closeModal();
@@ -1253,7 +1325,7 @@
     if (event.target.id === "kitchenUnitForm") {
       event.preventDefault();
       var unit = Object.fromEntries(new FormData(event.target).entries());
-      jsonWrite("/api/kitchen-units/" + encodeURIComponent(unit.kitchen_code), "PUT", { unit_code: unit.unit_code }, "Đã ghép bếp vào Unit");
+      jsonWrite("/api/kitchen-units/" + encodeURIComponent(unit.kitchen_code), "PUT", { xcom_code: unit.unit_code }, "Đã ghép bếp vào XCOM");
     }
     if (event.target.id === "mealPlanForm") {
       event.preventDefault();
@@ -1320,6 +1392,7 @@
     if (event.target.id === "inventoryDate" || event.target.id === "kitchenDate") {
       state.opsDate = event.target.value;
       state.opsMonth = state.opsDate.slice(0, 7);
+      if (event.target.id === "kitchenDate") state.kitchenImportPreview = null;
       state.operations = null;
       loadOperations();
     }
@@ -1345,6 +1418,15 @@
       state.mappingPreview = null;
       mappingFileInput.click();
     }
+    if (action === "choose-kitchen-workbook") {
+      state.kitchenImportPreview = null;
+      kitchenWorkbookInput.click();
+    }
+    if (action === "cancel-kitchen-import") {
+      state.kitchenImportPreview = null;
+      renderKitchen();
+    }
+    if (action === "confirm-kitchen-import") await confirmKitchenImport(button);
     if (action === "cancel-mapping-import") {
       var cancelledType = state.mappingPreview && state.mappingPreview.mapping_type;
       state.mappingPreview = null;

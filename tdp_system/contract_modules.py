@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import re
@@ -10,7 +11,7 @@ import time
 import unicodedata
 import uuid
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -286,6 +287,8 @@ MAPPING_IMPORT_MAX_ROWS = 10_000
 MAPPING_IMPORT_TTL_SECONDS = 30 * 60
 PENDING_MAPPING_IMPORTS = {}
 MAPPING_IMPORT_LOCK = threading.Lock()
+PENDING_KITCHEN_IMPORTS = {}
+KITCHEN_IMPORT_LOCK = threading.Lock()
 
 MAPPING_ALIASES = {
     "invoice_names": {
@@ -314,6 +317,7 @@ MAPPING_ALIASES = {
         },
         "target_value": {
             "unit", "maunit", "unitcode", "donvi", "donvigop", "nhomunit",
+            "xcom", "maxcom", "xuongcom", "maxuongcom", "xcomxuongcom",
         },
     },
 }
@@ -333,6 +337,15 @@ def init_contract_schema(conn):
     ensure_column(conn, "payroll_adjustments", "gross_override", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "payroll_adjustments", "net_override", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "payroll_adjustments", "use_override", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "meal_plans", "import_key", "TEXT")
+    ensure_column(conn, "meal_plans", "source_file", "TEXT")
+    ensure_column(conn, "meal_plans", "source_sheet", "TEXT")
+    ensure_column(conn, "meal_plans", "source_row_start", "INTEGER")
+    ensure_column(conn, "meal_plans", "source_row_end", "INTEGER")
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_plan_import_key
+           ON meal_plans(import_key) WHERE import_key IS NOT NULL AND import_key!=''"""
+    )
     defaults = {
         "tenant_code": "TDP",
         "printer_name": "",
@@ -496,7 +509,7 @@ def resolve_mapping_source(raw_code: str, raw_name: str, catalog: dict) -> tuple
 def parse_mapping_workbook(conn, workbook, mapping_type: str) -> dict:
     found = find_mapping_sheet(workbook, mapping_type)
     if not found:
-        expected = "Mã/Tên hàng và Tên xuất hóa đơn" if mapping_type == "invoice_names" else "Mã/Tên bếp và Unit"
+        expected = "Mã/Tên hàng và Tên xuất hóa đơn" if mapping_type == "invoice_names" else "Mã/Tên bếp và XCOM (xưởng cơm)"
         raise ValueError(f"Không tìm thấy dòng tiêu đề có {expected}")
     worksheet, header_row, fields = found
     catalog = mapping_catalog(conn, mapping_type)
@@ -609,6 +622,190 @@ def parse_mapping_workbook(conn, workbook, mapping_type: str) -> dict:
         "counts": counts,
         "can_confirm": counts["error"] == 0,
     }
+
+
+def kitchen_shift_label(values, previous="Ca sáng") -> str:
+    for value in values:
+        key = mapping_key(value)
+        if "cachieu" in key:
+            return "Ca chiều"
+        if "catrua" in key:
+            return "Ca trưa"
+        if "cadem" in key:
+            return "Ca đêm"
+        if "casang" in key:
+            return "Ca sáng"
+    return previous or "Ca sáng"
+
+
+def kitchen_block_name(segment, xcom_code: str) -> str:
+    ignored = ("sosuat", "casang", "cachieu", "catrua", "cadem", "mahang", "mabep", "nhathau")
+    candidates = []
+    for row in segment:
+        value = mapping_cell_text(row[4])
+        key = mapping_key(value)
+        if value and not any(token in key for token in ignored):
+            candidates.append(value)
+    name = candidates[-1] if candidates else xcom_code
+    return re.sub(r"^(BẾP|BEP)\s+", "", name, flags=re.IGNORECASE).strip().upper()
+
+
+def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
+    products = {
+        row["code"]: dict(row)
+        for row in conn.execute("SELECT code,name,unit,supplier FROM products")
+    }
+    known_kitchens = {row["code"] for row in conn.execute("SELECT code FROM kitchens")}
+    plans = []
+    for worksheet in workbook.worksheets:
+        values = [
+            list(row)
+            for row in worksheet.iter_rows(
+                min_row=1,
+                max_row=min(worksheet.max_row or 0, 2_000),
+                max_col=13,
+                values_only=True,
+            )
+        ]
+        header_row = 0
+        for index, row in enumerate(values, start=1):
+            if mapping_key(row[0]) == "nhathau" and mapping_key(row[1]) in {"mahang", "mavt", "masp"} and mapping_key(row[2]) == "mabep":
+                header_row = index
+                break
+        if not header_row:
+            continue
+
+        markers = [header_row]
+        for row_number in range(header_row + 1, len(values) + 1):
+            row = values[row_number - 1]
+            code = mapping_cell_text(row[1]).upper()
+            label = mapping_cell_text(row[4])
+            if (not code or code == "-") and label and as_number(row[5]) > 0:
+                markers.append(row_number)
+
+        previous_shift = "Ca sáng"
+        for run_index, marker_row in enumerate(markers, start=1):
+            block_end = (markers[run_index] - 1) if run_index < len(markers) else len(values)
+            run = []
+            for row_number in range(marker_row + 1, block_end + 1):
+                row = values[row_number - 1]
+                code = mapping_cell_text(row[1]).upper()
+                xcom = mapping_cell_text(row[2]).upper()
+                if code and code != "-" and xcom and as_number(row[5]) > 0:
+                    run.append(row_number)
+            if not run:
+                continue
+            start_row, end_row = run[0], run[-1]
+            marker = values[marker_row - 1]
+            marker_label = mapping_cell_text(marker[4])
+            previous_shift = kitchen_shift_label([marker_label], previous_shift)
+            meal_count = as_number(marker[5])
+            xcom_counts = Counter(
+                mapping_cell_text(values[row_number - 1][2]).upper() for row_number in run
+            )
+            xcom_code = xcom_counts.most_common(1)[0][0]
+            marker_key = mapping_key(marker_label)
+            if marker_label and not any(token in marker_key for token in (
+                "sosuat", "casang", "cachieu", "catrua", "cadem", "mahang", "mabep", "nhathau",
+            )):
+                kitchen = re.sub(r"^(BẾP|BEP)\s+", "", marker_label, flags=re.IGNORECASE).strip().upper()
+            elif xcom_code and xcom_code != "XCOM":
+                kitchen = xcom_code
+            else:
+                segment = values[max(0, marker_row - 2):marker_row - 1]
+                kitchen = kitchen_block_name(segment, xcom_code)
+            plan_errors = []
+            plan_warnings = []
+            if meal_count <= 0:
+                plan_errors.append("Không tìm thấy số suất của nhóm")
+            if kitchen not in known_kitchens:
+                plan_warnings.append(f"{kitchen}: chưa có trong danh mục bếp; sẽ ghi nhận từ file xưởng cơm")
+            if len(xcom_counts) > 1:
+                plan_errors.append("Một nhóm có nhiều mã XCOM khác nhau")
+
+            items = []
+            current_dish = ""
+            seen_item_keys = set()
+            for row_number in run:
+                row = values[row_number - 1]
+                code = mapping_cell_text(row[1]).upper()
+                dish = mapping_cell_text(row[3])
+                if dish:
+                    current_dish = dish
+                norm_raw = as_number(row[5])
+                file_required = as_number(row[6])
+                formula_norm_qty = norm_raw / 1000
+                formula_required = formula_norm_qty * meal_count
+                required_qty = file_required if file_required > 0 else formula_required
+                norm_qty = required_qty / meal_count if meal_count > 0 else formula_norm_qty
+                price = as_number(row[8])
+                price_group = mapping_cell_text(row[0]).upper()
+                item_errors = []
+                item_warnings = []
+                product = products.get(code)
+                if not product:
+                    item_errors.append(f"Mã {code} chưa có trong danh mục")
+                item_key = (mapping_key(current_dish), code)
+                if item_key in seen_item_keys:
+                    item_errors.append(f"Mã {code} bị lặp trong cùng món {current_dish or '(chưa có tên)'}")
+                seen_item_keys.add(item_key)
+                if price <= 0:
+                    item_warnings.append("Thiếu giá nguyên liệu")
+                if file_required > 0 and abs(file_required - formula_required) > max(0.01, formula_required * 0.01):
+                    item_warnings.append("Số lượng cần đã được chỉnh trong file; hệ thống ưu tiên số này và quy đổi lại định lượng/suất")
+                item = {
+                    "source_row": row_number,
+                    "product_code": code,
+                    "source_name": mapping_cell_text(row[4]),
+                    "product_name": product["name"] if product else mapping_cell_text(row[4]),
+                    "dish_name": current_dish,
+                    "norm_per_1000": norm_raw,
+                    "norm_qty": norm_qty,
+                    "required_qty": required_qty,
+                    "file_required_qty": file_required,
+                    "unit": mapping_cell_text(row[7]) or (product["unit"] if product else ""),
+                    "supplier": product["supplier"] if product else "",
+                    "buy_price": price,
+                    "price_source": f"{price_group} · File xưởng cơm" if price_group else "File xưởng cơm",
+                    "errors": item_errors,
+                    "warnings": item_warnings,
+                }
+                items.append(item)
+                plan_errors.extend(item_errors)
+                plan_warnings.extend(item_warnings)
+
+            key_source = "|".join([
+                work_date, worksheet.title, str(run_index), kitchen, xcom_code, previous_shift,
+            ])
+            import_key = hashlib.sha256(key_source.encode("utf-8")).hexdigest()
+            existing = conn.execute("SELECT id FROM meal_plans WHERE import_key=?", (import_key,)).fetchone()
+            dishes = list(dict.fromkeys(item["dish_name"] for item in items if item["dish_name"]))
+            plans.append({
+                "import_key": import_key,
+                "status": "update" if existing else "new",
+                "sheet": worksheet.title,
+                "source_row_start": start_row,
+                "source_row_end": end_row,
+                "kitchen": kitchen,
+                "xcom_code": xcom_code,
+                "shift": previous_shift,
+                "meal_count": meal_count,
+                "menu_name": " · ".join(dishes),
+                "items": items,
+                "errors": list(dict.fromkeys(plan_errors)),
+                "warnings": list(dict.fromkeys(plan_warnings)),
+            })
+    if not plans:
+        raise ValueError("Không tìm thấy bảng xưởng cơm có Nhà thầu, Mã hàng, Mã bếp và định lượng")
+    counts = {
+        "plans": len(plans),
+        "items": sum(len(plan["items"]) for plan in plans),
+        "new": sum(plan["status"] == "new" for plan in plans),
+        "update": sum(plan["status"] == "update" for plan in plans),
+        "errors": sum(bool(plan["errors"]) for plan in plans),
+        "warnings": sum(bool(plan["warnings"]) for plan in plans),
+    }
+    return {"plans": plans, "counts": counts, "can_confirm": counts["errors"] == 0}
 
 
 def net_received(order) -> float:
@@ -1121,6 +1318,162 @@ def register_contract_routes(app, ctx):
             return jsonify({"ok": False, "error": str(exc)}), 409
         return jsonify({"ok": True, "mapping_type": mapping_type, **result_counts})
 
+    @app.post("/api/kitchen/import/preview")
+    def api_kitchen_import_preview():
+        work_date = clean_text(request.form.get("work_date"))
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", work_date):
+            return jsonify({"ok": False, "error": "Ngày xưởng cơm phải có dạng YYYY-MM-DD"}), 400
+        try:
+            datetime.strptime(work_date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"ok": False, "error": "Ngày xưởng cơm không hợp lệ"}), 400
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file xưởng cơm"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file .xlsx hoặc .xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                expanded_size = sum(item.file_size for item in entries)
+                if len(entries) > 2_000 or expanded_size > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                    return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn để đọc an toàn"}), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with KITCHEN_IMPORT_LOCK:
+            for old_token, item in list(PENDING_KITCHEN_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_KITCHEN_IMPORTS.pop(old_token, None)
+        workbook = None
+        try:
+            workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True, keep_links=False)
+            with db_factory() as conn:
+                preview = parse_kitchen_workbook(conn, workbook, work_date)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Không đọc được file xưởng cơm; vui lòng kiểm tra lại file"}), 400
+        finally:
+            if workbook is not None:
+                workbook.close()
+
+        token = uuid.uuid4().hex
+        with KITCHEN_IMPORT_LOCK:
+            PENDING_KITCHEN_IMPORTS[token] = {
+                "created": time.time(),
+                "filename": filename,
+                "work_date": work_date,
+                "plans": preview["plans"],
+                "counts": preview["counts"],
+                "has_errors": not preview["can_confirm"],
+            }
+        return jsonify({
+            "ok": True,
+            "token": token,
+            "filename": filename,
+            "work_date": work_date,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            **preview,
+        })
+
+    @app.post("/api/kitchen/import/confirm")
+    def api_kitchen_import_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi dữ liệu"}), 400
+        token = clean_text(body.get("token"))
+        with KITCHEN_IMPORT_LOCK:
+            pending = PENDING_KITCHEN_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file"}), 410
+        if pending["has_errors"]:
+            return jsonify({"ok": False, "error": "File còn nhóm lỗi nên chưa thể nhập"}), 400
+
+        inserted = updated = saved_items = saved_mappings = 0
+        try:
+            with db_factory() as conn:
+                for plan in pending["plans"]:
+                    conn.execute(
+                        "INSERT INTO kitchens(code,name) VALUES(?,?) ON CONFLICT(code) DO NOTHING",
+                        (plan["kitchen"], plan["kitchen"]),
+                    )
+                    conn.execute(
+                        """INSERT INTO kitchen_units(kitchen_code,unit_code,updated_at) VALUES(?,?,?)
+                           ON CONFLICT(kitchen_code) DO UPDATE SET
+                           unit_code=excluded.unit_code,updated_at=excluded.updated_at""",
+                        (plan["kitchen"], plan["xcom_code"], now_iso()),
+                    )
+                    saved_mappings += 1
+                    existing = conn.execute(
+                        "SELECT id FROM meal_plans WHERE import_key=?", (plan["import_key"],)
+                    ).fetchone()
+                    if existing:
+                        plan_id = existing["id"]
+                        conn.execute(
+                            """UPDATE meal_plans SET work_date=?,kitchen=?,shift=?,meal_count=?,unit_code=?,
+                               status='draft',note=?,source_file=?,source_sheet=?,source_row_start=?,
+                               source_row_end=?,updated_at=? WHERE id=?""",
+                            (pending["work_date"], plan["kitchen"], plan["shift"], plan["meal_count"],
+                             plan["xcom_code"], plan["menu_name"], pending["filename"], plan["sheet"],
+                             plan["source_row_start"], plan["source_row_end"], now_iso(), plan_id),
+                        )
+                        conn.execute("DELETE FROM meal_plan_items WHERE plan_id=?", (plan_id,))
+                        updated += 1
+                    else:
+                        cur = conn.execute(
+                            """INSERT INTO meal_plans(
+                               work_date,kitchen,shift,meal_count,unit_code,status,note,created_at,updated_at,
+                               import_key,source_file,source_sheet,source_row_start,source_row_end
+                               ) VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?)""",
+                            (pending["work_date"], plan["kitchen"], plan["shift"], plan["meal_count"],
+                             plan["xcom_code"], plan["menu_name"], now_iso(), now_iso(), plan["import_key"],
+                             pending["filename"], plan["sheet"], plan["source_row_start"], plan["source_row_end"]),
+                        )
+                        plan_id = cur.lastrowid
+                        inserted += 1
+                    for item in plan["items"]:
+                        if not conn.execute(
+                            "SELECT 1 FROM products WHERE code=?", (item["product_code"],)
+                        ).fetchone():
+                            raise ValueError(
+                                f"Mã {item['product_code']} không còn trong danh mục; dữ liệu chưa được ghi"
+                            )
+                        conn.execute(
+                            """INSERT INTO meal_plan_items(
+                               plan_id,dish_name,product_code,product_name,norm_qty,unit,supplier,buy_price,price_source
+                               ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                            (plan_id, item["dish_name"], item["product_code"], item["product_name"],
+                             item["norm_qty"], item["unit"], item["supplier"], item["buy_price"],
+                             item["price_source"]),
+                        )
+                        saved_items += 1
+                result_counts = {
+                    "inserted": inserted,
+                    "updated": updated,
+                    "items": saved_items,
+                    "mappings": saved_mappings,
+                }
+                audit(
+                    conn,
+                    now_iso,
+                    "kitchen.bulk_import",
+                    "ok",
+                    entity_type="meal_plan",
+                    entity_id=pending["work_date"],
+                    metadata={"filename": pending["filename"], **result_counts},
+                )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 409
+        except Exception:
+            return jsonify({"ok": False, "error": "Không ghi được file xưởng cơm; dữ liệu chưa được thay đổi"}), 409
+        return jsonify({"ok": True, "work_date": pending["work_date"], **result_counts})
+
     @app.get("/api/mappings/<mapping_type>")
     def api_mapping_list(mapping_type):
         with db_factory() as conn:
@@ -1558,9 +1911,9 @@ def register_contract_routes(app, ctx):
     @app.put("/api/kitchen-units/<kitchen_code>")
     def api_kitchen_unit(kitchen_code):
         body = request.get_json(force=True) or {}
-        unit_code = clean_text(body.get("unit_code")).upper()
+        unit_code = clean_text(body.get("xcom_code") or body.get("unit_code")).upper()
         if not unit_code:
-            return jsonify({"ok": False, "error": "Cần mã Unit"}), 400
+            return jsonify({"ok": False, "error": "Cần mã XCOM (xưởng cơm)"}), 400
         with db_factory() as conn:
             conn.execute(
                 """INSERT INTO kitchen_units(kitchen_code,unit_code,updated_at) VALUES(?,?,?)
@@ -1601,7 +1954,7 @@ def register_contract_routes(app, ctx):
         with db_factory() as conn:
             kitchen = clean_text(body["kitchen"]).upper()
             unit = conn.execute("SELECT unit_code FROM kitchen_units WHERE kitchen_code=?", (kitchen,)).fetchone()
-            unit_code = clean_text(body.get("unit_code")) or (unit["unit_code"] if unit else "")
+            unit_code = clean_text(body.get("xcom_code") or body.get("unit_code")) or (unit["unit_code"] if unit else "")
             plan_id = int(body.get("id") or 0)
             if plan_id:
                 conn.execute(
@@ -2034,7 +2387,7 @@ def meal_plan_payload(conn, work_date=""):
         plan["cost_per_meal"] = plan["total_cost"] / plan["meal_count"] if plan["meal_count"] else 0
         plan["warnings"] = []
         if not plan["mapped_unit"]:
-            plan["warnings"].append("Bếp chưa được ghép Unit")
+            plan["warnings"].append("Bếp chưa được ghép XCOM (xưởng cơm)")
         if any(item["buy_price"] <= 0 for item in items):
             plan["warnings"].append("Có nguyên liệu thiếu giá")
     return plans
@@ -2044,19 +2397,21 @@ def meal_po_workbook(plans, work_date: str):
     groups = defaultdict(list)
     for plan in plans:
         for item in plan["items"]:
-            key = (plan["mapped_unit"] or "CHƯA CÓ UNIT", item["supplier"] or "CHƯA CÓ NCC")
+            key = (plan["mapped_unit"] or "CHƯA CÓ XCOM", item["supplier"] or "CHƯA CÓ NCC")
             groups[key].append((plan, item))
     wb = Workbook()
     wb.remove(wb.active)
     for (unit_code, supplier), rows in sorted(groups.items()):
         title = re.sub(r"[\\/*?:\[\]]", "-", f"{unit_code}-{supplier}")[:31]
         ws = wb.create_sheet(title or "PO")
-        ws.append(["PO XƯỞNG CƠM", f"Ngày {work_date}", f"Unit {unit_code}", f"NCC {supplier}"])
-        ws.merge_cells("A1:D1")
+        ws.append(["PO XƯỞNG CƠM"])
+        ws.merge_cells("A1:K1")
         ws["A1"].font = Font(name="Arial", size=16, bold=True, color="FFFFFF")
         ws["A1"].fill = PatternFill("solid", fgColor="17324D")
         ws["A1"].alignment = Alignment(horizontal="center")
-        ws.append([])
+        ws.append([f"Ngày {work_date}", "", "", f"XCOM {unit_code}", "", "", "", f"NCC {supplier}"])
+        for cell in ws[2]:
+            cell.font = Font(name="Arial", bold=True)
         ws.append(["STT", "Bếp / ca", "Mã hàng", "Tên nguyên liệu", "ĐVT", "Số suất", "Định lượng/suất",
                    "Số lượng cần", "Đơn giá", "Thành tiền", "Nguồn giá"])
         for index, (plan, item) in enumerate(rows, 1):
