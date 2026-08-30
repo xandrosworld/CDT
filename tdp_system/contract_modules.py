@@ -1,0 +1,1910 @@
+from __future__ import annotations
+
+import io
+import json
+import os
+import re
+import subprocess
+import unicodedata
+from collections import defaultdict
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+from flask import jsonify, request, send_file
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+
+try:
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm, Pt
+except ImportError:  # Kept optional until a payment-request DOCX is requested.
+    Document = None
+
+try:
+    from msmi_client import MsmiClient, MsmiConfig, MsmiError
+except ImportError:
+    from .msmi_client import MsmiClient, MsmiConfig, MsmiError
+
+
+ADVANCED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    entity_type TEXT,
+    entity_id TEXT,
+    status TEXT NOT NULL,
+    message TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS supplier_rules (
+    supplier_code TEXT PRIMARY KEY,
+    combine_kitchens INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inventory_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    txn_date TEXT NOT NULL,
+    product_code TEXT NOT NULL,
+    qty_in REAL NOT NULL DEFAULT 0,
+    qty_out REAL NOT NULL DEFAULT 0,
+    unit_cost REAL NOT NULL DEFAULT 0,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_line TEXT NOT NULL DEFAULT '',
+    kitchen TEXT,
+    status TEXT NOT NULL DEFAULT 'posted',
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source_type, source_id, source_line)
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_product_date ON inventory_transactions(product_code,txn_date);
+CREATE INDEX IF NOT EXISTS idx_inventory_source ON inventory_transactions(source_type,source_id);
+
+CREATE TABLE IF NOT EXISTS msmi_invoices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    remote_id TEXT NOT NULL UNIQUE,
+    tenant TEXT NOT NULL DEFAULT 'default',
+    invoice_type TEXT NOT NULL,
+    seller_tax_code TEXT,
+    seller_name TEXT,
+    invoice_number TEXT,
+    invoice_series TEXT,
+    invoice_date TEXT,
+    subtotal REAL NOT NULL DEFAULT 0,
+    tax_amount REAL NOT NULL DEFAULT 0,
+    total_amount REAL NOT NULL DEFAULT 0,
+    sync_status TEXT NOT NULL DEFAULT 'synced',
+    receipt_status TEXT NOT NULL DEFAULT 'pending_mapping',
+    raw_json TEXT NOT NULL,
+    error_message TEXT,
+    synced_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_msmi_invoice_date ON msmi_invoices(invoice_date DESC);
+
+CREATE TABLE IF NOT EXISTS msmi_invoice_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES msmi_invoices(id) ON DELETE CASCADE,
+    line_index INTEGER NOT NULL,
+    source_item_code TEXT,
+    source_item_name TEXT,
+    source_unit TEXT,
+    qty REAL NOT NULL DEFAULT 0,
+    unit_price REAL NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0,
+    tax_rate TEXT,
+    product_code TEXT,
+    mapping_status TEXT NOT NULL DEFAULT 'unmapped',
+    UNIQUE(invoice_id,line_index)
+);
+CREATE INDEX IF NOT EXISTS idx_msmi_items_invoice ON msmi_invoice_items(invoice_id);
+
+CREATE TABLE IF NOT EXISTS item_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant TEXT NOT NULL DEFAULT 'default',
+    seller_tax_code TEXT NOT NULL DEFAULT '',
+    source_item_code TEXT NOT NULL DEFAULT '',
+    source_item_name TEXT NOT NULL DEFAULT '',
+    product_code TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(tenant,seller_tax_code,source_item_code,source_item_name)
+);
+
+CREATE TABLE IF NOT EXISTS msmi_sync_state (
+    invoice_type TEXT PRIMARY KEY,
+    last_remote_id TEXT,
+    last_invoice_date TEXT,
+    last_synced_at TEXT,
+    last_status TEXT,
+    last_error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS outgoing_invoice_drafts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    contractor TEXT NOT NULL,
+    invoice_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    subtotal REAL NOT NULL DEFAULT 0,
+    tax_amount REAL NOT NULL DEFAULT 0,
+    total_amount REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    issued_at TEXT,
+    UNIQUE(batch_id,contractor)
+);
+CREATE TABLE IF NOT EXISTS outgoing_invoice_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    draft_id INTEGER NOT NULL REFERENCES outgoing_invoice_drafts(id) ON DELETE CASCADE,
+    order_id INTEGER NOT NULL,
+    product_code TEXT NOT NULL,
+    product_name TEXT,
+    qty REAL NOT NULL,
+    unit TEXT,
+    unit_price REAL NOT NULL,
+    tax TEXT,
+    amount REAL NOT NULL,
+    UNIQUE(draft_id,order_id)
+);
+
+CREATE TABLE IF NOT EXISTS outgoing_product_names (
+    product_code TEXT PRIMARY KEY,
+    invoice_name TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS debt_adjustments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    adjustment_date TEXT NOT NULL,
+    party_type TEXT NOT NULL,
+    party_code TEXT NOT NULL,
+    amount REAL NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kitchen_units (
+    kitchen_code TEXT PRIMARY KEY,
+    unit_code TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dated_prices (
+    product_code TEXT NOT NULL,
+    price_group TEXT NOT NULL,
+    period TEXT NOT NULL,
+    price_value REAL NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(product_code,price_group,period)
+);
+CREATE TABLE IF NOT EXISTS meal_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_date TEXT NOT NULL,
+    kitchen TEXT NOT NULL,
+    shift TEXT NOT NULL,
+    meal_count REAL NOT NULL,
+    unit_code TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_date ON meal_plans(work_date,kitchen);
+CREATE TABLE IF NOT EXISTS meal_plan_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
+    dish_name TEXT,
+    product_code TEXT NOT NULL,
+    product_name TEXT,
+    norm_qty REAL NOT NULL,
+    unit TEXT,
+    supplier TEXT,
+    buy_price REAL NOT NULL DEFAULT 0,
+    price_source TEXT,
+    UNIQUE(plan_id,dish_name,product_code)
+);
+
+CREATE TABLE IF NOT EXISTS staff (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_code TEXT NOT NULL UNIQUE,
+    full_name TEXT NOT NULL,
+    role_name TEXT,
+    kitchen TEXT,
+    base_salary REAL NOT NULL DEFAULT 0,
+    standard_days REAL NOT NULL DEFAULT 26,
+    standard_hours REAL NOT NULL DEFAULT 8,
+    bhxh_employee_rate REAL NOT NULL DEFAULT 0,
+    bhxh_company_rate REAL NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attendance_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id INTEGER NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+    work_date TEXT NOT NULL,
+    normal_hours REAL NOT NULL DEFAULT 0,
+    overtime_hours REAL NOT NULL DEFAULT 0,
+    sunday_hours REAL NOT NULL DEFAULT 0,
+    night_hours REAL NOT NULL DEFAULT 0,
+    holiday_hours REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    source TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE(employee_id,work_date)
+);
+CREATE TABLE IF NOT EXISTS payroll_adjustments (
+    employee_id INTEGER NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    allowance REAL NOT NULL DEFAULT 0,
+    responsibility REAL NOT NULL DEFAULT 0,
+    advance REAL NOT NULL DEFAULT 0,
+    probation_deduction REAL NOT NULL DEFAULT 0,
+    bhxh_employee_amount REAL NOT NULL DEFAULT 0,
+    bhxh_company_amount REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(employee_id,month)
+);
+CREATE TABLE IF NOT EXISTS kitchen_labor_costs (
+    work_date TEXT NOT NULL,
+    kitchen TEXT NOT NULL,
+    amount REAL NOT NULL DEFAULT 0,
+    source TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(work_date,kitchen,source)
+);
+
+CREATE TABLE IF NOT EXISTS print_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    document_type TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared',
+    approved_at TEXT,
+    printed_at TEXT,
+    printer_name TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(batch_id,document_type)
+);
+"""
+
+
+def ensure_column(conn, table: str, name: str, definition: str):
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if name not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+def init_contract_schema(conn):
+    conn.executescript(ADVANCED_SCHEMA)
+    ensure_column(conn, "orders", "damaged_qty", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "orders", "supplier_return_qty", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "orders", "customer_return_qty", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "payroll_adjustments", "gross_override", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "payroll_adjustments", "net_override", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "payroll_adjustments", "use_override", "INTEGER NOT NULL DEFAULT 0")
+    defaults = {
+        "tenant_code": "TDP",
+        "printer_name": "",
+        "print_copies": "1",
+        "print_paper": "A4",
+        "payment_requester": "",
+        "payment_bank_name": "",
+        "payment_bank_account": "",
+    }
+    for key, value in defaults.items():
+        conn.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING",
+            (key, value),
+        )
+
+
+def first_value(data: dict, *keys, default=""):
+    for key in keys:
+        value = data.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def as_number(value, default=0.0) -> float:
+    if value in (None, ""):
+        return float(default)
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(" ", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def as_date(value) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(text[:19], fmt).date().isoformat()
+        except ValueError:
+            continue
+    return text[:10]
+
+
+def audit(conn, now_iso, event_type: str, status: str, message: str = "", entity_type="", entity_id="", metadata=None):
+    conn.execute(
+        "INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (event_type, entity_type, str(entity_id or ""), status, message,
+         json.dumps(metadata or {}, ensure_ascii=False), now_iso()),
+    )
+
+
+def net_received(order) -> float:
+    return max(
+        as_number(order["actual_received"])
+        - as_number(order.get("damaged_qty") if isinstance(order, dict) else order["damaged_qty"])
+        - as_number(order.get("supplier_return_qty") if isinstance(order, dict) else order["supplier_return_qty"]),
+        0,
+    )
+
+
+def net_delivered(order) -> float:
+    return max(
+        as_number(order["actual_delivered"])
+        - as_number(order.get("customer_return_qty") if isinstance(order, dict) else order["customer_return_qty"]),
+        0,
+    )
+
+
+def inventory_rows(conn, as_of="", include_zero=False):
+    params = []
+    date_sql = ""
+    if as_of:
+        date_sql = " AND t.txn_date<=?"
+        params.append(as_of)
+    query = f"""
+        SELECT p.code product_code,p.name product_name,p.unit,
+               COALESCE(SUM(CASE WHEN t.status='posted' THEN t.qty_in-t.qty_out ELSE 0 END),0) accounting_qty,
+               COALESCE(SUM(CASE WHEN t.status IN ('posted','reserved') THEN t.qty_in-t.qty_out ELSE 0 END),0) available_qty,
+               COALESCE(SUM(CASE WHEN t.status='posted' THEN t.qty_in*t.unit_cost ELSE 0 END),0) input_value,
+               COALESCE(SUM(CASE WHEN t.status='posted' THEN t.qty_out*t.unit_cost ELSE 0 END),0) output_value
+        FROM products p LEFT JOIN inventory_transactions t ON t.product_code=p.code {date_sql}
+        GROUP BY p.code,p.name,p.unit
+        ORDER BY p.name
+    """
+    rows = [dict(row) for row in conn.execute(query, params)]
+    if not include_zero:
+        rows = [row for row in rows if abs(row["accounting_qty"]) > 1e-9 or abs(row["available_qty"]) > 1e-9]
+    return rows
+
+
+def inventory_lookup(conn, as_of=""):
+    return {row["product_code"]: row for row in inventory_rows(conn, as_of, include_zero=True)}
+
+
+def post_purchase_list_inventory(conn, batch_id: int, now_iso):
+    batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
+    if not batch:
+        return 0
+    rate_row = conn.execute("SELECT value FROM settings WHERE key='purchase_rate'").fetchone()
+    purchase_rate = as_number(rate_row["value"] if rate_row else 0.95, 0.95)
+    posted = 0
+    for row in conn.execute("SELECT * FROM orders WHERE batch_id=? AND purchase_list=1", (batch_id,)):
+        item = dict(row)
+        qty = net_received(item)
+        if qty <= 0 or not item.get("product_code"):
+            continue
+        conn.execute(
+            """INSERT INTO inventory_transactions(
+                txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
+                kitchen,status,note,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,'posted',?,?,?)
+            ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
+                txn_date=excluded.txn_date,product_code=excluded.product_code,qty_in=excluded.qty_in,
+                unit_cost=excluded.unit_cost,kitchen=excluded.kitchen,updated_at=excluded.updated_at""",
+            (batch["work_date"], item["product_code"], qty, 0, round(as_number(item["sell_price"]) * purchase_rate), "BK_INPUT",
+             str(batch_id), str(item["id"]), item["kitchen"], "Bảng kê mua vào đã duyệt", now_iso(), now_iso()),
+        )
+        posted += 1
+    if posted:
+        audit(conn, now_iso, "inventory.post_bk", "ok", entity_type="batch", entity_id=batch_id,
+              metadata={"lines": posted})
+    return posted
+
+
+def invoice_details(remote: dict) -> list[dict]:
+    details = first_value(remote, "hdhhdvu", "invoiceItems", "details", default=[])
+    return details if isinstance(details, list) else []
+
+
+def normalize_invoice(remote: dict, invoice_type: str, now: str) -> dict:
+    remote_id = str(first_value(remote, "_id", "id", "invoiceId", default="")).strip()
+    if not remote_id:
+        raise MsmiError("Hóa đơn mSMI thiếu khóa _id")
+    subtotal = as_number(first_value(remote, "tgtcthue", "subtotal", "totalBeforeTax"))
+    tax_amount = as_number(first_value(remote, "tgtthue", "taxAmount", "totalTax"))
+    total = as_number(first_value(remote, "tgtttbso", "tgtttbchu", "totalAmount", "total"))
+    if total <= 0:
+        total = subtotal + tax_amount
+    return {
+        "remote_id": remote_id,
+        "invoice_type": invoice_type,
+        "seller_tax_code": str(first_value(remote, "mstNban", "nbmst", "sellerTaxCode", "sellerTaxId")),
+        "seller_name": str(first_value(remote, "tenNban", "nbten", "sellerName")),
+        "invoice_number": str(first_value(remote, "shdon", "soHoaDon", "invoiceNumber")),
+        "invoice_series": str(first_value(remote, "khhdon", "khmshdon", "series", "invoiceSeries")),
+        "invoice_date": as_date(first_value(remote, "tdlap", "nlap", "invoiceDate", "signedDate")),
+        "subtotal": subtotal,
+        "tax_amount": tax_amount,
+        "total_amount": total,
+        "raw_json": json.dumps(remote, ensure_ascii=False, separators=(",", ":")),
+        "synced_at": now,
+    }
+
+
+def normalize_invoice_item(remote_item: dict, line_index: int) -> dict:
+    return {
+        "line_index": line_index,
+        "source_item_code": str(first_value(remote_item, "ma", "mhhhoa", "itemCode", "code")),
+        "source_item_name": str(first_value(remote_item, "ten", "tenhh", "itemName", "name")),
+        "source_unit": str(first_value(remote_item, "dvtinh", "dvt", "unit")),
+        "qty": as_number(first_value(remote_item, "sluong", "quantity", "qty")),
+        "unit_price": as_number(first_value(remote_item, "dgia", "unitPrice", "price")),
+        "amount": as_number(first_value(remote_item, "thtien", "amount", "total")),
+        "tax_rate": str(first_value(remote_item, "tsuat", "taxRate", "tax")),
+    }
+
+
+def saved_mapping(conn, tenant: str, seller_tax_code: str, item: dict):
+    return conn.execute(
+        """SELECT product_code FROM item_mappings
+           WHERE tenant=? AND seller_tax_code=? AND source_item_code=? AND source_item_name=?""",
+        (tenant, seller_tax_code, item["source_item_code"], item["source_item_name"]),
+    ).fetchone()
+
+
+def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now: str) -> tuple[int, bool]:
+    data = normalize_invoice(remote, invoice_type, now)
+    existing = conn.execute("SELECT id FROM msmi_invoices WHERE remote_id=?", (data["remote_id"],)).fetchone()
+    conn.execute(
+        """INSERT INTO msmi_invoices(
+            remote_id,tenant,invoice_type,seller_tax_code,seller_name,invoice_number,invoice_series,
+            invoice_date,subtotal,tax_amount,total_amount,sync_status,receipt_status,raw_json,
+            synced_at,created_at,updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'synced','pending_mapping',?,?,?,?)
+        ON CONFLICT(remote_id) DO UPDATE SET
+            seller_tax_code=excluded.seller_tax_code,seller_name=excluded.seller_name,
+            invoice_number=excluded.invoice_number,invoice_series=excluded.invoice_series,
+            invoice_date=excluded.invoice_date,subtotal=excluded.subtotal,tax_amount=excluded.tax_amount,
+            total_amount=excluded.total_amount,raw_json=excluded.raw_json,synced_at=excluded.synced_at,
+            sync_status='synced',error_message=NULL,updated_at=excluded.updated_at""",
+        (data["remote_id"], tenant, data["invoice_type"], data["seller_tax_code"], data["seller_name"],
+         data["invoice_number"], data["invoice_series"], data["invoice_date"], data["subtotal"],
+         data["tax_amount"], data["total_amount"], data["raw_json"], now, now, now),
+    )
+    invoice_id = conn.execute("SELECT id FROM msmi_invoices WHERE remote_id=?", (data["remote_id"],)).fetchone()["id"]
+    mapped = 0
+    detail_rows = invoice_details(remote)
+    for index, raw_item in enumerate(detail_rows, start=1):
+        item = normalize_invoice_item(raw_item if isinstance(raw_item, dict) else {}, index)
+        mapping = saved_mapping(conn, tenant, data["seller_tax_code"], item)
+        product_code = mapping["product_code"] if mapping else ""
+        conn.execute(
+            """INSERT INTO msmi_invoice_items(
+                invoice_id,line_index,source_item_code,source_item_name,source_unit,qty,unit_price,
+                amount,tax_rate,product_code,mapping_status
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(invoice_id,line_index) DO UPDATE SET
+                source_item_code=excluded.source_item_code,source_item_name=excluded.source_item_name,
+                source_unit=excluded.source_unit,qty=excluded.qty,unit_price=excluded.unit_price,
+                amount=excluded.amount,tax_rate=excluded.tax_rate,
+                product_code=CASE WHEN msmi_invoice_items.product_code!='' THEN msmi_invoice_items.product_code ELSE excluded.product_code END,
+                mapping_status=CASE WHEN msmi_invoice_items.product_code!='' OR excluded.product_code!='' THEN 'mapped' ELSE 'unmapped' END""",
+            (invoice_id, index, item["source_item_code"], item["source_item_name"], item["source_unit"],
+             item["qty"], item["unit_price"], item["amount"], item["tax_rate"], product_code,
+             "mapped" if product_code else "unmapped"),
+        )
+        mapped += bool(product_code)
+    receipt_status = "ready" if detail_rows and mapped == len(detail_rows) else "pending_mapping"
+    current = conn.execute("SELECT receipt_status FROM msmi_invoices WHERE id=?", (invoice_id,)).fetchone()
+    if current and current["receipt_status"] != "posted":
+        conn.execute("UPDATE msmi_invoices SET receipt_status=? WHERE id=?", (receipt_status, invoice_id))
+    return invoice_id, existing is None
+
+
+def sync_msmi(conn, client, now_iso, tenant="default", max_pages=5, page_size=200):
+    invoice_type = "INPUT_ELECTRONIC_INVOICE"
+    new_count = 0
+    seen_count = 0
+    item_count = 0
+    pages = 0
+    newest_id = ""
+    newest_date = ""
+    try:
+        for page in range(max(1, min(int(max_pages), 50))):
+            result = client.list_invoices(invoice_type=invoice_type, page=page, size=page_size)
+            pages += 1
+            remote_items = result["items"]
+            if not remote_items:
+                break
+            page_all_seen = True
+            for remote in remote_items:
+                if not isinstance(remote, dict):
+                    continue
+                invoice_id, created = upsert_msmi_invoice(conn, remote, invoice_type, tenant, now_iso())
+                if created:
+                    new_count += 1
+                    page_all_seen = False
+                else:
+                    seen_count += 1
+                item_count += conn.execute(
+                    "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=?", (invoice_id,)
+                ).fetchone()["n"]
+                normalized = normalize_invoice(remote, invoice_type, now_iso())
+                if not newest_id:
+                    newest_id = normalized["remote_id"]
+                    newest_date = normalized["invoice_date"]
+            # mSMI returns newest records first. Once a complete page is already
+            # known, older pages have already been synchronized.
+            if page_all_seen or not result["has_more"]:
+                break
+        conn.execute(
+            """INSERT INTO msmi_sync_state(invoice_type,last_remote_id,last_invoice_date,last_synced_at,last_status,last_error)
+               VALUES(?,?,?,?,?,'') ON CONFLICT(invoice_type) DO UPDATE SET
+               last_remote_id=excluded.last_remote_id,last_invoice_date=excluded.last_invoice_date,
+               last_synced_at=excluded.last_synced_at,last_status='ok',last_error=''""",
+            (invoice_type, newest_id, newest_date, now_iso(), "ok"),
+        )
+        audit(conn, now_iso, "msmi.sync", "ok", metadata={
+            "new_invoices": new_count, "known_invoices": seen_count,
+            "invoice_items": item_count, "pages": pages,
+        })
+        return {"new_invoices": new_count, "known_invoices": seen_count, "items": item_count, "pages": pages}
+    except Exception as error:
+        message = str(error)[:300]
+        conn.execute(
+            """INSERT INTO msmi_sync_state(invoice_type,last_synced_at,last_status,last_error)
+               VALUES(?,?,'error',?) ON CONFLICT(invoice_type) DO UPDATE SET
+               last_synced_at=excluded.last_synced_at,last_status='error',last_error=excluded.last_error""",
+            (invoice_type, now_iso(), message),
+        )
+        audit(conn, now_iso, "msmi.sync", "error", message=message)
+        raise
+
+
+def payroll_rows(conn, month: str):
+    start = month + "-01"
+    try:
+        start_date = datetime.strptime(start, "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError("Tháng tính lương phải có dạng YYYY-MM") from None
+    if start_date.month == 12:
+        end_date = date(start_date.year + 1, 1, 1)
+    else:
+        end_date = date(start_date.year, start_date.month + 1, 1)
+    output = []
+    for staff_row in conn.execute("SELECT * FROM staff WHERE active=1 ORDER BY full_name"):
+        person = dict(staff_row)
+        hours = conn.execute(
+            """SELECT COALESCE(SUM(normal_hours),0) normal,COALESCE(SUM(overtime_hours),0) overtime,
+                      COALESCE(SUM(sunday_hours),0) sunday,COALESCE(SUM(night_hours),0) night,
+                      COALESCE(SUM(holiday_hours),0) holiday
+               FROM attendance_entries WHERE employee_id=? AND work_date>=? AND work_date<?""",
+            (person["id"], start_date.isoformat(), end_date.isoformat()),
+        ).fetchone()
+        adjustment = conn.execute(
+            "SELECT * FROM payroll_adjustments WHERE employee_id=? AND month=?",
+            (person["id"], month),
+        ).fetchone()
+        adj = dict(adjustment) if adjustment else defaultdict(float)
+        hourly = person["base_salary"] / max(person["standard_days"] * person["standard_hours"], 1)
+        normal_pay = hourly * hours["normal"]
+        overtime_pay = hourly * hours["overtime"] * 1.5
+        sunday_pay = hourly * hours["sunday"] * 2
+        night_pay = hourly * hours["night"] * 1.3
+        holiday_pay = hourly * hours["holiday"] * 3
+        gross = (normal_pay + overtime_pay + sunday_pay + night_pay + holiday_pay
+                 + as_number(adj["allowance"]) + as_number(adj["responsibility"]))
+        employee_bhxh = as_number(adj["bhxh_employee_amount"])
+        if employee_bhxh <= 0:
+            employee_bhxh = person["base_salary"] * person["bhxh_employee_rate"]
+        company_bhxh = as_number(adj["bhxh_company_amount"])
+        if company_bhxh <= 0:
+            company_bhxh = person["base_salary"] * person["bhxh_company_rate"]
+        net = gross - as_number(adj["advance"]) - as_number(adj["probation_deduction"]) - employee_bhxh
+        if int(as_number(adj["use_override"])):
+            gross = as_number(adj["gross_override"])
+            net = as_number(adj["net_override"])
+        output.append({
+            **person, "month": month, "normal_hours": hours["normal"], "overtime_hours": hours["overtime"],
+            "sunday_hours": hours["sunday"], "night_hours": hours["night"], "holiday_hours": hours["holiday"],
+            "normal_pay": normal_pay, "overtime_pay": overtime_pay, "sunday_pay": sunday_pay,
+            "night_pay": night_pay, "holiday_pay": holiday_pay, "allowance": as_number(adj["allowance"]),
+            "responsibility": as_number(adj["responsibility"]), "advance": as_number(adj["advance"]),
+            "probation_deduction": as_number(adj["probation_deduction"]), "bhxh_employee": employee_bhxh,
+            "bhxh_company": company_bhxh, "gross_salary": gross, "net_salary": net,
+        })
+    return output
+
+
+VIET_DIGITS = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]
+
+
+def number_to_vietnamese(value: float) -> str:
+    number = int(round(value))
+    if number == 0:
+        return "Không đồng"
+
+    def three_digits(group: int, full=False) -> str:
+        hundred, remainder = divmod(group, 100)
+        ten, unit = divmod(remainder, 10)
+        words = []
+        if hundred or full:
+            words += [VIET_DIGITS[hundred], "trăm"]
+        if ten > 1:
+            words += [VIET_DIGITS[ten], "mươi"]
+            if unit == 1:
+                words.append("mốt")
+            elif unit == 5:
+                words.append("lăm")
+            elif unit:
+                words.append(VIET_DIGITS[unit])
+        elif ten == 1:
+            words.append("mười")
+            if unit == 5:
+                words.append("lăm")
+            elif unit:
+                words.append(VIET_DIGITS[unit])
+        elif unit:
+            if hundred or full:
+                words.append("lẻ")
+            words.append(VIET_DIGITS[unit])
+        return " ".join(words)
+
+    groups = []
+    while number:
+        groups.append(number % 1000)
+        number //= 1000
+    units = ["", "nghìn", "triệu", "tỷ", "nghìn tỷ", "triệu tỷ"]
+    words = []
+    for index in range(len(groups) - 1, -1, -1):
+        group = groups[index]
+        if group:
+            words.append(three_digits(group, full=bool(words) and group < 100))
+            if index < len(units) and units[index]:
+                words.append(units[index])
+    text = " ".join(words).strip()
+    return text[:1].upper() + text[1:] + " đồng"
+
+
+def register_contract_routes(app, ctx):
+    db_factory = ctx["db"]
+    now_iso = ctx["now_iso"]
+    clean_text = ctx["clean_text"]
+    number_value = ctx["number_value"]
+    tax_factor = ctx["tax_factor"]
+    setting_get = ctx["setting_get"]
+    setting_set = ctx["setting_set"]
+    root = ctx["root"]
+    data_dir = ctx["data_dir"]
+
+    def create_msmi_client():
+        return MsmiClient(MsmiConfig.from_env_files([root / ".env", data_dir.parent / ".env"]))
+
+    def invoice_payload(conn, limit=100, invoice_id=None):
+        params = []
+        where = ""
+        if invoice_id:
+            where = " WHERE i.id=?"
+            params.append(invoice_id)
+        query = f"""SELECT i.id,i.remote_id,i.invoice_type,i.seller_tax_code,i.seller_name,
+                           i.invoice_number,i.invoice_series,i.invoice_date,i.subtotal,i.tax_amount,
+                           i.total_amount,i.sync_status,i.receipt_status,i.error_message,i.synced_at,
+                           COUNT(li.id) item_count,
+                           SUM(CASE WHEN li.mapping_status='mapped' THEN 1 ELSE 0 END) mapped_count
+                    FROM msmi_invoices i LEFT JOIN msmi_invoice_items li ON li.invoice_id=i.id
+                    {where} GROUP BY i.id ORDER BY i.invoice_date DESC,i.id DESC LIMIT ?"""
+        params.append(max(1, min(int(limit), 500)))
+        invoices = [dict(row) for row in conn.execute(query, params)]
+        for item in invoices:
+            item["mapped_count"] = item["mapped_count"] or 0
+            item["items"] = [dict(row) for row in conn.execute(
+                """SELECT li.id,li.line_index,li.source_item_code,li.source_item_name,li.source_unit,
+                          li.qty,li.unit_price,li.amount,li.tax_rate,li.product_code,li.mapping_status,
+                          p.name product_name,p.unit product_unit
+                   FROM msmi_invoice_items li LEFT JOIN products p ON p.code=li.product_code
+                   WHERE li.invoice_id=? ORDER BY li.line_index""",
+                (item["id"],),
+            )]
+        return invoices
+
+    @app.get("/api/operations/bootstrap")
+    def api_operations_bootstrap():
+        as_of = request.args.get("as_of") or date.today().isoformat()
+        month = request.args.get("month") or as_of[:7]
+        with db_factory() as conn:
+            sync_state = [dict(row) for row in conn.execute("SELECT * FROM msmi_sync_state")]
+            inventory = inventory_rows(conn, as_of)
+            labor = [dict(row) for row in conn.execute(
+                "SELECT work_date,kitchen,amount,source FROM kitchen_labor_costs WHERE substr(work_date,1,7)=? ORDER BY work_date,kitchen",
+                (month,),
+            )]
+            return jsonify({
+                "ok": True,
+                "inventory": inventory,
+                "inventory_as_of": as_of,
+                "inventory_totals": {
+                    "products": len(inventory),
+                    "accounting_qty": sum(row["accounting_qty"] for row in inventory),
+                    "available_qty": sum(row["available_qty"] for row in inventory),
+                },
+                "msmi": {"state": sync_state, "invoices": invoice_payload(conn, 30)},
+                "meal_plans": meal_plan_payload(conn, request.args.get("date", "")),
+                "kitchen_units": [dict(row) for row in conn.execute("SELECT * FROM kitchen_units ORDER BY kitchen_code")],
+                "payroll": payroll_rows(conn, month),
+                "labor_costs": labor,
+                "staff": [dict(row) for row in conn.execute("SELECT * FROM staff ORDER BY full_name")],
+                "print_jobs": [dict(row) for row in conn.execute("SELECT * FROM print_jobs ORDER BY id DESC LIMIT 50")],
+                "printer": {
+                    "name": setting_get(conn, "printer_name", ""),
+                    "copies": int(as_number(setting_get(conn, "print_copies", "1"), 1)),
+                    "paper": setting_get(conn, "print_paper", "A4"),
+                },
+            })
+
+    @app.get("/api/inventory")
+    def api_inventory():
+        with db_factory() as conn:
+            as_of = request.args.get("as_of") or date.today().isoformat()
+            return jsonify({"ok": True, "as_of": as_of, "items": inventory_rows(conn, as_of)})
+
+    @app.post("/api/inventory/opening")
+    def api_inventory_opening():
+        body = request.get_json(force=True) or {}
+        period = clean_text(body.get("period"))
+        items = body.get("items") or []
+        if not re.fullmatch(r"\d{4}-\d{2}", period) or not isinstance(items, list):
+            return jsonify({"ok": False, "error": "Kỳ tồn đầu phải có dạng YYYY-MM và có danh sách hàng"}), 400
+        txn_date = period + "-01"
+        with db_factory() as conn:
+            saved = 0
+            for item in items:
+                code = clean_text(item.get("product_code")).upper()
+                if not code or not conn.execute("SELECT 1 FROM products WHERE code=?", (code,)).fetchone():
+                    continue
+                conn.execute(
+                    """INSERT INTO inventory_transactions(
+                        txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
+                        status,note,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,'OPENING',?,?,'posted',?,?,?)
+                    ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
+                        qty_in=excluded.qty_in,unit_cost=excluded.unit_cost,note=excluded.note,updated_at=excluded.updated_at""",
+                    (txn_date, code, max(number_value(item.get("qty")), 0), 0,
+                     max(number_value(item.get("unit_cost")), 0), period, code,
+                     clean_text(item.get("note")), now_iso(), now_iso()),
+                )
+                saved += 1
+            audit(conn, now_iso, "inventory.opening", "ok", entity_type="period", entity_id=period,
+                  metadata={"items": saved})
+            return jsonify({"ok": True, "saved": saved, "items": inventory_rows(conn, date.today().isoformat())})
+
+    @app.post("/api/inventory/adjustments")
+    def api_inventory_adjustment():
+        body = request.get_json(force=True) or {}
+        code = clean_text(body.get("product_code")).upper()
+        qty = number_value(body.get("qty"))
+        if not code or qty == 0:
+            return jsonify({"ok": False, "error": "Cần mã hàng và số lượng điều chỉnh khác 0"}), 400
+        with db_factory() as conn:
+            if not conn.execute("SELECT 1 FROM products WHERE code=?", (code,)).fetchone():
+                return jsonify({"ok": False, "error": "Mã hàng chưa có trong danh mục"}), 400
+            source_id = clean_text(body.get("reference")) or f"ADJ-{datetime.now():%Y%m%d%H%M%S%f}"
+            conn.execute(
+                """INSERT INTO inventory_transactions(
+                    txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
+                    status,note,created_at,updated_at
+                ) VALUES(?,?,?,?,?,'ADJUSTMENT',?,'','posted',?,?,?)""",
+                (body.get("txn_date") or date.today().isoformat(), code, max(qty, 0), max(-qty, 0),
+                 max(number_value(body.get("unit_cost")), 0), source_id, clean_text(body.get("note")),
+                 now_iso(), now_iso()),
+            )
+            audit(conn, now_iso, "inventory.adjust", "ok", entity_type="product", entity_id=code,
+                  metadata={"qty": qty, "reference": source_id})
+            return jsonify({"ok": True})
+
+    @app.get("/api/supplier-needs/<int:batch_id>")
+    def api_supplier_needs(batch_id):
+        with db_factory() as conn:
+            batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if not batch:
+                return jsonify({"ok": False, "error": "Không tìm thấy phiên đơn"}), 404
+            stock = inventory_lookup(conn, batch["work_date"])
+            available = {code: max(row["available_qty"], 0) for code, row in stock.items()}
+            groups = {}
+            ordered_total = 0
+            required_total = 0
+            for row in conn.execute("SELECT * FROM orders WHERE batch_id=? ORDER BY id", (batch_id,)):
+                item = dict(row)
+                qty = max(number_value(item["qty"]), 0)
+                use_stock = min(qty, available.get(item["product_code"], 0))
+                available[item["product_code"]] = max(available.get(item["product_code"], 0) - use_stock, 0)
+                required = max(qty - use_stock, 0)
+                ordered_total += qty
+                required_total += required
+                if required <= 0:
+                    continue
+                rule = conn.execute(
+                    "SELECT combine_kitchens FROM supplier_rules WHERE supplier_code=?", (item["supplier"],)
+                ).fetchone()
+                combined = bool(rule and rule["combine_kitchens"])
+                key = f"{item['supplier']}|{'ALL' if combined else item['kitchen']}"
+                group = groups.setdefault(key, {
+                    "supplier": item["supplier"], "kitchen": "GỘP NHIỀU BẾP" if combined else item["kitchen"],
+                    "combine_kitchens": combined, "items": [], "total_qty": 0,
+                })
+                group["items"].append({
+                    "order_id": item["id"], "product_code": item["product_code"],
+                    "product_name": item["product_name"], "unit": item["unit"],
+                    "kitchen": item["kitchen"], "customer_qty": qty, "stock_used": use_stock,
+                    "required_qty": required, "note": item["note"],
+                })
+                group["total_qty"] += required
+            return jsonify({
+                "ok": True, "batch_id": batch_id, "work_date": batch["work_date"],
+                "formula": "max(lượng khách đặt - tồn khả dụng, 0)",
+                "ordered_qty": ordered_total, "required_qty": required_total,
+                "groups": list(groups.values()),
+            })
+
+    @app.put("/api/supplier-rules/<supplier_code>")
+    def api_supplier_rule(supplier_code):
+        body = request.get_json(force=True) or {}
+        code = clean_text(supplier_code)
+        with db_factory() as conn:
+            conn.execute(
+                """INSERT INTO supplier_rules(supplier_code,combine_kitchens,updated_at) VALUES(?,?,?)
+                   ON CONFLICT(supplier_code) DO UPDATE SET combine_kitchens=excluded.combine_kitchens,updated_at=excluded.updated_at""",
+                (code, 1 if body.get("combine_kitchens") else 0, now_iso()),
+            )
+            return jsonify({"ok": True})
+
+    @app.get("/api/msmi/status")
+    def api_msmi_status():
+        try:
+            return jsonify({"ok": True, **create_msmi_client().status()})
+        except MsmiError as error:
+            return jsonify({"ok": False, "connected": False, "read_only": True, "error": str(error)}), 502
+
+    @app.post("/api/msmi/sync")
+    def api_msmi_sync():
+        body = request.get_json(silent=True) or {}
+        with db_factory() as conn:
+            tenant = setting_get(conn, "tenant_code", "TDP")
+            try:
+                result = sync_msmi(
+                    conn, create_msmi_client(), now_iso, tenant=tenant,
+                    max_pages=body.get("max_pages", 5), page_size=body.get("page_size", 200),
+                )
+                return jsonify({"ok": True, **result, "invoices": invoice_payload(conn, 30)})
+            except MsmiError as error:
+                return jsonify({"ok": False, "error": str(error), "read_only": True}), 502
+
+    @app.get("/api/msmi/invoices")
+    def api_msmi_invoices():
+        with db_factory() as conn:
+            return jsonify({"ok": True, "items": invoice_payload(
+                conn, request.args.get("limit", 100, type=int), request.args.get("id", type=int)
+            )})
+
+    @app.put("/api/msmi/items/<int:item_id>/mapping")
+    def api_msmi_mapping(item_id):
+        body = request.get_json(force=True) or {}
+        product_code = clean_text(body.get("product_code")).upper()
+        with db_factory() as conn:
+            item = conn.execute(
+                """SELECT li.*,i.tenant,i.seller_tax_code,i.id invoice_id FROM msmi_invoice_items li
+                   JOIN msmi_invoices i ON i.id=li.invoice_id WHERE li.id=?""", (item_id,)
+            ).fetchone()
+            if not item:
+                return jsonify({"ok": False, "error": "Không tìm thấy dòng hóa đơn"}), 404
+            if not conn.execute("SELECT 1 FROM products WHERE code=?", (product_code,)).fetchone():
+                return jsonify({"ok": False, "error": "Mã hàng đích chưa có trong danh mục"}), 400
+            conn.execute(
+                """INSERT INTO item_mappings(
+                    tenant,seller_tax_code,source_item_code,source_item_name,product_code,updated_at
+                ) VALUES(?,?,?,?,?,?) ON CONFLICT(tenant,seller_tax_code,source_item_code,source_item_name)
+                DO UPDATE SET product_code=excluded.product_code,updated_at=excluded.updated_at""",
+                (item["tenant"], item["seller_tax_code"] or "", item["source_item_code"] or "",
+                 item["source_item_name"] or "", product_code, now_iso()),
+            )
+            conn.execute(
+                "UPDATE msmi_invoice_items SET product_code=?,mapping_status='mapped' WHERE id=?",
+                (product_code, item_id),
+            )
+            remaining = conn.execute(
+                "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=? AND mapping_status!='mapped'",
+                (item["invoice_id"],),
+            ).fetchone()["n"]
+            conn.execute(
+                "UPDATE msmi_invoices SET receipt_status=?,updated_at=? WHERE id=? AND receipt_status!='posted'",
+                ("ready" if remaining == 0 else "pending_mapping", now_iso(), item["invoice_id"]),
+            )
+            audit(conn, now_iso, "msmi.mapping", "ok", entity_type="invoice_item", entity_id=item_id,
+                  metadata={"product_code": product_code})
+            return jsonify({"ok": True, "invoice": invoice_payload(conn, 1, item["invoice_id"])[0]})
+
+    @app.post("/api/msmi/invoices/<int:invoice_id>/receipt")
+    def api_msmi_receipt(invoice_id):
+        with db_factory() as conn:
+            invoice = conn.execute("SELECT * FROM msmi_invoices WHERE id=?", (invoice_id,)).fetchone()
+            if not invoice:
+                return jsonify({"ok": False, "error": "Không tìm thấy hóa đơn đầu vào"}), 404
+            items = [dict(row) for row in conn.execute(
+                "SELECT * FROM msmi_invoice_items WHERE invoice_id=? ORDER BY line_index", (invoice_id,)
+            )]
+            if not items:
+                return jsonify({"ok": False, "error": "Hóa đơn không có chi tiết hàng hóa"}), 400
+            missing = [item for item in items if item["mapping_status"] != "mapped" or not item["product_code"]]
+            if missing:
+                return jsonify({"ok": False, "error": f"Còn {len(missing)} dòng chưa ghép mã hàng"}), 400
+            posted = 0
+            for item in items:
+                conn.execute(
+                    """INSERT INTO inventory_transactions(
+                        txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
+                        status,note,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,'MSMI_INPUT',?,?,'posted',?,?,?)
+                    ON CONFLICT(source_type,source_id,source_line) DO NOTHING""",
+                    (invoice["invoice_date"] or date.today().isoformat(), item["product_code"], item["qty"], 0,
+                     item["unit_price"], invoice["remote_id"], str(item["line_index"]),
+                     f"Hóa đơn {invoice['invoice_series']} {invoice['invoice_number']}", now_iso(), now_iso()),
+                )
+                posted += conn.execute("SELECT changes() n").fetchone()["n"]
+            conn.execute(
+                "UPDATE msmi_invoices SET receipt_status='posted',updated_at=? WHERE id=?",
+                (now_iso(), invoice_id),
+            )
+            audit(conn, now_iso, "msmi.create_receipt", "ok", entity_type="msmi_invoice", entity_id=invoice_id,
+                  metadata={"new_inventory_lines": posted})
+            return jsonify({"ok": True, "new_inventory_lines": posted, "idempotent": posted == 0})
+
+    @app.post("/api/outgoing-invoices/draft/<int:batch_id>")
+    def api_create_outgoing_drafts(batch_id):
+        with db_factory() as conn:
+            batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if not batch:
+                return jsonify({"ok": False, "error": "Không tìm thấy phiên đơn"}), 404
+            if batch["status"] != "approved":
+                return jsonify({"ok": False, "error": "Phải duyệt phiên đơn trước khi lập hóa đơn đầu ra"}), 400
+            orders = [dict(row) for row in conn.execute(
+                "SELECT * FROM orders WHERE batch_id=? ORDER BY contractor,id", (batch_id,)
+            )]
+            stock = inventory_lookup(conn, batch["work_date"])
+            available = {code: max(row["available_qty"], 0) for code, row in stock.items()}
+            shortages = defaultdict(lambda: {"required": 0, "available": 0, "product_name": ""})
+            for item in orders:
+                qty = net_delivered(item)
+                code = item["product_code"]
+                have = available.get(code, 0)
+                if qty > have + 1e-9:
+                    shortages[code]["required"] += qty - have
+                    shortages[code]["available"] = have
+                    shortages[code]["product_name"] = item["product_name"]
+                available[code] = max(have - qty, 0)
+            if shortages:
+                return jsonify({
+                    "ok": False,
+                    "error": "Không đủ tồn hóa đơn để lập toàn bộ hóa đơn đầu ra",
+                    "shortages": [{"product_code": code, **values} for code, values in shortages.items()],
+                }), 409
+
+            created = []
+            for contractor, group in _group_rows(orders, "contractor").items():
+                existing = conn.execute(
+                    "SELECT * FROM outgoing_invoice_drafts WHERE batch_id=? AND contractor=?",
+                    (batch_id, contractor),
+                ).fetchone()
+                if existing and existing["status"] == "issued":
+                    created.append(dict(existing))
+                    continue
+                subtotal = sum(net_delivered(item) * number_value(item["sell_price"]) for item in group)
+                total = sum(net_delivered(item) * number_value(item["sell_price"]) * tax_factor(item["tax"]) for item in group)
+                tax_amount = total - subtotal
+                conn.execute(
+                    """INSERT INTO outgoing_invoice_drafts(
+                        batch_id,contractor,invoice_date,status,subtotal,tax_amount,total_amount,created_at
+                    ) VALUES(?,?,?,'draft',?,?,?,?)
+                    ON CONFLICT(batch_id,contractor) DO UPDATE SET
+                        invoice_date=excluded.invoice_date,status='draft',subtotal=excluded.subtotal,
+                        tax_amount=excluded.tax_amount,total_amount=excluded.total_amount""",
+                    (batch_id, contractor, batch["work_date"], subtotal, tax_amount, total, now_iso()),
+                )
+                draft = conn.execute(
+                    "SELECT * FROM outgoing_invoice_drafts WHERE batch_id=? AND contractor=?",
+                    (batch_id, contractor),
+                ).fetchone()
+                draft_id = draft["id"]
+                conn.execute("DELETE FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,))
+                conn.execute(
+                    "UPDATE inventory_transactions SET status='cancelled',updated_at=? "
+                    "WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",
+                    (now_iso(), str(draft_id)),
+                )
+                for item in group:
+                    qty = net_delivered(item)
+                    amount = qty * number_value(item["sell_price"])
+                    invoice_name_row = conn.execute(
+                        "SELECT invoice_name FROM outgoing_product_names WHERE product_code=?",
+                        (item["product_code"],),
+                    ).fetchone()
+                    invoice_name = invoice_name_row["invoice_name"] if invoice_name_row else item["product_name"]
+                    conn.execute(
+                        """INSERT INTO outgoing_invoice_lines(
+                            draft_id,order_id,product_code,product_name,qty,unit,unit_price,tax,amount
+                        ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                        (draft_id, item["id"], item["product_code"], invoice_name, qty,
+                         item["unit"], item["sell_price"], item["tax"], amount),
+                    )
+                    conn.execute(
+                        """INSERT INTO inventory_transactions(
+                            txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
+                            kitchen,status,note,created_at,updated_at
+                        ) VALUES(?,?,0,?,?, 'OUTGOING_DRAFT',?,?,?,'reserved',?,?,?)
+                        ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
+                            txn_date=excluded.txn_date,product_code=excluded.product_code,qty_out=excluded.qty_out,
+                            unit_cost=excluded.unit_cost,kitchen=excluded.kitchen,status='reserved',updated_at=excluded.updated_at""",
+                        (batch["work_date"], item["product_code"], qty, item["buy_price"], str(draft_id),
+                         str(item["id"]), item["kitchen"], f"Dự thảo hóa đơn {contractor}", now_iso(), now_iso()),
+                    )
+                created.append(dict(draft))
+            audit(conn, now_iso, "outgoing.draft", "ok", entity_type="batch", entity_id=batch_id,
+                  metadata={"drafts": len(created)})
+            return jsonify({"ok": True, "drafts": created, "requires_user_sign_and_issue": True})
+
+    @app.put("/api/outgoing-product-names/<product_code>")
+    def api_outgoing_product_name(product_code):
+        body = request.get_json(force=True) or {}
+        code = clean_text(product_code).upper()
+        invoice_name = clean_text(body.get("invoice_name"))
+        if not code or not invoice_name:
+            return jsonify({"ok": False, "error": "Cần mã hàng và tên xuất hóa đơn"}), 400
+        with db_factory() as conn:
+            product = conn.execute("SELECT code FROM products WHERE code=?", (code,)).fetchone()
+            if not product:
+                return jsonify({"ok": False, "error": "Mã hàng chưa có trong danh mục"}), 404
+            conn.execute(
+                """INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES(?,?,?)
+                   ON CONFLICT(product_code) DO UPDATE SET invoice_name=excluded.invoice_name,updated_at=excluded.updated_at""",
+                (code, invoice_name, now_iso()),
+            )
+            audit(conn, now_iso, "outgoing.name_mapping", "ok", entity_type="product", entity_id=code)
+            return jsonify({"ok": True, "product_code": code, "invoice_name": invoice_name})
+
+    @app.post("/api/outgoing-invoices/<int:draft_id>/confirm-issued")
+    def api_confirm_outgoing_issued(draft_id):
+        body = request.get_json(silent=True) or {}
+        if not body.get("confirmed"):
+            return jsonify({"ok": False, "error": "Cần xác nhận người dùng đã ký và phát hành hóa đơn"}), 400
+        with db_factory() as conn:
+            draft = conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,)).fetchone()
+            if not draft:
+                return jsonify({"ok": False, "error": "Không tìm thấy dự thảo hóa đơn"}), 404
+            if draft["status"] != "issued":
+                conn.execute(
+                    "UPDATE outgoing_invoice_drafts SET status='issued',issued_at=? WHERE id=?",
+                    (now_iso(), draft_id),
+                )
+                conn.execute(
+                    "UPDATE inventory_transactions SET status='posted',updated_at=? "
+                    "WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",
+                    (now_iso(), str(draft_id)),
+                )
+                audit(conn, now_iso, "outgoing.confirm_issued", "ok", entity_type="outgoing_invoice", entity_id=draft_id)
+            return jsonify({"ok": True, "idempotent": draft["status"] == "issued"})
+
+    @app.get("/api/outgoing-invoices")
+    def api_outgoing_invoices():
+        with db_factory() as conn:
+            rows = [dict(row) for row in conn.execute(
+                "SELECT * FROM outgoing_invoice_drafts ORDER BY invoice_date DESC,id DESC LIMIT 200"
+            )]
+            return jsonify({"ok": True, "items": rows})
+
+    @app.post("/api/debt-adjustments")
+    def api_debt_adjustment():
+        body = request.get_json(force=True) or {}
+        if body.get("party_type") not in {"contractor", "supplier"}:
+            return jsonify({"ok": False, "error": "Nhóm công nợ không hợp lệ"}), 400
+        with db_factory() as conn:
+            cur = conn.execute(
+                """INSERT INTO debt_adjustments(
+                    adjustment_date,party_type,party_code,amount,note,created_at
+                ) VALUES(?,?,?,?,?,?)""",
+                (body.get("adjustment_date") or date.today().isoformat(), body["party_type"],
+                 clean_text(body.get("party_code")), number_value(body.get("amount")),
+                 clean_text(body.get("note")), now_iso()),
+            )
+            return jsonify({"ok": True, "id": cur.lastrowid})
+
+    @app.get("/api/debts")
+    def api_debts():
+        period_from = request.args.get("from") or date.today().replace(day=1).isoformat()
+        period_to = request.args.get("to") or date.today().isoformat()
+        with db_factory() as conn:
+            return jsonify({"ok": True, **debt_period_payload(conn, period_from, period_to, tax_factor)})
+
+    @app.put("/api/kitchen-units/<kitchen_code>")
+    def api_kitchen_unit(kitchen_code):
+        body = request.get_json(force=True) or {}
+        unit_code = clean_text(body.get("unit_code")).upper()
+        if not unit_code:
+            return jsonify({"ok": False, "error": "Cần mã Unit"}), 400
+        with db_factory() as conn:
+            conn.execute(
+                """INSERT INTO kitchen_units(kitchen_code,unit_code,updated_at) VALUES(?,?,?)
+                   ON CONFLICT(kitchen_code) DO UPDATE SET unit_code=excluded.unit_code,updated_at=excluded.updated_at""",
+                (clean_text(kitchen_code).upper(), unit_code, now_iso()),
+            )
+            return jsonify({"ok": True})
+
+    @app.put("/api/dated-prices/<product_code>")
+    def api_dated_price(product_code):
+        body = request.get_json(force=True) or {}
+        period = clean_text(body.get("period"))
+        if not re.fullmatch(r"\d{4}-\d{2}", period):
+            return jsonify({"ok": False, "error": "Kỳ giá phải có dạng YYYY-MM"}), 400
+        with db_factory() as conn:
+            conn.execute(
+                """INSERT INTO dated_prices(product_code,price_group,period,price_value,updated_at)
+                   VALUES(?,?,?,?,?) ON CONFLICT(product_code,price_group,period)
+                   DO UPDATE SET price_value=excluded.price_value,updated_at=excluded.updated_at""",
+                (clean_text(product_code).upper(), clean_text(body.get("price_group") or "HATRAN").upper(),
+                 period, number_value(body.get("price_value")), now_iso()),
+            )
+            return jsonify({"ok": True})
+
+    @app.get("/api/kitchen/plans")
+    def api_meal_plans():
+        with db_factory() as conn:
+            return jsonify({"ok": True, "items": meal_plan_payload(conn, request.args.get("date", ""))})
+
+    @app.post("/api/kitchen/plans")
+    def api_save_meal_plan():
+        body = request.get_json(force=True) or {}
+        items = body.get("items") or []
+        if not body.get("work_date") or not body.get("kitchen") or not body.get("shift"):
+            return jsonify({"ok": False, "error": "Cần ngày, bếp và ca"}), 400
+        if number_value(body.get("meal_count")) <= 0:
+            return jsonify({"ok": False, "error": "Số suất phải lớn hơn 0"}), 400
+        with db_factory() as conn:
+            kitchen = clean_text(body["kitchen"]).upper()
+            unit = conn.execute("SELECT unit_code FROM kitchen_units WHERE kitchen_code=?", (kitchen,)).fetchone()
+            unit_code = clean_text(body.get("unit_code")) or (unit["unit_code"] if unit else "")
+            plan_id = int(body.get("id") or 0)
+            if plan_id:
+                conn.execute(
+                    """UPDATE meal_plans SET work_date=?,kitchen=?,shift=?,meal_count=?,unit_code=?,
+                       status='draft',note=?,updated_at=? WHERE id=?""",
+                    (body["work_date"], kitchen, clean_text(body["shift"]), number_value(body["meal_count"]),
+                     unit_code, clean_text(body.get("note")), now_iso(), plan_id),
+                )
+                conn.execute("DELETE FROM meal_plan_items WHERE plan_id=?", (plan_id,))
+            else:
+                cur = conn.execute(
+                    """INSERT INTO meal_plans(
+                        work_date,kitchen,shift,meal_count,unit_code,status,note,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,'draft',?,?,?)""",
+                    (body["work_date"], kitchen, clean_text(body["shift"]), number_value(body["meal_count"]),
+                     unit_code, clean_text(body.get("note")), now_iso(), now_iso()),
+                )
+                plan_id = cur.lastrowid
+            period = body["work_date"][:7]
+            saved = 0
+            warnings = []
+            for raw in items:
+                code = clean_text(raw.get("product_code")).upper()
+                product = conn.execute("SELECT * FROM products WHERE code=?", (code,)).fetchone()
+                if not product or number_value(raw.get("norm_qty")) <= 0:
+                    continue
+                price = number_value(raw.get("buy_price"))
+                source = "Nhập tại kế hoạch"
+                if price <= 0:
+                    dated = conn.execute(
+                        "SELECT price_value FROM dated_prices WHERE product_code=? AND price_group='HATRAN' AND period=?",
+                        (code, period),
+                    ).fetchone()
+                    if dated:
+                        price = dated["price_value"]
+                        source = f"HATRAN {period}"
+                    else:
+                        group_price = conn.execute(
+                            "SELECT price_value FROM product_prices WHERE product_code=? AND price_group='HATRAN'",
+                            (code,),
+                        ).fetchone()
+                        price = group_price["price_value"] if group_price and group_price["price_value"] else 0
+                        source = "HATRAN danh mục"
+                        warnings.append(f"{code}: chưa có giá HATRAN đúng kỳ {period}")
+                conn.execute(
+                    """INSERT INTO meal_plan_items(
+                        plan_id,dish_name,product_code,product_name,norm_qty,unit,supplier,buy_price,price_source
+                    ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                    (plan_id, clean_text(raw.get("dish_name")), code, product["name"],
+                     number_value(raw.get("norm_qty")), clean_text(raw.get("unit")) or product["unit"],
+                     clean_text(raw.get("supplier")) or product["supplier"], price, source),
+                )
+                saved += 1
+            audit(conn, now_iso, "kitchen.save_plan", "ok", entity_type="meal_plan", entity_id=plan_id,
+                  metadata={"items": saved, "warnings": len(warnings)})
+            return jsonify({"ok": True, "id": plan_id, "warnings": warnings,
+                            "items": meal_plan_payload(conn, body["work_date"])})
+
+    @app.post("/api/kitchen/plans/<int:plan_id>/approve")
+    def api_approve_meal_plan(plan_id):
+        with db_factory() as conn:
+            count = conn.execute("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?", (plan_id,)).fetchone()["n"]
+            if count == 0:
+                return jsonify({"ok": False, "error": "Kế hoạch chưa có định lượng nguyên liệu"}), 400
+            missing_price = conn.execute(
+                "SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=? AND buy_price<=0", (plan_id,)
+            ).fetchone()["n"]
+            if missing_price:
+                return jsonify({"ok": False, "error": f"Còn {missing_price} nguyên liệu thiếu giá"}), 400
+            conn.execute("UPDATE meal_plans SET status='approved',updated_at=? WHERE id=?", (now_iso(), plan_id))
+            return jsonify({"ok": True})
+
+    @app.get("/api/kitchen/po")
+    def api_kitchen_po():
+        work_date = request.args.get("date") or date.today().isoformat()
+        with db_factory() as conn:
+            plans = meal_plan_payload(conn, work_date)
+            if not plans:
+                return jsonify({"ok": False, "error": "Ngày này chưa có kế hoạch xưởng cơm"}), 404
+            wb = meal_po_workbook(plans, work_date)
+            stream = io.BytesIO()
+            wb.save(stream)
+            stream.seek(0)
+            return send_file(stream, as_attachment=True, download_name=f"PO_xuong_com_{work_date}.xlsx",
+                             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    @app.post("/api/staff")
+    def api_save_staff():
+        body = request.get_json(force=True) or {}
+        code = clean_text(body.get("employee_code")).upper()
+        name = clean_text(body.get("full_name"))
+        if not code or not name:
+            return jsonify({"ok": False, "error": "Cần mã và họ tên nhân sự"}), 400
+        with db_factory() as conn:
+            conn.execute(
+                """INSERT INTO staff(
+                    employee_code,full_name,role_name,kitchen,base_salary,standard_days,standard_hours,
+                    bhxh_employee_rate,bhxh_company_rate,active,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(employee_code) DO UPDATE SET
+                    full_name=excluded.full_name,role_name=excluded.role_name,kitchen=excluded.kitchen,
+                    base_salary=excluded.base_salary,standard_days=excluded.standard_days,
+                    standard_hours=excluded.standard_hours,bhxh_employee_rate=excluded.bhxh_employee_rate,
+                    bhxh_company_rate=excluded.bhxh_company_rate,active=excluded.active,updated_at=excluded.updated_at""",
+                (code, name, clean_text(body.get("role_name")), clean_text(body.get("kitchen")).upper(),
+                 number_value(body.get("base_salary")), number_value(body.get("standard_days"), 26),
+                 number_value(body.get("standard_hours"), 8), number_value(body.get("bhxh_employee_rate")),
+                 number_value(body.get("bhxh_company_rate")), 0 if body.get("active") is False else 1,
+                 now_iso(), now_iso()),
+            )
+            return jsonify({"ok": True})
+
+    @app.post("/api/attendance")
+    def api_save_attendance():
+        body = request.get_json(force=True) or {}
+        with db_factory() as conn:
+            staff_row = conn.execute(
+                "SELECT id FROM staff WHERE employee_code=?", (clean_text(body.get("employee_code")).upper(),)
+            ).fetchone()
+            if not staff_row or not body.get("work_date"):
+                return jsonify({"ok": False, "error": "Nhân sự hoặc ngày chấm công không hợp lệ"}), 400
+            conn.execute(
+                """INSERT INTO attendance_entries(
+                    employee_id,work_date,normal_hours,overtime_hours,sunday_hours,night_hours,
+                    holiday_hours,note,source,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(employee_id,work_date) DO UPDATE SET
+                    normal_hours=excluded.normal_hours,overtime_hours=excluded.overtime_hours,
+                    sunday_hours=excluded.sunday_hours,night_hours=excluded.night_hours,
+                    holiday_hours=excluded.holiday_hours,note=excluded.note,source=excluded.source,
+                    updated_at=excluded.updated_at""",
+                (staff_row["id"], body["work_date"], number_value(body.get("normal_hours")),
+                 number_value(body.get("overtime_hours")), number_value(body.get("sunday_hours")),
+                 number_value(body.get("night_hours")), number_value(body.get("holiday_hours")),
+                 clean_text(body.get("note")), "manual", now_iso()),
+            )
+            return jsonify({"ok": True})
+
+    @app.post("/api/attendance/import")
+    def api_import_attendance():
+        upload = request.files.get("file")
+        if not upload or not upload.filename or Path(upload.filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Cần file chấm công .xlsx/.xlsm"}), 400
+        temp = data_dir / f"attendance_{datetime.now():%Y%m%d%H%M%S%f}.xlsx"
+        upload.save(temp)
+        try:
+            with db_factory() as conn:
+                result = import_legacy_attendance(conn, temp, upload.filename, now_iso)
+                audit(conn, now_iso, "attendance.import", "ok", metadata=result)
+                return jsonify({"ok": True, **result})
+        finally:
+            try:
+                temp.unlink()
+            except OSError:
+                pass
+
+    @app.put("/api/payroll-adjustments/<employee_code>/<month>")
+    def api_payroll_adjustment(employee_code, month):
+        body = request.get_json(force=True) or {}
+        if not re.fullmatch(r"\d{4}-\d{2}", month):
+            return jsonify({"ok": False, "error": "Tháng phải có dạng YYYY-MM"}), 400
+        with db_factory() as conn:
+            person = conn.execute("SELECT id FROM staff WHERE employee_code=?", (employee_code.upper(),)).fetchone()
+            if not person:
+                return jsonify({"ok": False, "error": "Không tìm thấy nhân sự"}), 404
+            conn.execute(
+                """INSERT INTO payroll_adjustments(
+                    employee_id,month,allowance,responsibility,advance,probation_deduction,
+                    bhxh_employee_amount,bhxh_company_amount,gross_override,net_override,use_override,note,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(employee_id,month) DO UPDATE SET
+                    allowance=excluded.allowance,responsibility=excluded.responsibility,
+                    advance=excluded.advance,probation_deduction=excluded.probation_deduction,
+                    bhxh_employee_amount=excluded.bhxh_employee_amount,
+                    bhxh_company_amount=excluded.bhxh_company_amount,
+                    gross_override=excluded.gross_override,net_override=excluded.net_override,
+                    use_override=excluded.use_override,note=excluded.note,updated_at=excluded.updated_at""",
+                (person["id"], month, number_value(body.get("allowance")),
+                 number_value(body.get("responsibility")), number_value(body.get("advance")),
+                 number_value(body.get("probation_deduction")), number_value(body.get("bhxh_employee_amount")),
+                 number_value(body.get("bhxh_company_amount")), number_value(body.get("gross_override")),
+                 number_value(body.get("net_override")), 1 if body.get("use_override") else 0,
+                 clean_text(body.get("note")), now_iso()),
+            )
+            return jsonify({"ok": True, "payroll": payroll_rows(conn, month)})
+
+    @app.get("/api/payroll")
+    def api_payroll():
+        month = request.args.get("month") or date.today().strftime("%Y-%m")
+        with db_factory() as conn:
+            rows = payroll_rows(conn, month)
+            labor = [dict(row) for row in conn.execute(
+                """SELECT kitchen,SUM(amount) amount FROM kitchen_labor_costs
+                   WHERE substr(work_date,1,7)=? GROUP BY kitchen ORDER BY kitchen""", (month,)
+            )]
+            return jsonify({"ok": True, "month": month, "items": rows, "labor_by_kitchen": labor,
+                            "total_net": sum(row["net_salary"] for row in rows)})
+
+    @app.put("/api/print/settings")
+    def api_print_settings():
+        body = request.get_json(force=True) or {}
+        with db_factory() as conn:
+            setting_set(conn, "printer_name", clean_text(body.get("printer_name")))
+            setting_set(conn, "print_copies", max(1, min(int(number_value(body.get("copies"), 1)), 10)))
+            setting_set(conn, "print_paper", clean_text(body.get("paper")) or "A4")
+            return jsonify({"ok": True})
+
+    @app.post("/api/print/prepare/<int:batch_id>")
+    def api_prepare_print(batch_id):
+        export_dir = data_dir / "print_jobs" / str(batch_id)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        with db_factory() as conn:
+            batch, orders = ctx["require_batch"](conn, batch_id)
+            if batch["status"] != "approved":
+                return jsonify({"ok": False, "error": "Phải duyệt phiên đơn trước khi chuẩn bị in"}), 400
+            documents = {
+                "supplier_orders": (ctx["export_supplier_orders"](conn, batch, orders), f"Don_NCC_{batch['work_date']}.xlsx"),
+                "deliveries": (ctx["export_deliveries"](conn, batch, orders), f"Phieu_giao_{batch['work_date']}.xlsx"),
+                "purchases": (ctx["export_purchase_documents"](conn, batch, orders), f"Bang_ke_{batch['work_date']}.xlsx"),
+                "report": (ctx["export_report"](conn, batch, orders), f"Bao_cao_{batch['work_date']}.xlsx"),
+            }
+            prepared = []
+            for document_type, (workbook, filename) in documents.items():
+                path = export_dir / filename
+                workbook.save(path)
+                conn.execute(
+                    """INSERT INTO print_jobs(
+                        batch_id,document_type,file_path,status,created_at
+                    ) VALUES(?,?,?,'prepared',?) ON CONFLICT(batch_id,document_type) DO UPDATE SET
+                        file_path=excluded.file_path,status='prepared',approved_at=NULL,printed_at=NULL,
+                        error_message=NULL,created_at=excluded.created_at""",
+                    (batch_id, document_type, str(path.resolve()), now_iso()),
+                )
+                prepared.append(document_type)
+            audit(conn, now_iso, "print.prepare", "ok", entity_type="batch", entity_id=batch_id,
+                  metadata={"documents": prepared})
+            return jsonify({"ok": True, "prepared": prepared, "requires_approval": True})
+
+    @app.post("/api/print/approve/<int:batch_id>")
+    def api_approve_print(batch_id):
+        with db_factory() as conn:
+            count = conn.execute("SELECT COUNT(*) n FROM print_jobs WHERE batch_id=?", (batch_id,)).fetchone()["n"]
+            if not count:
+                return jsonify({"ok": False, "error": "Chưa chuẩn bị bộ chứng từ in"}), 400
+            conn.execute(
+                "UPDATE print_jobs SET status='approved',approved_at=?,error_message=NULL WHERE batch_id=?",
+                (now_iso(), batch_id),
+            )
+            audit(conn, now_iso, "print.approve", "ok", entity_type="batch", entity_id=batch_id,
+                  metadata={"jobs": count})
+            return jsonify({"ok": True, "approved": count})
+
+    @app.post("/api/print/run/<int:batch_id>")
+    def api_run_print(batch_id):
+        body = request.get_json(silent=True) or {}
+        dry_run = bool(body.get("dry_run"))
+        with db_factory() as conn:
+            jobs = [dict(row) for row in conn.execute(
+                "SELECT * FROM print_jobs WHERE batch_id=? AND status='approved' ORDER BY id", (batch_id,)
+            )]
+            if not jobs:
+                return jsonify({"ok": False, "error": "Không có chứng từ đã duyệt để in"}), 400
+            missing = [job for job in jobs if not Path(job["file_path"]).exists()]
+            if missing:
+                return jsonify({"ok": False, "error": "Có file in bị thiếu; cần chuẩn bị lại"}), 400
+            printer_name = setting_get(conn, "printer_name", "")
+            copies = max(1, min(int(as_number(setting_get(conn, "print_copies", "1"), 1)), 10))
+            if not dry_run:
+                if os.name != "nt" or not hasattr(os, "startfile"):
+                    return jsonify({"ok": False, "error": "In trực tiếp chỉ hỗ trợ trên PC Windows bàn giao"}), 400
+                for job in jobs:
+                    try:
+                        for _ in range(copies):
+                            os.startfile(job["file_path"], "print")
+                        conn.execute(
+                            "UPDATE print_jobs SET status='printed',printed_at=?,printer_name=?,error_message=NULL WHERE id=?",
+                            (now_iso(), printer_name or "Máy in mặc định Windows", job["id"]),
+                        )
+                    except OSError:
+                        conn.execute(
+                            "UPDATE print_jobs SET status='error',error_message=? WHERE id=?",
+                            ("Windows không mở được lệnh in cho file này", job["id"]),
+                        )
+                        return jsonify({"ok": False, "error": "Windows không gửi được một file sang máy in"}), 500
+            audit(conn, now_iso, "print.run", "dry_run" if dry_run else "ok", entity_type="batch", entity_id=batch_id,
+                  metadata={"jobs": len(jobs), "copies": copies})
+            return jsonify({"ok": True, "dry_run": dry_run, "jobs": len(jobs), "copies": copies,
+                            "printer": printer_name or "Máy in mặc định Windows"})
+
+    @app.get("/api/print/jobs/<int:batch_id>")
+    def api_print_jobs(batch_id):
+        with db_factory() as conn:
+            return jsonify({"ok": True, "items": [dict(row) for row in conn.execute(
+                "SELECT * FROM print_jobs WHERE batch_id=? ORDER BY id", (batch_id,)
+            )]})
+
+    @app.put("/api/document-settings")
+    def api_document_settings():
+        body = request.get_json(force=True) or {}
+        allowed = {"payment_requester", "payment_bank_name", "payment_bank_account"}
+        with db_factory() as conn:
+            for key in allowed:
+                if key in body:
+                    setting_set(conn, key, clean_text(body[key]))
+            return jsonify({"ok": True})
+
+    @app.get("/api/export/payment-request/<contractor>")
+    def api_payment_request(contractor):
+        if Document is None:
+            return jsonify({"ok": False, "error": "Máy chưa cài thư viện python-docx"}), 500
+        period_from = request.args.get("from") or date.today().replace(day=1).isoformat()
+        period_to = request.args.get("to") or date.today().isoformat()
+        contractor = clean_text(contractor).upper()
+        with db_factory() as conn:
+            rows = [dict(row) for row in conn.execute(
+                """SELECT o.*,b.work_date FROM orders o JOIN batches b ON b.id=o.batch_id
+                   WHERE b.status='approved' AND o.contractor=? AND b.work_date BETWEEN ? AND ?""",
+                (contractor, period_from, period_to),
+            )]
+            amount = sum(net_delivered(row) * number_value(row["sell_price"]) * tax_factor(row["tax"]) for row in rows)
+            if not rows:
+                return jsonify({"ok": False, "error": "Không có dữ liệu đã duyệt trong kỳ"}), 404
+            contractor_row = conn.execute("SELECT name FROM contractors WHERE code=?", (contractor,)).fetchone()
+            document = payment_request_document(
+                company=setting_get(conn, "company", ""),
+                recipient=contractor_row["name"] if contractor_row else contractor,
+                requester=setting_get(conn, "payment_requester", ""),
+                bank_name=setting_get(conn, "payment_bank_name", ""),
+                bank_account=setting_get(conn, "payment_bank_account", ""),
+                amount=amount, period_from=period_from, period_to=period_to,
+            )
+            stream = io.BytesIO()
+            document.save(stream)
+            stream.seek(0)
+            return send_file(stream, as_attachment=True,
+                             download_name=f"De_nghi_thanh_toan_{contractor}_{period_from}_{period_to}.docx",
+                             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+def _group_rows(rows, key):
+    groups = defaultdict(list)
+    for row in rows:
+        groups[row.get(key) or "CHƯA XÁC ĐỊNH"].append(row)
+    return groups
+
+
+def debt_period_payload(conn, period_from: str, period_to: str, tax_factor):
+    if period_from > period_to:
+        raise ValueError("Ngày bắt đầu phải trước ngày kết thúc")
+    parties = {
+        "contractor": defaultdict(lambda: {
+            "opening": 0, "period_charge": 0, "period_paid": 0,
+            "period_adjustment": 0, "closing": 0,
+        }),
+        "supplier": defaultdict(lambda: {
+            "opening": 0, "period_charge": 0, "period_paid": 0,
+            "period_adjustment": 0, "closing": 0,
+        }),
+    }
+    for row in conn.execute("SELECT * FROM balances"):
+        if row["party_type"] in parties:
+            parties[row["party_type"]][row["party_code"]]["opening"] += row["opening"]
+    for row in conn.execute(
+        """SELECT o.*,b.work_date FROM orders o JOIN batches b ON b.id=o.batch_id
+           WHERE b.status='approved' AND b.work_date<=? ORDER BY b.work_date,o.id""", (period_to,)
+    ):
+        item = dict(row)
+        contractor_charge = net_delivered(item) * as_number(item["sell_price"]) * tax_factor(item["tax"])
+        supplier_charge = net_received(item) * as_number(item["buy_price"])
+        for party_type, code, amount in (
+            ("contractor", item["contractor"], contractor_charge),
+            ("supplier", item["supplier"], supplier_charge),
+        ):
+            if not code:
+                continue
+            target = parties[party_type][code]
+            if item["work_date"] < period_from:
+                target["opening"] += amount
+            else:
+                target["period_charge"] += amount
+    for row in conn.execute("SELECT * FROM payments WHERE payment_date<=?", (period_to,)):
+        party_type = row["party_type"]
+        if party_type not in parties:
+            continue
+        target = parties[party_type][row["party_code"]]
+        if row["payment_date"] < period_from:
+            target["opening"] -= row["amount"]
+        else:
+            target["period_paid"] += row["amount"]
+    for row in conn.execute("SELECT * FROM debt_adjustments WHERE adjustment_date<=?", (period_to,)):
+        if row["party_type"] not in parties:
+            continue
+        target = parties[row["party_type"]][row["party_code"]]
+        if row["adjustment_date"] < period_from:
+            target["opening"] += row["amount"]
+        else:
+            target["period_adjustment"] += row["amount"]
+    for group in parties.values():
+        for values in group.values():
+            values["closing"] = (
+                values["opening"] + values["period_charge"]
+                + values["period_adjustment"] - values["period_paid"]
+            )
+    return {
+        "period_from": period_from,
+        "period_to": period_to,
+        "contractors": dict(parties["contractor"]),
+        "suppliers": dict(parties["supplier"]),
+    }
+
+
+def meal_plan_payload(conn, work_date=""):
+    params = []
+    where = ""
+    if work_date:
+        where = "WHERE mp.work_date=?"
+        params.append(work_date)
+    plans = [dict(row) for row in conn.execute(
+        f"""SELECT mp.*,COALESCE(ku.unit_code,mp.unit_code,'') mapped_unit
+             FROM meal_plans mp LEFT JOIN kitchen_units ku ON ku.kitchen_code=mp.kitchen
+             {where} ORDER BY mp.work_date DESC,mp.kitchen,mp.shift,mp.id""", params
+    )]
+    for plan in plans:
+        items = [dict(row) for row in conn.execute(
+            "SELECT * FROM meal_plan_items WHERE plan_id=? ORDER BY dish_name,product_name", (plan["id"],)
+        )]
+        for item in items:
+            item["required_qty"] = plan["meal_count"] * item["norm_qty"]
+            item["cost"] = item["required_qty"] * item["buy_price"]
+        plan["items"] = items
+        plan["total_cost"] = sum(item["cost"] for item in items)
+        plan["cost_per_meal"] = plan["total_cost"] / plan["meal_count"] if plan["meal_count"] else 0
+        plan["warnings"] = []
+        if not plan["mapped_unit"]:
+            plan["warnings"].append("Bếp chưa được ghép Unit")
+        if any(item["buy_price"] <= 0 for item in items):
+            plan["warnings"].append("Có nguyên liệu thiếu giá")
+    return plans
+
+
+def meal_po_workbook(plans, work_date: str):
+    groups = defaultdict(list)
+    for plan in plans:
+        for item in plan["items"]:
+            key = (plan["mapped_unit"] or "CHƯA CÓ UNIT", item["supplier"] or "CHƯA CÓ NCC")
+            groups[key].append((plan, item))
+    wb = Workbook()
+    wb.remove(wb.active)
+    for (unit_code, supplier), rows in sorted(groups.items()):
+        title = re.sub(r"[\\/*?:\[\]]", "-", f"{unit_code}-{supplier}")[:31]
+        ws = wb.create_sheet(title or "PO")
+        ws.append(["PO XƯỞNG CƠM", f"Ngày {work_date}", f"Unit {unit_code}", f"NCC {supplier}"])
+        ws.merge_cells("A1:D1")
+        ws["A1"].font = Font(name="Arial", size=16, bold=True, color="FFFFFF")
+        ws["A1"].fill = PatternFill("solid", fgColor="17324D")
+        ws["A1"].alignment = Alignment(horizontal="center")
+        ws.append([])
+        ws.append(["STT", "Bếp / ca", "Mã hàng", "Tên nguyên liệu", "ĐVT", "Số suất", "Định lượng/suất",
+                   "Số lượng cần", "Đơn giá", "Thành tiền", "Nguồn giá"])
+        for index, (plan, item) in enumerate(rows, 1):
+            ws.append([
+                index, f"{plan['kitchen']} / {plan['shift']}", item["product_code"], item["product_name"],
+                item["unit"], plan["meal_count"], item["norm_qty"], item["required_qty"], item["buy_price"],
+                item["cost"], item["price_source"],
+            ])
+        for cell in ws[3]:
+            cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="087F73")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.freeze_panes = "A4"
+        ws.auto_filter.ref = f"A3:K{ws.max_row}"
+        widths = [7, 20, 14, 32, 10, 11, 16, 15, 14, 16, 20]
+        for index, width in enumerate(widths, 1):
+            ws.column_dimensions[chr(64 + index)].width = width
+        for row in range(4, ws.max_row + 1):
+            for col in (9, 10):
+                ws.cell(row, col).number_format = "#,##0"
+    if not wb.sheetnames:
+        wb.create_sheet("PO")
+    return wb
+
+
+def employee_code(name: str) -> str:
+    text = unicodedata.normalize("NFD", name.upper())
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    return re.sub(r"[^A-Z0-9]+", "", text)[:30] or "NV"
+
+
+def import_legacy_attendance(conn, path: Path, source_name: str, now_iso):
+    values_book = load_workbook(path, data_only=True, read_only=False)
+    attendance_sheet = next(
+        (ws for ws in values_book.worksheets if "xưởng cơm" in ws.title.lower()), None
+    )
+    staff_count = entry_count = labor_count = payroll_override_count = 0
+    month = ""
+    if attendance_sheet:
+        year = int(as_number(attendance_sheet["C2"].value, date.today().year))
+        month_num = int(as_number(attendance_sheet["C3"].value, date.today().month))
+        month = f"{year:04d}-{month_num:02d}"
+        base_salary = 0
+        payroll_sheet = next((ws for ws in values_book.worksheets if "lương xưởng" in ws.title.lower()), None)
+        if payroll_sheet:
+            base_salary = as_number(payroll_sheet["C2"].value)
+        for row in range(6, attendance_sheet.max_row + 1):
+            name = str(attendance_sheet.cell(row, 2).value or "").strip()
+            if not name or name.upper() in {"HỌ& TÊN", "HỌ VÀ TÊN"}:
+                continue
+            code = employee_code(name)
+            conn.execute(
+                """INSERT INTO staff(
+                    employee_code,full_name,base_salary,standard_days,standard_hours,created_at,updated_at
+                ) VALUES(?,?,?,26,8,?,?) ON CONFLICT(employee_code) DO UPDATE SET
+                    full_name=excluded.full_name,
+                    base_salary=CASE WHEN staff.base_salary<=0 THEN excluded.base_salary ELSE staff.base_salary END,
+                    updated_at=excluded.updated_at""",
+                (code, name, base_salary, now_iso(), now_iso()),
+            )
+            staff_id = conn.execute("SELECT id FROM staff WHERE employee_code=?", (code,)).fetchone()["id"]
+            staff_count += 1
+            overtime_row = row + 1 if row + 1 <= attendance_sheet.max_row and not attendance_sheet.cell(row + 1, 2).value else None
+            for day_index, col in enumerate(range(6, 37), start=1):
+                try:
+                    work_date = date(year, month_num, day_index)
+                except ValueError:
+                    break
+                normal = as_number(attendance_sheet.cell(row, col).value)
+                overtime = as_number(attendance_sheet.cell(overtime_row, col).value) if overtime_row else 0
+                # Some legacy rows store a VND daily wage in the date cells,
+                # not hours. Those amounts are imported from LƯƠNG XƯỞNG below.
+                if abs(normal) > 24 or abs(overtime) > 24:
+                    continue
+                if normal == 0 and overtime == 0:
+                    continue
+                sunday = work_date.weekday() == 6
+                conn.execute(
+                    """INSERT INTO attendance_entries(
+                        employee_id,work_date,normal_hours,overtime_hours,sunday_hours,night_hours,
+                        holiday_hours,note,source,updated_at
+                    ) VALUES(?,?,?,?,?,0,0,'',?,?) ON CONFLICT(employee_id,work_date) DO UPDATE SET
+                        normal_hours=excluded.normal_hours,overtime_hours=excluded.overtime_hours,
+                        sunday_hours=excluded.sunday_hours,source=excluded.source,updated_at=excluded.updated_at""",
+                    (staff_id, work_date.isoformat(), 0 if sunday else normal,
+                     0 if sunday else overtime, normal + overtime if sunday else 0,
+                     source_name, now_iso()),
+                )
+                entry_count += 1
+
+        if payroll_sheet and month:
+            payroll_records = {}
+            for row in range(4, payroll_sheet.max_row + 1):
+                raw_name = payroll_sheet.cell(row, 2).value
+                name = str(raw_name or "").strip()
+                if not name or name == "0":
+                    continue
+                code = employee_code(name)
+                next_row = row + 1
+                detail_row = row
+                if (next_row <= payroll_sheet.max_row
+                        and not payroll_sheet.cell(next_row, 1).value
+                        and not payroll_sheet.cell(next_row, 2).value
+                        and any(as_number(payroll_sheet.cell(next_row, col).value) for col in range(4, 17))):
+                    detail_row = next_row
+                gross = as_number(payroll_sheet.cell(detail_row, 11).value)
+                net = as_number(payroll_sheet.cell(detail_row, 15).value)
+                if gross == 0 and net != 0:
+                    gross = net
+                payroll_records[code] = {
+                    "name": name,
+                    "role": str(payroll_sheet.cell(row, 3).value or "").strip(),
+                    "allowance": as_number(payroll_sheet.cell(detail_row, 9).value),
+                    "responsibility": as_number(payroll_sheet.cell(detail_row, 10).value),
+                    "advance": as_number(payroll_sheet.cell(detail_row, 12).value),
+                    "probation": as_number(payroll_sheet.cell(detail_row, 13).value),
+                    "bhxh_employee": as_number(payroll_sheet.cell(detail_row, 14).value),
+                    "bhxh_company": as_number(payroll_sheet.cell(detail_row, 16).value),
+                    "gross": gross,
+                    "net": net,
+                }
+
+            # The legacy sheet can carry named supplements below the employee
+            # grid, e.g. "Cho chị An". Attach them to the matching person.
+            for row in range(4, payroll_sheet.max_row + 1):
+                supplement = as_number(payroll_sheet.cell(row, 15).value)
+                label = str(payroll_sheet.cell(row, 16).value or "").strip()
+                if supplement == 0 or not label.lower().startswith("cho "):
+                    continue
+                label_code = employee_code(re.sub(r"^cho\s+(chị|anh|em)?\s*", "", label, flags=re.IGNORECASE))
+                match = next((key for key in payroll_records if key == label_code or key in label_code or label_code in key), None)
+                if match:
+                    payroll_records[match]["gross"] += supplement
+                    payroll_records[match]["net"] += supplement
+
+            for code, record in payroll_records.items():
+                conn.execute(
+                    """INSERT INTO staff(
+                        employee_code,full_name,role_name,base_salary,standard_days,standard_hours,created_at,updated_at
+                    ) VALUES(?,?,?,?,26,8,?,?) ON CONFLICT(employee_code) DO UPDATE SET
+                        full_name=excluded.full_name,role_name=excluded.role_name,
+                        base_salary=CASE WHEN excluded.base_salary>0 THEN excluded.base_salary ELSE staff.base_salary END,
+                        updated_at=excluded.updated_at""",
+                    (code, record["name"], record["role"], base_salary, now_iso(), now_iso()),
+                )
+                staff_id = conn.execute("SELECT id FROM staff WHERE employee_code=?", (code,)).fetchone()["id"]
+                conn.execute(
+                    """INSERT INTO payroll_adjustments(
+                        employee_id,month,allowance,responsibility,advance,probation_deduction,
+                        bhxh_employee_amount,bhxh_company_amount,gross_override,net_override,use_override,note,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(employee_id,month) DO UPDATE SET
+                        allowance=excluded.allowance,responsibility=excluded.responsibility,
+                        advance=excluded.advance,probation_deduction=excluded.probation_deduction,
+                        bhxh_employee_amount=excluded.bhxh_employee_amount,
+                        bhxh_company_amount=excluded.bhxh_company_amount,
+                        gross_override=excluded.gross_override,net_override=excluded.net_override,
+                        use_override=1,note=excluded.note,updated_at=excluded.updated_at""",
+                    (staff_id, month, record["allowance"], record["responsibility"], record["advance"],
+                     record["probation"], record["bhxh_employee"], record["bhxh_company"],
+                     record["gross"], record["net"], f"Nạp từ {source_name}", now_iso()),
+                )
+                payroll_override_count += 1
+
+    labor_sheet = next((ws for ws in values_book.worksheets if "chấm công chợ" in ws.title.lower()), None)
+    if labor_sheet:
+        year = int(as_number(labor_sheet["B1"].value, date.today().year))
+        month_num = int(as_number(labor_sheet["D1"].value, date.today().month))
+        month = month or f"{year:04d}-{month_num:02d}"
+        for row in range(4, min(labor_sheet.max_row, 40) + 1):
+            raw_date = labor_sheet.cell(row, 1).value
+            work_date = as_date(raw_date)
+            if not work_date:
+                try:
+                    work_date = date(year, month_num, row - 3).isoformat()
+                except ValueError:
+                    continue
+            for col in range(3, min(labor_sheet.max_column, 24) + 1):
+                kitchen = str(labor_sheet.cell(3, col).value or "").strip().upper()
+                amount = as_number(labor_sheet.cell(row, col).value)
+                if not kitchen or amount == 0:
+                    continue
+                conn.execute(
+                    """INSERT INTO kitchen_labor_costs(work_date,kitchen,amount,source,updated_at)
+                       VALUES(?,?,?,?,?) ON CONFLICT(work_date,kitchen,source) DO UPDATE SET
+                       amount=excluded.amount,updated_at=excluded.updated_at""",
+                    (work_date, kitchen, amount, source_name, now_iso()),
+                )
+                labor_count += 1
+    values_book.close()
+    return {"month": month, "staff": staff_count, "attendance_entries": entry_count,
+            "labor_cost_entries": labor_count, "payroll_overrides": payroll_override_count,
+            "source": source_name}
+
+
+def payment_request_document(company: str, recipient: str, requester: str, bank_name: str,
+                             bank_account: str, amount: float, period_from: str, period_to: str):
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Cm(1.7)
+    section.bottom_margin = Cm(1.7)
+    section.left_margin = Cm(2)
+    section.right_margin = Cm(2)
+    normal = document.styles["Normal"]
+    normal.font.name = "Times New Roman"
+    normal.font.size = Pt(13)
+    header = document.add_table(rows=1, cols=2)
+    header.autofit = False
+    header.columns[0].width = Cm(8)
+    header.columns[1].width = Cm(9)
+    left = header.cell(0, 0).paragraphs[0]
+    left.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = left.add_run(company.upper())
+    run.bold = True
+    right = header.cell(0, 1).paragraphs[0]
+    right.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = right.add_run("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc")
+    run.bold = True
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_before = Pt(18)
+    title.paragraph_format.space_after = Pt(8)
+    run = title.add_run("GIẤY ĐỀ NGHỊ THANH TOÁN")
+    run.bold = True
+    run.font.size = Pt(16)
+    today = date.today()
+    date_line = document.add_paragraph(f"Ngày {today.day:02d} tháng {today.month:02d} năm {today.year}")
+    date_line.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    lines = [
+        ("Kính gửi: ", recipient.upper()),
+        ("Họ và tên người đề nghị thanh toán: ", requester or "................................................"),
+        ("Bộ phận (hoặc địa chỉ): ", "Kế toán"),
+        ("Nội dung thanh toán: ", f"Thanh toán tiền hàng/dịch vụ từ {period_from} đến {period_to}"),
+        ("Số tiền: ", f"{amount:,.0f} VNĐ".replace(",", ".")),
+        ("(Viết bằng chữ): ", number_to_vietnamese(amount) + "./."),
+        ("Hình thức thanh toán: ", "Chuyển khoản"),
+        ("Đơn vị thụ hưởng: ", company),
+        ("Số tài khoản: ", bank_account or "................................................"),
+        ("Tại ngân hàng: ", bank_name or "................................................"),
+    ]
+    for label, value in lines:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(4)
+        label_run = paragraph.add_run(label)
+        label_run.bold = True
+        paragraph.add_run(value)
+    signatures = document.add_table(rows=1, cols=2)
+    signatures.autofit = False
+    signatures.columns[0].width = Cm(8)
+    signatures.columns[1].width = Cm(8)
+    for cell, text in zip(signatures.rows[0].cells, (
+        "Người đề nghị thanh toán\n(Ký, ghi rõ họ tên)",
+        "Người duyệt\n(Ký, ghi rõ họ tên, đóng dấu)",
+    )):
+        paragraph = cell.paragraphs[0]
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run(text)
+        run.bold = True
+    document.add_paragraph("\n\n\n")
+    return document

@@ -13,6 +13,10 @@
     modalMode: "order",
     pendingImport: null,
     minvoiceStatus: null,
+    operations: null,
+    supplierNeeds: null,
+    opsDate: new Date().toISOString().slice(0, 10),
+    opsMonth: new Date().toISOString().slice(0, 7),
     busy: false
   };
 
@@ -24,6 +28,11 @@
     quotes: "Báo giá theo nhà thầu",
     reports: "Báo cáo và công nợ",
     documents: "Bảng kê, biên nhận và hóa đơn",
+    inventory: "Kho hóa đơn / sổ sách",
+    msmi: "Hóa đơn đầu vào mSMI",
+    kitchen: "Xưởng cơm, menu và PO",
+    payroll: "Chấm công và tính lương",
+    printing: "Duyệt và in hàng loạt",
     settings: "Danh mục và sao lưu"
   };
 
@@ -33,6 +42,7 @@
   var toast = document.getElementById("toast");
   var batchSelect = document.getElementById("batchSelect");
   var excelInput = document.getElementById("excelInput");
+  var attendanceInput = document.getElementById("attendanceInput");
   var backdrop = document.getElementById("modalBackdrop");
   var orderForm = document.getElementById("orderForm");
   var toastTimer;
@@ -92,6 +102,7 @@
       var suffix = batchId ? "?batch_id=" + batchId : "";
       state.data = await api("/api/bootstrap" + suffix);
       state.batchId = state.data.batch ? state.data.batch.id : null;
+      state.supplierNeeds = null;
       state.busy = false;
       renderBatchSelect();
       render();
@@ -99,6 +110,18 @@
       state.busy = false;
       content.innerHTML = '<div class="card"><div class="empty"><h3>Không nạp được dữ liệu</h3><p>' +
         esc(error.message) + '</p><button class="btn btn-primary" data-action="reload">Thử lại</button></div></div>';
+    }
+  }
+
+  async function loadOperations(silent) {
+    if (!silent) content.innerHTML = '<div class="loading-panel"><div class="spinner"></div><strong>Đang nạp dữ liệu module…</strong></div>';
+    try {
+      state.operations = await api("/api/operations/bootstrap?as_of=" + encodeURIComponent(state.opsDate) +
+        "&month=" + encodeURIComponent(state.opsMonth) + "&date=" + encodeURIComponent(state.opsDate));
+      render();
+    } catch (error) {
+      content.innerHTML = '<div class="card"><div class="empty"><h3>Không nạp được module</h3><p>' +
+        esc(error.message) + '</p><button class="btn btn-primary" data-action="reload-operations">Thử lại</button></div></div>';
     }
   }
 
@@ -124,6 +147,10 @@
     pageTitle.textContent = titles[view] || "Vận hành";
     sidebar.classList.remove("open");
     window.scrollTo(0, 0);
+    if (["inventory", "msmi", "kitchen", "payroll", "printing"].indexOf(view) >= 0 && !state.operations) {
+      loadOperations();
+      return;
+    }
     render();
   }
 
@@ -226,7 +253,10 @@
         esc(item.kitchen), '</strong><div class="muted">', esc(item.contractor), "</div></td><td>",
         esc(item.product_code), '</td><td class="name-cell"><strong>', esc(item.product_name),
         '</strong><div class="muted">', esc(item.note), '</div></td><td class="num-cell">', num(item.qty),
-        '</td><td class="num-cell">', num(item.actual_received), '</td><td class="num-cell">', num(item.actual_delivered),
+        '</td><td class="num-cell">', num(item.actual_received), '<div class="muted">Hỏng/trả ',
+        num(n(item.damaged_qty) + n(item.supplier_return_qty)), ' · ròng ', num(Math.max(n(item.actual_received) - n(item.damaged_qty) - n(item.supplier_return_qty), 0)),
+        '</div></td><td class="num-cell">', num(item.actual_delivered), '<div class="muted">Khách trả ', num(item.customer_return_qty),
+        ' · ròng ', num(Math.max(n(item.actual_delivered) - n(item.customer_return_qty), 0)), '</div>',
         "</td><td>", esc(item.unit), "</td><td>", esc(item.supplier), '</td><td class="num-cell">',
         money(item.buy_price), '</td><td class="num-cell">', money(item.sell_price),
         '</td><td><span class="tag tag-tax">', taxText(item.tax), '</span></td><td class="',
@@ -273,29 +303,46 @@
     }, {});
   }
 
+  async function fetchSupplierNeeds() {
+    try {
+      state.supplierNeeds = await api("/api/supplier-needs/" + state.batchId);
+      if (state.view === "purchases") renderPurchases();
+    } catch (error) { showToast(error.message, true); }
+  }
+
   function renderPurchases() {
     var d = state.data;
     if (!d.batch) {
       content.innerHTML = emptyBatch("Chưa có dữ liệu đặt hàng", "Nạp đơn để hệ thống tự gộp số lượng theo nhà cung cấp.");
       return;
     }
-    var groups = groupBy(d.orders, "supplier");
-    var cards = Object.entries(groups).map(function (entry) {
-      var supplier = entry[0], items = entry[1];
+    if (!state.supplierNeeds) {
+      content.innerHTML = '<div class="loading-panel"><div class="spinner"></div><strong>Đang trừ tồn khả dụng và tách NCC…</strong></div>';
+      setTimeout(fetchSupplierNeeds, 0);
+      return;
+    }
+    var needs = state.supplierNeeds;
+    var cards = needs.groups.map(function (group, groupIndex) {
+      var supplier = group.supplier, items = group.items;
       var lines = items.map(function (item) {
         return '<div class="group-line"><div><strong>' + esc(item.product_name) + "</strong><span>" +
-          esc(item.product_code) + " · " + esc(item.kitchen) + (item.note ? " · " + esc(item.note) : "") +
-          "</span></div><strong>" + num(item.qty) + " " + esc(item.unit) + "</strong></div>";
+          esc(item.product_code) + " · " + esc(item.kitchen) + " · KH đặt " + num(item.customer_qty) +
+          (item.stock_used ? " · trừ tồn " + num(item.stock_used) : "") +
+          "</span></div><strong>" + num(item.required_qty) + " " + esc(item.unit) + "</strong></div>";
       }).join("");
       return '<div class="group-card"><div class="group-title"><div><strong>NCC ' + esc(supplier.toUpperCase()) +
-        "</strong><span>" + items.length + ' dòng hàng</span></div><button class="btn btn-small btn-outline" data-action="copy-supplier" data-supplier="' +
-        esc(supplier) + '">Sao chép gửi Zalo</button></div><div class="group-list">' + lines +
-        '</div><div class="group-total"><span>Tổng số lượng cộng gộp</span><strong>' +
-        num(items.reduce(function (sum, item) { return sum + n(item.qty); }, 0)) + "</strong></div></div>";
+        "</strong><span>" + esc(group.kitchen) + " · " + items.length +
+        ' dòng</span></div><button class="btn btn-small btn-outline" data-action="copy-supplier-need" data-group-index="' +
+        groupIndex + '">Sao chép gửi Zalo</button></div><div class="group-list">' + lines +
+        '</div><div class="group-total"><span>Tổng cần mua sau trừ tồn</span><strong>' +
+        num(group.total_qty) + "</strong></div></div>";
     }).join("");
-    content.innerHTML = '<div class="toolbar fade-in"><div class="status-bar">✓ Đã tách ' + d.orders.length +
-      " dòng thành " + Object.keys(groups).length + ' nhà cung cấp theo số lượng đặt</div><a class="btn btn-primary" href="' +
-      exportUrl("suppliers") + '">Tải Excel đặt hàng</a></div><div class="group-grid fade-in">' + cards + "</div>";
+    content.innerHTML = '<div class="code-note fade-in"><strong>Công thức:</strong> max(lượng khách đặt − tồn khả dụng, 0). ' +
+      'Đơn NCC không dùng toàn bộ lượng khách đặt.</div><div class="toolbar fade-in"><div class="status-bar">KH đặt ' +
+      num(needs.ordered_qty) + " · Cần mua " + num(needs.required_qty) + " · " + needs.groups.length +
+      ' nhóm NCC/bếp</div><a class="btn btn-primary" href="' + exportUrl("suppliers") +
+      '">Tải Excel đặt hàng</a></div><div class="group-grid fade-in">' +
+      (cards || '<div class="card"><div class="empty">Tồn hiện có đã đáp ứng toàn bộ nhu cầu.</div></div>') + "</div>";
   }
 
   function renderDeliveries() {
@@ -456,8 +503,15 @@
       return;
     }
     var purchaseCount = d.orders.filter(function (item) { return item.purchase_list; }).length;
+    var contractorOptions = (d.master.contractors || []).map(function (item) {
+      return '<option value="' + esc(item.code) + '">' + esc(item.code) + '</option>';
+    }).join("");
     content.innerHTML = html([
       '<div class="code-note fade-in"><strong>Luồng hóa đơn đúng:</strong> hệ thống sinh file 11 cột theo mẫu khách gửi → tải lên phần mềm trung gian kiểm tra tồn → phần mềm trung gian mới đẩy sang M-Invoice.</div>',
+      '<div class="toolbar fade-in"><div class="toolbar-left"><button class="btn btn-primary" data-action="create-outgoing-drafts">Kiểm tra tồn & tạo dự thảo đầu ra</button>',
+      '<span class="muted">Chỉ tạo bản nháp; người dùng tự kiểm tra, ký và phát hành</span></div>',
+      '<form id="paymentRequestForm" class="compact-controls"><select name="contractor" class="select">', contractorOptions,
+      '</select><button class="btn btn-outline" type="submit">Đề nghị thanh toán</button></form></div>',
       '<div class="card fade-in" style="margin-top:18px"><div class="card-head"><div><h3>Đầu ra từ phiên ', dateVN(d.batch.work_date),
       "</h3><p>Mỗi lần tải, file được sinh mới từ dữ liệu hiện tại — không dùng file dựng sẵn</p></div>",
       '<span class="tag tag-ok">', d.orders.length, " dòng nguồn</span></div>",
@@ -478,13 +532,179 @@
     ]);
   }
 
+  function renderInventory() {
+    var o = state.operations;
+    if (!o) { loadOperations(); return; }
+    var rows = o.inventory.map(function (item, index) {
+      return '<tr><td>' + (index + 1) + '</td><td><strong>' + esc(item.product_code) +
+        '</strong></td><td>' + esc(item.product_name) + '</td><td>' + esc(item.unit) +
+        '</td><td class="num-cell">' + num(item.accounting_qty) + '</td><td class="num-cell"><strong>' +
+        num(item.available_qty) + '</strong></td></tr>';
+    }).join("");
+    content.innerHTML = html([
+      '<div class="code-note fade-in"><strong>Kho sổ sách:</strong> tồn đầu kỳ + hóa đơn đầu vào + bảng kê BK − hóa đơn đầu ra đã xác nhận phát hành. Dự thảo đầu ra chỉ giữ tồn khả dụng.</div>',
+      '<div class="stats-grid fade-in">',
+      statCard("Mặt hàng có tồn", num(o.inventory_totals.products), "Tính đến " + dateVN(o.inventory_as_of), "▦"),
+      statCard("Tồn sổ sách", num(o.inventory_totals.accounting_qty), "Chứng từ đã ghi sổ", "Σ"),
+      statCard("Tồn khả dụng", num(o.inventory_totals.available_qty), "Đã trừ phần giữ cho dự thảo", "✓"),
+      statCard("Nguyên tắc", "Sổ sách", "Không trộn kho thực tế", "i"),
+      '</div>',
+      '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Nhập tồn đầu kỳ</h3><p>Mỗi lần lưu cùng kỳ + mã sẽ cập nhật, không tạo trùng</p></div></div><div class="card-body">',
+      '<form id="openingForm" class="payment-grid"><div class="form-field"><label>Kỳ</label><input name="period" type="month" value="', esc(state.opsMonth), '" required></div>',
+      '<div class="form-field"><label>Mã hàng</label><input name="product_code" required></div>',
+      '<div class="form-field"><label>Số lượng</label><input name="qty" type="number" step="0.01" required></div>',
+      '<div class="form-field"><label>Đơn giá vốn</label><input name="unit_cost" type="number" min="0"></div>',
+      '<button class="btn btn-primary" type="submit">Lưu tồn đầu</button></form></div></div>',
+      '<div class="card"><div class="card-head"><div><h3>Điều chỉnh kho</h3><p>Mọi điều chỉnh đều có audit</p></div></div><div class="card-body">',
+      '<form id="inventoryAdjustmentForm" class="payment-grid"><div class="form-field"><label>Ngày</label><input name="txn_date" type="date" value="', esc(state.opsDate), '" required></div>',
+      '<div class="form-field"><label>Mã hàng</label><input name="product_code" required></div>',
+      '<div class="form-field"><label>SL (+ tăng / − giảm)</label><input name="qty" type="number" step="0.01" required></div>',
+      '<div class="form-field"><label>Lý do</label><input name="note" required></div>',
+      '<button class="btn btn-outline" type="submit">Ghi điều chỉnh</button></form></div></div></div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Chi tiết tồn</h3><p>',
+      dateVN(o.inventory_as_of), '</p></div><input id="inventoryDate" type="date" value="', esc(state.opsDate), '"></div>',
+      '<div class="table-wrap"><table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn sổ sách</th><th>Tồn khả dụng</th></tr></thead><tbody>',
+      rows || '<tr><td colspan="6"><div class="empty">Chưa có tồn đầu, hóa đơn đầu vào hoặc bảng kê đã duyệt.</div></td></tr>',
+      '</tbody></table></div></div>'
+    ]);
+  }
+
+  function renderMsmi() {
+    var o = state.operations;
+    if (!o) { loadOperations(); return; }
+    var sync = o.msmi.state.length ? o.msmi.state[0] : null;
+    var cards = o.msmi.invoices.map(function (invoice) {
+      var itemRows = invoice.items.map(function (item) {
+        var mapping = item.mapping_status === "mapped"
+          ? '<span class="tag tag-ok">' + esc(item.product_code) + ' · ' + esc(item.product_name || "Đã ghép") + '</span>'
+          : '<div class="compact-controls"><input class="input-date" id="map_' + item.id + '" placeholder="Mã hàng TĐP"><button class="btn btn-small btn-outline" data-action="save-msmi-mapping" data-id="' + item.id + '">Ghi nhớ</button></div>';
+        return '<tr><td>' + item.line_index + '</td><td>' + esc(item.source_item_code) + '</td><td>' +
+          esc(item.source_item_name) + '</td><td>' + num(item.qty) + ' ' + esc(item.source_unit) +
+          '</td><td class="num-cell">' + money(item.amount) + '</td><td>' + mapping + '</td></tr>';
+      }).join("");
+      return '<div class="card" style="margin-bottom:18px"><div class="card-head"><div><h3>' +
+        esc(invoice.seller_name || invoice.seller_tax_code || "Người bán") + '</h3><p>' +
+        dateVN(invoice.invoice_date) + ' · ' + esc(invoice.invoice_series) + ' ' + esc(invoice.invoice_number) +
+        ' · ' + invoice.mapped_count + '/' + invoice.item_count + ' dòng đã ghép</p></div><div class="compact-controls"><span class="tag ' +
+        (invoice.receipt_status === "posted" ? "tag-ok" : invoice.receipt_status === "ready" ? "tag-warn" : "tag-red") + '">' +
+        esc(invoice.receipt_status) + '</span>' + (invoice.receipt_status === "ready" ? '<button class="btn btn-small btn-primary" data-action="create-msmi-receipt" data-id="' + invoice.id + '">Tạo phiếu nhập</button>' : '') +
+        '</div></div><div class="table-wrap"><table><thead><tr><th>Dòng</th><th>Mã nguồn</th><th>Tên hàng nguồn</th><th>SL</th><th>Thành tiền</th><th>Ghép mã TĐP</th></tr></thead><tbody>' +
+        itemRows + '</tbody></table></div></div>';
+    }).join("");
+    content.innerHTML = html([
+      '<div class="toolbar fade-in"><div><div class="status-bar">mSMI chỉ đọc · đồng bộ tăng dần · không tạo phiếu nhập trùng</div><div class="muted">',
+      sync ? 'Lần cuối ' + esc(sync.last_synced_at) + ' · ' + esc(sync.last_status) : 'Chưa đồng bộ trong phần mềm',
+      '</div></div><button class="btn btn-primary" data-action="sync-msmi">Đồng bộ hóa đơn mới</button></div>',
+      '<div class="code-note"><strong>Kiểm soát:</strong> phải ghép đủ mã hàng rồi người dùng mới bấm tạo phiếu nhập. Mapping được nhớ theo tenant + người bán + mã/tên hàng nguồn.</div>',
+      '<div style="margin-top:18px">', cards || '<div class="card"><div class="empty">Chưa có hóa đơn đầu vào trong database. Bấm đồng bộ khi API mSMI sẵn sàng.</div></div>', '</div>'
+    ]);
+  }
+
+  function renderKitchen() {
+    var o = state.operations;
+    if (!o) { loadOperations(); return; }
+    var cards = o.meal_plans.map(function (plan) {
+      var lines = plan.items.map(function (item) {
+        return '<div class="group-line"><div><strong>' + esc(item.product_name) + '</strong><span>' +
+          esc(item.dish_name) + ' · ' + esc(item.price_source) + '</span></div><strong>' +
+          num(item.required_qty) + ' ' + esc(item.unit) + ' · ' + money(item.cost) + '</strong></div>';
+      }).join("");
+      return '<div class="group-card"><div class="group-title"><div><strong>' + esc(plan.kitchen) +
+        ' · ' + esc(plan.shift) + '</strong><span>' + num(plan.meal_count) + ' suất · Unit ' +
+        esc(plan.mapped_unit || "CHƯA GHÉP") + '</span></div><span class="tag ' +
+        (plan.status === "approved" ? "tag-ok" : plan.warnings.length ? "tag-red" : "tag-warn") + '">' +
+        esc(plan.status) + '</span></div><div class="group-list">' + lines +
+        '</div><div class="group-total"><span>Cost / suất ' + money(plan.cost_per_meal) +
+        '</span><strong>' + money(plan.total_cost) + '</strong></div>' +
+        (plan.status !== "approved" ? '<button class="btn btn-small btn-primary" data-action="approve-meal-plan" data-id="' + plan.id + '">Duyệt kế hoạch</button>' : '') + '</div>';
+    }).join("");
+    content.innerHTML = html([
+      '<div class="toolbar fade-in"><div class="status-bar">Menu → suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → Unit → PO</div>',
+      '<div class="compact-controls"><input id="kitchenDate" type="date" value="', esc(state.opsDate), '"><a class="btn btn-primary" href="/api/kitchen/po?date=', encodeURIComponent(state.opsDate), '">Tải PO</a></div></div>',
+      '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Tạo kế hoạch bếp/ca</h3><p>Mỗi dòng nguyên liệu: mã | định lượng/suất | món | ĐVT | NCC | giá tùy chọn</p></div></div><div class="card-body">',
+      '<form id="mealPlanForm"><div class="payment-grid"><div class="form-field"><label>Ngày</label><input name="work_date" type="date" value="', esc(state.opsDate), '" required></div>',
+      '<div class="form-field"><label>Mã bếp</label><input name="kitchen" placeholder="POT" required></div>',
+      '<div class="form-field"><label>Ca</label><input name="shift" placeholder="Sáng / trưa / chiều" required></div>',
+      '<div class="form-field"><label>Số suất</label><input name="meal_count" type="number" min="1" required></div></div>',
+      '<div class="form-field"><label>Nguyên liệu</label><textarea name="items" style="min-height:180px" placeholder="I000060&#9;0.08&#9;Canh rau&#9;kg&#9;kho&#9;16000"></textarea></div>',
+      '<div class="form-actions"><button class="btn btn-primary" type="submit">Lưu và tính cost</button></div></form></div></div>',
+      '<div class="card"><div class="card-head"><div><h3>Ghép bếp vào Unit</h3><p>Chỉ cần làm một lần, có thể sửa</p></div></div><div class="card-body"><form id="kitchenUnitForm" class="payment-grid">',
+      '<div class="form-field"><label>Mã bếp</label><input name="kitchen_code" required></div><div class="form-field"><label>Unit</label><input name="unit_code" required></div>',
+      '<button class="btn btn-outline" type="submit">Lưu mapping</button></form></div></div></div>',
+      '<div class="group-grid" style="margin-top:18px">', cards || '<div class="card"><div class="empty">Ngày này chưa có kế hoạch xưởng cơm.</div></div>', '</div>'
+    ]);
+  }
+
+  function renderPayroll() {
+    var o = state.operations;
+    if (!o) { loadOperations(); return; }
+    var rows = o.payroll.map(function (item, index) {
+      return '<tr><td>' + (index + 1) + '</td><td><strong>' + esc(item.full_name) + '</strong><div class="muted">' +
+        esc(item.employee_code) + ' · ' + esc(item.kitchen) + '</div></td><td>' + esc(item.role_name) +
+        '</td><td class="num-cell">' + num(item.normal_hours) + '</td><td class="num-cell">' +
+        num(item.overtime_hours) + '</td><td class="num-cell">' + num(item.sunday_hours) +
+        '</td><td class="num-cell">' + money(item.gross_salary) + '</td><td class="num-cell">' +
+        money(item.bhxh_employee) + '</td><td class="num-cell">' + money(item.advance) +
+        '</td><td class="num-cell"><strong>' + money(item.net_salary) + '</strong></td></tr>';
+    }).join("");
+    var laborRows = o.labor_costs.slice(0, 120).map(function (item) {
+      return '<tr><td>' + dateVN(item.work_date) + '</td><td>' + esc(item.kitchen) +
+        '</td><td class="num-cell">' + money(item.amount) + '</td></tr>';
+    }).join("");
+    content.innerHTML = html([
+      '<div class="toolbar fade-in"><div class="status-bar">Công thường · tăng ca 150% · Chủ nhật 200% · đêm 130% · lễ 300% · phụ cấp · BHXH · tạm ứng</div>',
+      '<div class="compact-controls"><input id="payrollMonth" type="month" value="', esc(state.opsMonth), '"><button class="btn btn-primary" data-action="choose-attendance">Nạp file chấm công</button></div></div>',
+      '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Thêm/cập nhật nhân sự</h3><p>Mã nhân sự là khóa không trùng</p></div></div><div class="card-body">',
+      '<form id="staffForm" class="payment-grid"><div class="form-field"><label>Mã</label><input name="employee_code" required></div>',
+      '<div class="form-field"><label>Họ tên</label><input name="full_name" required></div><div class="form-field"><label>Chức vụ</label><input name="role_name"></div>',
+      '<div class="form-field"><label>Bếp</label><input name="kitchen"></div><div class="form-field"><label>Lương cơ bản</label><input name="base_salary" type="number" min="0"></div>',
+      '<button class="btn btn-outline" type="submit">Lưu nhân sự</button></form></div></div>',
+      '<div class="card"><div class="card-head"><div><h3>Chi phí lao động theo bếp</h3><p>Đọc từ sheet chấm công chợ</p></div></div><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Bếp</th><th>Chi phí</th></tr></thead><tbody>',
+      laborRows || '<tr><td colspan="3"><div class="empty">Chưa nạp file chấm công tháng này.</div></td></tr>',
+      '</tbody></table></div></div></div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Bảng lương ', esc(state.opsMonth),
+      '</h3><p>Tính từ dữ liệu chấm công chuẩn hóa; các khoản điều chỉnh lưu riêng theo tháng</p></div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>STT</th><th>Nhân sự</th><th>Chức vụ</th><th>HC</th><th>TC</th><th>CN</th><th>Tổng lương</th><th>BHXH NLĐ</th><th>Tạm ứng</th><th>Thực lĩnh</th></tr></thead><tbody>',
+      rows || '<tr><td colspan="10"><div class="empty">Chưa có nhân sự/chấm công.</div></td></tr>',
+      '</tbody></table></div></div>'
+    ]);
+  }
+
+  function renderPrinting() {
+    var o = state.operations;
+    if (!o) { loadOperations(); return; }
+    var jobs = o.print_jobs.filter(function (item) { return !state.batchId || item.batch_id === state.batchId; });
+    var rows = jobs.map(function (item) {
+      return '<tr><td>' + esc(item.document_type) + '</td><td><span class="tag ' +
+        (item.status === "printed" ? "tag-ok" : item.status === "error" ? "tag-red" : "tag-warn") + '">' +
+        esc(item.status) + '</span></td><td>' + esc(item.approved_at || "") + '</td><td>' +
+        esc(item.printed_at || "") + '</td><td>' + esc(item.error_message || "") + '</td></tr>';
+    }).join("");
+    content.innerHTML = html([
+      '<div class="code-note fade-in"><strong>Luồng bắt buộc:</strong> duyệt phiên đơn → chuẩn bị file → người dùng duyệt bộ in → bấm in. Không tự in theo lịch và không tự phát hành hóa đơn.</div>',
+      '<div class="toolbar"><div class="status-bar">Một PC Windows · một máy in mặc định đã cấu hình</div><div class="compact-controls">',
+      '<button class="btn btn-outline" data-action="prepare-print" ', state.batchId ? '' : 'disabled', '>1. Chuẩn bị</button>',
+      '<button class="btn btn-outline" data-action="approve-print" ', state.batchId ? '' : 'disabled', '>2. Duyệt bộ in</button>',
+      '<button class="btn btn-primary" data-action="run-print" ', state.batchId ? '' : 'disabled', '>3. In một nút</button></div></div>',
+      '<div class="card"><div class="card-head"><div><h3>Cấu hình máy in</h3><p>Để trống tên sẽ dùng máy in mặc định Windows</p></div></div><div class="card-body">',
+      '<form id="printSettingsForm" class="payment-grid"><div class="form-field span-2"><label>Tên máy in</label><input name="printer_name" value="', esc(o.printer.name), '"></div>',
+      '<div class="form-field"><label>Số bản</label><input name="copies" type="number" min="1" max="10" value="', esc(o.printer.copies), '"></div>',
+      '<div class="form-field"><label>Khổ giấy</label><select name="paper"><option>A4</option><option>A5</option></select></div>',
+      '<button class="btn btn-outline" type="submit">Lưu cấu hình</button></form></div></div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Hàng đợi in</h3><p>Phiên đơn đang chọn</p></div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>Chứng từ</th><th>Trạng thái</th><th>Duyệt lúc</th><th>In lúc</th><th>Lỗi</th></tr></thead><tbody>',
+      rows || '<tr><td colspan="5"><div class="empty">Chưa chuẩn bị bộ in.</div></td></tr>',
+      '</tbody></table></div></div>'
+    ]);
+  }
+
   function renderSettings() {
     var d = state.data;
     var synced = d.master.settings.master_synced_at || "Chưa đồng bộ";
     var m = state.minvoiceStatus;
     var minvoiceTitle = m && m.connected ? "Đã kết nối M-Invoice" : "Kiểm tra kết nối M-Invoice";
     var minvoiceText = m && m.connected
-      ? "API chính thức hoạt động · " + num(m.outgoing.series_count) + " ký hiệu hóa đơn. Hóa đơn đầu vào cần tài khoản mSMI OpenAPI riêng."
+      ? "API M-Invoice chỉ đọc hoạt động · " + num(m.outgoing.series_count) + " ký hiệu hóa đơn. Hóa đơn đầu vào đồng bộ riêng qua mSMI."
       : "Kiểm tra tài khoản theo chế độ chỉ đọc; không tạo, ký hoặc phát hành hóa đơn.";
     var minvoiceCard = '<div class="card fade-in" style="margin-bottom:18px"><div class="card-head"><div><h3>' +
       esc(minvoiceTitle) + '</h3><p>' + esc(minvoiceText) + '</p></div><button class="btn btn-primary" data-action="check-minvoice">' +
@@ -504,11 +724,14 @@
       '<div class="card"><div class="card-head"><div><h3>Sao lưu dữ liệu</h3><p>Tải toàn bộ đơn, công nợ và thanh toán về máy</p></div></div>',
       '<div class="card-body"><div class="code-note"><strong>Dữ liệu lưu tại máy chạy hệ thống.</strong> Máy thứ hai cùng Wi-Fi/LAN có thể dùng chung khi máy chủ đang mở.</div>',
       '<div class="form-actions"><a class="btn btn-primary" href="/api/backup">Tải bản sao lưu SQLite</a></div></div></div></div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Tên xuất hóa đơn</h3><p>Ghi nhớ tên đầu ra chuẩn theo mã hàng; nếu chưa khai báo sẽ dùng tên danh mục TĐP</p></div></div><div class="card-body">',
+      '<form id="outgoingNameForm" class="payment-grid"><div class="form-field"><label>Mã hàng</label><input name="product_code" required></div>',
+      '<div class="form-field span-2"><label>Tên xuất hóa đơn</label><input name="invoice_name" required></div><button class="btn btn-outline" type="submit">Lưu tên đầu ra</button></form></div></div>',
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Ranh giới tích hợp</h3><p>Trạng thái kỹ thuật minh bạch</p></div></div>',
       '<div class="card-body"><div class="flow">',
       '<div class="flow-step done"><div class="num">✓</div><div><strong>Excel & dữ liệu vận hành</strong><span>Đã chạy thật: nhập, sửa, lưu, tính và xuất động</span></div></div>',
-      '<div class="flow-step done"><div class="num">✓</div><div><strong>Zalo thủ công có hỗ trợ</strong><span>Sao chép đơn NCC để dán và gửi</span></div></div>',
-      '<div class="flow-step"><div class="num">API</div><div><strong>Zalo tự gửi / phần mềm trung gian / M-Invoice</strong><span>Cần tài khoản và tài liệu API của bên thứ ba mới kết nối thật</span></div></div>',
+      '<div class="flow-step done"><div class="num">✓</div><div><strong>mSMI và M-Invoice an toàn</strong><span>Đầu vào đồng bộ tăng dần; đầu ra tạo dự thảo, người dùng kiểm tra và phát hành</span></div></div>',
+      '<div class="flow-step"><div class="num">API</div><div><strong>Không tự gửi Zalo, ký hoặc phát hành</strong><span>Các thao tác đối ngoại luôn chờ người dùng duyệt</span></div></div>',
       "</div></div></div>"
     ]);
   }
@@ -523,6 +746,11 @@
       quotes: renderQuotes,
       reports: renderReports,
       documents: renderDocuments,
+      inventory: renderInventory,
+      msmi: renderMsmi,
+      kitchen: renderKitchen,
+      payroll: renderPayroll,
+      printing: renderPrinting,
       settings: renderSettings
     };
     (views[state.view] || renderHome)();
@@ -553,6 +781,7 @@
       work_date: d.batch ? d.batch.work_date : new Date().toISOString().slice(0, 10),
       contractor: "", kitchen: "", product_code: "", product_name: "", qty: 0,
       actual_received: 0, actual_delivered: 0, unit: "", supplier: "",
+      damaged_qty: 0, supplier_return_qty: 0, customer_return_qty: 0,
       buy_price: 0, sell_price: 0, tax: "KKKNT", purchase_list: 0,
       seller: "", cccd: "", note: ""
     };
@@ -574,6 +803,9 @@
       field("Số lượng đặt", "qty", item.qty, "number", 'step="0.01" min="0" required'),
       field("Số thực nhận", "actual_received", item.actual_received, "number", 'step="0.01" min="0" required'),
       field("Số thực giao", "actual_delivered", item.actual_delivered, "number", 'step="0.01" min="0" required'),
+      field("Hàng hỏng", "damaged_qty", item.damaged_qty, "number", 'step="0.01" min="0"'),
+      field("Trả NCC", "supplier_return_qty", item.supplier_return_qty, "number", 'step="0.01" min="0"'),
+      field("Khách trả", "customer_return_qty", item.customer_return_qty, "number", 'step="0.01" min="0"'),
       field("Giá mua", "buy_price", item.buy_price, "number", 'step="1" min="0" required'),
       field("Giá bán", "sell_price", item.sell_price, "number", 'step="1" min="0" required'),
       '<div class="form-field"><label>Thuế</label><select name="tax"><option value="KKKNT"',
@@ -742,7 +974,7 @@
       return;
     }
     var body = Object.fromEntries(form.entries());
-    ["qty", "actual_received", "actual_delivered", "buy_price", "sell_price"].forEach(function (key) {
+    ["qty", "actual_received", "actual_delivered", "damaged_qty", "supplier_return_qty", "customer_return_qty", "buy_price", "sell_price"].forEach(function (key) {
       body[key] = n(body[key]);
     });
     body.purchase_list = form.has("purchase_list") ? 1 : 0;
@@ -779,12 +1011,13 @@
     } catch (error) { showToast(error.message, true); }
   }
 
-  function copySupplier(supplier) {
-    var rows = state.data.orders.filter(function (item) { return item.supplier === supplier; });
-    var text = ["ĐƠN ĐẶT HÀNG " + supplier.toUpperCase() + " – " + dateVN(state.data.batch.work_date)]
-      .concat(rows.map(function (item, index) {
-        return (index + 1) + ". " + item.product_name + ": " + num(item.qty) + " " + item.unit +
-          (item.note ? " – " + item.note : "");
+  function copySupplierNeed(groupIndex) {
+    var group = state.supplierNeeds && state.supplierNeeds.groups[Number(groupIndex)];
+    if (!group) { showToast("Không tìm thấy nhóm đơn NCC", true); return; }
+    var text = ["ĐƠN ĐẶT HÀNG " + group.supplier.toUpperCase() + " – " + dateVN(state.data.batch.work_date),
+      "Bếp: " + group.kitchen]
+      .concat(group.items.map(function (item, index) {
+        return (index + 1) + ". " + item.product_name + ": " + num(item.required_qty) + " " + item.unit;
       })).join("\n");
     function fallback() {
       var area = document.createElement("textarea");
@@ -796,7 +1029,7 @@
     }
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(fallback);
     else fallback();
-    showToast("Đã sao chép đơn NCC " + supplier + " · Dán vào Zalo để gửi");
+    showToast("Đã sao chép lượng cần mua sau trừ tồn · Dán vào Zalo để gửi");
   }
 
   async function savePayment(formElement) {
@@ -847,6 +1080,30 @@
     } catch (error) { showToast(error.message, true); }
   }
 
+  async function refreshOperations(message) {
+    state.operations = null;
+    await loadOperations(true);
+    if (message) showToast(message);
+  }
+
+  async function importAttendance(file) {
+    if (!file) return;
+    try {
+      var form = new FormData();
+      form.append("file", file);
+      var result = await api("/api/attendance/import", { method: "POST", body: form });
+      if (result.month) state.opsMonth = result.month;
+      await refreshOperations("Đã nạp " + result.attendance_entries + " ngày công và " + result.labor_cost_entries + " dòng chi phí bếp");
+    } catch (error) { showToast(error.message, true); }
+  }
+
+  async function jsonWrite(url, method, body, success) {
+    try {
+      await api(url, { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+      await refreshOperations(success);
+    } catch (error) { showToast(error.message, true); }
+  }
+
   document.getElementById("nav").addEventListener("click", function (event) {
     var button = event.target.closest("[data-view]");
     if (button) navigate(button.dataset.view);
@@ -857,6 +1114,8 @@
   batchSelect.addEventListener("change", function () {
     state.batchId = Number(batchSelect.value) || null;
     state.quoteItems = null;
+    state.supplierNeeds = null;
+    state.operations = null;
     loadData(state.batchId);
   });
   excelInput.addEventListener("change", function () {
@@ -864,12 +1123,17 @@
     excelInput.value = "";
     importExcel(file);
   });
+  attendanceInput.addEventListener("change", function () {
+    var file = attendanceInput.files[0];
+    attendanceInput.value = "";
+    importAttendance(file);
+  });
   orderForm.addEventListener("submit", saveOrder);
   backdrop.addEventListener("click", function (event) {
     if (event.target === backdrop) closeModal();
   });
 
-  content.addEventListener("submit", function (event) {
+  content.addEventListener("submit", async function (event) {
     if (event.target.id === "paymentForm") {
       event.preventDefault();
       savePayment(event.target);
@@ -877,6 +1141,67 @@
     if (event.target.id === "balanceForm") {
       event.preventDefault();
       saveBalance(event.target);
+    }
+    if (event.target.id === "openingForm") {
+      event.preventDefault();
+      var opening = Object.fromEntries(new FormData(event.target).entries());
+      jsonWrite("/api/inventory/opening", "POST", { period: opening.period, items: [{
+        product_code: opening.product_code, qty: n(opening.qty), unit_cost: n(opening.unit_cost)
+      }] }, "Đã lưu tồn đầu kỳ");
+    }
+    if (event.target.id === "inventoryAdjustmentForm") {
+      event.preventDefault();
+      var adjustment = Object.fromEntries(new FormData(event.target).entries());
+      adjustment.qty = n(adjustment.qty);
+      jsonWrite("/api/inventory/adjustments", "POST", adjustment, "Đã ghi điều chỉnh kho");
+    }
+    if (event.target.id === "kitchenUnitForm") {
+      event.preventDefault();
+      var unit = Object.fromEntries(new FormData(event.target).entries());
+      jsonWrite("/api/kitchen-units/" + encodeURIComponent(unit.kitchen_code), "PUT", { unit_code: unit.unit_code }, "Đã ghép bếp vào Unit");
+    }
+    if (event.target.id === "mealPlanForm") {
+      event.preventDefault();
+      var plan = Object.fromEntries(new FormData(event.target).entries());
+      plan.meal_count = n(plan.meal_count);
+      plan.items = String(plan.items || "").split(/\r?\n/).filter(Boolean).map(function (line) {
+        var cells = line.split("\t");
+        return { product_code: cells[0] || "", norm_qty: n(cells[1]), dish_name: cells[2] || "",
+          unit: cells[3] || "", supplier: cells[4] || "", buy_price: n(cells[5]) };
+      });
+      state.opsDate = plan.work_date;
+      jsonWrite("/api/kitchen/plans", "POST", plan, "Đã lưu kế hoạch và tính cost");
+    }
+    if (event.target.id === "staffForm") {
+      event.preventDefault();
+      var staff = Object.fromEntries(new FormData(event.target).entries());
+      staff.base_salary = n(staff.base_salary);
+      jsonWrite("/api/staff", "POST", staff, "Đã lưu nhân sự");
+    }
+    if (event.target.id === "printSettingsForm") {
+      event.preventDefault();
+      var printSettings = Object.fromEntries(new FormData(event.target).entries());
+      printSettings.copies = n(printSettings.copies);
+      jsonWrite("/api/print/settings", "PUT", printSettings, "Đã lưu cấu hình in");
+    }
+    if (event.target.id === "paymentRequestForm") {
+      event.preventDefault();
+      var paymentRequest = Object.fromEntries(new FormData(event.target).entries());
+      var from = state.data.batch.work_date.slice(0, 7) + "-01";
+      window.location.href = "/api/export/payment-request/" + encodeURIComponent(paymentRequest.contractor) +
+        "?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(state.data.batch.work_date);
+    }
+    if (event.target.id === "outgoingNameForm") {
+      event.preventDefault();
+      var outgoingName = Object.fromEntries(new FormData(event.target).entries());
+      try {
+        await api("/api/outgoing-product-names/" + encodeURIComponent(outgoingName.product_code), {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invoice_name: outgoingName.invoice_name })
+        });
+        event.target.reset();
+        showToast("Đã ghi nhớ tên xuất hóa đơn");
+      } catch (error) { showToast(error.message, true); }
     }
   });
 
@@ -896,6 +1221,17 @@
       state.quoteItems = null;
       renderQuotes();
     }
+    if (event.target.id === "inventoryDate" || event.target.id === "kitchenDate") {
+      state.opsDate = event.target.value;
+      state.opsMonth = state.opsDate.slice(0, 7);
+      state.operations = null;
+      loadOperations();
+    }
+    if (event.target.id === "payrollMonth") {
+      state.opsMonth = event.target.value;
+      state.operations = null;
+      loadOperations();
+    }
   });
 
   content.addEventListener("click", async function (event) {
@@ -905,16 +1241,56 @@
     if (!button) return;
     var action = button.dataset.action;
     if (action === "reload") loadData();
+    if (action === "reload-operations") { state.operations = null; loadOperations(); }
     if (action === "choose-excel") excelInput.click();
+    if (action === "choose-attendance") attendanceInput.click();
     if (action === "new-batch") newBatch();
     if (action === "paste-orders") openPasteModal();
     if (action === "add-order") openOrderModal(null);
     if (action === "edit-order") openOrderModal(button.dataset.id);
     if (action === "delete-order") deleteOrder(button.dataset.id);
     if (action === "approve-batch") approveBatch();
-    if (action === "copy-supplier") copySupplier(button.dataset.supplier);
+    if (action === "copy-supplier-need") copySupplierNeed(button.dataset.groupIndex);
     if (action === "delete-payment") deletePayment(button.dataset.id);
     if (action === "check-minvoice") checkMinvoice(button);
+    if (action === "sync-msmi") {
+      try {
+        button.disabled = true;
+        button.textContent = "Đang đồng bộ…";
+        var synced = await api("/api/msmi/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        await refreshOperations("mSMI: " + synced.new_invoices + " hóa đơn mới, " + synced.known_invoices + " hóa đơn đã có");
+      } catch (error) { showToast(error.message, true); button.disabled = false; button.textContent = "Đồng bộ hóa đơn mới"; }
+    }
+    if (action === "save-msmi-mapping") {
+      var mappingInput = document.getElementById("map_" + button.dataset.id);
+      if (!mappingInput || !mappingInput.value.trim()) { showToast("Cần nhập mã hàng TĐP", true); return; }
+      jsonWrite("/api/msmi/items/" + button.dataset.id + "/mapping", "PUT", { product_code: mappingInput.value.trim() }, "Đã ghép và ghi nhớ mã hàng");
+    }
+    if (action === "create-msmi-receipt") {
+      if (!window.confirm("Tạo phiếu nhập kho từ hóa đơn này? Thao tác có chống trùng theo _id.")) return;
+      jsonWrite("/api/msmi/invoices/" + button.dataset.id + "/receipt", "POST", {}, "Đã tạo phiếu nhập kho");
+    }
+    if (action === "create-outgoing-drafts") {
+      try {
+        var drafts = await api("/api/outgoing-invoices/draft/" + state.batchId, { method: "POST" });
+        state.operations = null;
+        showToast("Đã tạo " + drafts.drafts.length + " dự thảo · chưa ký/phát hành");
+      } catch (error) { showToast(error.message, true); }
+    }
+    if (action === "approve-meal-plan") {
+      jsonWrite("/api/kitchen/plans/" + button.dataset.id + "/approve", "POST", {}, "Đã duyệt kế hoạch xưởng cơm");
+    }
+    if (action === "prepare-print") {
+      jsonWrite("/api/print/prepare/" + state.batchId, "POST", {}, "Đã chuẩn bị bộ chứng từ; cần duyệt trước khi in");
+    }
+    if (action === "approve-print") {
+      if (!window.confirm("Duyệt toàn bộ chứng từ của phiên đang chọn để sẵn sàng in?")) return;
+      jsonWrite("/api/print/approve/" + state.batchId, "POST", {}, "Đã duyệt bộ chứng từ in");
+    }
+    if (action === "run-print") {
+      if (!window.confirm("Gửi toàn bộ chứng từ đã duyệt sang máy in mặc định Windows?")) return;
+      jsonWrite("/api/print/run/" + state.batchId, "POST", { dry_run: false }, "Đã gửi bộ chứng từ sang máy in");
+    }
     if (action === "sync-master") {
       try {
         button.disabled = true;

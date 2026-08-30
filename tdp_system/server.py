@@ -31,6 +31,25 @@ try:
 except ImportError:  # Allows importing as tdp_system.server in tests/tools.
     from .minvoice_client import MinvoiceClient, MinvoiceConfig, MinvoiceError
 
+try:
+    from contract_modules import (
+        init_contract_schema,
+        inventory_lookup,
+        net_delivered,
+        net_received,
+        post_purchase_list_inventory,
+        register_contract_routes,
+    )
+except ImportError:
+    from .contract_modules import (
+        init_contract_schema,
+        inventory_lookup,
+        net_delivered,
+        net_received,
+        post_purchase_list_inventory,
+        register_contract_routes,
+    )
+
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -260,6 +279,7 @@ def setting_set(conn, key: str, value):
 def init_database():
     with db() as conn:
         conn.executescript(SCHEMA)
+        init_contract_schema(conn)
         order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
         if "warnings" not in order_columns:
             conn.execute("ALTER TABLE orders ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]'")
@@ -450,6 +470,9 @@ HEADER_ALIASES = {
     "purchase_list": {"bangke", "bk"},
     "actual_received": {"thucnhan", "soluongthucnhan"},
     "actual_delivered": {"thucgiao", "soluongthucgiao"},
+    "damaged_qty": {"hanghong", "soluonghong", "slhong"},
+    "supplier_return_qty": {"trancc", "tranhacungcap", "soluongtrancc"},
+    "customer_return_qty": {"khachtra", "khachhangtra", "soluongkhachtra"},
 }
 
 
@@ -534,6 +557,9 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
     qty = number_value(raw.get("qty"))
     actual_received = number_value(raw.get("actual_received"), qty)
     actual_delivered = number_value(raw.get("actual_delivered"), qty)
+    damaged_qty = max(number_value(raw.get("damaged_qty")), 0)
+    supplier_return_qty = max(number_value(raw.get("supplier_return_qty")), 0)
+    customer_return_qty = max(number_value(raw.get("customer_return_qty")), 0)
     unit = clean_text(raw.get("unit")) or (clean_text(product["unit"]) if product else "")
     buy_price = number_value(raw.get("buy_price"))
     if buy_price <= 0 and product:
@@ -583,6 +609,10 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
         warnings.append("Giá bán thấp hơn giá mua – cần xác nhận bán lỗ")
     if purchase_list and not cccd:
         errors.append("Hàng bảng kê thiếu CCCD")
+    if damaged_qty + supplier_return_qty > actual_received:
+        errors.append("Hàng hỏng + trả NCC không được vượt số thực nhận")
+    if customer_return_qty > actual_delivered:
+        errors.append("Khách trả không được vượt số thực giao")
 
     return {
         "work_date": display_date(raw.get("date"), fallback_date),
@@ -593,6 +623,9 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
         "qty": qty,
         "actual_received": actual_received,
         "actual_delivered": actual_delivered,
+        "damaged_qty": damaged_qty,
+        "supplier_return_qty": supplier_return_qty,
+        "customer_return_qty": customer_return_qty,
         "unit": unit,
         "supplier": supplier,
         "buy_price": buy_price,
@@ -691,13 +724,15 @@ def save_imported_batch(conn, orders, work_date, source_name):
         conn.execute(
             """INSERT INTO orders(
                 batch_id,work_date,contractor,kitchen,product_code,product_name,qty,
-                actual_received,actual_delivered,unit,supplier,buy_price,sell_price,tax,
+                actual_received,actual_delivered,damaged_qty,supplier_return_qty,customer_return_qty,
+                unit,supplier,buy_price,sell_price,tax,
                 purchase_list,seller,cccd,note,source_sheet,source_row,errors,warnings,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 batch_id, item["work_date"], item["contractor"], item["kitchen"],
                 item["product_code"], item["product_name"], item["qty"],
-                item["actual_received"], item["actual_delivered"], item["unit"],
+                item["actual_received"], item["actual_delivered"], item["damaged_qty"],
+                item["supplier_return_qty"], item["customer_return_qty"], item["unit"],
                 item["supplier"], item["buy_price"], item["sell_price"], item["tax"],
                 item["purchase_list"], item["seller"], item["cccd"], item["note"],
                 item["source_sheet"], item["source_row"],
@@ -719,12 +754,13 @@ ORDER_FIELDS = {
     "work_date", "contractor", "kitchen", "product_code", "product_name", "qty",
     "actual_received", "actual_delivered", "unit", "supplier", "buy_price",
     "sell_price", "tax", "purchase_list", "seller", "cccd", "note",
+    "damaged_qty", "supplier_return_qty", "customer_return_qty",
 }
 
 
 def order_totals(order):
-    revenue = number_value(order["actual_delivered"]) * number_value(order["sell_price"])
-    cost = number_value(order["actual_received"]) * number_value(order["buy_price"])
+    revenue = net_delivered(order) * number_value(order["sell_price"])
+    cost = net_received(order) * number_value(order["buy_price"])
     total = revenue * tax_factor(order["tax"])
     return revenue, cost, revenue - cost, total
 
@@ -1004,6 +1040,7 @@ def api_approve_batch(batch_id):
             "UPDATE batches SET status='approved',approved_at=? WHERE id=?",
             (now_iso(), batch_id),
         )
+        post_purchase_list_inventory(conn, batch_id, now_iso)
         return jsonify({"ok": True, **batch_payload(conn, batch_id)})
 
 
@@ -1019,13 +1056,15 @@ def api_add_order():
         cur = conn.execute(
             """INSERT INTO orders(
                 batch_id,work_date,contractor,kitchen,product_code,product_name,qty,
-                actual_received,actual_delivered,unit,supplier,buy_price,sell_price,tax,
+                actual_received,actual_delivered,damaged_qty,supplier_return_qty,customer_return_qty,
+                unit,supplier,buy_price,sell_price,tax,
                 purchase_list,seller,cccd,note,source_sheet,source_row,errors,warnings,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 batch_id, resolved["work_date"], resolved["contractor"], resolved["kitchen"],
                 resolved["product_code"], resolved["product_name"], resolved["qty"],
-                resolved["actual_received"], resolved["actual_delivered"], resolved["unit"],
+                resolved["actual_received"], resolved["actual_delivered"], resolved["damaged_qty"],
+                resolved["supplier_return_qty"], resolved["customer_return_qty"], resolved["unit"],
                 resolved["supplier"], resolved["buy_price"], resolved["sell_price"], resolved["tax"],
                 resolved["purchase_list"], resolved["seller"], resolved["cccd"], resolved["note"],
                 "Nhập tay", 0, json.dumps(resolved["errors"], ensure_ascii=False),
@@ -1078,13 +1117,15 @@ def api_add_orders_bulk():
             conn.execute(
                 """INSERT INTO orders(
                     batch_id,work_date,contractor,kitchen,product_code,product_name,qty,
-                    actual_received,actual_delivered,unit,supplier,buy_price,sell_price,tax,
+                    actual_received,actual_delivered,damaged_qty,supplier_return_qty,customer_return_qty,
+                    unit,supplier,buy_price,sell_price,tax,
                     purchase_list,seller,cccd,note,source_sheet,source_row,errors,warnings,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     batch_id, resolved["work_date"], resolved["contractor"], resolved["kitchen"],
                     resolved["product_code"], resolved["product_name"], resolved["qty"],
-                    resolved["actual_received"], resolved["actual_delivered"], resolved["unit"],
+                    resolved["actual_received"], resolved["actual_delivered"], resolved["damaged_qty"],
+                    resolved["supplier_return_qty"], resolved["customer_return_qty"], resolved["unit"],
                     resolved["supplier"], resolved["buy_price"], resolved["sell_price"], resolved["tax"],
                     resolved["purchase_list"], resolved["seller"], resolved["cccd"], resolved["note"],
                     "Dán từ Excel", inserted + 1,
@@ -1124,6 +1165,7 @@ def api_update_order(order_id):
             "work_date", "contractor", "kitchen", "product_code", "product_name", "qty",
             "actual_received", "actual_delivered", "unit", "supplier", "buy_price",
             "sell_price", "tax", "purchase_list", "seller", "cccd", "note",
+            "damaged_qty", "supplier_return_qty", "customer_return_qty",
         ]
         conn.execute(
             f"UPDATE orders SET {','.join(f'{col}=?' for col in columns)},errors=?,warnings=?,updated_at=? WHERE id=?",
@@ -1288,25 +1330,53 @@ def send_xlsx(wb, filename):
     )
 
 
-def export_supplier_orders(batch, orders):
+def export_supplier_orders(conn, batch, orders):
     wb = Workbook()
     wb.remove(wb.active)
     groups = defaultdict(list)
+    stock = inventory_lookup(conn, batch["work_date"])
+    available = {code: max(item["available_qty"], 0) for code, item in stock.items()}
     for item in orders:
-        groups[item["supplier"] or "CHƯA XÁC ĐỊNH"].append(item)
-    for supplier, rows in sorted(groups.items()):
-        ws = wb.create_sheet(safe_sheet_name(supplier.upper()))
+        qty = max(number_value(item["qty"]), 0)
+        used = min(qty, available.get(item["product_code"], 0))
+        available[item["product_code"]] = max(available.get(item["product_code"], 0) - used, 0)
+        required = max(qty - used, 0)
+        if required <= 0:
+            continue
+        rule = conn.execute(
+            "SELECT combine_kitchens FROM supplier_rules WHERE supplier_code=?", (item["supplier"],)
+        ).fetchone()
+        combined = bool(rule and rule["combine_kitchens"])
+        key = (item["supplier"] or "CHƯA XÁC ĐỊNH", "ALL" if combined else item["kitchen"])
+        output = dict(item)
+        output["required_qty"] = required
+        output["stock_used"] = used
+        groups[key].append(output)
+    for (supplier, kitchen_key), rows in sorted(groups.items()):
+        sheet_label = supplier if kitchen_key == "ALL" else f"{supplier}-{kitchen_key}"
+        ws = wb.create_sheet(safe_sheet_name(sheet_label.upper()))
         set_title(ws, f"ĐƠN ĐẶT HÀNG – NCC {supplier.upper()}",
                   f"Ngày giao: {batch['work_date']}", 7)
         ws.append([])
-        ws.append(["STT", "Mã hàng", "Tên hàng", "Số lượng đặt", "ĐVT", "Bếp", "Ghi chú"])
+        ws.append(["STT", "Mã hàng", "Tên hàng", "SL cần mua", "ĐVT", "Bếp", "Ghi chú"])
         for idx, item in enumerate(rows, 1):
-            ws.append([idx, item["product_code"], item["product_name"], item["qty"],
-                       item["unit"], item["kitchen"], item["note"]])
+            note = item["note"] or ""
+            if item["stock_used"]:
+                note = (note + f" · Đã trừ tồn {item['stock_used']:g}").strip(" ·")
+            ws.append([idx, item["product_code"], item["product_name"], item["required_qty"],
+                       item["unit"], item["kitchen"], note])
         style_table(ws, 4, 7)
         autosize(ws)
         ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_setup.fitToWidth = 1
+    if not wb.sheetnames:
+        ws = wb.create_sheet("KHÔNG CẦN MUA")
+        set_title(ws, "KHÔNG PHÁT SINH NHU CẦU MUA", "Tồn khả dụng đã đáp ứng toàn bộ lượng khách đặt", 4)
+        ws.append([])
+        ws.append(["Ngày", "Trạng thái", "Công thức", "Ghi chú"])
+        ws.append([batch["work_date"], "Không cần đặt NCC", "max(lượng khách đặt - tồn khả dụng, 0)", ""])
+        style_table(ws, 4, 4)
+        autosize(ws)
     return wb
 
 
@@ -1332,10 +1402,11 @@ def export_deliveries(conn, batch, orders):
             headers += ["Đơn giá", "Thành tiền"]
         ws.append(headers)
         for idx, item in enumerate(rows, 1):
-            values = [idx, item["product_code"], item["product_name"], item["actual_delivered"],
+            delivered = net_delivered(item)
+            values = [idx, item["product_code"], item["product_name"], delivered,
                       item["unit"], item["note"]]
             if show_price:
-                values += [item["sell_price"], item["actual_delivered"] * item["sell_price"]]
+                values += [item["sell_price"], delivered * item["sell_price"]]
             ws.append(values)
         style_table(ws, 4, end_col)
         autosize(ws)
@@ -1410,9 +1481,10 @@ def export_purchase_documents(conn, batch, orders):
         person = conn.execute("SELECT * FROM people WHERE name=?", (item["seller"],)).fetchone()
         address = person["address"] if person else "Hải Phòng"
         unit_price = round(item["sell_price"] * rate)
-        amount = item["actual_received"] * unit_price
+        received = net_received(item)
+        amount = received * unit_price
         ws.append([batch["work_date"], item["seller"], address, item["cccd"],
-                   item["product_name"], item["unit"], item["actual_received"], unit_price, amount])
+                   item["product_name"], item["unit"], received, unit_price, amount])
         grouped[item["seller"] or "CHƯA XÁC ĐỊNH"].append((item, unit_price, amount))
     style_table(ws, 4, 9)
     autosize(ws)
@@ -1437,7 +1509,7 @@ def export_purchase_documents(conn, batch, orders):
         total = 0
         for idx, (item, _, amount) in enumerate(seller_rows, 1):
             total += amount
-            ws.append([idx, item["product_name"], item["unit"], item["actual_received"], amount])
+            ws.append([idx, item["product_name"], item["unit"], net_received(item), amount])
         ws.append(["", "TỔNG CỘNG", "", "", total])
         style_table(ws, 10, 5)
         autosize(ws)
@@ -1445,19 +1517,21 @@ def export_purchase_documents(conn, batch, orders):
     return wb
 
 
-def invoice_workbook(rows):
+def invoice_workbook(rows, invoice_names=None):
+    invoice_names = invoice_names or {}
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
     ws.append(INVOICE_HEADERS)
     for item in rows:
-        qty = number_value(item["actual_delivered"])
+        qty = net_delivered(item)
         unit_price = round(number_value(item["sell_price"]))
         amount = round(qty * unit_price)
         total = round(amount * tax_factor(item["tax"]))
         tax = "KKKNT" if clean_text(item["tax"]).upper() == "KKKNT" else number_value(item["tax"])
         ws.append([
-            item["supplier"], item["product_code"], item["kitchen"], item["product_name"],
+            item["supplier"], item["product_code"], item["kitchen"],
+            invoice_names.get(item["product_code"], item["product_name"]),
             qty, item["unit"], unit_price, amount, tax, total,
             item["cccd"] or "",
         ])
@@ -1469,7 +1543,11 @@ def invoice_workbook(rows):
     return wb
 
 
-def export_invoices_zip(batch, orders):
+def export_invoices_zip(conn, batch, orders):
+    invoice_names = {
+        row["product_code"]: row["invoice_name"]
+        for row in conn.execute("SELECT product_code,invoice_name FROM outgoing_product_names")
+    }
     groups = defaultdict(list)
     for item in orders:
         tax_key = "KKKNT" if clean_text(item["tax"]).upper() == "KKKNT" else f"{number_value(item['tax']):.0%}"
@@ -1480,7 +1558,7 @@ def export_invoices_zip(batch, orders):
                     "Các file đúng 11 cột theo mẫu khách cung cấp.",
                     "Tải lên phần mềm trung gian để kiểm tra tồn rồi mới đẩy M-Invoice.", ""]
         for (contractor, tax_key), rows in sorted(groups.items()):
-            wb_stream = workbook_bytes(invoice_workbook(rows))
+            wb_stream = workbook_bytes(invoice_workbook(rows, invoice_names))
             filename = f"Hoa_don_{safe_sheet_name(contractor)}_{tax_key}_{batch['work_date']}.xlsx"
             archive.writestr(filename, wb_stream.getvalue())
             manifest.append(f"- {filename}: {len(rows)} dòng")
@@ -1535,7 +1613,7 @@ def api_export(kind, batch_id):
         batch, orders = require_batch(conn, batch_id)
         stamp = batch["work_date"]
         if kind == "suppliers":
-            return send_xlsx(export_supplier_orders(batch, orders), f"Don_dat_hang_NCC_{stamp}.xlsx")
+            return send_xlsx(export_supplier_orders(conn, batch, orders), f"Don_dat_hang_NCC_{stamp}.xlsx")
         if kind == "deliveries":
             return send_xlsx(export_deliveries(conn, batch, orders), f"Phieu_giao_hang_{stamp}.xlsx")
         if kind == "report":
@@ -1544,7 +1622,7 @@ def api_export(kind, batch_id):
             return send_xlsx(export_purchase_documents(conn, batch, orders), f"Bang_ke_bien_nhan_{stamp}.xlsx")
         if kind == "invoices":
             return send_file(
-                export_invoices_zip(batch, orders), as_attachment=True,
+                export_invoices_zip(conn, batch, orders), as_attachment=True,
                 download_name=f"File_tai_phan_mem_trung_gian_{stamp}.zip",
                 mimetype="application/zip",
             )
@@ -1612,6 +1690,24 @@ def local_ip():
 def open_browser():
     time.sleep(1.2)
     webbrowser.open("http://127.0.0.1:8765")
+
+
+register_contract_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+    "clean_text": clean_text,
+    "number_value": number_value,
+    "tax_factor": tax_factor,
+    "setting_get": setting_get,
+    "setting_set": setting_set,
+    "root": ROOT,
+    "data_dir": DATA_DIR,
+    "require_batch": require_batch,
+    "export_supplier_orders": export_supplier_orders,
+    "export_deliveries": export_deliveries,
+    "export_purchase_documents": export_purchase_documents,
+    "export_report": export_report,
+})
 
 
 if __name__ == "__main__":

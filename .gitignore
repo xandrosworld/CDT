@@ -38,7 +38,8 @@ _HANDOFF/
 bosung.30.8.26/
 hoadon/
 HOP_DONG_BAO_GIA_*/
-demo_tdp/
+demo_tdp/*
+!demo_tdp/styles.css
 *.xlsx
 *.xls
 *.docx

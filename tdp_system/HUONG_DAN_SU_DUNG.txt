@@ -1,28 +1,39 @@
-THÀNH ĐẠT PHÁT – HỆ THỐNG VẬN HÀNH
+THÀNH ĐẠT PHÁT – HƯỚNG DẪN VẬN HÀNH
 
-1. Nhấp đúp MO_HE_THONG_TDP.bat ở thư mục KHwww.
-2. Giữ cửa sổ màu đen đang chạy. Trình duyệt sẽ tự mở.
-3. Vào “Nhập & kiểm tra đơn” → “Nạp phiên Excel mới”.
-4. Sửa các dòng màu đỏ cho đến khi không còn lỗi → Duyệt phiên đơn.
-5. Mở từng mục để tải đơn NCC, phiếu giao, báo cáo, bảng kê và file hóa đơn.
+KHỞI ĐỘNG
+1. Nhấp đúp MO_HE_THONG_TDP.bat và giữ cửa sổ màu đen đang chạy.
+2. Trình duyệt tự mở tại http://127.0.0.1:8765.
+3. Máy khác cùng Wi-Fi/LAN dùng địa chỉ hiện trong cửa sổ khởi động.
 
-MÁY THỨ HAI:
-- Hai máy phải cùng Wi-Fi/LAN.
-- Địa chỉ dùng chung hiện trong cửa sổ màu đen khi khởi động.
-- Máy chạy MO_HE_THONG_TDP.bat phải luôn mở.
+LUỒNG ĐƠN HÀNG
+1. Vào “Nhập & kiểm tra đơn” → “Nạp phiên Excel mới”.
+2. Chỉ chọn đúng sheet ngày cần nhập; không nhập sheet gộp/lịch sử.
+3. Sửa lỗi, bổ sung giá và lượng thực nhận/thực giao → Duyệt phiên đơn.
+4. “Đặt hàng NCC” tự tính max(lượng khách đặt − tồn khả dụng, 0), tách theo NCC/bếp và quy tắc gộp.
+5. Hàng hỏng/trả NCC làm giảm số thực nhận; khách trả làm giảm số thực giao.
 
-QUY TẮC:
-- Số lượng đặt dùng cho đơn nhà cung cấp.
-- Số thực nhận dùng tính giá vốn/phải trả.
-- Số thực giao dùng tính doanh thu/phải thu/hóa đơn.
-- File hóa đơn là file tải lên phần mềm trung gian kiểm tra tồn; không phải hóa đơn đã phát hành.
+KHO, CÔNG NỢ VÀ HÓA ĐƠN
+- “Kho hóa đơn” là kho sổ sách: tồn đầu + hóa đơn đầu vào + bảng kê BK − hóa đơn đầu ra.
+- mSMI chỉ đọc và đồng bộ tăng dần; hóa đơn đã có không được tạo lại.
+- Ghép đủ mã hàng nguồn với mã TĐP rồi mới bấm “Tạo phiếu nhập”. Mapping được ghi nhớ.
+- Hóa đơn đầu ra dùng lượng thực giao, phải đủ tồn và chỉ tạo dự thảo.
+- Người dùng tự kiểm tra, ký và phát hành trên M-Invoice; hệ thống không tự ký/phát hành.
+- Công nợ hỗ trợ số dư đầu kỳ, thu/chi, điều chỉnh và xem nhiều kỳ.
 
-KẾT NỐI M-INVOICE
-- Vào Danh mục và sao lưu, bấm Kiểm tra M-Invoice để xác nhận kết nối.
-- Kiểm tra này chỉ đọc tài khoản và số lượng hóa đơn đầu ra; không tạo, ký hay phát hành hóa đơn.
-- Hóa đơn đầu vào từ Tổng cục Thuế thuộc mSMI/OpenAPI riêng. Chỉ bật đồng bộ đầu vào sau khi được M-Invoice cấp đúng quyền và tài liệu API.
-- Không chép file .env có mật khẩu vào gói gửi cho người khác. Trên máy mới, kỹ thuật cấu hình .env riêng cạnh hệ thống.
-- GIANHAPTAY và YLKHAN dùng giá theo ngày.
+XƯỞNG CƠM, CHẤM CÔNG VÀ LƯƠNG
+- Xưởng cơm: ngày/bếp/ca → số suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → Unit → PO.
+- GIANHAPTAY và YLKHAN dùng giá theo ngày, không tự lấy giá ngày trước.
+- Nạp file chấm công hiện tại để chuẩn hóa ngày công, tăng ca, Chủ nhật và chi phí lao động theo bếp.
+- Bảng lương giữ các công thức lương, BHXH, tạm ứng và điều chỉnh theo tháng.
 
-SAO LƯU:
-- Vào “Danh mục & sao lưu” → “Tải bản sao lưu SQLite”.
+DUYỆT VÀ IN
+1. Duyệt phiên đơn.
+2. Vào “Duyệt & in” → “Chuẩn bị” → kiểm tra file → “Duyệt bộ in”.
+3. Chọn máy in mặc định Windows, số bản/khổ giấy rồi bấm “In một nút”.
+4. Không tự in theo lịch; không in khi chưa duyệt.
+
+AN TOÀN DỮ LIỆU
+- Vào “Danh mục & sao lưu” → “Tải bản sao lưu SQLite” trước khi chuyển máy hoặc cập nhật.
+- Không gửi file .env; trên máy mới kỹ thuật cấu hình riêng.
+- Không xóa thư mục data. Muốn chuyển máy phải chép cả thư mục data.
+- Không gửi cho khách file có “QC” hoặc “page” trong tên.

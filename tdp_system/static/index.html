@@ -22,6 +22,11 @@
         <button class="nav-item" data-view="quotes"><span>₫</span> Báo giá</button>
         <button class="nav-item" data-view="reports"><span>↗</span> Báo cáo & công nợ</button>
         <button class="nav-item" data-view="documents"><span>✓</span> Bảng kê & hóa đơn</button>
+        <button class="nav-item" data-view="inventory"><span>▦</span> Kho hóa đơn</button>
+        <button class="nav-item" data-view="msmi"><span>⇩</span> Hóa đơn đầu vào</button>
+        <button class="nav-item" data-view="kitchen"><span>♨</span> Xưởng cơm / PO</button>
+        <button class="nav-item" data-view="payroll"><span>◷</span> Chấm công & lương</button>
+        <button class="nav-item" data-view="printing"><span>▣</span> Duyệt & in</button>
         <button class="nav-item" data-view="settings"><span>⚙</span> Danh mục & sao lưu</button>
       </nav>
       <div class="sidebar-foot">
@@ -46,6 +51,7 @@
   </div>
 
   <input type="file" id="excelInput" accept=".xlsx,.xlsm" hidden>
+  <input type="file" id="attendanceInput" accept=".xlsx,.xlsm" hidden>
   <div class="modal-backdrop" id="modalBackdrop" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-head"><div><p class="eyebrow">CẬP NHẬT DỮ LIỆU</p><h2 id="modalTitle">Dòng đơn hàng</h2></div><button class="icon-button" data-action="close-modal">×</button></div>
@@ -56,4 +62,3 @@
   <script src="/static/app.js"></script>
 </body>
 </html>
-
