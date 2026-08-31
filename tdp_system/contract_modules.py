@@ -305,6 +305,8 @@ MAPPING_IMPORT_MAX_ROWS = 10_000
 MAPPING_IMPORT_TTL_SECONDS = 30 * 60
 PENDING_MAPPING_IMPORTS = {}
 MAPPING_IMPORT_LOCK = threading.Lock()
+PENDING_CATALOG_IMPORTS = {}
+CATALOG_IMPORT_LOCK = threading.Lock()
 PENDING_KITCHEN_IMPORTS = {}
 KITCHEN_IMPORT_LOCK = threading.Lock()
 PENDING_OPENING_IMPORTS = {}
@@ -344,6 +346,35 @@ MAPPING_ALIASES = {
     },
 }
 
+CATALOG_ALIASES = {
+    "product_code": {
+        "mahang", "mahanghoa", "mahh", "mavt", "mavattu", "matdp", "masp",
+        "masanpham", "mahhtdp", "productcode", "itemcode", "code",
+    },
+    "product_group": {"nhomhang", "nhomhanghoa", "nhom", "category", "group"},
+    "product_name": {
+        "tenhang", "tenhanghoa", "tenhanghoatdp", "tentdp", "tenthanhdatphat",
+        "productname", "itemname",
+    },
+    "invoice_name": {
+        "tenxuathoadon", "tenxuathd", "tenxhd", "tenhoadon", "tenhd", "tendaura",
+        "tenhangxuathoadon", "tenhanghoaxuathoadon", "tenhangxhd", "invoicename",
+    },
+    "unit": {"dvt", "donvitinh", "unit"},
+    "tax": {"thue", "thuesuat", "thuegtgt", "tsuat", "vat", "tax"},
+}
+
+CATALOG_CANONICAL_UNITS = {
+    "kg": "Kg", "cai": "Cái", "goi": "Gói", "hop": "Hộp", "chai": "Chai",
+    "can": "Can", "qua": "Quả", "thung": "Thùng", "lo": "Lọ", "tui": "Túi",
+    "doi": "Đôi", "lit": "Lít", "cuon": "Cuộn", "bich": "Bịch", "coc": "Cốc",
+    "vi": "Vỉ", "bo": "Bộ", "mo": "Mớ", "la": "Lá", "bao": "Bao",
+    "tuyp": "Tuýp", "con": "Con", "to": "Tô", "binh": "Bình",
+    "cay": "Cây", "vien": "Viên", "ly": "Ly", "cu": "Củ", "tap": "Tập",
+    "lon": "Lon", "ong": "Ống", "le": "Lễ", "tep": "Tệp", "dia": "Đĩa",
+    "mieng": "Miếng", "day": "Dây", "suat": "Suất",
+}
+
 
 def ensure_column(conn, table: str, name: str, definition: str):
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -353,6 +384,8 @@ def ensure_column(conn, table: str, name: str, definition: str):
 
 def init_contract_schema(conn):
     conn.executescript(ADVANCED_SCHEMA)
+    ensure_column(conn, "products", "product_group", "TEXT")
+    ensure_column(conn, "products", "catalog_updated_at", "TEXT")
     ensure_column(conn, "orders", "damaged_qty", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "orders", "supplier_return_qty", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "orders", "customer_return_qty", "REAL NOT NULL DEFAULT 0")
@@ -463,6 +496,224 @@ def mapping_cell_text(value) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return re.sub(r"\s+", " ", str(value).strip())
+
+
+def catalog_unit(value) -> str:
+    text = mapping_cell_text(value)
+    return CATALOG_CANONICAL_UNITS.get(mapping_key(text), text)
+
+
+def catalog_tax(value) -> str:
+    if value in (None, "") or isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        text = mapping_cell_text(value).upper()
+        if mapping_key(text) in {"kkknt", "kct", "khongkekhai"}:
+            return "KKKNT"
+        text = text.replace("%", "").replace(",", ".").strip()
+        try:
+            number = float(text)
+        except ValueError:
+            return mapping_cell_text(value)
+    if number > 1:
+        number /= 100
+    return f"{number:.6f}".rstrip("0").rstrip(".")
+
+
+def catalog_header_fields(row) -> dict:
+    found = {}
+    for column_index, value in enumerate(row, start=1):
+        key = mapping_key(value)
+        if not key:
+            continue
+        for field_name, accepted in CATALOG_ALIASES.items():
+            if field_name not in found and key in accepted:
+                found[field_name] = column_index
+                break
+    return found
+
+
+def find_catalog_sheet(workbook):
+    candidates = []
+    required = {"product_code", "product_name", "unit", "tax"}
+    for sheet_index, worksheet in enumerate(workbook.worksheets):
+        for row_index, row in enumerate(
+            worksheet.iter_rows(min_row=1, max_row=25, max_col=30, values_only=True),
+            start=1,
+        ):
+            fields = catalog_header_fields(row)
+            if required.issubset(fields):
+                candidates.append((len(fields), -sheet_index, -row_index, worksheet, row_index, fields))
+    if not candidates:
+        return None
+    _, _, _, worksheet, row_index, fields = max(candidates, key=lambda item: item[:3])
+    return worksheet, row_index, fields
+
+
+def catalog_database_state_hash(conn) -> str:
+    digest = hashlib.sha256()
+    for row in conn.execute(
+        "SELECT code,name,unit,tax,COALESCE(product_group,'') product_group FROM products ORDER BY code"
+    ):
+        digest.update(json.dumps(list(row), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        digest.update(b"\n")
+    for row in conn.execute(
+        "SELECT product_code,invoice_name FROM outgoing_product_names ORDER BY product_code"
+    ):
+        digest.update(json.dumps(list(row), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def parse_catalog_workbook(conn, workbook) -> dict:
+    found = find_catalog_sheet(workbook)
+    if not found:
+        raise ValueError("Không tìm thấy bảng có Mã hàng, Tên Thành Đạt Phát, ĐVT và Thuế")
+    worksheet, header_row, fields = found
+    existing_products = {
+        row["code"]: dict(row)
+        for row in conn.execute(
+            "SELECT code,name,unit,tax,COALESCE(product_group,'') product_group FROM products"
+        )
+    }
+    existing_names = {
+        row["product_code"]: row["invoice_name"]
+        for row in conn.execute("SELECT product_code,invoice_name FROM outgoing_product_names")
+    }
+    rows = []
+    unique_items = {}
+    scanned = 0
+    max_column = max(fields.values())
+    for row_index, row in enumerate(
+        worksheet.iter_rows(
+            min_row=header_row + 1,
+            max_row=min(worksheet.max_row, header_row + MAPPING_IMPORT_MAX_ROWS + 1),
+            max_col=max_column,
+            values_only=True,
+        ),
+        start=header_row + 1,
+    ):
+        code = mapping_cell_text(row[fields["product_code"] - 1]).upper()
+        name = mapping_cell_text(row[fields["product_name"] - 1])
+        unit = catalog_unit(row[fields["unit"] - 1])
+        tax = catalog_tax(row[fields["tax"] - 1])
+        group = mapping_cell_text(row[fields["product_group"] - 1]).upper() if "product_group" in fields else ""
+        invoice_name = mapping_cell_text(row[fields["invoice_name"] - 1]) if "invoice_name" in fields else ""
+        if not any((code, name, unit, tax, group, invoice_name)):
+            continue
+        scanned += 1
+        item = {
+            "source_row": row_index,
+            "product_code": code,
+            "product_group": group,
+            "product_name": name,
+            "invoice_name": invoice_name,
+            "unit": unit,
+            "tax": tax,
+            "product_status": "error",
+            "invoice_status": "none",
+            "warnings": [],
+            "errors": [],
+            "apply": False,
+        }
+        if not code:
+            item["errors"].append("Thiếu mã hàng")
+        if not name:
+            item["errors"].append("Thiếu tên Thành Đạt Phát")
+        if not unit:
+            item["errors"].append("Thiếu đơn vị tính")
+        if not tax:
+            item["errors"].append("Thiếu thuế")
+        if "invoice_name" in fields and not invoice_name:
+            item["errors"].append("Thiếu tên xuất hóa đơn")
+
+        previous = unique_items.get(code) if code else None
+        if previous:
+            signature = (mapping_key(name), mapping_key(invoice_name), mapping_key(unit), tax, group)
+            previous_signature = (
+                mapping_key(previous["product_name"]), mapping_key(previous["invoice_name"]),
+                mapping_key(previous["unit"]), previous["tax"], previous["product_group"],
+            )
+            if signature == previous_signature:
+                item["product_status"] = "duplicate"
+                item["invoice_status"] = "duplicate"
+                item["warnings"].append(
+                    f"Trùng hoàn toàn với dòng {previous['source_row']}; chỉ nhập một lần"
+                )
+            else:
+                item["errors"].append(
+                    f"Cùng mã nhưng khác dữ liệu với dòng {previous['source_row']}"
+                )
+                previous["errors"].append(f"Cùng mã nhưng khác dữ liệu với dòng {row_index}")
+                previous["product_status"] = "error"
+                previous["invoice_status"] = "error"
+                previous["apply"] = False
+            rows.append(item)
+            continue
+
+        if code:
+            unique_items[code] = item
+        if item["errors"]:
+            rows.append(item)
+            continue
+
+        current = existing_products.get(code)
+        if not current:
+            item["product_status"] = "new"
+        else:
+            base_changed = any((
+                mapping_key(current.get("name")) != mapping_key(name),
+                mapping_key(current.get("unit")) != mapping_key(unit),
+                catalog_tax(current.get("tax")) != tax,
+                mapping_key(current.get("product_group")) != mapping_key(group),
+            ))
+            item["product_status"] = "update" if base_changed else "unchanged"
+
+        if invoice_name:
+            current_invoice_name = existing_names.get(code, "")
+            if not current_invoice_name:
+                item["invoice_status"] = "new"
+            elif mapping_key(current_invoice_name) == mapping_key(invoice_name):
+                item["invoice_status"] = "unchanged"
+            else:
+                item["invoice_status"] = "update"
+                item["warnings"].append("Tên xuất hóa đơn sẽ được cập nhật sau khi xác nhận")
+        item["apply"] = True
+        rows.append(item)
+
+    if scanned > MAPPING_IMPORT_MAX_ROWS:
+        raise ValueError(f"File vượt quá giới hạn {MAPPING_IMPORT_MAX_ROWS:,} dòng dữ liệu")
+    if not rows:
+        raise ValueError("Sheet được nhận diện nhưng không có dòng dữ liệu")
+
+    unique_rows = [item for item in rows if item["apply"] and item["product_status"] != "duplicate"]
+    incoming_codes = {item["product_code"] for item in unique_rows}
+    retained_codes = sorted(set(existing_products) - incoming_codes)
+    counts = {
+        "total": len(rows),
+        "unique_products": len(unique_rows),
+        "new_products": sum(item["product_status"] == "new" for item in unique_rows),
+        "update_products": sum(item["product_status"] == "update" for item in unique_rows),
+        "unchanged_products": sum(item["product_status"] == "unchanged" for item in unique_rows),
+        "retained_products": len(retained_codes),
+        "new_names": sum(item["invoice_status"] == "new" for item in unique_rows),
+        "update_names": sum(item["invoice_status"] == "update" for item in unique_rows),
+        "unchanged_names": sum(item["invoice_status"] == "unchanged" for item in unique_rows),
+        "duplicate": sum(item["product_status"] == "duplicate" for item in rows),
+        "error": sum(bool(item["errors"]) for item in rows),
+    }
+    return {
+        "sheet": worksheet.title,
+        "header_row": header_row,
+        "rows": rows,
+        "items": unique_rows,
+        "counts": counts,
+        "retained_codes": retained_codes,
+        "database_state_hash": catalog_database_state_hash(conn),
+        "can_confirm": counts["error"] == 0,
+    }
 
 
 def mapping_header_fields(row, mapping_type: str) -> dict:
@@ -1791,6 +2042,163 @@ def register_contract_routes(app, ctx):
                 (item["id"],),
             )]
         return invoices
+
+    @app.post("/api/catalog/import/preview")
+    def api_catalog_import_preview():
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file danh mục Excel"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file .xlsx hoặc .xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                expanded_size = sum(item.file_size for item in entries)
+                if len(entries) > 2_000 or expanded_size > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                    return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn để đọc an toàn"}), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with CATALOG_IMPORT_LOCK:
+            for old_token, item in list(PENDING_CATALOG_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_CATALOG_IMPORTS.pop(old_token, None)
+        workbook = None
+        try:
+            workbook = load_workbook(
+                io.BytesIO(payload), read_only=True, data_only=True, keep_links=False,
+            )
+            with db_factory() as conn:
+                preview = parse_catalog_workbook(conn, workbook)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Không đọc được file danh mục Excel"}), 400
+        finally:
+            if workbook is not None:
+                workbook.close()
+
+        token = uuid.uuid4().hex
+        source_hash = hashlib.sha256(payload).hexdigest().upper()
+        pending = {
+            "created": time.time(),
+            "filename": filename,
+            "source_hash": source_hash,
+            "sheet": preview["sheet"],
+            "header_row": preview["header_row"],
+            "items": preview.pop("items"),
+            "counts": preview["counts"],
+            "retained_codes": preview["retained_codes"],
+            "database_state_hash": preview.pop("database_state_hash"),
+            "has_errors": not preview["can_confirm"],
+        }
+        with CATALOG_IMPORT_LOCK:
+            PENDING_CATALOG_IMPORTS[token] = pending
+        return jsonify({
+            "ok": True,
+            "token": token,
+            "filename": filename,
+            "source_hash": source_hash,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            **preview,
+        })
+
+    @app.post("/api/catalog/import/confirm")
+    def api_catalog_import_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi danh mục"}), 400
+        token = clean_text(body.get("token"))
+        with CATALOG_IMPORT_LOCK:
+            pending = PENDING_CATALOG_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file"}), 410
+        if pending["has_errors"]:
+            return jsonify({"ok": False, "error": "File còn dòng lỗi nên chưa thể nhập"}), 400
+
+        inserted_products = updated_products = unchanged_products = 0
+        inserted_names = updated_names = unchanged_names = 0
+        try:
+            with db_factory() as conn:
+                if catalog_database_state_hash(conn) != pending["database_state_hash"]:
+                    raise ValueError(
+                        "Danh mục đã thay đổi sau khi xem trước; dữ liệu chưa được ghi, vui lòng chọn lại file"
+                    )
+                timestamp = now_iso()
+                for item in pending["items"]:
+                    code = item["product_code"]
+                    current_product = conn.execute(
+                        "SELECT code FROM products WHERE code=?", (code,),
+                    ).fetchone()
+                    if current_product:
+                        if item["product_status"] == "update":
+                            updated_products += 1
+                        else:
+                            unchanged_products += 1
+                    else:
+                        inserted_products += 1
+                    conn.execute(
+                        """INSERT INTO products(
+                               code,name,unit,tax,supplier,buy_price,purchase_list,
+                               product_group,catalog_updated_at
+                           ) VALUES(?,?,?,?, '',0,0,?,?)
+                           ON CONFLICT(code) DO UPDATE SET
+                               name=excluded.name,
+                               unit=excluded.unit,
+                               tax=excluded.tax,
+                               product_group=excluded.product_group,
+                               catalog_updated_at=excluded.catalog_updated_at""",
+                        (
+                            code, item["product_name"], item["unit"], item["tax"],
+                            item["product_group"], timestamp,
+                        ),
+                    )
+
+                    invoice_name = item["invoice_name"]
+                    if invoice_name:
+                        current_name = conn.execute(
+                            "SELECT invoice_name FROM outgoing_product_names WHERE product_code=?",
+                            (code,),
+                        ).fetchone()
+                        if not current_name:
+                            inserted_names += 1
+                        elif mapping_key(current_name["invoice_name"]) == mapping_key(invoice_name):
+                            unchanged_names += 1
+                        else:
+                            updated_names += 1
+                        conn.execute(
+                            """INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at)
+                               VALUES(?,?,?) ON CONFLICT(product_code) DO UPDATE SET
+                               invoice_name=excluded.invoice_name,updated_at=excluded.updated_at""",
+                            (code, invoice_name, timestamp),
+                        )
+                result_counts = {
+                    "inserted_products": inserted_products,
+                    "updated_products": updated_products,
+                    "unchanged_products": unchanged_products,
+                    "retained_products": len(pending["retained_codes"]),
+                    "inserted_names": inserted_names,
+                    "updated_names": updated_names,
+                    "unchanged_names": unchanged_names,
+                    "processed": len(pending["items"]),
+                }
+                audit(
+                    conn, now_iso, "catalog.bulk_import", "ok",
+                    entity_type="catalog", entity_id=pending["source_hash"][:16],
+                    metadata={
+                        "filename": pending["filename"], "sheet": pending["sheet"],
+                        "header_row": pending["header_row"], "source_hash": pending["source_hash"],
+                        **result_counts,
+                    },
+                )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 409
+        return jsonify({"ok": True, "source_hash": pending["source_hash"], **result_counts})
 
     @app.post("/api/mappings/import/preview")
     def api_mapping_import_preview():

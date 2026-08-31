@@ -22,6 +22,9 @@ KHO, CÔNG NỢ VÀ HÓA ĐƠN
 - Ghép đủ mã hàng nguồn với mã TĐP rồi mới bấm “Tạo phiếu nhập”. Mapping được ghi nhớ.
 - Hóa đơn đầu ra dùng lượng thực giao, phải đủ tồn và chỉ tạo dự thảo. Dự thảo đang giữ tồn có thể “Hủy & nhả tồn”.
 - Danh mục tên xuất hóa đơn: vào “Danh mục & sao lưu”, có thể lưu từng mã hoặc nạp cả file Excel. File cần có Mã/Tên hàng và Tên xuất hóa đơn.
+- Với file danh mục đầy đủ, vào “Danh mục & sao lưu” → “Nạp danh mục khách chốt” → kiểm tra số mã mới/cập nhật/mã cũ được giữ → bấm xác nhận. Hệ thống giữ nguyên NCC, giá mua và bảng giá của mã hiện có, đồng thời thêm mã mới và lưu tên xuất hóa đơn.
+- Tên xuất hóa đơn có thể khác hẳn tên TĐP nếu khách chủ động chọn mặt hàng thay thế cho hàng đặc thù. Hệ thống dùng đúng tên trong file đã được khách xác nhận và vẫn chỉ tạo dự thảo; người dùng phải kiểm tra trước khi ký/phát hành.
+- Nạp lại cùng file danh mục không nhân đôi. Mã cũ không có trong file mới vẫn được giữ; hệ thống không tự xóa danh mục.
 - Khi nạp danh sách Excel, phải xem trước và bấm xác nhận. Nếu còn dòng sai hoặc cùng mã có hai giá trị khác nhau, hệ thống không ghi bất kỳ dòng nào.
 - Người dùng tự kiểm tra, ký và phát hành trên M-Invoice; sau đó mới bấm “Xác nhận đã ký/phát hành” để ghi xuất kho. Hệ thống không tự ký/phát hành.
 - Công nợ hỗ trợ số dư đầu kỳ, thu/chi, điều chỉnh, xem theo khoảng ngày và tải Excel công nợ kỳ.

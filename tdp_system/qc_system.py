@@ -53,6 +53,31 @@ def preview_mapping(client, mapping_type, payload, filename="mapping.xlsx"):
     )
 
 
+def catalog_workbook_bytes(rows):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "danh mục hàng hóa"
+    headers = ["STT", "MÃ HÀNG", "Nhóm hàng", "TÊN THÀNH ĐẠT PHÁT", "TÊN XUẤT HÓA ĐƠN", "ĐVT", "Thuế"]
+    for column, value in enumerate(headers, start=1):
+        sheet.cell(1, column, value)
+    for row_index, values in enumerate(rows, start=2):
+        sheet.cell(row_index, 1, row_index - 1)
+        for column, value in enumerate(values, start=2):
+            sheet.cell(row_index, column, value)
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()
+
+
+def preview_catalog(client, payload, filename="danh-muc.xlsx"):
+    return client.post(
+        "/api/catalog/import/preview",
+        data={"file": (io.BytesIO(payload), filename)},
+        content_type="multipart/form-data",
+    )
+
+
 def kitchen_workbook_bytes(product_code="A000047", duplicate_first=False):
     workbook = Workbook()
     sheet = workbook.active
@@ -127,7 +152,145 @@ def preview_opening(client, payload, period="2026-08", filename="tồn đầu k�
     )
 
 
+def run_catalog_import_qc():
+    catalog_db = APP_DIR / "data" / "qc_catalog_test.sqlite3"
+    clean_test_db(catalog_db)
+    actual_source = next((ROOT / "_HANDOFF" / "EXTERNAL_INPUTS").glob("08410fad*.xlsx"), None)
+    try:
+        server.DB_PATH = catalog_db
+        server.init_database()
+        client = server.app.test_client()
+
+        conflict_file = catalog_workbook_bytes([
+            ["QC-CAT-01", "QC", "Hàng QC A", "Tên hóa đơn A", "Kg", "8%"],
+            ["QC-CAT-01", "QC", "Hàng QC B", "Tên hóa đơn B", "Kg", "8%"],
+        ])
+        conflict_preview = preview_catalog(client, conflict_file).get_json()
+        assert conflict_preview["can_confirm"] is False
+        assert conflict_preview["counts"]["error"] == 2
+        assert client.post(
+            "/api/catalog/import/confirm",
+            json={"token": conflict_preview["token"], "confirmed": True},
+        ).status_code == 400
+
+        if actual_source is None or not actual_source.exists():
+            return "synthetic conflict/atomic block passed; customer workbook not present"
+
+        source_hash = hashlib.sha256(actual_source.read_bytes()).hexdigest().upper()
+        assert source_hash == "635308AF3F203BA51456BB4F7984BE3034D18FBBE10E005B2827C394CFA4C305"
+        with server.db() as conn:
+            protected_before = dict(conn.execute(
+                """SELECT code,supplier,buy_price,purchase_list,seller,cccd
+                   FROM products WHERE code='A000001'"""
+            ).fetchone())
+            price_before = [tuple(row) for row in conn.execute(
+                "SELECT price_group,price_text,price_value FROM product_prices WHERE product_code='A000001' ORDER BY price_group"
+            )]
+
+        with actual_source.open("rb") as handle:
+            preview_response = client.post(
+                "/api/catalog/import/preview",
+                data={"file": (handle, actual_source.name)},
+                content_type="multipart/form-data",
+            )
+        assert preview_response.status_code == 200, preview_response.get_data(as_text=True)
+        preview = preview_response.get_json()
+        assert preview["source_hash"] == source_hash
+        assert preview["sheet"] == "danh mục hàng hóa" and preview["header_row"] == 1
+        assert preview["can_confirm"] is True
+        assert preview["counts"] == {
+            "total": 1249,
+            "unique_products": 1249,
+            "new_products": 380,
+            "update_products": 869,
+            "unchanged_products": 0,
+            "retained_products": 2,
+            "new_names": 1249,
+            "update_names": 0,
+            "unchanged_names": 0,
+            "duplicate": 0,
+            "error": 0,
+        }
+        assert client.post(
+            "/api/catalog/import/confirm", json={"token": preview["token"]},
+        ).status_code == 400
+        confirmed = client.post(
+            "/api/catalog/import/confirm",
+            json={"token": preview["token"], "confirmed": True},
+        )
+        assert confirmed.status_code == 200, confirmed.get_data(as_text=True)
+        confirmed_data = confirmed.get_json()
+        assert confirmed_data["processed"] == 1249
+        assert confirmed_data["inserted_products"] == 380
+        assert confirmed_data["inserted_names"] == 1249
+        assert client.post(
+            "/api/catalog/import/confirm",
+            json={"token": preview["token"], "confirmed": True},
+        ).status_code == 410
+
+        with server.db() as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert conn.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 1251
+            assert conn.execute("SELECT COUNT(*) FROM outgoing_product_names").fetchone()[0] == 1249
+            assert conn.execute(
+                "SELECT invoice_name FROM outgoing_product_names WHERE product_code='I000164'"
+            ).fetchone()[0] == "Bắp cải"
+            assert conn.execute("SELECT unit FROM products WHERE code='D000021'").fetchone()[0] == "Kg"
+            assert conn.execute("SELECT unit FROM products WHERE code='I000090'").fetchone()[0] == "Kg"
+            assert conn.execute("SELECT product_group FROM products WHERE code='A000001'").fetchone()[0] == "A"
+            assert conn.execute("SELECT 1 FROM products WHERE code='G000074'").fetchone()
+            assert conn.execute("SELECT 1 FROM products WHERE code='I000189'").fetchone()
+            protected_after = dict(conn.execute(
+                """SELECT code,supplier,buy_price,purchase_list,seller,cccd
+                   FROM products WHERE code='A000001'"""
+            ).fetchone())
+            price_after = [tuple(row) for row in conn.execute(
+                "SELECT price_group,price_text,price_value FROM product_prices WHERE product_code='A000001' ORDER BY price_group"
+            )]
+            assert protected_after == protected_before
+            assert price_after == price_before
+
+        with actual_source.open("rb") as handle:
+            repeat_response = client.post(
+                "/api/catalog/import/preview",
+                data={"file": (handle, "danh-muc-doi-ten.xlsx")},
+                content_type="multipart/form-data",
+            )
+        repeat = repeat_response.get_json()
+        assert repeat["counts"]["new_products"] == 0
+        assert repeat["counts"]["update_products"] == 0
+        assert repeat["counts"]["unchanged_products"] == 1249
+        assert repeat["counts"]["unchanged_names"] == 1249
+        repeat_confirm = client.post(
+            "/api/catalog/import/confirm",
+            json={"token": repeat["token"], "confirmed": True},
+        )
+        assert repeat_confirm.status_code == 200
+        assert repeat_confirm.get_json()["unchanged_names"] == 1249
+
+        with actual_source.open("rb") as handle:
+            stale_response = client.post(
+                "/api/catalog/import/preview",
+                data={"file": (handle, actual_source.name)},
+                content_type="multipart/form-data",
+            )
+        stale = stale_response.get_json()
+        with server.db() as conn:
+            conn.execute("UPDATE products SET unit='QC-CHANGED' WHERE code='A000001'")
+        stale_confirm = client.post(
+            "/api/catalog/import/confirm",
+            json={"token": stale["token"], "confirmed": True},
+        )
+        assert stale_confirm.status_code == 409
+        assert "thay đổi" in stale_confirm.get_json()["error"]
+        return "1,249 products / 380 new / 1,249 confirmed invoice names / repeat safe"
+    finally:
+        contract_modules.PENDING_CATALOG_IMPORTS.clear()
+        clean_test_db(catalog_db)
+
+
 def main():
+    catalog_import_result = run_catalog_import_qc()
     qc_db = APP_DIR / "data" / "qc_test.sqlite3"
     clean_test_db(qc_db)
     server.DB_PATH = qc_db
@@ -1060,6 +1223,7 @@ def main():
         "actualCustomerKitchenWorkbook": actual_kitchen_result,
         "actualMealAttendanceWorkbook": "205 daily kitchen/shift rows / 6,020 meals / repeat safe",
         "actualOpeningInventoryWorkbook": actual_opening_result,
+        "actualCustomerCatalogWorkbook": catalog_import_result,
         "attendancePayrollLegacyImport": "passed",
         "paymentRequestAndPrintApproval": "passed",
     }, ensure_ascii=False, indent=2))

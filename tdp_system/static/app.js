@@ -14,6 +14,7 @@
     pendingImport: null,
     mappingImportType: "",
     mappingPreview: null,
+    catalogImportPreview: null,
     kitchenImportPreview: null,
     mealAttendancePreview: null,
     openingImportPreview: null,
@@ -54,6 +55,7 @@
   var excelInput = document.getElementById("excelInput");
   var attendanceInput = document.getElementById("attendanceInput");
   var mappingFileInput = document.getElementById("mappingFileInput");
+  var catalogWorkbookInput = document.getElementById("catalogWorkbookInput");
   var kitchenWorkbookInput = document.getElementById("kitchenWorkbookInput");
   var mealAttendanceInput = document.getElementById("mealAttendanceInput");
   var openingWorkbookInput = document.getElementById("openingWorkbookInput");
@@ -200,6 +202,40 @@
       '<div class="card-body"><div class="form-actions"><button class="btn btn-primary" data-action="confirm-mapping-import" ',
       preview.can_confirm ? '' : 'disabled', '>Xác nhận nhập dữ liệu</button></div>',
       preview.can_confirm ? '' : '<div class="code-note"><strong>Chưa thể nhập:</strong> sửa hết dòng lỗi trong Excel rồi chọn lại file.</div>',
+      '</div></div>'
+    ]);
+  }
+
+  function catalogImportPreviewHtml() {
+    var preview = state.catalogImportPreview;
+    if (!preview) return "";
+    var statusNames = { "new": "Thêm mới", "update": "Cập nhật", "unchanged": "Không đổi", "duplicate": "Dòng trùng", "error": "Lỗi" };
+    var visibleRows = preview.rows.slice(0, 200).map(function (item) {
+      var messages = item.errors.concat(item.warnings);
+      var status = item.errors.length ? "error" : item.product_status;
+      var tagClass = status === "error" ? "tag-red" : status === "new" ? "tag-ok" : "tag-warn";
+      return '<tr><td>' + item.source_row + '</td><td><strong>' + esc(item.product_code) +
+        '</strong><div class="muted">' + esc(item.product_group || "—") + '</div></td><td><strong>' +
+        esc(item.product_name) + '</strong><div class="muted">' + esc(item.unit) + ' · ' +
+        esc(taxText(item.tax)) + '</div></td><td>' + esc(item.invoice_name || "—") +
+        '</td><td><span class="tag ' + tagClass + '">' + esc(statusNames[status] || status) +
+        '</span><div class="muted">' + esc(messages.join(" · ")) + '</div></td></tr>';
+    }).join("");
+    var count = preview.counts;
+    return html([
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước danh mục ', esc(preview.filename),
+      '</h3><p>Sheet ', esc(preview.sheet), ' · tiêu đề dòng ', preview.header_row,
+      ' · chỉ ghi sau khi người dùng xác nhận</p></div><button class="btn btn-small btn-outline" data-action="cancel-catalog-import">Bỏ file</button></div>',
+      '<div class="card-body"><div class="status-bar">', count.unique_products, ' mã · ', count.new_products,
+      ' mã mới · ', count.update_products, ' cập nhật · ', count.retained_products,
+      ' mã cũ được giữ · ', count.new_names, ' tên hóa đơn mới · ', count.error, ' lỗi</div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>Dòng</th><th>Mã / nhóm</th><th>Tên TĐP</th><th>Tên xuất hóa đơn</th><th>Kiểm tra</th></tr></thead><tbody>',
+      visibleRows, '</tbody></table></div>',
+      preview.rows.length > 200 ? '<div class="card-body muted">Hiển thị 200 dòng đầu; toàn bộ file vẫn được kiểm tra và nhập.</div>' : '',
+      '<div class="card-body"><div class="code-note"><strong>Nguyên tắc:</strong> giữ nguyên giá mua, NCC và các nhóm giá đang có; không xóa mã cũ. Tên xuất hóa đơn được dùng đúng theo file khách đã xác nhận.</div>',
+      '<div class="form-actions"><button class="btn btn-primary" data-action="confirm-catalog-import" ',
+      preview.can_confirm ? '' : 'disabled', '>Xác nhận cập nhật danh mục</button></div>',
+      preview.can_confirm ? '' : '<div class="code-note"><strong>Chưa thể nhập:</strong> sửa hết dòng lỗi rồi chọn lại file.</div>',
       '</div></div>'
     ]);
   }
@@ -963,10 +999,12 @@
       '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Đồng bộ danh mục</h3>',
       '<p>Nguồn: Em Thành.xlsx · Lần cuối ', esc(synced), '</p></div></div><div class="card-body">',
       '<div class="code-note"><strong>Đang áp dụng:</strong> HATRAN, ATV, SUPPY… dùng đúng nhóm giá. GIANHAPTAY và YLKHAN là giá theo ngày, không ăn theo nhà thầu nào.</div>',
-      '<div class="form-actions"><button class="btn btn-primary" data-action="sync-master">Đồng bộ lại từ Excel</button></div></div></div>',
+      '<div class="form-actions"><button class="btn btn-outline" data-action="sync-master">Đồng bộ lại từ Em Thành.xlsx</button>',
+      '<button class="btn btn-primary" data-action="choose-catalog-workbook">Nạp danh mục khách chốt</button></div></div></div>',
       '<div class="card"><div class="card-head"><div><h3>Sao lưu dữ liệu</h3><p>Tải toàn bộ đơn, công nợ và thanh toán về máy</p></div></div>',
       '<div class="card-body"><div class="code-note"><strong>Dữ liệu lưu tại máy chạy hệ thống.</strong> Máy thứ hai cùng Wi-Fi/LAN có thể dùng chung khi máy chủ đang mở.</div>',
       '<div class="form-actions"><a class="btn btn-primary" href="/api/backup">Tải bản sao lưu SQLite</a></div></div></div></div>',
+      catalogImportPreviewHtml(),
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Thông tin đề nghị thanh toán</h3><p>Đã lấy từ mẫu TĐP khách cung cấp; có thể sửa khi tài khoản hoặc người đại diện thay đổi</p></div></div><div class="card-body">',
       '<form id="documentSettingsForm" class="payment-grid"><div class="form-field span-2"><label>Người đại diện / đề nghị</label><input name="payment_requester" required value="', esc(d.master.settings.payment_requester || ""), '"></div>',
       '<div class="form-field"><label>Số tài khoản nhận tiền</label><input name="payment_bank_account" inputmode="numeric" required value="', esc(d.master.settings.payment_bank_account || ""), '"></div>',
@@ -1424,6 +1462,41 @@
     }
   }
 
+  async function previewCatalogWorkbook(file) {
+    if (!file) return;
+    try {
+      var form = new FormData();
+      form.append("file", file);
+      state.catalogImportPreview = await api("/api/catalog/import/preview", { method: "POST", body: form });
+      renderSettings();
+      showToast("Đã kiểm tra danh mục · xem kỹ rồi xác nhận cập nhật");
+    } catch (error) {
+      state.catalogImportPreview = null;
+      showToast(error.message, true);
+    }
+  }
+
+  async function confirmCatalogImport(button) {
+    var preview = state.catalogImportPreview;
+    if (!preview || !preview.can_confirm) return;
+    try {
+      button.disabled = true;
+      button.textContent = "Đang cập nhật danh mục…";
+      var result = await api("/api/catalog/import/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: preview.token, confirmed: true })
+      });
+      state.catalogImportPreview = null;
+      await loadData(state.batchId, true);
+      showToast("Đã cập nhật " + result.processed + " mã và tên xuất hóa đơn");
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Xác nhận cập nhật danh mục";
+      showToast(error.message, true);
+    }
+  }
+
   async function previewKitchenWorkbook(file) {
     if (!file) return;
     try {
@@ -1580,6 +1653,11 @@
     var file = mappingFileInput.files[0];
     mappingFileInput.value = "";
     previewMappingFile(file);
+  });
+  catalogWorkbookInput.addEventListener("change", function () {
+    var file = catalogWorkbookInput.files[0];
+    catalogWorkbookInput.value = "";
+    previewCatalogWorkbook(file);
   });
   kitchenWorkbookInput.addEventListener("change", function () {
     var file = kitchenWorkbookInput.files[0];
@@ -1787,6 +1865,10 @@
       state.mappingPreview = null;
       mappingFileInput.click();
     }
+    if (action === "choose-catalog-workbook") {
+      state.catalogImportPreview = null;
+      catalogWorkbookInput.click();
+    }
     if (action === "choose-kitchen-workbook") {
       state.kitchenImportPreview = null;
       kitchenWorkbookInput.click();
@@ -1823,6 +1905,11 @@
       if (cancelledType === "kitchen_units") renderKitchen(); else renderSettings();
     }
     if (action === "confirm-mapping-import") await confirmMappingImport(button);
+    if (action === "cancel-catalog-import") {
+      state.catalogImportPreview = null;
+      renderSettings();
+    }
+    if (action === "confirm-catalog-import") await confirmCatalogImport(button);
     if (action === "new-batch") newBatch();
     if (action === "paste-orders") openPasteModal();
     if (action === "add-order") openOrderModal(null);
