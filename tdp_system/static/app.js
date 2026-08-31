@@ -15,9 +15,16 @@
     mappingImportType: "",
     mappingPreview: null,
     kitchenImportPreview: null,
+    mealAttendancePreview: null,
+    openingImportPreview: null,
     minvoiceStatus: null,
     operations: null,
     supplierNeeds: null,
+    debtPeriod: null,
+    debtLoading: false,
+    debtFrom: "",
+    debtTo: "",
+    outgoingInvoices: null,
     opsDate: new Date().toISOString().slice(0, 10),
     opsMonth: new Date().toISOString().slice(0, 7),
     busy: false
@@ -48,6 +55,8 @@
   var attendanceInput = document.getElementById("attendanceInput");
   var mappingFileInput = document.getElementById("mappingFileInput");
   var kitchenWorkbookInput = document.getElementById("kitchenWorkbookInput");
+  var mealAttendanceInput = document.getElementById("mealAttendanceInput");
+  var openingWorkbookInput = document.getElementById("openingWorkbookInput");
   var backdrop = document.getElementById("modalBackdrop");
   var orderForm = document.getElementById("orderForm");
   var toastTimer;
@@ -227,6 +236,74 @@
     ]);
   }
 
+  function mealAttendancePreviewHtml() {
+    var preview = state.mealAttendancePreview;
+    if (!preview) return "";
+    var visibleRows = preview.rows.slice(0, 200).map(function (item) {
+      var messages = item.errors.concat(item.warnings);
+      var tagClass = item.errors.length ? "tag-red" : item.warnings.length ? "tag-warn" : "tag-ok";
+      var statusText = item.status === "new" ? "Thêm" : item.status === "update" ? "Cập nhật" : "Không đổi";
+      return '<tr><td>' + dateVN(item.work_date) + '</td><td><strong>' + esc(item.kitchen) +
+        '</strong></td><td>' + esc(item.shift) + '</td><td class="num-cell"><strong>' +
+        num(item.actual_count) + '</strong></td><td class="num-cell">' +
+        (item.ordered_count ? num(item.ordered_count) : "—") + '</td><td><span class="tag ' +
+        tagClass + '">' + statusText + '</span><div class="muted">' + esc(messages.join(" · ")) +
+        '</div></td></tr>';
+    }).join("");
+    var count = preview.counts;
+    return html([
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước chấm suất ăn</h3><p>File ',
+      esc(preview.filename), ' · kỳ ', esc(preview.periods.join(", ")),
+      ' · số ăn thực tế lưu riêng, không thay số suất đặt dùng cho PO</p></div><button class="btn btn-small btn-outline" data-action="cancel-meal-attendance-import">Bỏ file</button></div>',
+      '<div class="card-body"><div class="status-bar">', count.items, ' dòng ngày/bếp/ca · ', count.dates,
+      ' ngày · ', count.kitchens, ' bếp · ', count.new, ' thêm · ', count.update, ' cập nhật · ',
+      count.unchanged, ' không đổi · ', count.error, ' lỗi · Tổng thực ăn ', num(preview.totals.actual),
+      ' suất</div></div><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Bếp</th><th>Ca</th><th>Thực ăn</th><th>Số đặt</th><th>Kiểm tra</th></tr></thead><tbody>',
+      visibleRows, '</tbody></table></div>',
+      preview.rows.length > 200 ? '<div class="card-body muted">Hiển thị 200 dòng đầu; toàn bộ file vẫn được kiểm tra.</div>' : '',
+      '<div class="card-body"><div class="form-actions"><button class="btn btn-primary" data-action="confirm-meal-attendance-import" ',
+      preview.can_confirm ? '' : 'disabled', '>Xác nhận nạp chấm suất</button></div>',
+      preview.can_confirm ? '<div class="code-note"><strong>Kiểm soát:</strong> nạp lại cùng tháng sẽ cập nhật/thay thế đúng dữ liệu tháng, không cộng trùng.</div>' :
+        '<div class="code-note"><strong>Chưa thể nhập:</strong> sửa dòng âm hoặc cấu trúc lỗi rồi chọn lại file.</div>',
+      '</div></div>'
+    ]);
+  }
+
+  function openingImportPreviewHtml() {
+    var preview = state.openingImportPreview;
+    if (!preview) return "";
+    var count = preview.counts;
+    var visibleRows = preview.rows.slice(0, 200).map(function (item) {
+      var messages = item.errors.concat(item.warnings);
+      var statusText = item.errors.length ? "Lỗi" : item.status === "update" ? "Cập nhật" : "Thêm tồn";
+      if (item.create_product) statusText += " + mã mới";
+      var tagClass = item.errors.length ? "tag-red" : item.warnings.length ? "tag-warn" : "tag-ok";
+      return '<tr><td><strong>' + esc(item.product_code || "—") + '</strong><div class="muted">' +
+        esc(item.product_name) + '</div></td><td>' + esc(item.source_rows.join(", ")) +
+        '<div class="muted">' + esc(item.warehouse_codes.join(", ") || "Không có mã kho") +
+        '</div></td><td class="num-cell"><strong>' + num(item.qty) + '</strong> ' + esc(item.unit) +
+        '</td><td class="num-cell">' + money(item.unit_cost) + '</td><td class="num-cell"><strong>' +
+        money(item.amount) + '</strong></td><td><span class="tag ' + tagClass + '">' +
+        esc(statusText) + '</span><div class="muted">' + esc(messages.join(" · ")) + '</div></td></tr>';
+    }).join("");
+    return html([
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước tồn đầu kỳ ',
+      esc(preview.period), '</h3><p>File ', esc(preview.filename), ' · sheet ', esc(preview.sheet),
+      ' · chỉ ghi dữ liệu sau khi xác nhận</p></div><button class="btn btn-small btn-outline" data-action="cancel-opening-import">Bỏ file</button></div>',
+      '<div class="card-body"><div class="status-bar">', count.source_rows, ' dòng nguồn → ', count.items,
+      ' mã TĐP · ', count.new_products, ' mã mới · ', count.negative, ' mã tồn âm · ', count.warning,
+      ' mã cần lưu ý · ', count.error, ' lỗi · Tổng giá trị ', money(preview.totals.amount), '</div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>Mã / tên TĐP</th><th>Dòng / mã kho</th><th>Tồn</th><th>Đơn giá vốn</th><th>Giá trị</th><th>Kiểm tra</th></tr></thead><tbody>',
+      visibleRows, '</tbody></table></div>',
+      preview.rows.length > 200 ? '<div class="card-body muted">Hiển thị 200 mã cần xem đầu tiên; toàn bộ file vẫn được kiểm tra và gộp.</div>' : '',
+      '<div class="card-body"><div class="form-actions"><button class="btn btn-primary" data-action="confirm-opening-import" ',
+      preview.can_confirm ? '' : 'disabled', '>Xác nhận nạp tồn đầu kỳ</button></div>',
+      preview.can_confirm ? '<div class="code-note"><strong>Kiểm soát:</strong> mã trùng được cộng theo Mã TĐP; số âm và Thành tiền sổ sách được giữ nguyên. Mã mới được thêm vào danh mục nhưng chưa có NCC mặc định.</div>' :
+        '<div class="code-note"><strong>Chưa thể nhập:</strong> sửa các dòng lỗi trong Excel rồi chọn lại file.</div>',
+      '</div></div>'
+    ]);
+  }
+
   function emptyBatch(title, description) {
     return '<div class="card fade-in"><div class="empty"><div class="empty-icon">▤</div><h3>' +
       esc(title) + "</h3><p>" + esc(description) +
@@ -399,8 +476,11 @@
       }).join("");
       return '<div class="group-card"><div class="group-title"><div><strong>NCC ' + esc(supplier.toUpperCase()) +
         "</strong><span>" + esc(group.kitchen) + " · " + items.length +
-        ' dòng</span></div><button class="btn btn-small btn-outline" data-action="copy-supplier-need" data-group-index="' +
-        groupIndex + '">Sao chép gửi Zalo</button></div><div class="group-list">' + lines +
+        ' dòng</span></div><div class="compact-controls"><button class="btn btn-small btn-outline" data-action="toggle-supplier-rule" data-supplier="' +
+        esc(supplier) + '" data-combine="' + (group.combine_kitchens ? "0" : "1") + '">' +
+        (group.combine_kitchens ? "Tách theo bếp" : "Gộp NCC này") +
+        '</button><button class="btn btn-small btn-outline" data-action="copy-supplier-need" data-group-index="' +
+        groupIndex + '">Sao chép gửi Zalo</button></div></div><div class="group-list">' + lines +
         '</div><div class="group-total"><span>Tổng cần mua sau trừ tồn</span><strong>' +
         num(group.total_qty) + "</strong></div></div>";
     }).join("");
@@ -502,18 +582,29 @@
       content.innerHTML = emptyBatch("Chưa có dữ liệu báo cáo", "Nạp đơn để tính doanh thu, giá vốn, lợi nhuận và công nợ.");
       return;
     }
+    if (!state.debtFrom || !state.debtTo) {
+      state.debtFrom = d.batch.work_date.slice(0, 7) + "-01";
+      state.debtTo = d.batch.work_date;
+    }
+    if (state.debtPeriod === null) setTimeout(fetchDebtPeriod, 0);
     var s = d.summary;
-    var contractorRows = Object.entries(s.contractors).map(function (entry) {
+    var contractorDebt = state.debtPeriod ? state.debtPeriod.contractors : s.contractors;
+    var supplierDebt = state.debtPeriod ? state.debtPeriod.suppliers : s.suppliers;
+    var contractorRows = Object.entries(contractorDebt).map(function (entry) {
       var name = entry[0], item = entry[1];
       return "<tr><td><strong>" + esc(name) + '</strong></td><td class="num-cell">' + money(item.opening) +
-        '</td><td class="num-cell">' + money(item.total) + '</td><td class="num-cell">' + money(item.paid) +
-        '</td><td class="num-cell"><strong>' + money(item.balance) + "</strong></td></tr>";
+        '</td><td class="num-cell">' + money(item.period_charge == null ? item.total : item.period_charge) +
+        '</td><td class="num-cell">' + money(item.period_adjustment || 0) +
+        '</td><td class="num-cell">' + money(item.period_paid == null ? item.paid : item.period_paid) +
+        '</td><td class="num-cell"><strong>' + money(item.closing == null ? item.balance : item.closing) + "</strong></td></tr>";
     }).join("");
-    var supplierRows = Object.entries(s.suppliers).map(function (entry) {
+    var supplierRows = Object.entries(supplierDebt).map(function (entry) {
       var name = entry[0], item = entry[1];
       return "<tr><td><strong>" + esc(name) + '</strong></td><td class="num-cell">' + money(item.opening) +
-        '</td><td class="num-cell">' + money(item.cost) + '</td><td class="num-cell">' + money(item.paid) +
-        '</td><td class="num-cell"><strong>' + money(item.balance) + "</strong></td></tr>";
+        '</td><td class="num-cell">' + money(item.period_charge == null ? item.cost : item.period_charge) +
+        '</td><td class="num-cell">' + money(item.period_adjustment || 0) +
+        '</td><td class="num-cell">' + money(item.period_paid == null ? item.paid : item.period_paid) +
+        '</td><td class="num-cell"><strong>' + money(item.closing == null ? item.balance : item.closing) + "</strong></td></tr>";
     }).join("");
     var paymentRows = (d.payments || []).map(function (item) {
       return "<tr><td>" + dateVN(item.payment_date) + "</td><td>" +
@@ -523,8 +614,10 @@
         item.id + '">×</button></td></tr>';
     }).join("");
     content.innerHTML = html([
-      '<div class="toolbar fade-in"><div class="status-bar">✓ Doanh thu theo thực giao · Giá vốn theo thực nhận · Có số dư đầu kỳ và thanh toán</div>',
-      '<a class="btn btn-primary" href="', exportUrl("report"), '">Tải báo cáo Excel</a></div>',
+      '<div class="toolbar fade-in"><form id="debtPeriodForm" class="compact-controls"><strong>Kỳ công nợ</strong><input class="input-date" name="from" type="date" value="', esc(state.debtFrom), '" required><span>đến</span><input class="input-date" name="to" type="date" value="', esc(state.debtTo), '" required><button class="btn btn-outline" type="submit">Xem kỳ</button></form>',
+      '<div class="compact-controls"><a class="btn btn-outline" href="', exportUrl("report"), '">Báo cáo ngày</a>',
+      '<a class="btn btn-primary" href="/api/export/debts?from=', encodeURIComponent(state.debtFrom),
+      '&to=', encodeURIComponent(state.debtTo), '">Tải công nợ kỳ</a></div></div>',
       '<div class="stats-grid fade-in">',
       statCard("Doanh thu chưa VAT", money(s.totals.revenue), "Theo số thực giao", "₫"),
       statCard("Giá vốn", money(s.totals.cost), "Theo số thực nhận", "↓"),
@@ -539,11 +632,11 @@
       '<div class="form-field"><label>Số tiền</label><input name="amount" type="number" min="0" required></div>',
       '<div class="form-field"><label>Nội dung</label><input name="note" placeholder="Chuyển khoản…"></div>',
       '<button class="btn btn-primary" type="submit">Lưu thanh toán</button></form></div></div>',
-      '<div class="section-grid" style="margin-top:18px"><div class="card"><div class="card-head"><div><h3>Công nợ phải thu</h3><p>Đầu kỳ + phát sinh có thuế − đã thu</p></div></div>',
-      '<div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Đã thu</th><th>Còn thu</th></tr></thead><tbody>',
+      '<div class="section-grid" style="margin-top:18px"><div class="card"><div class="card-head"><div><h3>Công nợ phải thu</h3><p>Đầu kỳ + phát sinh + điều chỉnh − đã thu</p></div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Điều chỉnh</th><th>Đã thu</th><th>Còn thu</th></tr></thead><tbody>',
       contractorRows, "</tbody></table></div></div>",
-      '<div class="card"><div class="card-head"><div><h3>Công nợ phải trả</h3><p>Đầu kỳ + giá vốn thực nhận − đã trả</p></div></div>',
-      '<div class="table-wrap"><table><thead><tr><th>NCC</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Đã trả</th><th>Còn trả</th></tr></thead><tbody>',
+      '<div class="card"><div class="card-head"><div><h3>Công nợ phải trả</h3><p>Đầu kỳ + giá vốn thực nhận + điều chỉnh − đã trả</p></div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>NCC</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Điều chỉnh</th><th>Đã trả</th><th>Còn trả</th></tr></thead><tbody>',
       supplierRows, "</tbody></table></div></div></div>",
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Nhập số dư đầu kỳ</h3><p>Có thể cập nhật lại khi bắt đầu sử dụng</p></div></div>',
       '<div class="card-body"><form id="balanceForm" class="payment-grid">',
@@ -551,6 +644,13 @@
       '<div class="form-field span-2"><label>Mã nhà thầu / NCC</label><input name="party_code" required></div>',
       '<div class="form-field"><label>Số dư đầu kỳ</label><input name="opening" type="number" required></div>',
       '<button class="btn btn-outline" type="submit">Lưu số dư</button></form></div></div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Điều chỉnh công nợ</h3><p>Dùng số dương để tăng, số âm để giảm; lưu riêng trong lịch sử kỳ</p></div></div><div class="card-body"><form id="debtAdjustmentForm" class="payment-grid">',
+      '<div class="form-field"><label>Ngày</label><input name="adjustment_date" type="date" value="', esc(state.debtTo), '" required></div>',
+      '<div class="form-field"><label>Nhóm</label><select name="party_type"><option value="contractor">Phải thu</option><option value="supplier">Phải trả</option></select></div>',
+      '<div class="form-field"><label>Mã nhà thầu / NCC</label><input name="party_code" required></div>',
+      '<div class="form-field"><label>Số điều chỉnh (+/−)</label><input name="amount" type="number" required></div>',
+      '<div class="form-field span-2"><label>Lý do</label><input name="note" required></div>',
+      '<button class="btn btn-outline" type="submit">Lưu điều chỉnh</button></form></div></div>',
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Lịch sử thanh toán</h3><p>100 giao dịch gần nhất</p></div></div>',
       '<div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Loại</th><th>Đối tượng</th><th>Số tiền</th><th>Nội dung</th><th></th></tr></thead><tbody>',
       paymentRows || '<tr><td colspan="6"><div class="empty">Chưa ghi nhận thanh toán</div></td></tr>',
@@ -573,6 +673,22 @@
     var contractorOptions = (d.master.contractors || []).map(function (item) {
       return '<option value="' + esc(item.code) + '">' + esc(item.code) + '</option>';
     }).join("");
+    if (state.outgoingInvoices === null) setTimeout(fetchOutgoingInvoices, 0);
+    var outgoingRows = (state.outgoingInvoices || []).filter(function (item) {
+      return item.batch_id === state.batchId;
+    }).map(function (item) {
+      var statusText = item.status === "issued" ? "Đã phát hành" : item.status === "cancelled" ? "Đã hủy" : "Dự thảo";
+      var statusClass = item.status === "issued" ? "tag-ok" : item.status === "cancelled" ? "tag-red" : "tag-warn";
+      var actions = item.status === "draft"
+        ? '<div class="compact-controls"><button class="btn btn-small btn-primary" data-action="confirm-outgoing-issued" data-id="' +
+          item.id + '">Xác nhận đã ký/phát hành</button><button class="btn btn-small btn-outline" data-action="cancel-outgoing-draft" data-id="' +
+          item.id + '">Hủy & nhả tồn</button></div>'
+        : "";
+      return '<tr><td><strong>' + esc(item.contractor) + '</strong></td><td>' + dateVN(item.invoice_date) +
+        '</td><td class="num-cell">' + money(item.subtotal) + '</td><td class="num-cell">' + money(item.tax_amount) +
+        '</td><td class="num-cell"><strong>' + money(item.total_amount) + '</strong></td><td><span class="tag ' +
+        statusClass + '">' + statusText + '</span></td><td>' + actions + '</td></tr>';
+    }).join("");
     content.innerHTML = html([
       '<div class="code-note fade-in"><strong>Luồng hóa đơn đúng:</strong> hệ thống sinh file 11 cột theo mẫu khách gửi → tải lên phần mềm trung gian kiểm tra tồn → phần mềm trung gian mới đẩy sang M-Invoice.</div>',
       '<div class="toolbar fade-in"><div class="toolbar-left"><button class="btn btn-primary" data-action="create-outgoing-drafts">Kiểm tra tồn & tạo dự thảo đầu ra</button>',
@@ -589,6 +705,10 @@
       documentCard("11", "File tải hóa đơn", "ZIP tách nhà thầu và thuế, đúng 11 cột", exportUrl("invoices"), "Tải ZIP"),
       documentCard("BC", "Báo cáo công nợ", "Doanh thu, giá vốn, đầu kỳ và thanh toán", exportUrl("report"), "Tải Excel"),
       "</div></div></div>",
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Dự thảo hóa đơn đầu ra</h3><p>Tạo dự thảo chỉ giữ tồn khả dụng; chỉ ghi xuất kho sau khi người dùng xác nhận đã ký/phát hành bên ngoài</p></div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Ngày</th><th>Trước thuế</th><th>Thuế</th><th>Tổng</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>',
+      outgoingRows || '<tr><td colspan="7"><div class="empty">' + (state.outgoingInvoices === null ? 'Đang nạp trạng thái dự thảo…' : 'Phiên này chưa có dự thảo đầu ra.') + '</div></td></tr>',
+      '</tbody></table></div></div>',
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Điểm kiểm soát trước khi tải hóa đơn</h3>',
       '<p>Hệ thống không tự nhận là đã phát hành hóa đơn</p></div></div><div class="card-body"><div class="flow">',
       '<div class="flow-step ', d.summary.totals.errors ? "" : "done", '"><div class="num">1</div><div><strong>Đơn đủ dữ liệu</strong><span>',
@@ -621,13 +741,15 @@
       '<div class="form-field"><label>Mã hàng</label><input name="product_code" required></div>',
       '<div class="form-field"><label>Số lượng</label><input name="qty" type="number" step="0.01" required></div>',
       '<div class="form-field"><label>Đơn giá vốn</label><input name="unit_cost" type="number" min="0"></div>',
-      '<button class="btn btn-primary" type="submit">Lưu tồn đầu</button></form></div></div>',
+      '<button class="btn btn-primary" type="submit">Lưu tồn đầu</button>',
+      '<button class="btn btn-outline" type="button" data-action="choose-opening-workbook">Nạp Excel tồn đầu kỳ</button></form></div></div>',
       '<div class="card"><div class="card-head"><div><h3>Điều chỉnh kho</h3><p>Mọi điều chỉnh đều có audit</p></div></div><div class="card-body">',
       '<form id="inventoryAdjustmentForm" class="payment-grid"><div class="form-field"><label>Ngày</label><input name="txn_date" type="date" value="', esc(state.opsDate), '" required></div>',
       '<div class="form-field"><label>Mã hàng</label><input name="product_code" required></div>',
       '<div class="form-field"><label>SL (+ tăng / − giảm)</label><input name="qty" type="number" step="0.01" required></div>',
       '<div class="form-field"><label>Lý do</label><input name="note" required></div>',
       '<button class="btn btn-outline" type="submit">Ghi điều chỉnh</button></form></div></div></div>',
+      openingImportPreviewHtml(),
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Chi tiết tồn</h3><p>',
       dateVN(o.inventory_as_of), '</p></div><input id="inventoryDate" type="date" value="', esc(state.opsDate), '"></div>',
       '<div class="table-wrap"><table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn sổ sách</th><th>Tồn khả dụng</th></tr></thead><tbody>',
@@ -670,6 +792,15 @@
   function renderKitchen() {
     var o = state.operations;
     if (!o) { loadOperations(); return; }
+    var attendanceTotals = o.meal_attendance_totals || { actual: 0, ordered: 0, rows: 0, kitchens: 0 };
+    var attendanceRows = (o.meal_attendance || []).slice(0, 240).map(function (item) {
+      var difference = item.ordered_count ? item.actual_count - item.ordered_count : null;
+      return '<tr><td>' + dateVN(item.work_date) + '</td><td><strong>' + esc(item.kitchen) +
+        '</strong></td><td>' + esc(item.shift) + '</td><td class="num-cell"><strong>' +
+        num(item.actual_count) + '</strong></td><td class="num-cell">' +
+        (item.ordered_count ? num(item.ordered_count) : "—") + '</td><td class="num-cell">' +
+        (difference === null ? "—" : num(difference)) + '</td></tr>';
+    }).join("");
     var poApproved = o.meal_plans.length && o.meal_plans.every(function (plan) {
       return plan.status === "approved";
     });
@@ -695,8 +826,8 @@
         '</strong></div><strong>' + esc(item.unit_code) + '</strong></div>';
     }).join("");
     content.innerHTML = html([
-      '<div class="toolbar fade-in"><div class="status-bar">Menu → suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → XCOM → PO</div>',
-      '<div class="compact-controls"><input id="kitchenDate" type="date" value="', esc(state.opsDate), '"><button class="btn btn-outline" data-action="choose-kitchen-workbook">Nạp file xưởng cơm</button><a class="btn btn-primary" href="/api/kitchen/po?date=', encodeURIComponent(state.opsDate), '">',
+      '<div class="toolbar fade-in"><div><div class="status-bar">Menu → suất đặt → định lượng → nguyên liệu → giá HATRAN đúng kỳ → XCOM → PO</div><div class="muted">Chấm suất thực tế lưu riêng để đối chiếu; không tự đổi số suất đặt ban đầu của PO.</div></div>',
+      '<div class="compact-controls"><input id="kitchenDate" type="date" value="', esc(state.opsDate), '"><button class="btn btn-outline" data-action="choose-kitchen-workbook">Nạp định mức/PO</button><button class="btn btn-outline" data-action="choose-meal-attendance">Nạp chấm suất tháng</button><a class="btn btn-primary" href="/api/kitchen/po?date=', encodeURIComponent(state.opsDate), '">',
       poApproved ? 'Tải PO đã duyệt' : 'Tải PO nháp', '</a></div></div>',
       '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Tạo kế hoạch bếp/ca</h3><p>Mỗi dòng nguyên liệu: mã | định lượng/suất | món | ĐVT | NCC | giá tùy chọn</p></div></div><div class="card-body">',
       '<form id="mealPlanForm"><div class="payment-grid"><div class="form-field"><label>Ngày</label><input name="work_date" type="date" value="', esc(state.opsDate), '" required></div>',
@@ -715,7 +846,13 @@
       '<div class="group-list" style="margin-top:16px">', unitRows || '<div class="muted">Chưa ghép bếp nào vào XCOM.</div>', '</div></div></div></div>',
       mappingPreviewHtml("kitchen_units"),
       kitchenImportPreviewHtml(),
-      '<div class="group-grid" style="margin-top:18px">', cards || '<div class="card"><div class="empty">Ngày này chưa có kế hoạch xưởng cơm.</div></div>', '</div>'
+      mealAttendancePreviewHtml(),
+      '<div class="group-grid" style="margin-top:18px">', cards || '<div class="card"><div class="empty">Ngày này chưa có kế hoạch xưởng cơm.</div></div>', '</div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Chấm suất ăn thực tế ', esc(state.opsMonth),
+      '</h3><p>', attendanceTotals.kitchens, ' bếp · ', attendanceTotals.rows, ' dòng ngày/bếp/ca · tổng ',
+      num(attendanceTotals.actual), ' suất thực ăn</p></div></div><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Bếp</th><th>Ca</th><th>Thực ăn</th><th>Số đặt</th><th>Chênh lệch</th></tr></thead><tbody>',
+      attendanceRows || '<tr><td colspan="6"><div class="empty">Chưa nạp file chấm suất ăn tháng này.</div></td></tr>',
+      '</tbody></table></div>', (o.meal_attendance || []).length > 240 ? '<div class="card-body muted">Đang hiển thị 240 dòng đầu của kỳ.</div>' : '', '</div>'
     ]);
   }
 
@@ -727,8 +864,10 @@
         esc(item.employee_code) + ' · ' + esc(item.kitchen) + '</div></td><td>' + esc(item.role_name) +
         '</td><td class="num-cell">' + num(item.normal_hours) + '</td><td class="num-cell">' +
         num(item.overtime_hours) + '</td><td class="num-cell">' + num(item.sunday_hours) +
+        '</td><td class="num-cell">' + num(item.night_hours) + '</td><td class="num-cell">' +
+        num(item.holiday_hours) + '</td><td class="num-cell">' + money(n(item.allowance) + n(item.responsibility)) +
         '</td><td class="num-cell">' + money(item.gross_salary) + '</td><td class="num-cell">' +
-        money(item.bhxh_employee) + '</td><td class="num-cell">' + money(item.advance) +
+        money(item.bhxh_employee) + '</td><td class="num-cell">' + money(n(item.advance) + n(item.probation_deduction)) +
         '</td><td class="num-cell"><strong>' + money(item.net_salary) + '</strong></td></tr>';
     }).join("");
     var laborRows = o.labor_costs.slice(0, 120).map(function (item) {
@@ -737,19 +876,35 @@
     }).join("");
     content.innerHTML = html([
       '<div class="toolbar fade-in"><div class="status-bar">Công thường · tăng ca 150% · Chủ nhật 200% · đêm 130% · lễ 300% · phụ cấp · BHXH · tạm ứng</div>',
-      '<div class="compact-controls"><input id="payrollMonth" type="month" value="', esc(state.opsMonth), '"><button class="btn btn-primary" data-action="choose-attendance">Nạp file chấm công</button></div></div>',
+      '<div class="compact-controls"><input id="payrollMonth" type="month" value="', esc(state.opsMonth), '"><a class="btn btn-outline" href="/api/export/payroll?month=', encodeURIComponent(state.opsMonth), '">Tải bảng lương</a><button class="btn btn-primary" data-action="choose-attendance">Nạp file chấm công</button></div></div>',
       '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Thêm/cập nhật nhân sự</h3><p>Mã nhân sự là khóa không trùng</p></div></div><div class="card-body">',
       '<form id="staffForm" class="payment-grid"><div class="form-field"><label>Mã</label><input name="employee_code" required></div>',
       '<div class="form-field"><label>Họ tên</label><input name="full_name" required></div><div class="form-field"><label>Chức vụ</label><input name="role_name"></div>',
       '<div class="form-field"><label>Bếp</label><input name="kitchen"></div><div class="form-field"><label>Lương cơ bản</label><input name="base_salary" type="number" min="0"></div>',
+      '<div class="form-field"><label>Ngày chuẩn/tháng</label><input name="standard_days" type="number" min="1" value="26"></div><div class="form-field"><label>Giờ chuẩn/ngày</label><input name="standard_hours" type="number" min="1" value="8"></div>',
+      '<div class="form-field"><label>Tỷ lệ BHXH NLĐ</label><input name="bhxh_employee_rate" type="number" min="0" step="0.001" value="0"></div><div class="form-field"><label>Tỷ lệ BHXH công ty</label><input name="bhxh_company_rate" type="number" min="0" step="0.001" value="0"></div>',
       '<button class="btn btn-outline" type="submit">Lưu nhân sự</button></form></div></div>',
       '<div class="card"><div class="card-head"><div><h3>Chi phí lao động theo bếp</h3><p>Đọc từ sheet chấm công chợ</p></div></div><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Bếp</th><th>Chi phí</th></tr></thead><tbody>',
       laborRows || '<tr><td colspan="3"><div class="empty">Chưa nạp file chấm công tháng này.</div></td></tr>',
       '</tbody></table></div></div></div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Chấm/sửa công một ngày</h3><p>Dùng khi cần bổ sung phát sinh sau khi nạp Excel</p></div></div><div class="card-body"><form id="attendanceForm" class="payment-grid">',
+      '<div class="form-field"><label>Mã nhân sự</label><input name="employee_code" required></div><div class="form-field"><label>Ngày</label><input name="work_date" type="date" value="', esc(state.opsDate), '" required></div>',
+      '<div class="form-field"><label>Giờ thường</label><input name="normal_hours" type="number" min="0" step="0.5"></div><div class="form-field"><label>Tăng ca</label><input name="overtime_hours" type="number" min="0" step="0.5"></div>',
+      '<div class="form-field"><label>Chủ nhật</label><input name="sunday_hours" type="number" min="0" step="0.5"></div><div class="form-field"><label>Ca đêm</label><input name="night_hours" type="number" min="0" step="0.5"></div>',
+      '<div class="form-field"><label>Ngày lễ</label><input name="holiday_hours" type="number" min="0" step="0.5"></div><div class="form-field span-2"><label>Ghi chú</label><input name="note"></div>',
+      '<button class="btn btn-outline" type="submit">Lưu chấm công</button></form></div></div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Khoản lương theo tháng</h3><p>Phụ cấp, trách nhiệm, BHXH, tạm ứng, thử việc hoặc chốt thực lĩnh theo file hiện tại</p></div></div><div class="card-body"><form id="payrollAdjustmentForm" class="payment-grid">',
+      '<div class="form-field"><label>Mã nhân sự</label><input name="employee_code" required></div><div class="form-field"><label>Tháng</label><input name="month" type="month" value="', esc(state.opsMonth), '" required></div>',
+      '<div class="form-field"><label>Phụ cấp</label><input name="allowance" type="number" value="0"></div><div class="form-field"><label>Trách nhiệm</label><input name="responsibility" type="number" value="0"></div>',
+      '<div class="form-field"><label>Tạm ứng</label><input name="advance" type="number" value="0"></div><div class="form-field"><label>Khấu trừ thử việc</label><input name="probation_deduction" type="number" value="0"></div>',
+      '<div class="form-field"><label>BHXH người lao động</label><input name="bhxh_employee_amount" type="number" value="0"></div><div class="form-field"><label>BHXH công ty</label><input name="bhxh_company_amount" type="number" value="0"></div>',
+      '<div class="form-field"><label>Tổng lương chốt</label><input name="gross_override" type="number" value="0"></div><div class="form-field"><label>Thực lĩnh chốt</label><input name="net_override" type="number" value="0"></div>',
+      '<div class="form-field"><label><input name="use_override" type="checkbox"> Dùng số chốt thay công thức</label></div><div class="form-field span-2"><label>Ghi chú</label><input name="note"></div>',
+      '<button class="btn btn-primary" type="submit">Lưu khoản lương</button></form></div></div>',
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Bảng lương ', esc(state.opsMonth),
       '</h3><p>Tính từ dữ liệu chấm công chuẩn hóa; các khoản điều chỉnh lưu riêng theo tháng</p></div></div>',
-      '<div class="table-wrap"><table><thead><tr><th>STT</th><th>Nhân sự</th><th>Chức vụ</th><th>HC</th><th>TC</th><th>CN</th><th>Tổng lương</th><th>BHXH NLĐ</th><th>Tạm ứng</th><th>Thực lĩnh</th></tr></thead><tbody>',
-      rows || '<tr><td colspan="10"><div class="empty">Chưa có nhân sự/chấm công.</div></td></tr>',
+      '<div class="table-wrap"><table><thead><tr><th>STT</th><th>Nhân sự</th><th>Chức vụ</th><th>HC</th><th>TC</th><th>CN</th><th>Đêm</th><th>Lễ</th><th>PC+TN</th><th>Tổng lương</th><th>BHXH NLĐ</th><th>Tạm ứng+TV</th><th>Thực lĩnh</th></tr></thead><tbody>',
+      rows || '<tr><td colspan="13"><div class="empty">Chưa có nhân sự/chấm công.</div></td></tr>',
       '</tbody></table></div></div>'
     ]);
   }
@@ -812,6 +967,12 @@
       '<div class="card"><div class="card-head"><div><h3>Sao lưu dữ liệu</h3><p>Tải toàn bộ đơn, công nợ và thanh toán về máy</p></div></div>',
       '<div class="card-body"><div class="code-note"><strong>Dữ liệu lưu tại máy chạy hệ thống.</strong> Máy thứ hai cùng Wi-Fi/LAN có thể dùng chung khi máy chủ đang mở.</div>',
       '<div class="form-actions"><a class="btn btn-primary" href="/api/backup">Tải bản sao lưu SQLite</a></div></div></div></div>',
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Thông tin đề nghị thanh toán</h3><p>Đã lấy từ mẫu TĐP khách cung cấp; có thể sửa khi tài khoản hoặc người đại diện thay đổi</p></div></div><div class="card-body">',
+      '<form id="documentSettingsForm" class="payment-grid"><div class="form-field span-2"><label>Người đại diện / đề nghị</label><input name="payment_requester" required value="', esc(d.master.settings.payment_requester || ""), '"></div>',
+      '<div class="form-field"><label>Số tài khoản nhận tiền</label><input name="payment_bank_account" inputmode="numeric" required value="', esc(d.master.settings.payment_bank_account || ""), '"></div>',
+      '<div class="form-field span-2"><label>Ngân hàng</label><input name="payment_bank_name" required value="', esc(d.master.settings.payment_bank_name || ""), '"></div>',
+      '<button class="btn btn-primary" type="submit">Lưu thông tin</button></form>',
+      '<div class="code-note" style="margin-top:14px"><strong>Kiểm soát:</strong> hệ thống sẽ không xuất đề nghị thanh toán nếu thiếu một trong ba thông tin trên.</div></div></div>',
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Tên xuất hóa đơn</h3><p>Ghi nhớ tên đầu ra chuẩn theo mã hàng; nếu chưa khai báo sẽ dùng tên danh mục TĐP</p></div></div><div class="card-body">',
       '<form id="outgoingNameForm" class="payment-grid"><div class="form-field"><label>Mã hàng</label><input name="product_code" required></div>',
       '<div class="form-field span-2"><label>Tên xuất hóa đơn</label><input name="invoice_name" required></div><button class="btn btn-outline" type="submit">Lưu tên đầu ra</button>',
@@ -981,6 +1142,16 @@
   }
 
   function closeModal() {
+    if (state.modalMode === "import" && state.pendingImport && state.pendingImport.token) {
+      var token = state.pendingImport.token;
+      state.pendingImport = null;
+      fetch("/api/import/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: token }),
+        keepalive: true
+      }).catch(function () {});
+    }
     backdrop.hidden = true;
     state.editingId = null;
   }
@@ -1038,8 +1209,8 @@
             sheets: sheets
           })
         });
-        closeModal();
         state.pendingImport = null;
+        closeModal();
         state.batchId = imported.batch.id;
         state.view = "orders";
         await loadData(state.batchId, true);
@@ -1132,6 +1303,7 @@
       await api("/api/payments", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
       });
+      state.debtPeriod = null;
       await loadData(state.batchId, true);
       showToast("Đã ghi nhận thanh toán");
     } catch (error) { showToast(error.message, true); }
@@ -1144,8 +1316,28 @@
       await api("/api/balances", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
       });
+      state.debtPeriod = null;
       await loadData(state.batchId, true);
       showToast("Đã cập nhật số dư đầu kỳ");
+    } catch (error) { showToast(error.message, true); }
+  }
+
+  async function fetchDebtPeriod() {
+    if (!state.debtFrom || !state.debtTo || state.debtLoading) return;
+    state.debtLoading = true;
+    try {
+      state.debtPeriod = await api("/api/debts?from=" + encodeURIComponent(state.debtFrom) +
+        "&to=" + encodeURIComponent(state.debtTo));
+      if (state.view === "reports") renderReports();
+    } catch (error) { showToast(error.message, true); }
+    finally { state.debtLoading = false; }
+  }
+
+  async function fetchOutgoingInvoices() {
+    try {
+      var payload = await api("/api/outgoing-invoices");
+      state.outgoingInvoices = payload.items || [];
+      if (state.view === "documents") renderDocuments();
     } catch (error) { showToast(error.message, true); }
   }
 
@@ -1267,6 +1459,87 @@
     }
   }
 
+  async function previewMealAttendance(file) {
+    if (!file) return;
+    try {
+      var form = new FormData();
+      form.append("file", file);
+      state.mealAttendancePreview = await api("/api/kitchen/attendance/import/preview", {
+        method: "POST", body: form
+      });
+      renderKitchen();
+      showToast("Đã kiểm tra file chấm suất ăn · xem kỹ rồi xác nhận nhập");
+    } catch (error) {
+      state.mealAttendancePreview = null;
+      showToast(error.message, true);
+    }
+  }
+
+  async function confirmMealAttendance(button) {
+    var preview = state.mealAttendancePreview;
+    if (!preview || !preview.can_confirm) return;
+    try {
+      button.disabled = true;
+      button.textContent = "Đang ghi chấm suất…";
+      var result = await api("/api/kitchen/attendance/import/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: preview.token, confirmed: true })
+      });
+      state.mealAttendancePreview = null;
+      if (result.periods.length) {
+        state.opsMonth = result.periods[0];
+        state.opsDate = result.periods[0] + "-01";
+      }
+      await refreshOperations("Đã nạp " + result.processed + " dòng chấm suất · thêm " +
+        result.inserted + " · cập nhật " + result.updated + " · không đổi " + result.unchanged);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Xác nhận nạp chấm suất";
+      showToast(error.message, true);
+    }
+  }
+
+  async function previewOpeningWorkbook(file) {
+    if (!file) return;
+    try {
+      var form = new FormData();
+      form.append("period", state.opsMonth);
+      form.append("file", file);
+      state.openingImportPreview = await api("/api/inventory/opening/import/preview", {
+        method: "POST", body: form
+      });
+      renderInventory();
+      showToast("Đã kiểm tra và gộp file tồn đầu kỳ · xem kỹ rồi xác nhận nhập");
+    } catch (error) {
+      state.openingImportPreview = null;
+      showToast(error.message, true);
+    }
+  }
+
+  async function confirmOpeningImport(button) {
+    var preview = state.openingImportPreview;
+    if (!preview || !preview.can_confirm) return;
+    try {
+      button.disabled = true;
+      button.textContent = "Đang ghi tồn đầu kỳ…";
+      var result = await api("/api/inventory/opening/import/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: preview.token, confirmed: true })
+      });
+      state.openingImportPreview = null;
+      state.opsMonth = result.period;
+      state.opsDate = result.period + "-01";
+      await refreshOperations("Đã nạp " + result.processed + " mã tồn đầu kỳ · thêm " +
+        result.inserted_products + " mã hàng mới");
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Xác nhận nạp tồn đầu kỳ";
+      showToast(error.message, true);
+    }
+  }
+
   async function jsonWrite(url, method, body, success) {
     try {
       await api(url, { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
@@ -1286,6 +1559,11 @@
     state.quoteItems = null;
     state.supplierNeeds = null;
     state.operations = null;
+    state.debtPeriod = null;
+    state.debtLoading = false;
+    state.debtFrom = "";
+    state.debtTo = "";
+    state.outgoingInvoices = null;
     loadData(state.batchId);
   });
   excelInput.addEventListener("change", function () {
@@ -1308,12 +1586,44 @@
     kitchenWorkbookInput.value = "";
     previewKitchenWorkbook(file);
   });
+  mealAttendanceInput.addEventListener("change", function () {
+    var file = mealAttendanceInput.files[0];
+    mealAttendanceInput.value = "";
+    previewMealAttendance(file);
+  });
+  openingWorkbookInput.addEventListener("change", function () {
+    var file = openingWorkbookInput.files[0];
+    openingWorkbookInput.value = "";
+    previewOpeningWorkbook(file);
+  });
   orderForm.addEventListener("submit", saveOrder);
   backdrop.addEventListener("click", function (event) {
     if (event.target === backdrop) closeModal();
   });
 
   content.addEventListener("submit", async function (event) {
+    if (event.target.id === "debtPeriodForm") {
+      event.preventDefault();
+      var debtRange = Object.fromEntries(new FormData(event.target).entries());
+      state.debtFrom = debtRange.from;
+      state.debtTo = debtRange.to;
+      state.debtPeriod = null;
+      await fetchDebtPeriod();
+    }
+    if (event.target.id === "debtAdjustmentForm") {
+      event.preventDefault();
+      var debtAdjustment = Object.fromEntries(new FormData(event.target).entries());
+      debtAdjustment.amount = n(debtAdjustment.amount);
+      try {
+        await api("/api/debt-adjustments", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(debtAdjustment)
+        });
+        state.debtPeriod = null;
+        await loadData(state.batchId, true);
+        showToast("Đã lưu điều chỉnh công nợ");
+      } catch (error) { showToast(error.message, true); }
+    }
     if (event.target.id === "paymentForm") {
       event.preventDefault();
       savePayment(event.target);
@@ -1360,7 +1670,33 @@
       event.preventDefault();
       var staff = Object.fromEntries(new FormData(event.target).entries());
       staff.base_salary = n(staff.base_salary);
+      staff.standard_days = n(staff.standard_days) || 26;
+      staff.standard_hours = n(staff.standard_hours) || 8;
+      staff.bhxh_employee_rate = n(staff.bhxh_employee_rate);
+      staff.bhxh_company_rate = n(staff.bhxh_company_rate);
       jsonWrite("/api/staff", "POST", staff, "Đã lưu nhân sự");
+    }
+    if (event.target.id === "attendanceForm") {
+      event.preventDefault();
+      var attendance = Object.fromEntries(new FormData(event.target).entries());
+      ["normal_hours", "overtime_hours", "sunday_hours", "night_hours", "holiday_hours"].forEach(function (key) {
+        attendance[key] = n(attendance[key]);
+      });
+      state.opsDate = attendance.work_date;
+      state.opsMonth = state.opsDate.slice(0, 7);
+      jsonWrite("/api/attendance", "POST", attendance, "Đã lưu chấm công trong ngày");
+    }
+    if (event.target.id === "payrollAdjustmentForm") {
+      event.preventDefault();
+      var payrollAdjustment = Object.fromEntries(new FormData(event.target).entries());
+      ["allowance", "responsibility", "advance", "probation_deduction", "bhxh_employee_amount",
+        "bhxh_company_amount", "gross_override", "net_override"].forEach(function (key) {
+        payrollAdjustment[key] = n(payrollAdjustment[key]);
+      });
+      payrollAdjustment.use_override = new FormData(event.target).has("use_override");
+      state.opsMonth = payrollAdjustment.month;
+      jsonWrite("/api/payroll-adjustments/" + encodeURIComponent(payrollAdjustment.employee_code) + "/" +
+        encodeURIComponent(payrollAdjustment.month), "PUT", payrollAdjustment, "Đã lưu khoản lương tháng");
     }
     if (event.target.id === "printSettingsForm") {
       event.preventDefault();
@@ -1374,6 +1710,18 @@
       var from = state.data.batch.work_date.slice(0, 7) + "-01";
       window.location.href = "/api/export/payment-request/" + encodeURIComponent(paymentRequest.contractor) +
         "?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(state.data.batch.work_date);
+    }
+    if (event.target.id === "documentSettingsForm") {
+      event.preventDefault();
+      var documentSettings = Object.fromEntries(new FormData(event.target).entries());
+      try {
+        await api("/api/document-settings", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(documentSettings)
+        });
+        await loadData(state.batchId, true);
+        showToast("Đã lưu thông tin đề nghị thanh toán");
+      } catch (error) { showToast(error.message, true); }
     }
     if (event.target.id === "outgoingNameForm") {
       event.preventDefault();
@@ -1409,7 +1757,11 @@
     if (event.target.id === "inventoryDate" || event.target.id === "kitchenDate") {
       state.opsDate = event.target.value;
       state.opsMonth = state.opsDate.slice(0, 7);
-      if (event.target.id === "kitchenDate") state.kitchenImportPreview = null;
+      if (event.target.id === "kitchenDate") {
+        state.kitchenImportPreview = null;
+        state.mealAttendancePreview = null;
+      }
+      if (event.target.id === "inventoryDate") state.openingImportPreview = null;
       state.operations = null;
       loadOperations();
     }
@@ -1439,11 +1791,31 @@
       state.kitchenImportPreview = null;
       kitchenWorkbookInput.click();
     }
+    if (action === "choose-meal-attendance") {
+      state.mealAttendancePreview = null;
+      mealAttendanceInput.click();
+    }
+    if (action === "choose-opening-workbook") {
+      var openingPeriod = document.querySelector('#openingForm [name="period"]');
+      if (openingPeriod && openingPeriod.value) state.opsMonth = openingPeriod.value;
+      state.openingImportPreview = null;
+      openingWorkbookInput.click();
+    }
+    if (action === "cancel-opening-import") {
+      state.openingImportPreview = null;
+      renderInventory();
+    }
+    if (action === "confirm-opening-import") await confirmOpeningImport(button);
     if (action === "cancel-kitchen-import") {
       state.kitchenImportPreview = null;
       renderKitchen();
     }
     if (action === "confirm-kitchen-import") await confirmKitchenImport(button);
+    if (action === "cancel-meal-attendance-import") {
+      state.mealAttendancePreview = null;
+      renderKitchen();
+    }
+    if (action === "confirm-meal-attendance-import") await confirmMealAttendance(button);
     if (action === "cancel-mapping-import") {
       var cancelledType = state.mappingPreview && state.mappingPreview.mapping_type;
       state.mappingPreview = null;
@@ -1458,6 +1830,17 @@
     if (action === "delete-order") deleteOrder(button.dataset.id);
     if (action === "approve-batch") approveBatch();
     if (action === "copy-supplier-need") copySupplierNeed(button.dataset.groupIndex);
+    if (action === "toggle-supplier-rule") {
+      try {
+        await api("/api/supplier-rules/" + encodeURIComponent(button.dataset.supplier), {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ combine_kitchens: button.dataset.combine === "1" })
+        });
+        state.supplierNeeds = null;
+        await fetchSupplierNeeds();
+        showToast(button.dataset.combine === "1" ? "Đã gộp đơn NCC qua nhiều bếp" : "Đã tách đơn NCC theo từng bếp");
+      } catch (error) { showToast(error.message, true); }
+    }
     if (action === "delete-payment") deletePayment(button.dataset.id);
     if (action === "check-minvoice") checkMinvoice(button);
     if (action === "sync-msmi") {
@@ -1480,8 +1863,35 @@
     if (action === "create-outgoing-drafts") {
       try {
         var drafts = await api("/api/outgoing-invoices/draft/" + state.batchId, { method: "POST" });
-        state.operations = null;
+        state.outgoingInvoices = null;
+        await fetchOutgoingInvoices();
         showToast("Đã tạo " + drafts.drafts.length + " dự thảo · chưa ký/phát hành");
+      } catch (error) { showToast(error.message, true); }
+    }
+    if (action === "confirm-outgoing-issued") {
+      if (!window.confirm("Chỉ xác nhận khi hóa đơn đã được kiểm tra, ký và phát hành trên phần mềm hóa đơn. Tiếp tục?")) return;
+      try {
+        await api("/api/outgoing-invoices/" + button.dataset.id + "/confirm-issued", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmed: true })
+        });
+        state.outgoingInvoices = null;
+        state.operations = null;
+        await fetchOutgoingInvoices();
+        showToast("Đã ghi nhận hóa đơn phát hành và ghi xuất kho");
+      } catch (error) { showToast(error.message, true); }
+    }
+    if (action === "cancel-outgoing-draft") {
+      if (!window.confirm("Hủy dự thảo này và nhả phần tồn đang giữ?")) return;
+      try {
+        await api("/api/outgoing-invoices/" + button.dataset.id + "/cancel", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmed: true })
+        });
+        state.outgoingInvoices = null;
+        state.operations = null;
+        await fetchOutgoingInvoices();
+        showToast("Đã hủy dự thảo và nhả tồn khả dụng");
       } catch (error) { showToast(error.message, true); }
     }
     if (action === "approve-meal-plan") {

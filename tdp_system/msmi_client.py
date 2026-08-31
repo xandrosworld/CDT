@@ -53,6 +53,11 @@ class MsmiConfig:
 class MsmiClient:
     """Read-only mSMI OpenAPI client used only for listing invoice data."""
 
+    # Tài liệu công bố tối đa 200, nhưng production qlhd.minvoice.com.vn của
+    # tenant này trả HTTP 400 khi size=200 (31/08/2026) và nhận size=199.
+    # Khóa ở 199 để nút đồng bộ dùng được thật, không chỉ đạt kiểm tra status size=1.
+    MAX_PAGE_SIZE = 199
+
     def __init__(self, config: MsmiConfig, timeout: int = 35):
         self.config = config
         self.timeout = timeout
@@ -90,7 +95,7 @@ class MsmiClient:
         params = {
             "invoiceType": invoice_type,
             "page": max(0, int(page)),
-            "size": max(1, min(int(size), 200)),
+            "size": max(1, min(int(size), self.MAX_PAGE_SIZE)),
         }
         # These optional names follow mSMI OpenAPI v1.1.1. Omitting them keeps
         # compatibility with tenants that do not enable a date filter.

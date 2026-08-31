@@ -965,6 +965,20 @@ def api_import_analyze():
             except OSError:
                 pass
             PENDING_IMPORTS.pop(old_token, None)
+    # Tokens only live in memory. After an app restart, any copy not referenced
+    # by the current process is unusable and can be removed immediately;
+    # customer source files are never stored under this pattern.
+    active_pending_paths = {
+        item["path"].resolve() for item in PENDING_IMPORTS.values()
+        if item.get("path")
+    }
+    for pattern in ("pending_*.xlsx", "pending_*.xlsm"):
+        for orphan in DATA_DIR.glob(pattern):
+            try:
+                if orphan.is_file() and orphan.resolve() not in active_pending_paths:
+                    orphan.unlink()
+            except OSError:
+                pass
     token = uuid.uuid4().hex
     suffix = Path(upload.filename).suffix.lower()
     temp = DATA_DIR / f"pending_{token}{suffix}"
@@ -989,6 +1003,19 @@ def api_import_analyze():
         "created": time.time(),
     }
     return jsonify({"ok": True, "token": token, "filename": upload.filename, "sheets": sheets})
+
+
+@app.post("/api/import/cancel")
+def api_import_cancel():
+    body = request.get_json(silent=True) or {}
+    token = clean_text(body.get("token"))
+    pending = PENDING_IMPORTS.pop(token, None)
+    if pending:
+        try:
+            pending["path"].unlink()
+        except OSError:
+            pass
+    return jsonify({"ok": True, "idempotent": pending is None})
 
 
 @app.post("/api/import/confirm")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -18,6 +19,7 @@ from pathlib import Path
 from flask import jsonify, request, send_file
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 try:
     from docx import Document
@@ -214,6 +216,22 @@ CREATE TABLE IF NOT EXISTS meal_plan_items (
     UNIQUE(plan_id,dish_name,product_code)
 );
 
+CREATE TABLE IF NOT EXISTS meal_attendance (
+    work_date TEXT NOT NULL,
+    kitchen TEXT NOT NULL,
+    shift TEXT NOT NULL,
+    actual_count REAL NOT NULL DEFAULT 0,
+    ordered_count REAL NOT NULL DEFAULT 0,
+    source_type TEXT NOT NULL DEFAULT 'MONTHLY_WORKBOOK',
+    source_file TEXT,
+    source_sheet TEXT,
+    source_column TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(work_date,kitchen,shift)
+);
+CREATE INDEX IF NOT EXISTS idx_meal_attendance_month
+    ON meal_attendance(work_date,kitchen);
+
 CREATE TABLE IF NOT EXISTS staff (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     employee_code TEXT NOT NULL UNIQUE,
@@ -289,6 +307,10 @@ PENDING_MAPPING_IMPORTS = {}
 MAPPING_IMPORT_LOCK = threading.Lock()
 PENDING_KITCHEN_IMPORTS = {}
 KITCHEN_IMPORT_LOCK = threading.Lock()
+PENDING_OPENING_IMPORTS = {}
+OPENING_IMPORT_LOCK = threading.Lock()
+PENDING_MEAL_ATTENDANCE_IMPORTS = {}
+MEAL_ATTENDANCE_IMPORT_LOCK = threading.Lock()
 
 MAPPING_ALIASES = {
     "invoice_names": {
@@ -360,14 +382,22 @@ def init_contract_schema(conn):
         "printer_name": "",
         "print_copies": "1",
         "print_paper": "A4",
-        "payment_requester": "",
-        "payment_bank_name": "",
-        "payment_bank_account": "",
+        # Từ mẫu "Đề nghị Thanh toán TĐP (T04.26).xlsx" khách đã cung cấp.
+        "payment_requester": "VŨ THỊ THỤY",
+        "payment_bank_name": "Ngân hàng TMCP Ngoại Thương Việt Nam",
+        "payment_bank_account": "1052787580",
     }
     for key, value in defaults.items():
         conn.execute(
             "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING",
             (key, value),
+        )
+    # Bản demo cũ đã tạo ba khóa này với giá trị rỗng; chỉ điền phần còn trống để
+    # không ghi đè cấu hình mà người dùng đã chủ động sửa.
+    for key in ("payment_requester", "payment_bank_name", "payment_bank_account"):
+        conn.execute(
+            "UPDATE settings SET value=? WHERE key=? AND TRIM(COALESCE(value,''))=''",
+            (defaults[key], key),
         )
 
 
@@ -629,6 +659,468 @@ def parse_mapping_workbook(conn, workbook, mapping_type: str) -> dict:
             for item in rows if item["apply"] and not item["errors"]
         ],
         "counts": counts,
+        "can_confirm": counts["error"] == 0,
+    }
+
+
+OPENING_ALIASES = {
+    "product_code": {"matdp", "mahangtdp", "mavattutdp", "masptdp", "mahhtdp"},
+    "product_name": {"tentdp", "tenhangtdp", "tenhanghoatdp", "tenvattutdp"},
+    "invoice_name": {"tentrenhd", "tentrenhoadon", "tenhoadon", "tenxuathoadon"},
+    "warehouse_code": {"makho", "mahangkho", "mavattukho"},
+    "tax": {"tsuat", "thuesuat", "thuegtgt", "vat"},
+    "unit": {"dvt", "donvitinh", "unit"},
+    "qty": {"soluong", "toncuoikysoluong", "tondaukysoluong", "toncuoiky", "tondauky"},
+    "unit_cost": {"dongia", "giavon", "dongiavon"},
+    "amount": {"thanhtien", "giatriton", "giatritonkho"},
+}
+
+
+def opening_header_fields(*header_rows) -> dict:
+    width = max((len(row) for row in header_rows), default=0)
+    fields = {}
+    for column in range(width):
+        parts = [mapping_key(row[column]) for row in header_rows if column < len(row)]
+        keys = {part for part in parts if part}
+        combined = "".join(part for part in parts if part)
+        if combined:
+            keys.add(combined)
+        for field, aliases in OPENING_ALIASES.items():
+            if field not in fields and keys.intersection(aliases):
+                fields[field] = column + 1
+    return fields
+
+
+def find_opening_sheet(workbook):
+    candidates = []
+    for sheet_index, worksheet in enumerate(workbook.worksheets):
+        rows = list(worksheet.iter_rows(
+            min_row=1, max_row=min(worksheet.max_row or 0, 26), max_col=30, values_only=True,
+        ))
+        for index, row in enumerate(rows):
+            single = opening_header_fields(row)
+            if {"product_code", "qty"}.issubset(single):
+                candidates.append((len(single), -sheet_index, -(index + 1), worksheet, index + 1, single))
+            if index + 1 < len(rows):
+                double = opening_header_fields(row, rows[index + 1])
+                if {"product_code", "qty"}.issubset(double):
+                    candidates.append((len(double), -sheet_index, -(index + 2), worksheet, index + 2, double))
+    if not candidates:
+        return None
+    _, _, _, worksheet, header_end, fields = max(candidates, key=lambda item: item[:3])
+    return worksheet, header_end, fields
+
+
+def opening_number(value):
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        text = str(value).strip().replace(" ", "").replace("₫", "").replace("đ", "")
+        if not text:
+            return None
+        if "," in text:
+            text = text.replace(".", "").replace(",", ".")
+        elif text.count(".") > 1:
+            text = text.replace(".", "")
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            return None
+    return number if math.isfinite(number) else None
+
+
+def first_most_common(values) -> str:
+    values = [mapping_cell_text(value) for value in values if mapping_cell_text(value)]
+    return Counter(values).most_common(1)[0][0] if values else ""
+
+
+def parse_opening_workbook(conn, workbook, period: str) -> dict:
+    found = find_opening_sheet(workbook)
+    if not found:
+        raise ValueError("Không tìm thấy dòng tiêu đề có Mã TĐP và Số lượng tồn")
+    worksheet, header_end, fields = found
+    missing_columns = [
+        label for field, label in (
+            ("product_name", "Tên TĐP"), ("unit", "ĐVT"),
+            ("unit_cost", "Đơn giá"), ("amount", "Thành tiền"),
+        ) if field not in fields
+    ]
+    if missing_columns:
+        raise ValueError("File thiếu cột: " + ", ".join(missing_columns))
+
+    source_rows = []
+    scanned = 0
+    max_column = max(fields.values())
+    for row_index, row in enumerate(
+        worksheet.iter_rows(
+            min_row=header_end + 1,
+            max_row=header_end + MAPPING_IMPORT_MAX_ROWS + 1,
+            max_col=max_column,
+            values_only=True,
+        ),
+        start=header_end + 1,
+    ):
+        raw = {field: row[column - 1] for field, column in fields.items()}
+        code = mapping_cell_text(raw.get("product_code")).upper()
+        if not code and not any(value not in (None, "") for value in raw.values()):
+            continue
+        if mapping_key(code) in OPENING_ALIASES["product_code"]:
+            continue
+        scanned += 1
+        item = {
+            "source_row": row_index,
+            "product_code": code,
+            "product_name": mapping_cell_text(raw.get("product_name")),
+            "invoice_name": mapping_cell_text(raw.get("invoice_name")),
+            "warehouse_code": mapping_cell_text(raw.get("warehouse_code")).upper(),
+            "tax": mapping_cell_text(raw.get("tax")),
+            "unit": mapping_cell_text(raw.get("unit")),
+            "qty": opening_number(raw.get("qty")),
+            "unit_cost": opening_number(raw.get("unit_cost")),
+            "amount": opening_number(raw.get("amount")),
+            "warnings": [],
+            "errors": [],
+        }
+        if not code:
+            item["errors"].append("Thiếu Mã TĐP")
+        if item["qty"] is None:
+            item["errors"].append("Số lượng tồn không hợp lệ")
+        if item["unit_cost"] is None and item["amount"] is None:
+            item["warnings"].append("Thiếu cả đơn giá và thành tiền; giá trị tồn được ghi là 0")
+        if item["qty"] is not None:
+            if item["amount"] is None and item["unit_cost"] is not None:
+                item["amount"] = item["qty"] * item["unit_cost"]
+                item["warnings"].append("Thiếu thành tiền; hệ thống tính Số lượng × Đơn giá")
+            elif item["amount"] is not None and item["unit_cost"] is None and item["qty"]:
+                item["unit_cost"] = abs(item["amount"] / item["qty"])
+                item["warnings"].append("Thiếu đơn giá; hệ thống suy ra từ Thành tiền / Số lượng")
+            elif item["amount"] is not None and item["unit_cost"] is not None:
+                calculated = item["qty"] * item["unit_cost"]
+                if abs(item["amount"] - calculated) > max(1, abs(item["amount"]) * 0.000001):
+                    item["warnings"].append("Thành tiền lệch Số lượng × Đơn giá; ưu tiên Thành tiền sổ sách")
+        item["amount"] = item["amount"] if item["amount"] is not None else 0.0
+        item["unit_cost"] = item["unit_cost"] if item["unit_cost"] is not None else 0.0
+        source_rows.append(item)
+
+    if scanned > MAPPING_IMPORT_MAX_ROWS:
+        raise ValueError(f"File vượt quá giới hạn {MAPPING_IMPORT_MAX_ROWS:,} dòng dữ liệu")
+    if not source_rows:
+        raise ValueError("Sheet được nhận diện nhưng không có dòng tồn đầu kỳ")
+
+    products = {
+        row["code"]: dict(row)
+        for row in conn.execute("SELECT code,name,unit,tax,buy_price FROM products")
+    }
+    existing_openings = {
+        row["source_line"]: dict(row)
+        for row in conn.execute(
+            """SELECT source_line,qty_in,qty_out,unit_cost FROM inventory_transactions
+               WHERE source_type='OPENING' AND source_id=?""",
+            (period,),
+        )
+    }
+    grouped = defaultdict(list)
+    orphan_errors = []
+    for item in source_rows:
+        if item["product_code"]:
+            grouped[item["product_code"]].append(item)
+        elif item["errors"]:
+            orphan_errors.append(item)
+
+    rows = []
+    items = []
+    for code, parts in grouped.items():
+        names = [part["product_name"] for part in parts if part["product_name"]]
+        units = [part["unit"] for part in parts if part["unit"]]
+        taxes = [part["tax"] for part in parts if part["tax"]]
+        invoice_names = [part["invoice_name"] for part in parts if part["invoice_name"]]
+        qty = sum(part["qty"] or 0 for part in parts)
+        amount = sum(part["amount"] or 0 for part in parts)
+        source_row_numbers = [part["source_row"] for part in parts]
+        warehouse_codes = list(dict.fromkeys(
+            part["warehouse_code"] for part in parts if part["warehouse_code"]
+        ))
+        product = products.get(code)
+        item = {
+            "product_code": code,
+            "product_name": first_most_common(names),
+            "unit": first_most_common(units),
+            "tax": first_most_common(taxes),
+            "invoice_name": first_most_common(invoice_names),
+            "qty": qty,
+            "amount": amount,
+            "unit_cost": abs(amount / qty) if abs(qty) > 1e-12 else 0,
+            "source_rows": source_row_numbers,
+            "warehouse_codes": warehouse_codes,
+            "source_row_count": len(parts),
+            "create_product": product is None,
+            "status": "update" if code in existing_openings else "new",
+            "current_qty": (
+                existing_openings[code]["qty_in"] - existing_openings[code]["qty_out"]
+                if code in existing_openings else 0
+            ),
+            "warnings": [],
+            "errors": [],
+        }
+        for part in parts:
+            item["warnings"].extend(part["warnings"])
+            item["errors"].extend(part["errors"])
+        if len(parts) > 1:
+            item["warnings"].append(
+                f"Đã gộp {len(parts)} dòng/mã kho theo cùng Mã TĐP"
+            )
+        distinct_names = list(dict.fromkeys(mapping_cell_text(value) for value in names if value))
+        distinct_units = list(dict.fromkeys(mapping_cell_text(value) for value in units if value))
+        if len({mapping_key(value) for value in distinct_names}) > 1:
+            item["warnings"].append("Một Mã TĐP có nhiều tên nguồn; tồn được gộp theo mã")
+        if len({mapping_key(value) for value in distinct_units}) > 1:
+            item["warnings"].append("Một Mã TĐP có nhiều ĐVT nguồn; cần hiểu số lượng là tổng theo mã")
+        if abs(qty) <= 1e-12:
+            item["errors"].append("Tổng số lượng sau gộp bằng 0")
+        if qty < 0:
+            item["warnings"].append("Tồn đầu kỳ âm; hệ thống giữ đúng số sổ sách")
+        if amount and qty and amount * qty < 0:
+            item["errors"].append("Thành tiền và số lượng trái dấu")
+        if product:
+            if distinct_names and all(
+                mapping_key(name) != mapping_key(product["name"]) for name in distinct_names
+            ):
+                item["warnings"].append(
+                    f"Tên trong file khác danh mục ({product['name']}); hệ thống giữ danh mục hiện tại"
+                )
+            if distinct_units and all(
+                mapping_key(unit) != mapping_key(product["unit"]) for unit in distinct_units
+            ):
+                item["warnings"].append(
+                    f"ĐVT trong file khác danh mục ({product['unit']}); hệ thống giữ danh mục hiện tại"
+                )
+        else:
+            if not item["product_name"]:
+                item["errors"].append("Mã mới thiếu Tên TĐP")
+            if not item["unit"]:
+                item["errors"].append("Mã mới thiếu ĐVT")
+            item["warnings"].append("Mã mới sẽ được thêm vào danh mục; chưa có NCC mặc định")
+        item["warnings"] = list(dict.fromkeys(item["warnings"]))
+        item["errors"] = list(dict.fromkeys(item["errors"]))
+        rows.append(item)
+        if not item["errors"]:
+            items.append({key: item[key] for key in (
+                "product_code", "product_name", "unit", "tax", "invoice_name", "qty",
+                "amount", "unit_cost", "source_rows", "warehouse_codes", "create_product",
+            )})
+
+    rows.extend({
+        "product_code": "", "product_name": item["product_name"], "unit": item["unit"],
+        "tax": item["tax"], "invoice_name": item["invoice_name"], "qty": item["qty"] or 0,
+        "amount": item["amount"], "unit_cost": item["unit_cost"],
+        "source_rows": [item["source_row"]], "warehouse_codes": [item["warehouse_code"]],
+        "source_row_count": 1, "create_product": False, "status": "error", "current_qty": 0,
+        "warnings": item["warnings"], "errors": item["errors"],
+    } for item in orphan_errors)
+    rows.sort(key=lambda item: (not bool(item["errors"]), not bool(item["warnings"]), item["product_code"]))
+    counts = {
+        "source_rows": len(source_rows),
+        "items": len(grouped),
+        "new_products": sum(item["create_product"] for item in rows),
+        "new": sum(item["status"] == "new" for item in rows),
+        "update": sum(item["status"] == "update" for item in rows),
+        "negative": sum(item["qty"] < 0 for item in rows),
+        "warning": sum(bool(item["warnings"]) for item in rows),
+        "error": sum(bool(item["errors"]) for item in rows),
+    }
+    return {
+        "sheet": worksheet.title,
+        "header_row": header_end,
+        "period": period,
+        "rows": rows,
+        "items": items,
+        "counts": counts,
+        "totals": {
+            "qty": sum(item["qty"] for item in rows),
+            "amount": sum(item["amount"] for item in rows),
+        },
+        "can_confirm": counts["error"] == 0,
+    }
+
+
+MEAL_ATTENDANCE_GROUPS = (
+    ("dainam", "DAINAM"),
+    ("havico", "HAVICO"),
+    ("thaco", "THACO"),
+    ("sunby", "SUNBY"),
+    ("lucky", "LUCKY"),
+    ("vina", "VINA"),
+    ("united", "UNI"),
+    ("uni", "UNI"),
+    ("bot", "BOT"),
+    ("pot", "BOT"),
+    ("tq", "TQ"),
+)
+
+
+def meal_attendance_group(value) -> str:
+    key = mapping_key(value)
+    for token, code in MEAL_ATTENDANCE_GROUPS:
+        if token in key:
+            return code
+    return ""
+
+
+def meal_attendance_shift(value) -> str:
+    key = mapping_key(value)
+    if "sang" in key:
+        return "Sáng"
+    if "trua" in key:
+        return "Trưa"
+    if "chieu" in key:
+        return "Chiều"
+    if "dem" in key or "toi" in key:
+        return "Đêm"
+    if "vaosuat" in key:
+        return "Tổng"
+    return ""
+
+
+def meal_attendance_header_kind(value) -> str:
+    key = mapping_key(value)
+    if not key or any(token in key for token in ("chenhlech", "cl", "tong")):
+        return ""
+    if "dat" in key:
+        return "ordered"
+    if "an" in key or "vaosuat" in key or key.startswith("ca"):
+        return "actual"
+    return ""
+
+
+def parse_meal_attendance_workbook(conn, workbook) -> dict:
+    if "SUẤT ĂN" not in workbook.sheetnames:
+        raise ValueError("File thiếu sheet SUẤT ĂN làm nguồn chấm suất")
+    worksheet = workbook["SUẤT ĂN"]
+    columns = {}
+    current_group = ""
+    for column in range(3, min(worksheet.max_column or 0, 80) + 1):
+        group_label = worksheet.cell(1, column).value
+        if group_label not in (None, ""):
+            current_group = meal_attendance_group(group_label)
+        shift = meal_attendance_shift(worksheet.cell(2, column).value)
+        kind = meal_attendance_header_kind(worksheet.cell(2, column).value)
+        if current_group and shift and kind:
+            columns.setdefault((current_group, shift), {})[kind] = column
+    if not columns:
+        raise ValueError("Không nhận diện được cột bếp/ca trong sheet SUẤT ĂN")
+
+    raw_items = []
+    for row_index in range(3, min(worksheet.max_row or 0, 380) + 1):
+        work_date = as_date(worksheet.cell(row_index, 2).value)
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", work_date):
+            continue
+        for (kitchen, shift), source_columns in columns.items():
+            actual = as_number(worksheet.cell(row_index, source_columns.get("actual", 0)).value) \
+                if source_columns.get("actual") else 0
+            ordered = as_number(worksheet.cell(row_index, source_columns.get("ordered", 0)).value) \
+                if source_columns.get("ordered") else 0
+            if abs(actual) <= 1e-12 and abs(ordered) <= 1e-12:
+                continue
+            source_column = "/".join(
+                get_column_letter(column) for column in sorted(set(source_columns.values()))
+            )
+            raw_items.append({
+                "work_date": work_date, "kitchen": kitchen, "shift": shift,
+                "actual_count": actual, "ordered_count": ordered,
+                "source_sheet": worksheet.title, "source_column": source_column,
+                "errors": ["Số suất không được âm"] if actual < 0 or ordered < 0 else [],
+                "warnings": [],
+            })
+
+    # TTS dùng ma trận ngày theo cột, nhóm người ăn theo dòng; tổng từng ngày là
+    # số suất thực tế. Không lấy cột B dư từ file cũ vì dãy tháng chính bắt đầu ở C.
+    if "TTS" in workbook.sheetnames:
+        tts = workbook["TTS"]
+        for column in range(3, min(tts.max_column or 0, 80) + 1):
+            if mapping_key(tts.cell(4, column).value) == "tong":
+                break
+            work_date = as_date(tts.cell(4, column).value)
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", work_date):
+                continue
+            actual = 0.0
+            for row_index in range(6, min(tts.max_row or 0, 300) + 1):
+                label = mapping_key(tts.cell(row_index, 1).value)
+                if label == "tong":
+                    break
+                if label:
+                    actual += max(as_number(tts.cell(row_index, column).value), 0)
+            if actual > 0:
+                raw_items.append({
+                    "work_date": work_date, "kitchen": "TTS", "shift": "Tổng",
+                    "actual_count": actual, "ordered_count": 0,
+                    "source_sheet": tts.title, "source_column": tts.cell(4, column).column_letter,
+                    "errors": [], "warnings": [],
+                })
+
+    if not raw_items:
+        raise ValueError("File không có số suất ăn theo ngày để nhập")
+    grouped = {}
+    for item in raw_items:
+        key = (item["work_date"], item["kitchen"], item["shift"])
+        if key in grouped:
+            grouped[key]["actual_count"] += item["actual_count"]
+            grouped[key]["ordered_count"] += item["ordered_count"]
+            grouped[key]["source_column"] += "+" + item["source_column"]
+            grouped[key]["warnings"].append("Đã gộp nhiều vùng nguồn cùng ngày/bếp/ca")
+        else:
+            grouped[key] = item
+
+    existing = {
+        (row["work_date"], row["kitchen"], row["shift"]): dict(row)
+        for row in conn.execute("SELECT * FROM meal_attendance")
+    }
+    rows = []
+    items = []
+    for key in sorted(grouped):
+        item = grouped[key]
+        previous = existing.get(key)
+        if previous is None:
+            status = "new"
+        elif (
+            abs(previous["actual_count"] - item["actual_count"]) <= 1e-9
+            and abs(previous["ordered_count"] - item["ordered_count"]) <= 1e-9
+        ):
+            status = "unchanged"
+        else:
+            status = "update"
+        item["status"] = status
+        if item["ordered_count"] > 0 and abs(item["ordered_count"] - item["actual_count"]) > 1e-9:
+            item["warnings"].append("Số đặt và số ăn thực tế chênh nhau")
+        item["warnings"] = list(dict.fromkeys(item["warnings"]))
+        rows.append(item)
+        if not item["errors"]:
+            items.append({key: item[key] for key in (
+                "work_date", "kitchen", "shift", "actual_count", "ordered_count",
+                "source_sheet", "source_column",
+            )})
+    periods = sorted({item["work_date"][:7] for item in rows})
+    counts = {
+        "items": len(rows),
+        "dates": len({item["work_date"] for item in rows}),
+        "kitchens": len({item["kitchen"] for item in rows}),
+        "new": sum(item["status"] == "new" for item in rows),
+        "update": sum(item["status"] == "update" for item in rows),
+        "unchanged": sum(item["status"] == "unchanged" for item in rows),
+        "warning": sum(bool(item["warnings"]) for item in rows),
+        "error": sum(bool(item["errors"]) for item in rows),
+    }
+    return {
+        "sheet": worksheet.title,
+        "periods": periods,
+        "rows": rows,
+        "items": items,
+        "counts": counts,
+        "totals": {
+            "actual": sum(item["actual_count"] for item in rows),
+            "ordered": sum(item["ordered_count"] for item in rows),
+        },
         "can_confirm": counts["error"] == 0,
     }
 
@@ -1094,7 +1586,7 @@ def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now:
     return invoice_id, existing is None
 
 
-def sync_msmi(conn, client, now_iso, tenant="default", max_pages=5, page_size=200):
+def sync_msmi(conn, client, now_iso, tenant="default", max_pages=5, page_size=199):
     invoice_type = "INPUT_ELECTRONIC_INVOICE"
     new_count = 0
     seen_count = 0
@@ -1630,6 +2122,12 @@ def register_contract_routes(app, ctx):
                 "SELECT work_date,kitchen,amount,source FROM kitchen_labor_costs WHERE substr(work_date,1,7)=? ORDER BY work_date,kitchen",
                 (month,),
             )]
+            meal_attendance = [dict(row) for row in conn.execute(
+                """SELECT work_date,kitchen,shift,actual_count,ordered_count,source_file,source_sheet
+                   FROM meal_attendance WHERE substr(work_date,1,7)=?
+                   ORDER BY work_date,kitchen,shift""",
+                (month,),
+            )]
             return jsonify({
                 "ok": True,
                 "inventory": inventory,
@@ -1641,6 +2139,13 @@ def register_contract_routes(app, ctx):
                 },
                 "msmi": {"state": sync_state, "invoices": invoice_payload(conn, 30)},
                 "meal_plans": meal_plan_payload(conn, request.args.get("date", "")),
+                "meal_attendance": meal_attendance,
+                "meal_attendance_totals": {
+                    "actual": sum(row["actual_count"] for row in meal_attendance),
+                    "ordered": sum(row["ordered_count"] for row in meal_attendance),
+                    "rows": len(meal_attendance),
+                    "kitchens": len({row["kitchen"] for row in meal_attendance}),
+                },
                 "kitchen_units": [dict(row) for row in conn.execute("SELECT * FROM kitchen_units ORDER BY kitchen_code")],
                 "payroll": payroll_rows(conn, month),
                 "labor_costs": labor,
@@ -1651,6 +2156,11 @@ def register_contract_routes(app, ctx):
                     "copies": int(as_number(setting_get(conn, "print_copies", "1"), 1)),
                     "paper": setting_get(conn, "print_paper", "A4"),
                 },
+                "document_settings": {
+                    "requester": setting_get(conn, "payment_requester", ""),
+                    "bank_name": setting_get(conn, "payment_bank_name", ""),
+                    "bank_account": setting_get(conn, "payment_bank_account", ""),
+                },
             })
 
     @app.get("/api/inventory")
@@ -1658,6 +2168,294 @@ def register_contract_routes(app, ctx):
         with db_factory() as conn:
             as_of = request.args.get("as_of") or date.today().isoformat()
             return jsonify({"ok": True, "as_of": as_of, "items": inventory_rows(conn, as_of)})
+
+    @app.post("/api/inventory/opening/import/preview")
+    def api_inventory_opening_import_preview():
+        period = clean_text(request.form.get("period"))
+        if not re.fullmatch(r"\d{4}-\d{2}", period):
+            return jsonify({"ok": False, "error": "Kỳ tồn đầu phải có dạng YYYY-MM"}), 400
+        try:
+            datetime.strptime(period + "-01", "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"ok": False, "error": "Kỳ tồn đầu không hợp lệ"}), 400
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file tồn đầu kỳ"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file .xlsx hoặc .xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                expanded_size = sum(item.file_size for item in entries)
+                if len(entries) > 2_000 or expanded_size > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                    return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn để đọc an toàn"}), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with OPENING_IMPORT_LOCK:
+            for old_token, item in list(PENDING_OPENING_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_OPENING_IMPORTS.pop(old_token, None)
+        workbook = None
+        try:
+            workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True, keep_links=False)
+            with db_factory() as conn:
+                preview = parse_opening_workbook(conn, workbook, period)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Không đọc được file tồn đầu kỳ; vui lòng kiểm tra lại file"}), 400
+        finally:
+            if workbook is not None:
+                workbook.close()
+
+        token = uuid.uuid4().hex
+        pending_items = preview.pop("items")
+        with OPENING_IMPORT_LOCK:
+            PENDING_OPENING_IMPORTS[token] = {
+                "created": time.time(),
+                "filename": filename,
+                "source_hash": hashlib.sha256(payload).hexdigest().upper(),
+                "period": period,
+                "sheet": preview["sheet"],
+                "header_row": preview["header_row"],
+                "items": pending_items,
+                "counts": preview["counts"],
+                "totals": preview["totals"],
+                "has_errors": not preview["can_confirm"],
+            }
+        return jsonify({
+            "ok": True,
+            "token": token,
+            "filename": filename,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            **preview,
+        })
+
+    @app.post("/api/inventory/opening/import/confirm")
+    def api_inventory_opening_import_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi tồn đầu kỳ"}), 400
+        token = clean_text(body.get("token"))
+        with OPENING_IMPORT_LOCK:
+            pending = PENDING_OPENING_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file"}), 410
+        if pending["has_errors"]:
+            return jsonify({"ok": False, "error": "File còn dòng lỗi nên chưa thể nhập"}), 400
+
+        inserted_products = inserted = updated = 0
+        try:
+            with db_factory() as conn:
+                for item in pending["items"]:
+                    code = item["product_code"]
+                    product = conn.execute("SELECT code FROM products WHERE code=?", (code,)).fetchone()
+                    if not product and not item["create_product"]:
+                        raise ValueError(f"Mã {code} không còn trong danh mục; dữ liệu chưa được ghi")
+                    if not product:
+                        conn.execute(
+                            """INSERT INTO products(
+                               code,name,unit,tax,supplier,buy_price,purchase_list,seller,cccd
+                               ) VALUES(?,?,?,?,?, ?,0,'','')""",
+                            (code, item["product_name"], item["unit"], item["tax"], "",
+                             max(number_value(item["unit_cost"]), 0)),
+                        )
+                        inserted_products += 1
+                    existing = conn.execute(
+                        """SELECT id FROM inventory_transactions
+                           WHERE source_type='OPENING' AND source_id=? AND source_line=?""",
+                        (pending["period"], code),
+                    ).fetchone()
+                    if existing:
+                        updated += 1
+                    else:
+                        inserted += 1
+                    qty = number_value(item["qty"])
+                    note = (
+                        f"Tồn đầu kỳ {pending['period']} từ {pending['filename']}; "
+                        f"sheet {pending['sheet']}; dòng {','.join(map(str, item['source_rows']))}"
+                    )
+                    conn.execute(
+                        """INSERT INTO inventory_transactions(
+                           txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
+                           status,note,created_at,updated_at
+                           ) VALUES(?,?,?,?,?,'OPENING',?,?,'posted',?,?,?)
+                           ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
+                           txn_date=excluded.txn_date,product_code=excluded.product_code,
+                           qty_in=excluded.qty_in,qty_out=excluded.qty_out,unit_cost=excluded.unit_cost,
+                           status='posted',note=excluded.note,updated_at=excluded.updated_at""",
+                        (pending["period"] + "-01", code, max(qty, 0), max(-qty, 0),
+                         max(number_value(item["unit_cost"]), 0), pending["period"], code,
+                         note, now_iso(), now_iso()),
+                    )
+                result_counts = {
+                    "inserted_products": inserted_products,
+                    "inserted": inserted,
+                    "updated": updated,
+                    "processed": len(pending["items"]),
+                }
+                audit(
+                    conn, now_iso, "inventory.opening.bulk_import", "ok",
+                    entity_type="period", entity_id=pending["period"],
+                    metadata={
+                        "filename": pending["filename"], "source_hash": pending["source_hash"],
+                        "sheet": pending["sheet"], "header_row": pending["header_row"],
+                        **result_counts,
+                    },
+                )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 409
+        except Exception:
+            return jsonify({"ok": False, "error": "Không ghi được tồn đầu kỳ; dữ liệu chưa được thay đổi"}), 409
+        year, month = map(int, pending["period"].split("-"))
+        next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+        as_of = (next_month - timedelta(days=1)).isoformat()
+        with db_factory() as conn:
+            inventory = inventory_rows(conn, as_of)
+        return jsonify({
+            "ok": True, "period": pending["period"], **result_counts,
+            "totals": pending["totals"], "items": inventory,
+        })
+
+    @app.post("/api/kitchen/attendance/import/preview")
+    def api_meal_attendance_import_preview():
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file chấm suất ăn"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file .xlsx hoặc .xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                expanded_size = sum(item.file_size for item in entries)
+                if len(entries) > 2_000 or expanded_size > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                    return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn để đọc an toàn"}), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with MEAL_ATTENDANCE_IMPORT_LOCK:
+            for old_token, item in list(PENDING_MEAL_ATTENDANCE_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_MEAL_ATTENDANCE_IMPORTS.pop(old_token, None)
+        workbook = None
+        try:
+            workbook = load_workbook(io.BytesIO(payload), read_only=False, data_only=True, keep_links=False)
+            with db_factory() as conn:
+                preview = parse_meal_attendance_workbook(conn, workbook)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Không đọc được file chấm suất ăn; vui lòng kiểm tra lại file"}), 400
+        finally:
+            if workbook is not None:
+                workbook.close()
+
+        token = uuid.uuid4().hex
+        pending_items = preview.pop("items")
+        with MEAL_ATTENDANCE_IMPORT_LOCK:
+            PENDING_MEAL_ATTENDANCE_IMPORTS[token] = {
+                "created": time.time(),
+                "filename": filename,
+                "source_hash": hashlib.sha256(payload).hexdigest().upper(),
+                "periods": preview["periods"],
+                "items": pending_items,
+                "counts": preview["counts"],
+                "totals": preview["totals"],
+                "has_errors": not preview["can_confirm"],
+            }
+        return jsonify({
+            "ok": True, "token": token, "filename": filename,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            **preview,
+        })
+
+    @app.post("/api/kitchen/attendance/import/confirm")
+    def api_meal_attendance_import_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi chấm suất ăn"}), 400
+        token = clean_text(body.get("token"))
+        with MEAL_ATTENDANCE_IMPORT_LOCK:
+            pending = PENDING_MEAL_ATTENDANCE_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file"}), 410
+        if pending["has_errors"]:
+            return jsonify({"ok": False, "error": "File còn dòng lỗi nên chưa thể nhập"}), 400
+
+        inserted = updated = unchanged = deleted = 0
+        try:
+            with db_factory() as conn:
+                existing = {
+                    (row["work_date"], row["kitchen"], row["shift"]): dict(row)
+                    for period in pending["periods"]
+                    for row in conn.execute(
+                        "SELECT * FROM meal_attendance WHERE source_type='MONTHLY_WORKBOOK' AND substr(work_date,1,7)=?",
+                        (period,),
+                    )
+                }
+                incoming_keys = set()
+                for item in pending["items"]:
+                    key = (item["work_date"], item["kitchen"], item["shift"])
+                    incoming_keys.add(key)
+                    previous = existing.get(key)
+                    if previous is None:
+                        inserted += 1
+                    elif (
+                        abs(previous["actual_count"] - item["actual_count"]) <= 1e-9
+                        and abs(previous["ordered_count"] - item["ordered_count"]) <= 1e-9
+                    ):
+                        unchanged += 1
+                    else:
+                        updated += 1
+                    conn.execute(
+                        """INSERT INTO meal_attendance(
+                           work_date,kitchen,shift,actual_count,ordered_count,source_type,
+                           source_file,source_sheet,source_column,updated_at
+                           ) VALUES(?,?,?,?,?,'MONTHLY_WORKBOOK',?,?,?,?)
+                           ON CONFLICT(work_date,kitchen,shift) DO UPDATE SET
+                           actual_count=excluded.actual_count,ordered_count=excluded.ordered_count,
+                           source_type='MONTHLY_WORKBOOK',source_file=excluded.source_file,
+                           source_sheet=excluded.source_sheet,source_column=excluded.source_column,
+                           updated_at=excluded.updated_at""",
+                        (item["work_date"], item["kitchen"], item["shift"], item["actual_count"],
+                         item["ordered_count"], pending["filename"], item["source_sheet"],
+                         item["source_column"], now_iso()),
+                    )
+                for key in set(existing).difference(incoming_keys):
+                    conn.execute(
+                        "DELETE FROM meal_attendance WHERE work_date=? AND kitchen=? AND shift=? AND source_type='MONTHLY_WORKBOOK'",
+                        key,
+                    )
+                    deleted += 1
+                result_counts = {
+                    "inserted": inserted, "updated": updated, "unchanged": unchanged,
+                    "deleted": deleted, "processed": len(pending["items"]),
+                }
+                audit(
+                    conn, now_iso, "kitchen.meal_attendance.bulk_import", "ok",
+                    entity_type="period", entity_id=",".join(pending["periods"]),
+                    metadata={
+                        "filename": pending["filename"], "source_hash": pending["source_hash"],
+                        **result_counts,
+                    },
+                )
+        except Exception:
+            return jsonify({"ok": False, "error": "Không ghi được chấm suất ăn; dữ liệu chưa được thay đổi"}), 409
+        return jsonify({
+            "ok": True, "periods": pending["periods"], **result_counts,
+            "totals": pending["totals"],
+        })
 
     @app.post("/api/inventory/opening")
     def api_inventory_opening():
@@ -1679,8 +2477,10 @@ def register_contract_routes(app, ctx):
                         status,note,created_at,updated_at
                     ) VALUES(?,?,?,?,?,'OPENING',?,?,'posted',?,?,?)
                     ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
-                        qty_in=excluded.qty_in,unit_cost=excluded.unit_cost,note=excluded.note,updated_at=excluded.updated_at""",
-                    (txn_date, code, max(number_value(item.get("qty")), 0), 0,
+                        qty_in=excluded.qty_in,qty_out=excluded.qty_out,unit_cost=excluded.unit_cost,
+                        note=excluded.note,updated_at=excluded.updated_at""",
+                    (txn_date, code, max(number_value(item.get("qty")), 0),
+                     max(-number_value(item.get("qty")), 0),
                      max(number_value(item.get("unit_cost")), 0), period, code,
                      clean_text(item.get("note")), now_iso(), now_iso()),
                 )
@@ -1784,7 +2584,7 @@ def register_contract_routes(app, ctx):
             try:
                 result = sync_msmi(
                     conn, create_msmi_client(), now_iso, tenant=tenant,
-                    max_pages=body.get("max_pages", 5), page_size=body.get("page_size", 200),
+                    max_pages=body.get("max_pages", 5), page_size=body.get("page_size", 199),
                 )
                 return jsonify({"ok": True, **result, "invoices": invoice_payload(conn, 30)})
             except MsmiError as error:
@@ -1882,6 +2682,21 @@ def register_contract_routes(app, ctx):
             )]
             stock = inventory_lookup(conn, batch["work_date"])
             available = {code: max(row["available_qty"], 0) for code, row in stock.items()}
+            # Khi người dùng bấm tạo lại, tồn khả dụng đã trừ phần chính dự thảo
+            # của batch này đang giữ. Cộng phần giữ đó lại trước khi kiểm tra để
+            # thao tác idempotent, rồi phía dưới thay thế đúng các dòng reserve.
+            for reserved in conn.execute(
+                """SELECT t.product_code,SUM(t.qty_out) qty
+                   FROM inventory_transactions t
+                   JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id
+                   WHERE t.source_type='OUTGOING_DRAFT' AND t.status='reserved'
+                     AND d.batch_id=? AND d.status!='issued'
+                   GROUP BY t.product_code""",
+                (batch_id,),
+            ):
+                available[reserved["product_code"]] = (
+                    available.get(reserved["product_code"], 0) + reserved["qty"]
+                )
             shortages = defaultdict(lambda: {"required": 0, "available": 0, "product_name": ""})
             for item in orders:
                 qty = net_delivered(item)
@@ -1990,6 +2805,8 @@ def register_contract_routes(app, ctx):
             draft = conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,)).fetchone()
             if not draft:
                 return jsonify({"ok": False, "error": "Không tìm thấy dự thảo hóa đơn"}), 404
+            if draft["status"] == "cancelled":
+                return jsonify({"ok": False, "error": "Dự thảo đã hủy; cần tạo lại trước khi xác nhận phát hành"}), 409
             if draft["status"] != "issued":
                 conn.execute(
                     "UPDATE outgoing_invoice_drafts SET status='issued',issued_at=? WHERE id=?",
@@ -2002,6 +2819,29 @@ def register_contract_routes(app, ctx):
                 )
                 audit(conn, now_iso, "outgoing.confirm_issued", "ok", entity_type="outgoing_invoice", entity_id=draft_id)
             return jsonify({"ok": True, "idempotent": draft["status"] == "issued"})
+
+    @app.post("/api/outgoing-invoices/<int:draft_id>/cancel")
+    def api_cancel_outgoing_draft(draft_id):
+        body = request.get_json(silent=True) or {}
+        if not body.get("confirmed"):
+            return jsonify({"ok": False, "error": "Cần xác nhận hủy dự thảo hóa đơn"}), 400
+        with db_factory() as conn:
+            draft = conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,)).fetchone()
+            if not draft:
+                return jsonify({"ok": False, "error": "Không tìm thấy dự thảo hóa đơn"}), 404
+            if draft["status"] == "issued":
+                return jsonify({"ok": False, "error": "Hóa đơn đã phát hành nên không thể hủy dự thảo"}), 409
+            if draft["status"] != "cancelled":
+                conn.execute(
+                    "UPDATE outgoing_invoice_drafts SET status='cancelled' WHERE id=?", (draft_id,)
+                )
+                conn.execute(
+                    """UPDATE inventory_transactions SET status='cancelled',updated_at=?
+                       WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'""",
+                    (now_iso(), str(draft_id)),
+                )
+                audit(conn, now_iso, "outgoing.cancel", "ok", entity_type="outgoing_invoice", entity_id=draft_id)
+            return jsonify({"ok": True, "idempotent": draft["status"] == "cancelled"})
 
     @app.get("/api/outgoing-invoices")
     def api_outgoing_invoices():
@@ -2031,8 +2871,28 @@ def register_contract_routes(app, ctx):
     def api_debts():
         period_from = request.args.get("from") or date.today().replace(day=1).isoformat()
         period_to = request.args.get("to") or date.today().isoformat()
+        try:
+            validate_date_range(period_from, period_to)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         with db_factory() as conn:
             return jsonify({"ok": True, **debt_period_payload(conn, period_from, period_to, tax_factor)})
+
+    @app.get("/api/export/debts")
+    def api_export_debts():
+        period_from = request.args.get("from") or date.today().replace(day=1).isoformat()
+        period_to = request.args.get("to") or date.today().isoformat()
+        try:
+            validate_date_range(period_from, period_to)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        with db_factory() as conn:
+            payload = debt_period_payload(conn, period_from, period_to, tax_factor)
+            workbook = debt_period_workbook(conn, payload)
+            return send_workbook(
+                workbook,
+                f"Cong_no_{period_from}_{period_to}.xlsx",
+            )
 
     @app.put("/api/kitchen-units/<kitchen_code>")
     def api_kitchen_unit(kitchen_code):
@@ -2296,14 +3156,31 @@ def register_contract_routes(app, ctx):
     @app.get("/api/payroll")
     def api_payroll():
         month = request.args.get("month") or date.today().strftime("%Y-%m")
+        if not re.fullmatch(r"\d{4}-\d{2}", month):
+            return jsonify({"ok": False, "error": "Tháng tính lương phải có dạng YYYY-MM"}), 400
         with db_factory() as conn:
-            rows = payroll_rows(conn, month)
+            try:
+                rows = payroll_rows(conn, month)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
             labor = [dict(row) for row in conn.execute(
                 """SELECT kitchen,SUM(amount) amount FROM kitchen_labor_costs
                    WHERE substr(work_date,1,7)=? GROUP BY kitchen ORDER BY kitchen""", (month,)
             )]
             return jsonify({"ok": True, "month": month, "items": rows, "labor_by_kitchen": labor,
                             "total_net": sum(row["net_salary"] for row in rows)})
+
+    @app.get("/api/export/payroll")
+    def api_export_payroll():
+        month = request.args.get("month") or date.today().strftime("%Y-%m")
+        if not re.fullmatch(r"\d{4}-\d{2}", month):
+            return jsonify({"ok": False, "error": "Tháng tính lương phải có dạng YYYY-MM"}), 400
+        with db_factory() as conn:
+            try:
+                workbook = payroll_workbook(conn, month)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+            return send_workbook(workbook, f"Bang_luong_{month}.xlsx")
 
     @app.put("/api/print/settings")
     def api_print_settings():
@@ -2429,14 +3306,31 @@ def register_contract_routes(app, ctx):
             amount = sum(net_delivered(row) * number_value(row["sell_price"]) * tax_factor(row["tax"]) for row in rows)
             if not rows:
                 return jsonify({"ok": False, "error": "Không có dữ liệu đã duyệt trong kỳ"}), 404
+            requester = setting_get(conn, "payment_requester", "")
+            bank_name = setting_get(conn, "payment_bank_name", "")
+            bank_account = setting_get(conn, "payment_bank_account", "")
+            if not requester or not bank_name or not bank_account:
+                return jsonify({
+                    "ok": False,
+                    "error": "Thiếu người đại diện hoặc tài khoản nhận tiền; cập nhật tại Cấu hình trước khi xuất",
+                }), 409
             contractor_row = conn.execute("SELECT name FROM contractors WHERE code=?", (contractor,)).fetchone()
+            daily_amounts = defaultdict(float)
+            for row in rows:
+                daily_amounts[row["work_date"]] += (
+                    net_delivered(row) * number_value(row["sell_price"]) * tax_factor(row["tax"])
+                )
             document = payment_request_document(
                 company=setting_get(conn, "company", ""),
                 recipient=contractor_row["name"] if contractor_row else contractor,
-                requester=setting_get(conn, "payment_requester", ""),
-                bank_name=setting_get(conn, "payment_bank_name", ""),
-                bank_account=setting_get(conn, "payment_bank_account", ""),
+                requester=requester,
+                bank_name=bank_name,
+                bank_account=bank_account,
                 amount=amount, period_from=period_from, period_to=period_to,
+                details=[
+                    {"work_date": work_date, "amount": daily_amounts[work_date]}
+                    for work_date in sorted(daily_amounts)
+                ],
             )
             stream = io.BytesIO()
             document.save(stream)
@@ -2516,6 +3410,168 @@ def debt_period_payload(conn, period_from: str, period_to: str, tax_factor):
         "contractors": dict(parties["contractor"]),
         "suppliers": dict(parties["supplier"]),
     }
+
+
+def validate_date_range(period_from: str, period_to: str):
+    try:
+        start = datetime.strptime(period_from, "%Y-%m-%d").date()
+        end = datetime.strptime(period_to, "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError("Kỳ công nợ phải dùng ngày hợp lệ dạng YYYY-MM-DD") from None
+    if start > end:
+        raise ValueError("Ngày bắt đầu phải trước hoặc bằng ngày kết thúc")
+
+
+def style_export_sheet(ws, title: str, subtitle: str, headers: list[str], money_columns=()):
+    end_col = max(len(headers), 1)
+    ws.insert_rows(1, 2)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_col)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=end_col)
+    ws.cell(1, 1, title)
+    ws.cell(2, 1, subtitle)
+    ws.cell(1, 1).font = Font(name="Arial", size=16, bold=True, color="FFFFFF")
+    ws.cell(1, 1).fill = PatternFill("solid", fgColor="17324D")
+    ws.cell(1, 1).alignment = Alignment(horizontal="center")
+    ws.cell(2, 1).font = Font(name="Arial", italic=True, color="475569")
+    ws.cell(2, 1).alignment = Alignment(horizontal="center")
+    for cell in ws[3]:
+        cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="087F73")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for row in ws.iter_rows(min_row=4):
+        for cell in row:
+            cell.font = Font(name="Arial", size=10)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for column in money_columns:
+        for row in range(4, ws.max_row + 1):
+            ws.cell(row, column).number_format = "#,##0"
+    ws.freeze_panes = "A4"
+    if ws.max_row >= 3:
+        ws.auto_filter.ref = f"A3:{get_column_letter(end_col)}{ws.max_row}"
+    for index in range(1, end_col + 1):
+        values = [str(ws.cell(row, index).value or "") for row in range(3, ws.max_row + 1)]
+        width = min(max([len(value) for value in values] + [10]) + 2, 42)
+        ws.column_dimensions[get_column_letter(index)].width = width
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+
+
+def send_workbook(workbook: Workbook, filename: str):
+    stream = io.BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return send_file(
+        stream,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def debt_period_workbook(conn, payload: dict):
+    period_from = payload["period_from"]
+    period_to = payload["period_to"]
+    workbook = Workbook()
+    for index, (sheet_name, title, items) in enumerate((
+        ("Phải thu", "CÔNG NỢ PHẢI THU", payload["contractors"]),
+        ("Phải trả", "CÔNG NỢ PHẢI TRẢ", payload["suppliers"]),
+    )):
+        ws = workbook.active if index == 0 else workbook.create_sheet()
+        ws.title = sheet_name
+        headers = ["Đối tượng", "Số dư đầu kỳ", "Phát sinh", "Điều chỉnh", "Đã thu/trả", "Số dư cuối kỳ"]
+        ws.append(headers)
+        for code, values in sorted(items.items()):
+            ws.append([
+                code,
+                values["opening"],
+                values["period_charge"],
+                values["period_adjustment"],
+                values["period_paid"],
+                values["closing"],
+            ])
+        style_export_sheet(
+            ws,
+            title,
+            f"Từ {period_from} đến {period_to} · đầu kỳ + phát sinh + điều chỉnh − đã thu/trả",
+            headers,
+            money_columns=(2, 3, 4, 5, 6),
+        )
+
+    ws = workbook.create_sheet("Thu chi")
+    payment_headers = ["Ngày", "Loại", "Nhóm", "Đối tượng", "Số tiền", "Nội dung", "Ngày tạo"]
+    ws.append(payment_headers)
+    for row in conn.execute(
+        "SELECT * FROM payments WHERE payment_date>=? AND payment_date<=? ORDER BY payment_date,id",
+        (period_from, period_to),
+    ):
+        ws.append([
+            row["payment_date"],
+            "Thu khách hàng" if row["kind"] == "receipt" else "Trả nhà cung cấp",
+            "Phải thu" if row["party_type"] == "contractor" else "Phải trả",
+            row["party_code"],
+            row["amount"],
+            row["note"],
+            row["created_at"],
+        ])
+    style_export_sheet(ws, "LỊCH SỬ THU – CHI", f"Từ {period_from} đến {period_to}", payment_headers, (5,))
+
+    ws = workbook.create_sheet("Điều chỉnh")
+    adjustment_headers = ["Ngày", "Nhóm", "Đối tượng", "Số điều chỉnh", "Lý do", "Ngày tạo"]
+    ws.append(adjustment_headers)
+    for row in conn.execute(
+        "SELECT * FROM debt_adjustments WHERE adjustment_date>=? AND adjustment_date<=? ORDER BY adjustment_date,id",
+        (period_from, period_to),
+    ):
+        ws.append([
+            row["adjustment_date"],
+            "Phải thu" if row["party_type"] == "contractor" else "Phải trả",
+            row["party_code"],
+            row["amount"],
+            row["note"],
+            row["created_at"],
+        ])
+    style_export_sheet(ws, "ĐIỀU CHỈNH CÔNG NỢ", f"Từ {period_from} đến {period_to}", adjustment_headers, (4,))
+    return workbook
+
+
+def payroll_workbook(conn, month: str):
+    rows = payroll_rows(conn, month)
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "Bảng lương"
+    headers = [
+        "STT", "Mã nhân sự", "Họ tên", "Chức vụ", "Bếp", "Giờ thường", "Tăng ca",
+        "Chủ nhật", "Ca đêm", "Ngày lễ", "Phụ cấp", "Trách nhiệm", "Tổng lương",
+        "BHXH NLĐ", "Tạm ứng", "Khấu trừ thử việc", "Thực lĩnh", "BHXH công ty",
+    ]
+    ws.append(headers)
+    for index, item in enumerate(rows, 1):
+        ws.append([
+            index, item["employee_code"], item["full_name"], item["role_name"], item["kitchen"],
+            item["normal_hours"], item["overtime_hours"], item["sunday_hours"], item["night_hours"],
+            item["holiday_hours"], item["allowance"], item["responsibility"], item["gross_salary"],
+            item["bhxh_employee"], item["advance"], item["probation_deduction"], item["net_salary"],
+            item["bhxh_company"],
+        ])
+    style_export_sheet(
+        ws,
+        f"BẢNG LƯƠNG THÁNG {month}",
+        "Công thường · tăng ca · Chủ nhật · ca đêm · ngày lễ · phụ cấp · BHXH · tạm ứng",
+        headers,
+        money_columns=(11, 12, 13, 14, 15, 16, 17, 18),
+    )
+
+    ws = workbook.create_sheet("Chi phí theo bếp")
+    labor_headers = ["Bếp", "Chi phí lao động"]
+    ws.append(labor_headers)
+    for row in conn.execute(
+        """SELECT kitchen,SUM(amount) amount FROM kitchen_labor_costs
+           WHERE substr(work_date,1,7)=? GROUP BY kitchen ORDER BY kitchen""",
+        (month,),
+    ):
+        ws.append([row["kitchen"], row["amount"]])
+    style_export_sheet(ws, f"CHI PHÍ LAO ĐỘNG THÁNG {month}", "Tổng hợp theo bếp", labor_headers, (2,))
+    return workbook
 
 
 def meal_plan_payload(conn, work_date=""):
@@ -2812,7 +3868,8 @@ def import_legacy_attendance(conn, path: Path, source_name: str, now_iso):
 
 
 def payment_request_document(company: str, recipient: str, requester: str, bank_name: str,
-                             bank_account: str, amount: float, period_from: str, period_to: str):
+                             bank_account: str, amount: float, period_from: str, period_to: str,
+                             details=None):
     document = Document()
     section = document.sections[0]
     section.top_margin = Cm(1.7)
@@ -2838,7 +3895,7 @@ def payment_request_document(company: str, recipient: str, requester: str, bank_
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.space_before = Pt(18)
     title.paragraph_format.space_after = Pt(8)
-    run = title.add_run("GIẤY ĐỀ NGHỊ THANH TOÁN")
+    run = title.add_run("ĐỀ NGHỊ THANH TOÁN")
     run.bold = True
     run.font.size = Pt(16)
     today = date.today()
@@ -2846,15 +3903,9 @@ def payment_request_document(company: str, recipient: str, requester: str, bank_
     date_line.alignment = WD_ALIGN_PARAGRAPH.CENTER
     lines = [
         ("Kính gửi: ", recipient.upper()),
-        ("Họ và tên người đề nghị thanh toán: ", requester or "................................................"),
-        ("Bộ phận (hoặc địa chỉ): ", "Kế toán"),
-        ("Nội dung thanh toán: ", f"Thanh toán tiền hàng/dịch vụ từ {period_from} đến {period_to}"),
-        ("Số tiền: ", f"{amount:,.0f} VNĐ".replace(",", ".")),
-        ("(Viết bằng chữ): ", number_to_vietnamese(amount) + "./."),
-        ("Hình thức thanh toán: ", "Chuyển khoản"),
-        ("Đơn vị thụ hưởng: ", company),
-        ("Số tài khoản: ", bank_account or "................................................"),
-        ("Tại ngân hàng: ", bank_name or "................................................"),
+        ("Đơn vị đề nghị: ", company),
+        ("Người đại diện: ", requester),
+        ("Nội dung: ", f"Đề nghị thanh toán tiền hàng/dịch vụ từ {period_from} đến {period_to}"),
     ]
     for label, value in lines:
         paragraph = document.add_paragraph()
@@ -2862,13 +3913,69 @@ def payment_request_document(company: str, recipient: str, requester: str, bank_
         label_run = paragraph.add_run(label)
         label_run.bold = True
         paragraph.add_run(value)
+
+    detail_rows = details or [{"work_date": f"{period_from} – {period_to}", "amount": amount}]
+    detail_table = document.add_table(rows=1, cols=4)
+    detail_table.style = "Table Grid"
+    detail_table.autofit = False
+    widths = (Cm(1.4), Cm(3.2), Cm(8.4), Cm(3.8))
+    headers = ("STT", "Ngày", "Nội dung", "Thành tiền (VNĐ)")
+    for index, cell in enumerate(detail_table.rows[0].cells):
+        cell.width = widths[index]
+        paragraph = cell.paragraphs[0]
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run(headers[index])
+        run.bold = True
+    for index, item in enumerate(detail_rows, start=1):
+        row_cells = detail_table.add_row().cells
+        work_date = str(item.get("work_date") or "").strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", work_date):
+            work_date = datetime.strptime(work_date, "%Y-%m-%d").strftime("%d/%m/%Y")
+        values = (
+            str(index),
+            work_date,
+            "Tiền hàng/dịch vụ đã giao",
+            f"{as_number(item.get('amount')):,.0f}".replace(",", "."),
+        )
+        for column, value in enumerate(values):
+            row_cells[column].width = widths[column]
+            paragraph = row_cells[column].paragraphs[0]
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT if column == 3 else WD_ALIGN_PARAGRAPH.CENTER
+            paragraph.add_run(value)
+    total_cells = detail_table.add_row().cells
+    total_cells[0].merge(total_cells[2])
+    total_label = total_cells[0].paragraphs[0]
+    total_label.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run = total_label.add_run("TỔNG CỘNG")
+    run.bold = True
+    total_value = total_cells[3].paragraphs[0]
+    total_value.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run = total_value.add_run(f"{amount:,.0f}".replace(",", "."))
+    run.bold = True
+
+    payment_lines = [
+        ("Số tiền bằng chữ: ", number_to_vietnamese(amount) + "./."),
+        ("Hình thức thanh toán: ", "Chuyển khoản"),
+        ("Đơn vị thụ hưởng: ", company),
+        ("Số tài khoản: ", bank_account),
+        ("Tại ngân hàng: ", bank_name),
+    ]
+    for label, value in payment_lines:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(4)
+        label_run = paragraph.add_run(label)
+        label_run.bold = True
+        paragraph.add_run(value)
+
+    closing = document.add_paragraph("Rất mong Quý đơn vị xem xét và thanh toán.\nTrân trọng cảm ơn!")
+    closing.paragraph_format.space_after = Pt(8)
     signatures = document.add_table(rows=1, cols=2)
     signatures.autofit = False
     signatures.columns[0].width = Cm(8)
     signatures.columns[1].width = Cm(8)
     for cell, text in zip(signatures.rows[0].cells, (
-        "Người đề nghị thanh toán\n(Ký, ghi rõ họ tên)",
-        "Người duyệt\n(Ký, ghi rõ họ tên, đóng dấu)",
+        "NGƯỜI LẬP\n(Ký, ghi rõ họ tên)",
+        "ĐẠI DIỆN CÔNG TY\n(Ký, ghi rõ họ tên, đóng dấu)",
     )):
         paragraph = cell.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER

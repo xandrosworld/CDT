@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 from shutil import rmtree
 
+from docx import Document as DocxDocument
 from openpyxl import Workbook, load_workbook
 
 APP_DIR = Path(__file__).resolve().parent
@@ -16,6 +17,7 @@ ROOT = APP_DIR.parent
 sys.path.insert(0, str(APP_DIR))
 import server  # noqa: E402
 import contract_modules  # noqa: E402
+from msmi_client import MsmiClient, MsmiConfig  # noqa: E402
 
 
 def clean_test_db(path: Path):
@@ -97,6 +99,34 @@ def preview_kitchen(client, payload, work_date="2026-09-02", filename="xưởng 
     )
 
 
+def opening_workbook_bytes(rows):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Tồn cuối tháng"
+    headers = ["MÃ TĐP", "TÊN TDP", "Tên trên HĐ", "MÃ KHO", "T/Suất", "ĐVT"]
+    for column, value in enumerate(headers, start=1):
+        sheet.cell(5, column, value)
+    sheet.cell(5, 7, "Tồn cuối kỳ")
+    sheet.cell(6, 7, "Số lượng")
+    sheet.cell(6, 8, "Đơn giá")
+    sheet.cell(6, 9, "Thành tiền")
+    for row_index, values in enumerate(rows, start=7):
+        for column, value in enumerate(values, start=1):
+            sheet.cell(row_index, column, value)
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()
+
+
+def preview_opening(client, payload, period="2026-08", filename="tồn đầu kỳ.xlsx"):
+    return client.post(
+        "/api/inventory/opening/import/preview",
+        data={"period": period, "file": (io.BytesIO(payload), filename)},
+        content_type="multipart/form-data",
+    )
+
+
 def main():
     qc_db = APP_DIR / "data" / "qc_test.sqlite3"
     clean_test_db(qc_db)
@@ -109,6 +139,20 @@ def main():
     bootstrap = client.get("/api/bootstrap").get_json()
     assert bootstrap["master"]["product_count"] >= 800
     assert len(bootstrap["master"]["kitchens"]) >= 20
+    assert bootstrap["master"]["settings"]["payment_requester"] == "VŨ THỊ THỤY"
+    assert bootstrap["master"]["settings"]["payment_bank_account"] == "1052787580"
+    assert bootstrap["master"]["settings"]["payment_bank_name"] == "Ngân hàng TMCP Ngoại Thương Việt Nam"
+
+    class CapturingMsmiClient(MsmiClient):
+        def _get(self, path, params=None):
+            self.captured_path = path
+            self.captured_params = params
+            return {"listInvoice": [{} for _ in range(params["size"])]}
+
+    paging_client = CapturingMsmiClient(MsmiConfig("https://example.invalid", "not-a-real-token"))
+    paging_result = paging_client.list_invoices(size=200)
+    assert paging_client.captured_path == "api/qlhd-api/invoices"
+    assert paging_client.captured_params["size"] == 199 and paging_result["has_more"] is True
 
     with server.db() as conn:
         mapping_products = [dict(row) for row in conn.execute(
@@ -269,6 +313,26 @@ def main():
     }, ensure_ascii=False, indent=2))
 
     master_source = ROOT / "Em Thành.xlsx"
+    orphan_pending = APP_DIR / "data" / "pending_qc_orphan.xlsx"
+    orphan_pending.write_bytes(b"orphaned preview")
+    with master_source.open("rb") as handle:
+        cancelled_analysis = client.post(
+            "/api/import/analyze",
+            data={"file": (handle, master_source.name)},
+            content_type="multipart/form-data",
+        )
+    assert cancelled_analysis.status_code == 200
+    assert not orphan_pending.exists()
+    cancelled_token = cancelled_analysis.get_json()["token"]
+    cancelled_path = APP_DIR / "data" / f"pending_{cancelled_token}.xlsx"
+    assert cancelled_path.exists()
+    assert client.post("/api/import/cancel", json={"token": cancelled_token}).status_code == 200
+    assert not cancelled_path.exists()
+    assert client.post("/api/import/cancel", json={"token": cancelled_token}).get_json()["idempotent"]
+    assert client.post("/api/import/confirm", json={
+        "token": cancelled_token, "work_date": "2026-08-27", "sheets": ["đơn hàng27.08 "],
+    }).status_code == 400
+
     with master_source.open("rb") as handle:
         analyzed = client.post(
             "/api/import/analyze",
@@ -409,6 +473,22 @@ def main():
     checked = client.get(f"/api/bootstrap?batch_id={manual_id}").get_json()
     assert checked["summary"]["contractors"]["HATRAN"]["opening"] == 5000
     assert checked["summary"]["contractors"]["HATRAN"]["paid"] == 10000
+    debt_adjustment = client.post("/api/debt-adjustments", json={
+        "adjustment_date": "2026-08-29", "party_type": "contractor",
+        "party_code": "HATRAN", "amount": 2500, "note": "QC điều chỉnh",
+    })
+    assert debt_adjustment.status_code == 200
+    debt_period = client.get("/api/debts?from=2026-08-01&to=2026-08-31")
+    assert debt_period.status_code == 200
+    assert debt_period.get_json()["contractors"]["HATRAN"]["period_adjustment"] == 2500
+    assert client.get("/api/debts?from=2026-09-01&to=2026-08-31").status_code == 400
+    debt_export = client.get("/api/export/debts?from=2026-08-01&to=2026-08-31")
+    assert debt_export.status_code == 200 and len(debt_export.data) > 1000
+    debt_book = load_workbook(io.BytesIO(debt_export.data), data_only=True)
+    assert debt_book.sheetnames == ["Phải thu", "Phải trả", "Thu chi", "Điều chỉnh"]
+    assert debt_book["Phải thu"]["A3"].value == "Đối tượng"
+    assert any(row[0].value == "HATRAN" and row[3].value == 2500 for row in debt_book["Phải thu"].iter_rows(min_row=4))
+    debt_book.close()
 
     # Returns/damage: cost and revenue must use net received/net delivered.
     first_item = checked["orders"][0]
@@ -442,13 +522,33 @@ def main():
     drafted = client.post(f"/api/outgoing-invoices/draft/{manual_id}")
     assert drafted.status_code == 200, drafted.get_data(as_text=True)
     draft_id = drafted.get_json()["drafts"][0]["id"]
+    drafted_again = client.post(f"/api/outgoing-invoices/draft/{manual_id}")
+    assert drafted_again.status_code == 200, drafted_again.get_data(as_text=True)
+    assert drafted_again.get_json()["drafts"][0]["id"] == draft_id
     with server.db() as conn:
         assert conn.execute(
             "SELECT COUNT(*) n FROM outgoing_invoice_lines WHERE draft_id=? AND product_code='I000060' AND product_name='HÀNH TÂY XUẤT HĐ QC'",
             (draft_id,),
         ).fetchone()["n"] >= 1
+        assert conn.execute(
+            "SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",
+            (str(draft_id),),
+        ).fetchone()["n"] == 2
+    cancelled = client.post(f"/api/outgoing-invoices/{draft_id}/cancel", json={"confirmed": True})
+    assert cancelled.status_code == 200
+    assert client.post(
+        f"/api/outgoing-invoices/{draft_id}/confirm-issued", json={"confirmed": True}
+    ).status_code == 409
+    with server.db() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",
+            (str(draft_id),),
+        ).fetchone()["n"] == 0
+    recreated = client.post(f"/api/outgoing-invoices/draft/{manual_id}")
+    assert recreated.status_code == 200 and recreated.get_json()["drafts"][0]["status"] == "draft"
     issued = client.post(f"/api/outgoing-invoices/{draft_id}/confirm-issued", json={"confirmed": True})
     assert issued.status_code == 200
+    assert client.post(f"/api/outgoing-invoices/{draft_id}/cancel", json={"confirmed": True}).status_code == 409
 
     # mSMI incremental/idempotent sync with a mock response; no external write.
     class DummyMsmi:
@@ -648,6 +748,70 @@ def main():
         assert len(client.get("/api/kitchen/plans?date=2026-09-01").get_json()["items"]) == 5
         actual_kitchen_result = "5 plans / 54 items / 3 XCOM sheets / financial reconciliation passed"
 
+    # Actual monthly meal-attendance workbook: keep actual meals separate from PO planned meals.
+    meal_attendance_source = (
+        ROOT / "bosung.30.8.26" / "CHẤM CÔNG+ SUẤT ĂN  2026"
+        / "SUẤT ĂN XƯỞNG CƠM 2026" / "SUẤT ĂN T8.2026.xlsx"
+    )
+    assert hashlib.sha256(meal_attendance_source.read_bytes()).hexdigest().upper() == (
+        "1117786C6356E75CA75329926E1F3717BD8EADAE3857F8E5BED3B36B1C9E1EBF"
+    )
+    with meal_attendance_source.open("rb") as handle:
+        meal_attendance_preview_response = client.post(
+            "/api/kitchen/attendance/import/preview",
+            data={"file": (handle, meal_attendance_source.name)},
+            content_type="multipart/form-data",
+        )
+    assert meal_attendance_preview_response.status_code == 200, meal_attendance_preview_response.get_data(as_text=True)
+    meal_attendance_preview = meal_attendance_preview_response.get_json()
+    assert meal_attendance_preview["periods"] == ["2026-08"]
+    assert meal_attendance_preview["counts"] == {
+        "items": 205, "dates": 28, "kitchens": 6, "new": 205,
+        "update": 0, "unchanged": 0, "warning": 0, "error": 0,
+    }
+    assert meal_attendance_preview["totals"] == {"actual": 6020, "ordered": 0}
+    assert client.post(
+        "/api/kitchen/attendance/import/confirm",
+        json={"token": meal_attendance_preview["token"]},
+    ).status_code == 400
+    meal_attendance_confirm = client.post(
+        "/api/kitchen/attendance/import/confirm",
+        json={"token": meal_attendance_preview["token"], "confirmed": True},
+    )
+    assert meal_attendance_confirm.status_code == 200, meal_attendance_confirm.get_data(as_text=True)
+    assert meal_attendance_confirm.get_json()["inserted"] == 205
+    with server.db() as conn:
+        meal_totals_by_kitchen = {
+            row["kitchen"]: row["actual"]
+            for row in conn.execute(
+                """SELECT kitchen,SUM(actual_count) actual FROM meal_attendance
+                   WHERE substr(work_date,1,7)='2026-08' GROUP BY kitchen"""
+            )
+        }
+    assert meal_totals_by_kitchen == {
+        "BOT": 1313, "DAINAM": 1433, "SUNBY": 874,
+        "THACO": 1063, "TTS": 627, "VINA": 710,
+    }
+    with meal_attendance_source.open("rb") as handle:
+        repeat_meal_attendance_response = client.post(
+            "/api/kitchen/attendance/import/preview",
+            data={"file": (handle, "renamed-meal-attendance.xlsx")},
+            content_type="multipart/form-data",
+        )
+    repeat_meal_attendance = repeat_meal_attendance_response.get_json()
+    assert repeat_meal_attendance["counts"]["unchanged"] == 205
+    repeat_meal_confirm = client.post(
+        "/api/kitchen/attendance/import/confirm",
+        json={"token": repeat_meal_attendance["token"], "confirmed": True},
+    )
+    assert repeat_meal_confirm.status_code == 200
+    assert repeat_meal_confirm.get_json()["unchanged"] == 205
+    assert client.post(
+        "/api/kitchen/attendance/import/preview",
+        data={"file": (io.BytesIO(b"not-an-xlsx"), "bad.xlsx")},
+        content_type="multipart/form-data",
+    ).status_code == 400
+
     # Normalized kitchen/menu/cost/XCOM/PO manual flow remains backward compatible.
     assert client.put("/api/kitchen-units/POT", json={"xcom_code": "XCOM-POT"}).status_code == 200
     assert client.put("/api/dated-prices/I000060", json={
@@ -716,12 +880,149 @@ def main():
     assert max(row["normal_hours"] for row in legacy_payroll) <= 31 * 24
     assert round(next(row for row in legacy_payroll if row["employee_code"] == "TRIEN")["net_salary"]) == 8000000
     assert round(sum(row["net_salary"] for row in legacy_payroll)) == 14379021
+    payroll_export = client.get("/api/export/payroll?month=2026-08")
+    assert payroll_export.status_code == 200 and len(payroll_export.data) > 1000
+    payroll_book = load_workbook(io.BytesIO(payroll_export.data), data_only=True)
+    assert payroll_book.sheetnames == ["Bảng lương", "Chi phí theo bếp"]
+    assert payroll_book["Bảng lương"]["A3"].value == "STT"
+    assert any(
+        row[1].value == "TRIEN" and round(row[16].value) == 8000000
+        for row in payroll_book["Bảng lương"].iter_rows(min_row=4)
+    )
+    payroll_book.close()
+    assert client.get("/api/export/payroll?month=2026-13").status_code == 400
+
+    # Opening inventory workbook: safe preview/confirm, signed quantities, aggregation and rollback.
+    with server.db() as conn:
+        conn.execute(
+            """INSERT INTO products(code,name,unit,supplier,buy_price)
+               VALUES('QC-OPEN-ROLLBACK','Hàng rollback tồn đầu','kg','QC',10000)"""
+        )
+    rollback_opening_file = opening_workbook_bytes([
+        ["QC-OPEN-NEW", "Hàng mới phải rollback", "", "QC-OPEN-NEW", "KKKNT", "kg", 2, 20000, 40000],
+        ["QC-OPEN-ROLLBACK", "Hàng rollback tồn đầu", "", "QC-OPEN-ROLLBACK", "KKKNT", "kg", 1, 10000, 10000],
+    ])
+    rollback_opening = preview_opening(client, rollback_opening_file, period="2026-07").get_json()
+    assert rollback_opening["can_confirm"] is True and rollback_opening["counts"]["new_products"] == 1
+    with server.db() as conn:
+        conn.execute("DELETE FROM products WHERE code='QC-OPEN-ROLLBACK'")
+    rollback_opening_confirm = client.post(
+        "/api/inventory/opening/import/confirm",
+        json={"token": rollback_opening["token"], "confirmed": True},
+    )
+    assert rollback_opening_confirm.status_code == 409
+    with server.db() as conn:
+        assert not conn.execute("SELECT 1 FROM products WHERE code='QC-OPEN-NEW'").fetchone()
+        assert conn.execute(
+            "SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='OPENING' AND source_id='2026-07'"
+        ).fetchone()["n"] == 0
+
+    actual_opening_source = ROOT / "_HANDOFF" / "EXTERNAL_INPUTS" / "TĐK T8-2026.xlsx thụy.xlsx"
+    actual_opening_result = "not_present"
+    if actual_opening_source.exists():
+        assert hashlib.sha256(actual_opening_source.read_bytes()).hexdigest().upper() == (
+            "36DF2BA86D13307F96BB5944FCECB19A4A81C093B4AC6A98EA71330D68204DA6"
+        )
+        assert preview_opening(client, b"not-an-xlsx").status_code == 400
+        assert preview_opening(client, actual_opening_source.read_bytes(), period="2026-13").status_code == 400
+        with actual_opening_source.open("rb") as handle:
+            actual_opening_response = client.post(
+                "/api/inventory/opening/import/preview",
+                data={"period": "2026-08", "file": (handle, actual_opening_source.name)},
+                content_type="multipart/form-data",
+            )
+        assert actual_opening_response.status_code == 200, actual_opening_response.get_data(as_text=True)
+        actual_opening = actual_opening_response.get_json()
+        print("OPENING_PREVIEW", json.dumps(actual_opening["counts"], ensure_ascii=False))
+        assert actual_opening["can_confirm"] is True
+        assert actual_opening["counts"] == {
+            "source_rows": 395, "items": 334, "new_products": 113,
+            "new": 334, "update": 0, "negative": 4, "warning": 181, "error": 0,
+        }
+        assert abs(actual_opening["totals"]["qty"] - 101383.26) < 0.0001
+        assert abs(actual_opening["totals"]["amount"] - 2419360717.80439) < 0.01
+        c000021 = next(row for row in actual_opening["rows"] if row["product_code"] == "C000021")
+        assert c000021["source_row_count"] == 3 and abs(c000021["qty"] - 79.97) < 0.0001
+        d000056 = next(row for row in actual_opening["rows"] if row["product_code"] == "D000056")
+        assert d000056["qty"] == -1.5 and any("âm" in warning for warning in d000056["warnings"])
+        m000277 = next(row for row in actual_opening["rows"] if row["product_code"] == "M000277")
+        assert any("Thành tiền lệch" in warning for warning in m000277["warnings"])
+        k000066 = next(row for row in actual_opening["rows"] if row["product_code"] == "K000066")
+        assert any("Tên trong file khác danh mục" in warning for warning in k000066["warnings"])
+        assert client.post(
+            "/api/inventory/opening/import/confirm", json={"token": actual_opening["token"]}
+        ).status_code == 400
+        actual_opening_confirm = client.post(
+            "/api/inventory/opening/import/confirm",
+            json={"token": actual_opening["token"], "confirmed": True},
+        )
+        assert actual_opening_confirm.status_code == 200, actual_opening_confirm.get_data(as_text=True)
+        assert actual_opening_confirm.get_json()["inserted_products"] == 113
+        assert actual_opening_confirm.get_json()["inserted"] == 334
+        assert actual_opening_confirm.get_json()["updated"] == 0
+        with server.db() as conn:
+            opening_totals = conn.execute(
+                """SELECT COUNT(*) n,SUM(qty_in-qty_out) qty,
+                          SUM((qty_in-qty_out)*unit_cost) amount,
+                          SUM(CASE WHEN qty_out>0 THEN 1 ELSE 0 END) negative
+                   FROM inventory_transactions
+                   WHERE source_type='OPENING' AND source_id='2026-08'
+                     AND note LIKE 'Tồn đầu kỳ 2026-08 từ %'"""
+            ).fetchone()
+            assert opening_totals["n"] == 334 and opening_totals["negative"] == 4
+            assert abs(opening_totals["qty"] - 101383.26) < 0.0001
+            assert abs(opening_totals["amount"] - 2419360717.80439) < 0.01
+            assert conn.execute("SELECT COUNT(*) n FROM products").fetchone()["n"] == 984
+            assert conn.execute("SELECT name FROM products WHERE code='K000066'").fetchone()["name"] == "Thịt vịt xông khói"
+            added_product = conn.execute(
+                "SELECT name,unit,supplier FROM products WHERE code='HT00241'"
+            ).fetchone()
+            assert added_product and added_product["supplier"] == ""
+        with actual_opening_source.open("rb") as handle:
+            repeat_opening_response = client.post(
+                "/api/inventory/opening/import/preview",
+                data={"period": "2026-08", "file": (handle, "renamed-opening.xlsx")},
+                content_type="multipart/form-data",
+            )
+        repeat_opening = repeat_opening_response.get_json()
+        assert repeat_opening["counts"]["new_products"] == 0
+        assert repeat_opening["counts"]["new"] == 0 and repeat_opening["counts"]["update"] == 334
+        repeat_opening_confirm = client.post(
+            "/api/inventory/opening/import/confirm",
+            json={"token": repeat_opening["token"], "confirmed": True},
+        )
+        assert repeat_opening_confirm.status_code == 200
+        assert repeat_opening_confirm.get_json()["inserted"] == 0
+        assert repeat_opening_confirm.get_json()["updated"] == 334
+        actual_opening_result = "395 rows / 334 TDP codes / signed quantity and VND value reconciled"
 
     # Multi-period debts, payment request and approval-gated print dry-run.
     debts = client.get("/api/debts?from=2026-08-01&to=2026-08-31")
     assert debts.status_code == 200 and "HATRAN" in debts.get_json()["contractors"]
+    blank_settings = client.put("/api/document-settings", json={"payment_bank_account": ""})
+    assert blank_settings.status_code == 200
+    blocked_request = client.get("/api/export/payment-request/HATRAN?from=2026-08-01&to=2026-08-31")
+    assert blocked_request.status_code == 409 and "Cấu hình" in blocked_request.get_json()["error"]
+    restored_settings = client.put("/api/document-settings", json={
+        "payment_requester": "VŨ THỊ THỤY",
+        "payment_bank_name": "Ngân hàng TMCP Ngoại Thương Việt Nam",
+        "payment_bank_account": "1052787580",
+    })
+    assert restored_settings.status_code == 200
     payment_request = client.get("/api/export/payment-request/HATRAN?from=2026-08-01&to=2026-08-31")
     assert payment_request.status_code == 200 and len(payment_request.data) > 1000
+    payment_document = DocxDocument(io.BytesIO(payment_request.data))
+    payment_text = "\n".join(
+        [paragraph.text for paragraph in payment_document.paragraphs]
+        + [cell.text for table in payment_document.tables for row in table.rows for cell in row.cells]
+    )
+    for required_text in (
+        "ĐỀ NGHỊ THANH TOÁN", "CÔNG TY TNHH THỰC PHẨM THÀNH ĐẠT PHÁT",
+        "VŨ THỊ THỤY", "1052787580", "Ngân hàng TMCP Ngoại Thương Việt Nam",
+        "TỔNG CỘNG", "Số tiền bằng chữ", "ĐẠI DIỆN CÔNG TY",
+    ):
+        assert required_text in payment_text, required_text
+    assert "................................" not in payment_text
     prepared = client.post(f"/api/print/prepare/{manual_id}")
     assert prepared.status_code == 200, prepared.get_data(as_text=True)
     assert client.post(f"/api/print/approve/{manual_id}").status_code == 200
@@ -732,6 +1033,14 @@ def main():
     assert operations.status_code == 200
     assert operations.get_json()["msmi"]["invoices"]
     assert operations.get_json()["meal_plans"]
+    assert operations.get_json()["meal_attendance_totals"] == {
+        "actual": 6020, "ordered": 0, "rows": 205, "kitchens": 6,
+    }
+    assert operations.get_json()["document_settings"] == {
+        "requester": "VŨ THỊ THỤY",
+        "bank_name": "Ngân hàng TMCP Ngoại Thương Việt Nam",
+        "bank_account": "1052787580",
+    }
 
     print("QC", json.dumps({
         "ok": True,
@@ -749,12 +1058,20 @@ def main():
         "kitchenMenuCostPo": "passed",
         "kitchenWorkbookImport": "passed",
         "actualCustomerKitchenWorkbook": actual_kitchen_result,
+        "actualMealAttendanceWorkbook": "205 daily kitchen/shift rows / 6,020 meals / repeat safe",
+        "actualOpeningInventoryWorkbook": actual_opening_result,
         "attendancePayrollLegacyImport": "passed",
         "paymentRequestAndPrintApproval": "passed",
     }, ensure_ascii=False, indent=2))
     print_dir = APP_DIR / "data" / "print_jobs" / str(manual_id)
     if print_dir.exists() and print_dir.resolve().is_relative_to((APP_DIR / "data" / "print_jobs").resolve()):
         rmtree(print_dir)
+    payment_qc = APP_DIR / "data" / "qc_payment_request.docx"
+    if payment_qc.exists() and payment_qc.parent.resolve() == (APP_DIR / "data").resolve():
+        payment_qc.unlink()
+    payment_render_qc = APP_DIR / "data" / "qc_payment_request_render"
+    if payment_render_qc.exists() and payment_render_qc.resolve().is_relative_to((APP_DIR / "data").resolve()):
+        rmtree(payment_render_qc)
     clean_test_db(qc_db)
 
 
