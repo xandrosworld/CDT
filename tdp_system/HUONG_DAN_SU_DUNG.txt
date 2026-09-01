@@ -3,7 +3,7 @@ THÀNH ĐẠT PHÁT – HƯỚNG DẪN VẬN HÀNH
 KHỞI ĐỘNG
 1. Nhấp đúp MO_HE_THONG_TDP.bat và giữ cửa sổ màu đen đang chạy.
 2. Trình duyệt tự mở tại http://127.0.0.1:8765.
-3. Máy khác cùng Wi-Fi/LAN dùng địa chỉ hiện trong cửa sổ khởi động.
+3. Mặc định hệ thống chỉ mở trên máy đang chạy để bảo vệ dữ liệu. Chỉ khi cần dùng qua Wi-Fi/LAN, kỹ thuật mới bật TDP_ALLOW_LAN=1 và cấu hình TDP_TRUSTED_HOSTS; sau đó máy khác dùng địa chỉ hiện trong cửa sổ khởi động.
 
 LUỒNG ĐƠN HÀNG
 1. Vào “Nhập & kiểm tra đơn” → “Nạp phiên Excel mới”.
@@ -39,7 +39,7 @@ XƯỞNG CƠM, CHẤM CÔNG VÀ LƯƠNG
 - Ghép bếp → XCOM có thể lưu từng bếp hoặc nạp file Excel có Mã/Tên bếp và XCOM; file cũ ghi tiêu đề Unit vẫn đọc được.
 - PO gộp các bếp cùng XCOM vào một sheet. Khi chưa duyệt, tên file và tiêu đề ghi rõ NHÁP/BẢN NHÁP; phải đủ XCOM, giá suất ăn và giá nguyên liệu mới duyệt được.
 - GIANHAPTAY và YLKHAN dùng giá theo ngày, không tự lấy giá ngày trước.
-- Chấm suất ăn thực tế: bấm “Nạp chấm suất tháng”, kiểm tra tổng theo ngày/bếp/ca rồi xác nhận. Nạp lại cùng tháng sẽ cập nhật/thay thế, không cộng trùng và không đổi số suất đặt ban đầu của PO.
+- Chấm suất ăn thực tế: bấm “Nạp chấm suất tháng”, kiểm tra tổng theo ngày/bếp/ca rồi xác nhận. Nếu tổng nhìn thấy mâu thuẫn công thức hoặc còn #REF!, hệ thống chặn xác nhận thay vì tự đoán. Nạp lại cùng tháng sẽ cập nhật/thay thế, không cộng trùng và không đổi số suất đặt ban đầu của PO.
 - Nạp file chấm công hiện tại để chuẩn hóa ngày công, tăng ca, Chủ nhật và chi phí lao động theo bếp.
 - Có thể chấm/sửa công một ngày và bổ sung phụ cấp, trách nhiệm, BHXH, tạm ứng, thử việc hoặc số lương chốt theo tháng.
 - Bảng lương giữ các công thức lương, BHXH, tạm ứng và điều chỉnh theo tháng; bấm “Tải bảng lương” để lấy Excel.

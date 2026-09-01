@@ -92,9 +92,13 @@ class MsmiClient:
     ) -> dict:
         if invoice_type not in {"INPUT_ELECTRONIC_INVOICE", "OUTPUT_ELECTRONIC_INVOICE"}:
             raise MsmiError("Loại hóa đơn mSMI không hợp lệ")
+        internal_page = max(0, int(page))
         params = {
             "invoiceType": invoice_type,
-            "page": max(0, int(page)),
+            # Production qlhd.minvoice.com.vn is 1-based: page=0 and page=1
+            # return the same first page. Keep the application's cursor
+            # zero-based and translate only at the HTTP boundary.
+            "page": internal_page + 1,
             "size": max(1, min(int(size), self.MAX_PAGE_SIZE)),
         }
         # These optional names follow mSMI OpenAPI v1.1.1. Omitting them keeps
@@ -111,7 +115,7 @@ class MsmiClient:
             raise MsmiError("mSMI không trả danh sách hóa đơn")
         return {
             "items": invoices,
-            "page": int(page),
+            "page": internal_page,
             "size": int(params["size"]),
             "has_more": len(invoices) >= int(params["size"]),
         }

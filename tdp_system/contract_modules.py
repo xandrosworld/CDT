@@ -13,17 +13,23 @@ import unicodedata
 import uuid
 import zipfile
 from collections import Counter, defaultdict
+from copy import deepcopy
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
+from statistics import median
 
 from flask import jsonify, request, send_file
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.datetime import from_excel
 
 try:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
     from docx.shared import Cm, Pt
 except ImportError:  # Kept optional until a payment-request DOCX is requested.
     Document = None
@@ -32,6 +38,47 @@ try:
     from msmi_client import MsmiClient, MsmiConfig, MsmiError
 except ImportError:
     from .msmi_client import MsmiClient, MsmiConfig, MsmiError
+
+try:
+    from minvoice_client import MinvoiceError, MinvoiceOutcomeUnknown
+except ImportError:
+    from .minvoice_client import MinvoiceError, MinvoiceOutcomeUnknown
+
+try:
+    from pdf_documents import PdfDocumentError, build_pdf_bundle, verify_pdf, write_manifest
+    from print_bundle import workbooks_to_sections
+except ImportError:
+    from .pdf_documents import PdfDocumentError, build_pdf_bundle, verify_pdf, write_manifest
+    from .print_bundle import workbooks_to_sections
+
+try:
+    from xcom_payment_documents import (
+        XcomPaymentError,
+        assign_payment_scope,
+        consume_payment_preview,
+        create_payment_preview,
+        delete_meal_tariff,
+        delete_payment_profile,
+        init_xcom_payment_schema,
+        list_payment_profiles,
+        remove_payment_scope,
+        upsert_meal_tariff,
+        upsert_payment_profile,
+    )
+except ImportError:
+    from .xcom_payment_documents import (
+        XcomPaymentError,
+        assign_payment_scope,
+        consume_payment_preview,
+        create_payment_preview,
+        delete_meal_tariff,
+        delete_payment_profile,
+        init_xcom_payment_schema,
+        list_payment_profiles,
+        remove_payment_scope,
+        upsert_meal_tariff,
+        upsert_payment_profile,
+    )
 
 
 ADVANCED_SCHEMA = """
@@ -107,6 +154,9 @@ CREATE TABLE IF NOT EXISTS msmi_invoice_items (
     unit_price REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
     tax_rate TEXT,
+    source_nature TEXT,
+    inventory_eligible INTEGER NOT NULL DEFAULT 1,
+    validation_note TEXT NOT NULL DEFAULT '',
     product_code TEXT,
     mapping_status TEXT NOT NULL DEFAULT 'unmapped',
     UNIQUE(invoice_id,line_index)
@@ -130,7 +180,10 @@ CREATE TABLE IF NOT EXISTS msmi_sync_state (
     last_invoice_date TEXT,
     last_synced_at TEXT,
     last_status TEXT,
-    last_error TEXT
+    last_error TEXT,
+    backfill_anchor_id TEXT,
+    backfill_anchor_date TEXT,
+    backfill_complete INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS outgoing_invoice_drafts (
@@ -156,6 +209,7 @@ CREATE TABLE IF NOT EXISTS outgoing_invoice_lines (
     unit TEXT,
     unit_price REAL NOT NULL,
     tax TEXT,
+    invoice_nature TEXT NOT NULL DEFAULT '1',
     amount REAL NOT NULL,
     UNIQUE(draft_id,order_id)
 );
@@ -163,6 +217,16 @@ CREATE TABLE IF NOT EXISTS outgoing_invoice_lines (
 CREATE TABLE IF NOT EXISTS outgoing_product_names (
     product_code TEXT PRIMARY KEY,
     invoice_name TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS outgoing_buyer_profiles (
+    contractor TEXT PRIMARY KEY,
+    display_name TEXT,
+    legal_name TEXT,
+    tax_code TEXT,
+    address TEXT NOT NULL,
+    email TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -175,6 +239,35 @@ CREATE TABLE IF NOT EXISTS debt_adjustments (
     note TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS historical_payable_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_date TEXT NOT NULL,
+    kitchen TEXT,
+    item_name TEXT NOT NULL,
+    qty REAL NOT NULL DEFAULT 0,
+    unit TEXT,
+    supplier TEXT NOT NULL,
+    buy_price REAL NOT NULL DEFAULT 0,
+    damaged_qty REAL NOT NULL DEFAULT 0,
+    added_qty REAL NOT NULL DEFAULT 0,
+    reduced_qty REAL NOT NULL DEFAULT 0,
+    missing_qty REAL NOT NULL DEFAULT 0,
+    actual_qty REAL NOT NULL DEFAULT 0,
+    source_amount REAL NOT NULL DEFAULT 0,
+    calculated_amount REAL NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    source_file TEXT NOT NULL,
+    source_sheet TEXT NOT NULL,
+    source_row INTEGER NOT NULL,
+    source_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source_file,source_sheet,source_row)
+);
+CREATE INDEX IF NOT EXISTS idx_historical_payable_date_supplier
+    ON historical_payable_lines(purchase_date,supplier);
 
 CREATE TABLE IF NOT EXISTS kitchen_units (
     kitchen_code TEXT PRIMARY KEY,
@@ -313,6 +406,11 @@ PENDING_OPENING_IMPORTS = {}
 OPENING_IMPORT_LOCK = threading.Lock()
 PENDING_MEAL_ATTENDANCE_IMPORTS = {}
 MEAL_ATTENDANCE_IMPORT_LOCK = threading.Lock()
+PENDING_LEGACY_ATTENDANCE_IMPORTS = {}
+LEGACY_ATTENDANCE_IMPORT_LOCK = threading.Lock()
+PENDING_PAYABLE_IMPORTS = {}
+PAYABLE_IMPORT_LOCK = threading.Lock()
+PRINT_SUBMISSION_LOCK = threading.Lock()
 
 MAPPING_ALIASES = {
     "invoice_names": {
@@ -384,11 +482,102 @@ def ensure_column(conn, table: str, name: str, definition: str):
 
 def init_contract_schema(conn):
     conn.executescript(ADVANCED_SCHEMA)
+    conn.execute(
+        "INSERT OR IGNORE INTO settings(key,value) VALUES('installation_uuid',?)",
+        (uuid.uuid4().hex.upper(),),
+    )
+    # Schema creation belongs to application startup/migration only.  Route
+    # helpers below never run DDL inside a business transaction.
+    init_xcom_payment_schema(conn)
     ensure_column(conn, "products", "product_group", "TEXT")
     ensure_column(conn, "products", "catalog_updated_at", "TEXT")
+    ensure_column(conn, "balances", "as_of_date", "TEXT NOT NULL DEFAULT '1900-01-01'")
+    # Older builds only remembered the newest mSMI invoice.  That was not enough
+    # to continue an initial history import after max_pages was reached: the next
+    # run saw an already-known first page and stopped forever.  The anchor marks
+    # the *oldest fully processed position* and is deliberately migrated as
+    # incomplete so an existing database safely resumes/backfills idempotently.
+    ensure_column(conn, "msmi_sync_state", "backfill_anchor_id", "TEXT")
+    ensure_column(conn, "msmi_sync_state", "backfill_anchor_date", "TEXT")
+    ensure_column(conn, "msmi_sync_state", "backfill_complete", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "msmi_sync_state", "reconcile_next_page", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "msmi_invoice_items", "source_nature", "TEXT")
+    ensure_column(conn, "msmi_invoice_items", "inventory_eligible", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "msmi_invoice_items", "validation_note", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "orders", "damaged_qty", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "orders", "supplier_return_qty", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "orders", "customer_return_qty", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "outgoing_invoice_drafts", "minvoice_status", "TEXT NOT NULL DEFAULT 'not_sent'")
+    ensure_column(conn, "outgoing_invoice_drafts", "minvoice_series", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "minvoice_remote_id", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "minvoice_saved_at", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "minvoice_error", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "minvoice_key_api", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "minvoice_started_at", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "minvoice_reconciled_at", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "external_key_uuid", "TEXT")
+    for draft_row in conn.execute(
+        "SELECT id FROM outgoing_invoice_drafts WHERE TRIM(COALESCE(external_key_uuid,''))=''"
+    ):
+        conn.execute(
+            "UPDATE outgoing_invoice_drafts SET external_key_uuid=? WHERE id=?",
+            (uuid.uuid4().hex.upper(), draft_row["id"]),
+        )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_outgoing_external_key_uuid
+           ON outgoing_invoice_drafts(external_key_uuid)
+           WHERE external_key_uuid IS NOT NULL AND external_key_uuid!=''"""
+    )
+    ensure_column(conn, "outgoing_invoice_drafts", "issued_invoice_number", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "issued_invoice_series", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "issued_invoice_date", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "buyer_name_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "buyer_tax_code_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "buyer_address_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "buyer_email_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "company_name_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "company_tax_code_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "company_address_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "payment_requester_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "payment_bank_name_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_drafts", "payment_bank_account_snapshot", "TEXT")
+    ensure_column(conn, "outgoing_invoice_lines", "invoice_nature", "TEXT NOT NULL DEFAULT '1'")
+    ensure_column(conn, "historical_payable_lines", "source_amount", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "historical_payable_lines", "calculated_amount", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "historical_payable_lines", "source_hash", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "historical_payable_lines", "source_sheet", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "historical_payable_lines", "source_row", "INTEGER NOT NULL DEFAULT 0")
+    conn.execute("DROP INDEX IF EXISTS idx_historical_payable_source_row")
+    duplicate_payable_sources = [
+        dict(row) for row in conn.execute(
+            """SELECT source_hash,source_sheet,source_row,GROUP_CONCAT(id) ids,COUNT(*) count
+               FROM historical_payable_lines
+               GROUP BY source_hash,source_sheet,source_row HAVING COUNT(*)>1"""
+        )
+    ]
+    if duplicate_payable_sources:
+        conn.execute(
+            """INSERT INTO settings(key,value)
+               VALUES('schema_warning_duplicate_payable_source_ids',?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            (json.dumps(duplicate_payable_sources, ensure_ascii=False),),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM settings WHERE key='schema_warning_duplicate_payable_source_ids'"
+        )
+        conn.execute(
+            """CREATE UNIQUE INDEX idx_historical_payable_source_row
+               ON historical_payable_lines(source_hash,source_sheet,source_row)"""
+        )
+    ensure_column(conn, "print_jobs", "file_sha256", "TEXT")
+    ensure_column(conn, "print_jobs", "input_sha256", "TEXT")
+    ensure_column(conn, "print_jobs", "manifest_path", "TEXT")
+    ensure_column(conn, "print_jobs", "page_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "print_jobs", "paper", "TEXT NOT NULL DEFAULT 'A4'")
+    ensure_column(conn, "print_jobs", "copies", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "print_jobs", "submitted_at", "TEXT")
+    ensure_column(conn, "print_jobs", "claim_id", "TEXT")
     ensure_column(conn, "payroll_adjustments", "gross_override", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "payroll_adjustments", "net_override", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "payroll_adjustments", "use_override", "INTEGER NOT NULL DEFAULT 0")
@@ -410,6 +599,40 @@ def init_contract_schema(conn):
         """CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_plan_import_key
            ON meal_plans(import_key) WHERE import_key IS NOT NULL AND import_key!=''"""
     )
+    # Canonical invoice identity is case-insensitive.  Legacy databases may
+    # already contain conflicting variants; keep the app startable and surface
+    # the exact IDs instead of crashing halfway through migration or deleting a
+    # legal document automatically.
+    conn.execute("DROP INDEX IF EXISTS idx_outgoing_issued_number")
+    duplicate_invoice_ids = [
+        dict(row) for row in conn.execute(
+            """SELECT UPPER(TRIM(COALESCE(issued_invoice_series,''))) series_key,
+                      TRIM(COALESCE(issued_invoice_number,'')) number_key,
+                      GROUP_CONCAT(id) ids,COUNT(*) count
+               FROM outgoing_invoice_drafts
+               WHERE TRIM(COALESCE(issued_invoice_number,''))!=''
+               GROUP BY series_key,number_key HAVING COUNT(*)>1"""
+        )
+    ]
+    if duplicate_invoice_ids:
+        conn.execute(
+            """INSERT INTO settings(key,value) VALUES('schema_warning_duplicate_invoice_ids',?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            (json.dumps(duplicate_invoice_ids, ensure_ascii=False),),
+        )
+    else:
+        conn.execute(
+            """UPDATE outgoing_invoice_drafts
+               SET issued_invoice_series=UPPER(TRIM(COALESCE(issued_invoice_series,''))),
+                   issued_invoice_number=TRIM(COALESCE(issued_invoice_number,''))
+               WHERE TRIM(COALESCE(issued_invoice_number,''))!=''"""
+        )
+        conn.execute("DELETE FROM settings WHERE key='schema_warning_duplicate_invoice_ids'")
+        conn.execute(
+            """CREATE UNIQUE INDEX idx_outgoing_issued_number
+               ON outgoing_invoice_drafts(issued_invoice_series COLLATE NOCASE,issued_invoice_number)
+               WHERE issued_invoice_number IS NOT NULL AND issued_invoice_number!=''"""
+        )
     defaults = {
         "tenant_code": "TDP",
         "printer_name": "",
@@ -419,6 +642,8 @@ def init_contract_schema(conn):
         "payment_requester": "VŨ THỊ THỤY",
         "payment_bank_name": "Ngân hàng TMCP Ngoại Thương Việt Nam",
         "payment_bank_account": "1052787580",
+        "company_tax_code": "0202265016",
+        "company_address": "Số nhà 112 ngõ 366, Đường Hùng Vương, Phường Hồng Bàng, Thành phố Hải Phòng, Việt Nam",
     }
     for key, value in defaults.items():
         conn.execute(
@@ -456,6 +681,91 @@ def as_number(value, default=0.0) -> float:
         return float(default)
 
 
+def msmi_number(value, label: str, default=0.0) -> float:
+    """Parse an API number without ever converting malformed data to zero."""
+    if value in (None, ""):
+        value = default
+    if isinstance(value, bool):
+        raise MsmiError(f"{label} trên hóa đơn mSMI không hợp lệ")
+    text = str(value).strip().replace(" ", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        number = Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        raise MsmiError(f"{label} trên hóa đơn mSMI không phải là số") from None
+    if not number.is_finite():
+        raise MsmiError(f"{label} trên hóa đơn mSMI phải là số hữu hạn")
+    return float(number)
+
+
+def import_cell_number(value, label: str, default=0.0) -> float:
+    """Strict financial-cell parser used by authoritative snapshot imports."""
+    if value in (None, ""):
+        return float(default)
+    if isinstance(value, bool):
+        raise ValueError(f"{label} không phải là số")
+    text = str(value).strip().replace(" ", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        number = Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(f"{label} không phải là số") from None
+    if not number.is_finite():
+        raise ValueError(f"{label} phải là số hữu hạn")
+    return float(number)
+
+
+def vnd_round(value):
+    """Round VND with the same HALF_UP rule as the M-Invoice client."""
+    try:
+        return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, TypeError, ValueError):
+        return 0
+
+
+def vnd_product(*values):
+    try:
+        total = Decimal("1")
+        for value in values:
+            total *= Decimal(str(value))
+        return int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, TypeError, ValueError):
+        return 0
+
+
+MINVOICE_SAVING_STALE_SECONDS = 120
+
+
+def minvoice_remote_id(data) -> str:
+    """Extract only a remote identifier; never persist the raw invoice body."""
+    candidates = [data] if isinstance(data, dict) else data if isinstance(data, list) else []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("inv_invoiceAuth_Id", "invoiceAuthId", "id", "_id"):
+            value = candidate.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+    return ""
+
+
+def minvoice_saving_is_fresh(started_at, current_time) -> bool:
+    if not started_at:
+        return False
+    try:
+        age = (
+            datetime.fromisoformat(str(current_time))
+            - datetime.fromisoformat(str(started_at))
+        ).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    # A future timestamp is treated as active: clock skew must never allow a
+    # second POST while the first request may still be running.
+    return age < MINVOICE_SAVING_STALE_SECONDS
+
+
 def as_date(value) -> str:
     if isinstance(value, datetime):
         return value.date().isoformat()
@@ -464,12 +774,12 @@ def as_date(value) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%dT%H:%M:%S"):
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%dT%H:%M:%S"):
         try:
             return datetime.strptime(text[:19], fmt).date().isoformat()
         except ValueError:
             continue
-    return text[:10]
+    return ""
 
 
 def audit(conn, now_iso, event_type: str, status: str, message: str = "", entity_type="", entity_id="", metadata=None):
@@ -510,8 +820,10 @@ def catalog_tax(value) -> str:
         number = float(value)
     else:
         text = mapping_cell_text(value).upper()
-        if mapping_key(text) in {"kkknt", "kct", "khongkekhai"}:
+        if mapping_key(text) in {"kkknt", "khongkekhai"}:
             return "KKKNT"
+        if mapping_key(text) in {"kct", "khongchiuthue"}:
+            return "KCT"
         text = text.replace("%", "").replace(",", ".").strip()
         try:
             number = float(text)
@@ -520,6 +832,19 @@ def catalog_tax(value) -> str:
     if number > 1:
         number /= 100
     return f"{number:.6f}".rstrip("0").rstrip(".")
+
+
+def invoice_tax_percent(value) -> float:
+    raw = mapping_cell_text(value).upper().replace(" ", "")
+    if raw in {"KKKNT", "KHÔNGKÊKHAI", "KHONGKEKHAI"}:
+        return -2
+    if raw in {"KCT", "KHÔNGCHỊUTHUẾ", "KHONGCHIUTHUE"}:
+        return -1
+    has_percent = raw.endswith("%")
+    number = as_number(raw.rstrip("%"), 0)
+    if not has_percent and 0 < abs(number) < 1:
+        number *= 100
+    return round(number, 4)
 
 
 def catalog_header_fields(row) -> dict:
@@ -565,6 +890,139 @@ def catalog_database_state_hash(conn) -> str:
         digest.update(json.dumps(list(row), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def query_database_state_hash(conn, query_specs) -> str:
+    """Fingerprint the exact database rows a preview was calculated from.
+
+    Preview/confirm imports can be open in two browser tabs at once.  A token
+    therefore protects the uploaded bytes but not the database snapshot.  The
+    caller supplies deterministic ``(label, sql, params)`` queries; confirmation
+    must compare the fingerprint again inside the same write transaction before
+    applying an authoritative snapshot.
+    """
+
+    digest = hashlib.sha256()
+    for label, sql, params in query_specs:
+        digest.update(str(label).encode("utf-8"))
+        digest.update(b"\0")
+        for row in conn.execute(sql, tuple(params or ())):
+            digest.update(
+                json.dumps(list(row), ensure_ascii=False, separators=(",", ":"), default=str)
+                .encode("utf-8")
+            )
+            digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def mapping_database_state_hash(conn, mapping_type: str) -> str:
+    if mapping_type == "invoice_names":
+        return query_database_state_hash(conn, (
+            ("products", "SELECT code,name FROM products ORDER BY code", ()),
+            (
+                "outgoing_product_names",
+                "SELECT product_code,invoice_name FROM outgoing_product_names ORDER BY product_code",
+                (),
+            ),
+        ))
+    return query_database_state_hash(conn, (
+        ("kitchens", "SELECT code,name FROM kitchens ORDER BY code", ()),
+        (
+            "kitchen_units",
+            "SELECT kitchen_code,unit_code FROM kitchen_units ORDER BY kitchen_code",
+            (),
+        ),
+    ))
+
+
+def kitchen_import_database_state_hash(conn) -> str:
+    return query_database_state_hash(conn, (
+        (
+            "products",
+            "SELECT code,name,unit,supplier,buy_price FROM products ORDER BY code",
+            (),
+        ),
+        (
+            "dated_prices",
+            "SELECT product_code,price_group,period,price_value FROM dated_prices "
+            "ORDER BY product_code,price_group,period",
+            (),
+        ),
+        ("kitchens", "SELECT code,name FROM kitchens ORDER BY code", ()),
+        (
+            "kitchen_units",
+            "SELECT kitchen_code,unit_code FROM kitchen_units ORDER BY kitchen_code",
+            (),
+        ),
+        (
+            "meal_plans",
+            "SELECT id,work_date,kitchen,shift,meal_count,unit_code,status,import_key,"
+            "meal_price,other_cost,updated_at FROM meal_plans ORDER BY id",
+            (),
+        ),
+        (
+            "meal_plan_items",
+            "SELECT id,plan_id,product_code,norm_qty,buy_price,price_source,"
+            "applicable_meal_count,source_amount "
+            "FROM meal_plan_items ORDER BY id",
+            (),
+        ),
+    ))
+
+
+def opening_import_database_state_hash(conn, period: str) -> str:
+    return query_database_state_hash(conn, (
+        (
+            "products",
+            "SELECT code,name,unit,tax,buy_price FROM products ORDER BY code",
+            (),
+        ),
+        (
+            "opening",
+            "SELECT product_code,qty_in,qty_out,unit_cost,source_line,status,note "
+            "FROM inventory_transactions WHERE source_type='OPENING' AND source_id=? "
+            "ORDER BY source_line",
+            (period,),
+        ),
+    ))
+
+
+def meal_attendance_database_state_hash(conn, periods) -> str:
+    normalized = sorted({str(period) for period in periods})
+    if not normalized:
+        return query_database_state_hash(conn, ())
+    placeholders = ",".join("?" for _ in normalized)
+    return query_database_state_hash(conn, ((
+        "meal_attendance",
+        f"SELECT work_date,kitchen,shift,actual_count,ordered_count,source_type,"
+        f"source_file,source_sheet,source_column,updated_at FROM meal_attendance "
+        f"WHERE substr(work_date,1,7) IN ({placeholders}) "
+        f"ORDER BY work_date,kitchen,shift",
+        tuple(normalized),
+    ),))
+
+
+def payables_database_state_hash(conn) -> str:
+    return query_database_state_hash(conn, (
+        (
+            "supplier_master",
+            "SELECT code,name FROM suppliers ORDER BY code",
+            (),
+        ),
+        (
+            "product_suppliers",
+            "SELECT code,supplier FROM products ORDER BY code",
+            (),
+        ),
+        (
+            "historical_payable_lines",
+            "SELECT id,purchase_date,kitchen,item_name,qty,unit,supplier,buy_price,"
+            "damaged_qty,added_qty,reduced_qty,missing_qty,actual_qty,source_amount,"
+            "calculated_amount,amount,note,source_file,source_sheet,source_row,source_hash "
+            ",updated_at FROM historical_payable_lines ORDER BY id",
+            (),
+        ),
+    ))
 
 
 def parse_catalog_workbook(conn, workbook) -> dict:
@@ -1197,6 +1655,8 @@ def parse_opening_workbook(conn, workbook, period: str) -> dict:
 
 
 MEAL_ATTENDANCE_GROUPS = (
+    ("sangolf", "SANGOLF"),
+    ("sangold", "SANGOLF"),
     ("dainam", "DAINAM"),
     ("havico", "HAVICO"),
     ("thaco", "THACO"),
@@ -1221,14 +1681,16 @@ def meal_attendance_group(value) -> str:
 
 def meal_attendance_shift(value) -> str:
     key = mapping_key(value)
+    # "Suất ăn đêm + phụ sáng" is the night shift.  Check night
+    # first so the explanatory "phụ sáng" text cannot relabel it as morning.
+    if "dem" in key or "toi" in key:
+        return "Đêm"
     if "sang" in key:
         return "Sáng"
     if "trua" in key:
         return "Trưa"
     if "chieu" in key:
         return "Chiều"
-    if "dem" in key or "toi" in key:
-        return "Đêm"
     if "vaosuat" in key:
         return "Tổng"
     return ""
@@ -1245,55 +1707,471 @@ def meal_attendance_header_kind(value) -> str:
     return ""
 
 
-def parse_meal_attendance_workbook(conn, workbook) -> dict:
-    if "SUẤT ĂN" not in workbook.sheetnames:
-        raise ValueError("File thiếu sheet SUẤT ĂN làm nguồn chấm suất")
-    worksheet = workbook["SUẤT ĂN"]
-    columns = {}
-    current_group = ""
-    for column in range(3, min(worksheet.max_column or 0, 80) + 1):
-        group_label = worksheet.cell(1, column).value
-        if group_label not in (None, ""):
-            current_group = meal_attendance_group(group_label)
-        shift = meal_attendance_shift(worksheet.cell(2, column).value)
-        kind = meal_attendance_header_kind(worksheet.cell(2, column).value)
-        if current_group and shift and kind:
-            columns.setdefault((current_group, shift), {})[kind] = column
-    if not columns:
-        raise ValueError("Không nhận diện được cột bếp/ca trong sheet SUẤT ĂN")
+def workbook_cell_date(value, workbook, period_override="", force_period=False) -> str:
+    parsed = ""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if 20_000 <= float(value) <= 80_000:
+            try:
+                parsed = from_excel(value, workbook.epoch).date().isoformat()
+            except (TypeError, ValueError, OverflowError):
+                parsed = ""
+        elif period_override and float(value).is_integer() and 1 <= int(value) <= 31:
+            parsed = f"{period_override}-{int(value):02d}"
+    else:
+        parsed = as_date(value)
+    if parsed and period_override and force_period:
+        try:
+            year, month = map(int, period_override.split("-"))
+            parsed_date = datetime.strptime(parsed, "%Y-%m-%d").date()
+            parsed = date(year, month, parsed_date.day).isoformat()
+        except ValueError:
+            return ""
+    try:
+        return datetime.strptime(parsed, "%Y-%m-%d").date().isoformat()
+    except (TypeError, ValueError):
+        return ""
+
+
+def find_meal_date_column(worksheet, workbook, period_override="") -> tuple[int, dict[int, str]]:
+    candidates = []
+    max_row = min(worksheet.max_row or 0, 380)
+    for column in range(1, min(worksheet.max_column or 0, 6) + 1):
+        dates = {}
+        for row_index in range(3, max_row + 1):
+            value = workbook_cell_date(worksheet.cell(row_index, column).value, workbook)
+            if value:
+                dates[row_index] = value
+        periods = {value[:7] for value in dates.values()}
+        if len(set(dates.values())) >= 5 and len(periods) == 1:
+            header_key = mapping_key(
+                f"{worksheet.cell(1, column).value} {worksheet.cell(2, column).value}"
+            )
+            bonus = 100 if any(token in header_key for token in ("ngay", "nt", "date")) else 0
+            candidates.append((len(set(dates.values())) + bonus, -column, column, dates))
+    if candidates:
+        _, _, column, dates = max(candidates)
+        return column, dates
+    if period_override:
+        for column in range(1, min(worksheet.max_column or 0, 6) + 1):
+            dates = {}
+            for row_index in range(3, max_row + 1):
+                value = worksheet.cell(row_index, column).value
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    if float(value).is_integer() and 1 <= int(value) <= 31:
+                        parsed = workbook_cell_date(value, workbook, period_override)
+                        if parsed:
+                            dates[row_index] = parsed
+            days = sorted({int(value[-2:]) for value in dates.values()})
+            if len(days) >= 5 and all(right - left == 1 for left, right in zip(days, days[1:])):
+                header_key = mapping_key(
+                    f"{worksheet.cell(1, column).value} {worksheet.cell(2, column).value}"
+                )
+                bonus = 100 if any(token in header_key for token in ("ngay", "nt", "date")) else 0
+                candidates.append((len(days) + bonus, -column, column, dates))
+        if candidates:
+            _, _, column, dates = max(candidates)
+            return column, dates
+    raise ValueError("Không nhận diện được cột ngày; nếu file cũ hỏng ngày hãy chọn rõ kỳ tháng rồi thử lại")
+
+
+LEGACY_MEAL_SHEET_GROUPS = {
+    "uni": "UNI",
+    "united": "UNI",
+    "tq": "TQ",
+    "trungquoc": "TQ",
+    "lianxin": "LIANXIN",
+    "dainam": "DAINAM",
+    "sunby": "SUNBY",
+    "sangolf": "SANGOLF",
+    "sangold": "SANGOLF",
+    "havico": "HAVICO",
+    "thaco": "THACO",
+    "lucky": "LUCKY",
+    "vina": "VINA",
+}
+
+
+def legacy_meal_sheet_group(sheet_name) -> str:
+    """Return the business unit for a legacy per-unit meal sheet.
+
+    Old workbooks contain both a delivery sheet and one or more invoice copies
+    of the same figures.  Importing an invoice copy would double the meals, so
+    only the canonical per-unit sheet names are accepted here.
+    """
+    key = mapping_key(sheet_name)
+    if "hoadon" in key or key.endswith("hd"):
+        return ""
+    return LEGACY_MEAL_SHEET_GROUPS.get(key, "")
+
+
+def legacy_meal_invoice_sheet_group(sheet_name) -> str:
+    """Identify a paired invoice sheet, used only to recover broken displays."""
+    key = mapping_key(sheet_name)
+    if "hoadon" in key:
+        key = key.replace("hoadon", "")
+    elif key.endswith("hd"):
+        key = key[:-2]
+    else:
+        return ""
+    return LEGACY_MEAL_SHEET_GROUPS.get(key, "")
+
+
+def legacy_meal_table_layout(worksheet):
+    """Locate STT/day, shift and displayed-total columns in a legacy sheet."""
+    max_column = min(worksheet.max_column or 0, 40)
+    for row_index in range(1, min(worksheet.max_row or 0, 15) + 1):
+        stt_column = 0
+        date_column = 0
+        total_column = 0
+        shift_columns = []
+        for column in range(1, max_column + 1):
+            value = worksheet.cell(row_index, column).value
+            key = mapping_key(value)
+            if key.startswith("stt"):
+                stt_column = column
+            elif key.startswith("ngay"):
+                date_column = column
+            elif key in {"tong", "tongcong"} or key.startswith("tongcong"):
+                total_column = column
+            shift = meal_attendance_shift(value)
+            if shift and shift != "Tổng":
+                shift_columns.append((column, shift))
+        if stt_column and shift_columns:
+            return {
+                "header_row": row_index,
+                "stt_column": stt_column,
+                "date_column": date_column,
+                "total_column": total_column,
+                "shift_columns": shift_columns,
+            }
+    return None
+
+
+def legacy_meal_numeric_cell(cell):
+    """Read a count without silently turning a broken Excel value into zero."""
+    value = cell.value
+    if value in (None, ""):
+        return "blank", 0.0
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("#"):
+            return "error", 0.0
+        if text in {"", "-", "--"}:
+            return "blank", 0.0
+        normalized = text.replace(" ", "")
+        if "," in normalized:
+            normalized = normalized.replace(".", "").replace(",", ".")
+        try:
+            return "number", float(normalized)
+        except ValueError as exc:
+            raise ValueError(
+                f"Sheet {cell.parent.title}, ô {cell.coordinate}: số suất '{text}' không hợp lệ"
+            ) from exc
+    if isinstance(value, bool):
+        raise ValueError(
+            f"Sheet {cell.parent.title}, ô {cell.coordinate}: số suất không được là TRUE/FALSE"
+        )
+    if isinstance(value, (int, float)):
+        return "number", float(value)
+    raise ValueError(
+        f"Sheet {cell.parent.title}, ô {cell.coordinate}: không đọc được số suất"
+    )
+
+
+def parse_legacy_meal_attendance_sheets(workbook, period_override) -> tuple[list, list]:
+    """Parse the pre-summary layout used by the January 2026 workbook.
+
+    The workbook's linked/cached date cells are corrupt (mixed 2025 and
+    2027-2036 dates).  With an explicit period, STT 1..31 is the only stable
+    source for the day.  Broken shift formulas may use a displayed total, but
+    the parser never distributes that total across shifts by guessing.
+    """
+    try:
+        year, month = map(int, period_override.split("-"))
+        date(year, month, 1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Kỳ chấm suất phải có dạng YYYY-MM") from exc
+
+    # Invoice-format copies are never imported as a second source.  They are
+    # retained only as a row-level visible fallback when the delivery sheet has
+    # a cached #REF! (as in TQ, day 15 of the real January workbook).
+    invoice_fallbacks = {}
+    for candidate in workbook.worksheets:
+        group = legacy_meal_invoice_sheet_group(candidate.title)
+        layout = legacy_meal_table_layout(candidate) if group else None
+        if not group or not layout:
+            continue
+        day_rows = {}
+        for row_index in range(layout["header_row"] + 1, min(candidate.max_row or 0, 100) + 1):
+            day_value = as_number(candidate.cell(row_index, layout["stt_column"]).value, -1)
+            if float(day_value).is_integer() and 1 <= int(day_value) <= 31:
+                day_rows[int(day_value)] = row_index
+        invoice_fallbacks[group] = (candidate, layout, day_rows)
 
     raw_items = []
-    for row_index in range(3, min(worksheet.max_row or 0, 380) + 1):
-        work_date = as_date(worksheet.cell(row_index, 2).value)
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", work_date):
+    source_sheet_names = []
+    for worksheet in workbook.worksheets:
+        kitchen = legacy_meal_sheet_group(worksheet.title)
+        if not kitchen:
             continue
-        for (kitchen, shift), source_columns in columns.items():
-            actual = as_number(worksheet.cell(row_index, source_columns.get("actual", 0)).value) \
-                if source_columns.get("actual") else 0
-            ordered = as_number(worksheet.cell(row_index, source_columns.get("ordered", 0)).value) \
-                if source_columns.get("ordered") else 0
-            if abs(actual) <= 1e-12 and abs(ordered) <= 1e-12:
+        layout = legacy_meal_table_layout(worksheet)
+        if not layout:
+            continue
+        source_sheet_names.append(worksheet.title)
+        shift_columns = layout["shift_columns"]
+        total_column = layout["total_column"]
+        for row_index in range(layout["header_row"] + 1, min(worksheet.max_row or 0, 100) + 1):
+            stt_cell = worksheet.cell(row_index, layout["stt_column"])
+            stt_key = mapping_key(stt_cell.value)
+            if "tong" in stt_key or stt_key in {"cong", "total"}:
+                break
+            day_number = as_number(stt_cell.value, -1)
+            if not float(day_number).is_integer() or not 1 <= int(day_number) <= 31:
+                # Header spacers and signature rows are harmless.  A count on a
+                # row without a usable STT is not: its date cannot be inferred.
+                populated = []
+                for column, _ in shift_columns:
+                    state, value = legacy_meal_numeric_cell(worksheet.cell(row_index, column))
+                    if state == "error" or abs(value) > 1e-12:
+                        populated.append(worksheet.cell(row_index, column).coordinate)
+                if total_column:
+                    state, value = legacy_meal_numeric_cell(worksheet.cell(row_index, total_column))
+                    if state == "error" or abs(value) > 1e-12:
+                        populated.append(worksheet.cell(row_index, total_column).coordinate)
+                if populated:
+                    raise ValueError(
+                        f"Sheet {worksheet.title}, dòng {row_index}: có số suất tại "
+                        f"{', '.join(populated)} nhưng STT/ngày không hợp lệ"
+                    )
                 continue
-            source_column = "/".join(
-                get_column_letter(column) for column in sorted(set(source_columns.values()))
-            )
-            raw_items.append({
-                "work_date": work_date, "kitchen": kitchen, "shift": shift,
-                "actual_count": actual, "ordered_count": ordered,
-                "source_sheet": worksheet.title, "source_column": source_column,
-                "errors": ["Số suất không được âm"] if actual < 0 or ordered < 0 else [],
-                "warnings": [],
-            })
+            day_number = int(day_number)
+            try:
+                work_date = date(year, month, day_number).isoformat()
+            except ValueError as exc:
+                populated = []
+                for column, _ in shift_columns:
+                    state, value = legacy_meal_numeric_cell(worksheet.cell(row_index, column))
+                    if state == "error" or abs(value) > 1e-12:
+                        populated.append(worksheet.cell(row_index, column).coordinate)
+                if populated:
+                    raise ValueError(
+                        f"Sheet {worksheet.title}, dòng {row_index}: STT {day_number} "
+                        f"không tồn tại trong kỳ {period_override}"
+                    ) from exc
+                continue
 
-    # TTS dùng ma trận ngày theo cột, nhóm người ăn theo dòng; tổng từng ngày là
-    # số suất thực tế. Không lấy cột B dư từ file cũ vì dãy tháng chính bắt đầu ở C.
+            shift_values = []
+            broken_cells = []
+            for column, shift in shift_columns:
+                cell = worksheet.cell(row_index, column)
+                state, value = legacy_meal_numeric_cell(cell)
+                if state == "error":
+                    broken_cells.append(cell.coordinate)
+                else:
+                    if value < 0:
+                        raise ValueError(
+                            f"Sheet {worksheet.title}, ô {cell.coordinate}: số suất không được âm"
+                        )
+                    shift_values.append((column, shift, value))
+
+            total_state = "blank"
+            displayed_total = 0.0
+            total_cell = None
+            if total_column:
+                total_cell = worksheet.cell(row_index, total_column)
+                total_state, displayed_total = legacy_meal_numeric_cell(total_cell)
+                if total_state == "number" and displayed_total < 0:
+                    raise ValueError(
+                        f"Sheet {worksheet.title}, ô {total_cell.coordinate}: tổng số suất không được âm"
+                    )
+
+            known_total = sum(value for _, _, value in shift_values)
+            if broken_cells:
+                fallback_note = ""
+                total_source_sheet = worksheet.title
+                if total_state != "number" and kitchen in invoice_fallbacks:
+                    fallback_sheet, fallback_layout, fallback_rows = invoice_fallbacks[kitchen]
+                    fallback_row = fallback_rows.get(day_number)
+                    if fallback_row:
+                        fallback_values = []
+                        fallback_broken = []
+                        for column, _ in fallback_layout["shift_columns"]:
+                            cell = fallback_sheet.cell(fallback_row, column)
+                            state, value = legacy_meal_numeric_cell(cell)
+                            if state == "error":
+                                fallback_broken.append(cell.coordinate)
+                            else:
+                                fallback_values.append(value)
+                        fallback_total_cell = (
+                            fallback_sheet.cell(fallback_row, fallback_layout["total_column"])
+                            if fallback_layout["total_column"] else None
+                        )
+                        fallback_total_state, fallback_total = (
+                            legacy_meal_numeric_cell(fallback_total_cell)
+                            if fallback_total_cell else ("blank", 0.0)
+                        )
+                        if not fallback_broken and fallback_total_state == "number":
+                            fallback_detail_total = sum(fallback_values)
+                            if (
+                                fallback_total > 0
+                                and fallback_detail_total > 0
+                                and abs(fallback_total - fallback_detail_total) > 1e-9
+                            ):
+                                raise ValueError(
+                                    f"Sheet {fallback_sheet.title}, dòng {fallback_row}: tổng hiển thị "
+                                    f"{fallback_total:g} khác tổng chi tiết ca {fallback_detail_total:g}"
+                                )
+                            displayed_total = fallback_total
+                            total_state = "number"
+                            total_cell = fallback_total_cell
+                            total_source_sheet = fallback_sheet.title
+                            fallback_note = (
+                                f"; đối chiếu tổng hiển thị tại "
+                                f"{fallback_sheet.title}!{fallback_total_cell.coordinate}"
+                            )
+                if total_state != "number":
+                    total_ref = total_cell.coordinate if total_cell else "không có cột Tổng"
+                    raise ValueError(
+                        f"Sheet {worksheet.title}, dòng {row_index}: ô ca "
+                        f"{', '.join(broken_cells)} bị lỗi và {total_ref} không có tổng hiển thị hợp lệ"
+                    )
+                if known_total > displayed_total + 1e-9:
+                    raise ValueError(
+                        f"Sheet {worksheet.title}, dòng {row_index}: tổng hiển thị "
+                        f"{displayed_total:g} tại {total_cell.coordinate} nhỏ hơn chi tiết ca đã biết {known_total:g}"
+                    )
+                if displayed_total > 0:
+                    raw_items.append({
+                        "work_date": work_date, "kitchen": kitchen, "shift": "Tổng",
+                        "actual_count": displayed_total, "ordered_count": 0,
+                        "source_sheet": total_source_sheet,
+                        "source_column": total_cell.coordinate,
+                        "errors": [],
+                        "warnings": [
+                            f"Chi tiết ca {', '.join(broken_cells)} bị lỗi; dùng tổng hiển thị {total_cell.coordinate}{fallback_note}, không tự phân bổ theo ca"
+                        ],
+                    })
+                continue
+
+            if total_state == "number" and displayed_total > 0:
+                if known_total <= 1e-12:
+                    raw_items.append({
+                        "work_date": work_date, "kitchen": kitchen, "shift": "Tổng",
+                        "actual_count": displayed_total, "ordered_count": 0,
+                        "source_sheet": worksheet.title,
+                        "source_column": total_cell.coordinate,
+                        "errors": [],
+                        "warnings": [
+                            f"Chi tiết ca trống; dùng tổng hiển thị {total_cell.coordinate}, không tự phân bổ theo ca"
+                        ],
+                    })
+                    continue
+                if abs(displayed_total - known_total) > 1e-9:
+                    source_cells = ", ".join(
+                        worksheet.cell(row_index, column).coordinate
+                        for column, _, value in shift_values if abs(value) > 1e-12
+                    )
+                    raise ValueError(
+                        f"Sheet {worksheet.title}, dòng {row_index}: tổng hiển thị "
+                        f"{displayed_total:g} tại {total_cell.coordinate} khác tổng chi tiết ca "
+                        f"{known_total:g} tại {source_cells}"
+                    )
+
+            common_warnings = []
+            if total_state == "error":
+                common_warnings.append(
+                    f"Ô tổng {total_cell.coordinate} bị lỗi; dùng các số ca hiển thị"
+                )
+            for column, shift, value in shift_values:
+                if value <= 1e-12:
+                    continue
+                raw_items.append({
+                    "work_date": work_date, "kitchen": kitchen, "shift": shift,
+                    "actual_count": value, "ordered_count": 0,
+                    "source_sheet": worksheet.title,
+                    "source_column": worksheet.cell(row_index, column).coordinate,
+                    "errors": [], "warnings": list(common_warnings),
+                })
+    return raw_items, source_sheet_names
+
+
+def parse_meal_attendance_workbook(conn, workbook, period_override="") -> dict:
+    if period_override and not re.fullmatch(r"\d{4}-\d{2}", period_override):
+        raise ValueError("Kỳ chấm suất phải có dạng YYYY-MM")
+    worksheet = workbook["SUẤT ĂN"] if "SUẤT ĂN" in workbook.sheetnames else None
+    if worksheet is None and not period_override:
+        raise ValueError(
+            "File cũ thiếu sheet SUẤT ĂN và kỳ nguồn mâu thuẫn; cần chọn rõ kỳ tháng trước khi nhập"
+        )
+    raw_items = []
+    source_sheet_names = []
+    if worksheet is not None:
+        source_sheet_names.append(worksheet.title)
+        columns = {}
+        current_group = ""
+        for column in range(3, min(worksheet.max_column or 0, 80) + 1):
+            group_label = worksheet.cell(1, column).value
+            if group_label not in (None, ""):
+                current_group = meal_attendance_group(group_label)
+            shift = meal_attendance_shift(worksheet.cell(2, column).value)
+            kind = meal_attendance_header_kind(worksheet.cell(2, column).value)
+            if current_group and shift and kind:
+                columns.setdefault((current_group, shift), {})[kind] = column
+        if not columns:
+            raise ValueError("Không nhận diện được cột bếp/ca trong sheet SUẤT ĂN")
+        _, row_dates = find_meal_date_column(worksheet, workbook, period_override)
+        source_value_columns = sorted({column for group in columns.values() for column in group.values()})
+        medians = {}
+        for column in source_value_columns:
+            values = [
+                abs(as_number(worksheet.cell(row_index, column).value))
+                for row_index in row_dates
+                if abs(as_number(worksheet.cell(row_index, column).value)) > 0
+            ]
+            medians[column] = median(values) if values else 0
+        for row_index, work_date in sorted(row_dates.items()):
+            for (kitchen, shift), source_columns in columns.items():
+                actual_column = source_columns.get("actual")
+                ordered_column = source_columns.get("ordered")
+                actual = as_number(worksheet.cell(row_index, actual_column).value) if actual_column else 0
+                ordered = as_number(worksheet.cell(row_index, ordered_column).value) if ordered_column else 0
+                if abs(actual) <= 1e-12 and abs(ordered) <= 1e-12:
+                    continue
+                errors = ["Số suất không được âm"] if actual < 0 or ordered < 0 else []
+                for label, value, source_column in (
+                    ("Số ăn thực tế", actual, actual_column), ("Số đặt", ordered, ordered_column),
+                ):
+                    if source_column and value > max(1000, medians.get(source_column, 0) * 10):
+                        errors.append(f"{label} {value:g} là ngoại lệ quá lớn; cần kiểm tra ô {get_column_letter(source_column)}{row_index}")
+                source_column = "/".join(
+                    get_column_letter(column) for column in sorted(set(source_columns.values()))
+                )
+                raw_items.append({
+                    "work_date": work_date, "kitchen": kitchen, "shift": shift,
+                    "actual_count": actual, "ordered_count": ordered,
+                    "source_sheet": worksheet.title, "source_column": source_column,
+                    "errors": errors, "warnings": [],
+                })
+
+    if worksheet is None:
+        legacy_items, legacy_sheet_names = parse_legacy_meal_attendance_sheets(
+            workbook, period_override,
+        )
+        raw_items.extend(legacy_items)
+        source_sheet_names.extend(legacy_sheet_names)
+
+    # TTS dùng ma trận ngày theo cột, nhóm người ăn theo dòng; tổng từng ngày là số suất thực tế.
     if "TTS" in workbook.sheetnames:
         tts = workbook["TTS"]
+        source_sheet_names.append(tts.title)
+        force_period = worksheet is None and bool(period_override)
         for column in range(3, min(tts.max_column or 0, 80) + 1):
             if mapping_key(tts.cell(4, column).value) == "tong":
                 break
-            work_date = as_date(tts.cell(4, column).value)
-            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", work_date):
+            work_date = workbook_cell_date(
+                tts.cell(4, column).value, workbook, period_override, force_period=force_period,
+            )
+            if not work_date:
                 continue
             actual = 0.0
             for row_index in range(6, min(tts.max_row or 0, 300) + 1):
@@ -1320,6 +2198,7 @@ def parse_meal_attendance_workbook(conn, workbook) -> dict:
             grouped[key]["ordered_count"] += item["ordered_count"]
             grouped[key]["source_column"] += "+" + item["source_column"]
             grouped[key]["warnings"].append("Đã gộp nhiều vùng nguồn cùng ngày/bếp/ca")
+            grouped[key]["errors"].extend(item["errors"])
         else:
             grouped[key] = item
 
@@ -1331,6 +2210,14 @@ def parse_meal_attendance_workbook(conn, workbook) -> dict:
     items = []
     for key in sorted(grouped):
         item = grouped[key]
+        for label, value in (
+            ("Số ăn thực tế", item["actual_count"]),
+            ("Số đặt", item["ordered_count"]),
+        ):
+            if not math.isfinite(float(value)):
+                item["errors"].append(f"{label} phải là số hữu hạn")
+            elif abs(float(value) - round(float(value))) > 1e-9:
+                item["errors"].append(f"{label} phải là số suất nguyên")
         previous = existing.get(key)
         if previous is None:
             status = "new"
@@ -1345,13 +2232,18 @@ def parse_meal_attendance_workbook(conn, workbook) -> dict:
         if item["ordered_count"] > 0 and abs(item["ordered_count"] - item["actual_count"]) > 1e-9:
             item["warnings"].append("Số đặt và số ăn thực tế chênh nhau")
         item["warnings"] = list(dict.fromkeys(item["warnings"]))
+        item["errors"] = list(dict.fromkeys(item["errors"]))
         rows.append(item)
         if not item["errors"]:
-            items.append({key: item[key] for key in (
+            items.append({field: item[field] for field in (
                 "work_date", "kitchen", "shift", "actual_count", "ordered_count",
                 "source_sheet", "source_column",
             )})
     periods = sorted({item["work_date"][:7] for item in rows})
+    if len(periods) > 1:
+        for item in rows:
+            item["errors"].append("File chứa nhiều kỳ tháng; cần tách file hoặc chọn đúng kỳ nguồn")
+        items = []
     counts = {
         "items": len(rows),
         "dates": len({item["work_date"] for item in rows}),
@@ -1363,7 +2255,7 @@ def parse_meal_attendance_workbook(conn, workbook) -> dict:
         "error": sum(bool(item["errors"]) for item in rows),
     }
     return {
-        "sheet": worksheet.title,
+        "sheet": ", ".join(dict.fromkeys(source_sheet_names)),
         "periods": periods,
         "rows": rows,
         "items": items,
@@ -1439,15 +2331,110 @@ def kitchen_financials(block_rows) -> dict:
     return result
 
 
+KITCHEN_MISSING_MEAL_COUNT_ERROR = "Không tìm thấy số suất của nhóm"
+
+
+def kitchen_sheet_day_offset(sheet_title: str):
+    """Return the T2..CN offset from Monday without treating T20 as T2."""
+    key = mapping_key(sheet_title)
+    for prefix, offset in (("t2", 0), ("t3", 1), ("t4", 2), ("t5", 3), ("t6", 4), ("t7", 5)):
+        if key.startswith(prefix) and (len(key) == len(prefix) or not key[len(prefix)].isdigit()):
+            return offset
+    if key.startswith("cn") or key.startswith("chunhat"):
+        return 6
+    return None
+
+
+def apply_kitchen_meal_count_overrides(plans: list, overrides: dict) -> list[str]:
+    """Apply explicit user-entered totals to plans whose workbook has no meal count."""
+    errors = []
+    overrides = overrides if isinstance(overrides, dict) else {}
+    for plan in plans:
+        if not plan.get("needs_meal_count"):
+            continue
+        plan_key = plan.get("plan_key", "")
+        raw_value = overrides.get(plan_key)
+        meal_count = as_number(raw_value)
+        if meal_count <= 0 or abs(meal_count - round(meal_count)) > 1e-9:
+            errors.append(
+                f"{plan.get('sheet', '')} · {plan.get('kitchen', '')} · "
+                f"{plan.get('shift', '')}: cần nhập số suất nguyên lớn hơn 0"
+            )
+            continue
+        meal_count = float(round(meal_count))
+        plan["meal_count"] = meal_count
+        for item in plan.get("items", []):
+            required_qty = as_number(item.get("file_required_qty"))
+            if required_qty <= 0:
+                required_qty = as_number(item.get("norm_per_1000")) * meal_count / 1000
+            item["required_qty"] = required_qty
+            item["norm_qty"] = required_qty / meal_count
+            norm_per_1000 = as_number(item.get("norm_per_1000"))
+            item["applicable_meal_count"] = (
+                required_qty * 1000 / norm_per_1000
+                if norm_per_1000 > 0 and required_qty > 0
+                else meal_count
+            )
+            item["calculated_amount"] = required_qty * as_number(item.get("buy_price"))
+
+        financials = plan.get("source_financials") or {}
+        food_cost = sum(as_number(item.get("calculated_amount")) for item in plan.get("items", []))
+        revenue = meal_count * as_number(plan.get("meal_price"))
+        total_cost = food_cost + as_number(plan.get("other_cost"))
+        financials.update({
+            "calculated_revenue": revenue,
+            "calculated_food_cost": food_cost,
+            "calculated_total_cost": total_cost,
+            "calculated_profit": revenue - total_cost,
+        })
+        plan["source_financials"] = financials
+        plan["errors"] = [
+            message for message in plan.get("errors", [])
+            if message != KITCHEN_MISSING_MEAL_COUNT_ERROR
+        ]
+        plan["warnings"] = list(dict.fromkeys([
+            *plan.get("warnings", []),
+            f"Số suất {int(meal_count)} được người dùng nhập khi xác nhận vì file để trống",
+        ]))
+        plan["needs_meal_count"] = False
+        plan["override_only"] = False
+    return errors
+
+
 def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
+    anchor_date = date.fromisoformat(work_date)
     products = {
         row["code"]: dict(row)
         for row in conn.execute("SELECT code,name,unit,supplier FROM products")
     }
+    product_codes_by_name = defaultdict(list)
+    for product in products.values():
+        product_codes_by_name[mapping_key(product["name"])].append(product["code"])
     known_kitchens = {row["code"] for row in conn.execute("SELECT code FROM kitchens")}
+    dated_hatran_prices = {
+        (row["product_code"], row["period"]): as_number(row["price_value"])
+        for row in conn.execute(
+            "SELECT product_code,period,price_value FROM dated_prices WHERE price_group='HATRAN'"
+        )
+    }
     plans = []
     plan_occurrences = Counter()
+    sheet_offsets = {
+        worksheet.title: kitchen_sheet_day_offset(worksheet.title)
+        for worksheet in workbook.worksheets
+    }
+    weekly_mode = len({offset for offset in sheet_offsets.values() if offset is not None}) >= 2
+    if weekly_mode and anchor_date.weekday() != 0:
+        raise ValueError("File tuần T2–CN yêu cầu chọn ngày Thứ Hai làm ngày bắt đầu tuần")
     for worksheet in workbook.worksheets:
+        sheet_offset = sheet_offsets[worksheet.title]
+        if weekly_mode and sheet_offset is None:
+            continue
+        plan_work_date = (
+            anchor_date + timedelta(days=sheet_offset)
+            if sheet_offset is not None
+            else anchor_date
+        ).isoformat()
         values = [
             list(row)
             for row in worksheet.iter_rows(
@@ -1499,19 +2486,19 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
             )
             xcom_code = xcom_counts.most_common(1)[0][0]
             marker_key = mapping_key(marker_label)
-            if marker_label and not any(token in marker_key for token in (
+            if xcom_code and xcom_code != "XCOM":
+                kitchen = xcom_code
+            elif marker_label and not any(token in marker_key for token in (
                 "sosuat", "casang", "cachieu", "catrua", "cadem", "mahang", "mabep", "nhathau",
             )):
                 kitchen = re.sub(r"^(BẾP|BEP)\s+", "", marker_label, flags=re.IGNORECASE).strip().upper()
-            elif xcom_code and xcom_code != "XCOM":
-                kitchen = xcom_code
             else:
                 segment = values[max(0, marker_row - 2):marker_row - 1]
                 kitchen = kitchen_block_name(segment, xcom_code)
             plan_errors = []
             plan_warnings = []
             if meal_count <= 0:
-                plan_errors.append("Không tìm thấy số suất của nhóm")
+                plan_errors.append(KITCHEN_MISSING_MEAL_COUNT_ERROR)
             if servings_per_menu > 0 and marker_total > 0 and abs(ratio - round(ratio)) > 0.01:
                 plan_warnings.append("Tổng suất không chia hết cho số suất/thực đơn; cần kiểm tra lại")
             if kitchen not in known_kitchens:
@@ -1521,7 +2508,7 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
 
             items = []
             current_dish = ""
-            seen_item_keys = set()
+            seen_item_names = defaultdict(list)
             for row_number in run:
                 row = values[row_number - 1]
                 code = mapping_cell_text(row[1]).upper()
@@ -1537,8 +2524,22 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 applicable_meal_count = (
                     required_qty * 1000 / norm_raw if norm_raw > 0 and required_qty > 0 else meal_count
                 )
-                price = as_number(row[8])
+                file_price = as_number(row[8])
                 price_group = mapping_cell_text(row[0]).upper()
+                price_period = plan_work_date[:7]
+                dated_price = dated_hatran_prices.get((code, price_period), 0)
+                if dated_price > 0:
+                    price = dated_price
+                    price_source = f"HATRAN {price_period} · giá kỳ đã khóa"
+                elif file_price > 0:
+                    # The workbook itself is the current-period HATRAN source.
+                    # Confirmation below locks this exact value to the period;
+                    # never borrow the timeless/previous catalogue price.
+                    price = file_price
+                    price_source = f"HATRAN {price_period} · giá file chờ xác nhận"
+                else:
+                    price = 0
+                    price_source = f"HATRAN {price_period} · chưa có giá"
                 source_amount_raw = row[9]
                 source_amount = as_number(source_amount_raw)
                 calculated_amount = required_qty * price
@@ -1548,11 +2549,38 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 if not product:
                     item_errors.append(f"Mã {code} chưa có trong danh mục")
                 item_key = (mapping_key(current_dish), code)
-                if item_key in seen_item_keys:
-                    item_errors.append(f"Mã {code} bị lặp trong cùng món {current_dish or '(chưa có tên)'}")
-                seen_item_keys.add(item_key)
+                source_name = mapping_cell_text(row[4])
+                source_name_key = mapping_key(source_name)
+                previous_names = seen_item_names[item_key]
+                if previous_names:
+                    if all(previous["key"] == source_name_key for previous in previous_names):
+                        item_warnings.append(
+                            f"Mã {code} và tên {source_name or '(trống)'} lặp trong cùng món; giữ nguyên từng dòng"
+                        )
+                    else:
+                        prior_names = ", ".join(dict.fromkeys(
+                            previous["name"] or "(trống)" for previous in previous_names
+                        ))
+                        message = (
+                            f"Mã {code} dùng cho nhiều tên trong cùng món {current_dish or '(chưa có tên)'}: "
+                            f"{prior_names} / {source_name or '(trống)'}"
+                        )
+                        exact_codes = [
+                            exact_code for exact_code in product_codes_by_name.get(source_name_key, [])
+                            if exact_code != code
+                        ]
+                        if exact_codes:
+                            message += f"; danh mục có tên khớp chính xác ở mã {', '.join(sorted(exact_codes))}"
+                        item_errors.append(message)
+                seen_item_names[item_key].append({"key": source_name_key, "name": source_name})
+                if price_group and price_group != "HATRAN":
+                    item_warnings.append(f"Nguồn file ghi {price_group}; hệ thống vẫn bắt buộc đối chiếu giá HATRAN {price_period}")
                 if price <= 0:
-                    item_warnings.append("Thiếu giá nguyên liệu")
+                    item_errors.append(f"Mã {code} chưa có giá HATRAN đúng kỳ {price_period}")
+                elif file_price > 0 and abs(file_price - price) > 1:
+                    item_warnings.append(
+                        f"Giá trong file {file_price:,.0f} lệch giá HATRAN {price_period} {price:,.0f}; hệ thống dùng giá HATRAN"
+                    )
                 if file_required > 0 and abs(file_required - formula_required) > max(0.01, formula_required * 0.01):
                     item_warnings.append("Số lượng áp dụng khác tổng suất (có thể do chia thực đơn); hệ thống giữ đúng số trong file")
                 if calculated_amount > 0 and source_amount_raw in (None, ""):
@@ -1562,8 +2590,8 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 item = {
                     "source_row": row_number,
                     "product_code": code,
-                    "source_name": mapping_cell_text(row[4]),
-                    "product_name": product["name"] if product else mapping_cell_text(row[4]),
+                    "source_name": source_name,
+                    "product_name": product["name"] if product else source_name,
                     "dish_name": current_dish,
                     "norm_per_1000": norm_raw,
                     "norm_qty": norm_qty,
@@ -1575,7 +2603,7 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                     "unit": mapping_cell_text(row[7]) or (product["unit"] if product else ""),
                     "supplier": product["supplier"] if product else "",
                     "buy_price": price,
-                    "price_source": f"{price_group} · File xưởng cơm" if price_group else "File xưởng cơm",
+                    "price_source": price_source,
                     "errors": item_errors,
                     "warnings": item_warnings,
                 }
@@ -1607,10 +2635,10 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 warning for warning in plan_warnings
                 if "chưa có trong danh mục bếp" not in warning
             ))
-            occurrence_key = (kitchen, previous_shift)
+            occurrence_key = (plan_work_date, kitchen, previous_shift)
             plan_occurrences[occurrence_key] += 1
             key_source = "|".join([
-                work_date, kitchen, previous_shift, str(plan_occurrences[occurrence_key]),
+                plan_work_date, kitchen, previous_shift, str(plan_occurrences[occurrence_key]),
             ])
             import_key = hashlib.sha256(key_source.encode("utf-8")).hexdigest()
             existing = conn.execute("SELECT id FROM meal_plans WHERE import_key=?", (import_key,)).fetchone()
@@ -1618,14 +2646,16 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
                 existing = conn.execute(
                     """SELECT id FROM meal_plans WHERE work_date=? AND kitchen=? AND shift=?
                        AND COALESCE(source_file,'')!='' ORDER BY id DESC LIMIT 1""",
-                    (work_date, kitchen, previous_shift),
+                    (plan_work_date, kitchen, previous_shift),
                 ).fetchone()
             dishes = list(dict.fromkeys(item["dish_name"] for item in items if item["dish_name"]))
             plans.append({
                 "import_key": import_key,
+                "plan_key": import_key,
                 "existing_id": existing["id"] if existing else None,
                 "status": "update" if existing else "new",
                 "sheet": worksheet.title,
+                "work_date": plan_work_date,
                 "source_row_start": start_row,
                 "source_row_end": end_row,
                 "kitchen": kitchen,
@@ -1653,6 +2683,15 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
             for plan in plans:
                 if plan["kitchen"] == kitchen:
                     plan["errors"].append(message)
+    for plan in plans:
+        plan["errors"] = list(dict.fromkeys(plan["errors"]))
+        plan["warnings"] = list(dict.fromkeys(plan["warnings"]))
+        plan["needs_meal_count"] = plan["meal_count"] <= 0
+        plan["override_only"] = (
+            plan["needs_meal_count"]
+            and bool(plan["errors"])
+            and all(message == KITCHEN_MISSING_MEAL_COUNT_ERROR for message in plan["errors"])
+        )
     counts = {
         "plans": len(plans),
         "items": sum(len(plan["items"]) for plan in plans),
@@ -1661,7 +2700,216 @@ def parse_kitchen_workbook(conn, workbook, work_date: str) -> dict:
         "errors": sum(bool(plan["errors"]) for plan in plans),
         "warnings": sum(bool(plan["warnings"]) for plan in plans),
     }
-    return {"plans": plans, "counts": counts, "can_confirm": counts["errors"] == 0}
+    work_dates = sorted({plan["work_date"] for plan in plans})
+    return {
+        "plans": plans,
+        "counts": counts,
+        "can_confirm": counts["errors"] == 0,
+        "can_confirm_with_overrides": all(
+            not plan["errors"] or plan["override_only"] for plan in plans
+        ),
+        "weekly": weekly_mode,
+        "work_dates": work_dates,
+    }
+
+
+PAYABLE_ALIASES = {
+    "purchase_date": {"ngaythang", "ngay", "ngaymua", "ngaynhap"},
+    "kitchen": {"tenbep", "bep", "mabep"},
+    "item_name": {"tenhang", "tenhanghoa", "tenvattu"},
+    "qty": {"soluong", "sldat", "slnhan"},
+    "unit": {"dvt", "donvitinh"},
+    "supplier": {"ncc", "nhacungcap", "nguoinhan"},
+    "buy_price": {"giamua", "dongiamua", "dongia"},
+    "damaged_qty": {"hong", "hanghong"},
+    "added_qty": {"them", "phatsinhthem"},
+    "reduced_qty": {"giam", "tralai"},
+    "missing_qty": {"thieu", "giaothieu"},
+    "actual_qty": {"slthucte", "soluongthucte", "thucte"},
+    "amount": {"thanhtien", "tongtien", "sotien"},
+    "note": {"ghichu", "diengiai"},
+}
+
+
+def payable_header_fields(row) -> dict:
+    found = {}
+    for column_index, value in enumerate(row, start=1):
+        key = mapping_key(value)
+        for field_name, accepted in PAYABLE_ALIASES.items():
+            if field_name not in found and key in accepted:
+                found[field_name] = column_index
+                break
+    return found
+
+
+def find_payable_sheet(workbook):
+    required = {"purchase_date", "kitchen", "item_name", "qty", "supplier", "buy_price"}
+    candidates = []
+    for sheet_index, worksheet in enumerate(workbook.worksheets):
+        for row_index, row in enumerate(
+            worksheet.iter_rows(min_row=1, max_row=25, max_col=30, values_only=True), start=1,
+        ):
+            fields = payable_header_fields(row)
+            if required.issubset(fields):
+                candidates.append((len(fields), -sheet_index, -row_index, worksheet, row_index, fields))
+    if not candidates:
+        return None
+    distinct_locations = {
+        (candidate[3].title, candidate[4]) for candidate in candidates
+    }
+    if len(distinct_locations) > 1:
+        locations = ", ".join(
+            f"{sheet}!{row}" for sheet, row in sorted(distinct_locations)[:5]
+        )
+        raise ValueError(
+            "File có nhiều bảng công nợ hợp lệ "
+            f"({locations}). Hãy chỉ giữ một bảng tổng hợp duy nhất để tránh "
+            "bỏ sót sheet hoặc thay nhầm toàn bộ lịch sử."
+        )
+    _, _, _, worksheet, row_index, fields = max(candidates, key=lambda item: item[:3])
+    return worksheet, row_index, fields
+
+
+def parse_historical_payables(conn, workbook) -> dict:
+    found = find_payable_sheet(workbook)
+    if not found:
+        raise ValueError("Không tìm thấy bảng công nợ có Ngày, Tên bếp, Tên hàng, Số lượng, NCC và Giá mua")
+    worksheet, header_row, fields = found
+    supplier_names = {}
+    for row in conn.execute(
+        "SELECT code supplier FROM suppliers WHERE TRIM(COALESCE(code,''))!='' "
+        "UNION SELECT supplier FROM products WHERE TRIM(COALESCE(supplier,''))!='' "
+        "UNION SELECT supplier FROM historical_payable_lines"
+    ):
+        value = mapping_cell_text(row["supplier"])
+        supplier_names.setdefault(mapping_key(value), value)
+
+    rows = []
+    items = []
+    scanned = 0
+    for row_number, row in enumerate(
+        worksheet.iter_rows(
+            min_row=header_row + 1,
+            max_row=min(worksheet.max_row, header_row + MAPPING_IMPORT_MAX_ROWS),
+            max_col=max(max(fields.values()), fields.get("actual_qty", 0) + 1),
+            values_only=True,
+        ),
+        start=header_row + 1,
+    ):
+        def cell(name, default=None):
+            column = fields.get(name)
+            return row[column - 1] if column else default
+
+        raw_date = cell("purchase_date")
+        kitchen = mapping_cell_text(cell("kitchen")).upper()
+        item_name = mapping_cell_text(cell("item_name"))
+        raw_supplier = mapping_cell_text(cell("supplier"))
+        errors = []
+
+        def financial_number(field, label):
+            try:
+                return import_cell_number(cell(field), label)
+            except ValueError as exc:
+                errors.append(str(exc))
+                return 0.0
+
+        qty = financial_number("qty", "Số lượng")
+        buy_price = financial_number("buy_price", "Giá mua")
+        damaged = financial_number("damaged_qty", "Số lượng hỏng")
+        added = financial_number("added_qty", "Số lượng thêm")
+        reduced = financial_number("reduced_qty", "Số lượng giảm/trả")
+        missing = financial_number("missing_qty", "Số lượng thiếu")
+        cached_actual = financial_number("actual_qty", "Số thực tế")
+        amount_column = fields.get("amount") or (fields.get("actual_qty", 0) + 1)
+        raw_source_amount = row[amount_column - 1] if 0 < amount_column <= len(row) else None
+        try:
+            source_amount = import_cell_number(raw_source_amount, "Thành tiền")
+        except ValueError as exc:
+            errors.append(str(exc))
+            source_amount = 0.0
+        if not any((raw_date, kitchen, item_name, raw_supplier, qty, buy_price, damaged, added, reduced, missing)):
+            continue
+        scanned += 1
+        purchase_date = as_date(raw_date)
+        actual_qty = qty + added - damaged - reduced - missing
+        calculated_amount = actual_qty * buy_price
+        amount = source_amount if raw_source_amount not in (None, "") else calculated_amount
+        supplier = supplier_names.get(mapping_key(raw_supplier), raw_supplier.upper())
+        warnings = []
+        apply = True
+        zero_value_line = abs(actual_qty) > 1e-9 and buy_price <= 0 and abs(amount) <= 1e-9
+        if actual_qty < -1e-9:
+            warnings.append("Số lượng âm được giữ làm dòng ghi giảm/trả lại")
+        if abs(amount) > 1e-9 and not purchase_date:
+            errors.append("Thiếu hoặc sai ngày mua")
+        elif not purchase_date:
+            apply = False
+            warnings.append("Dòng không phát sinh phải trả và thiếu ngày nên được bỏ qua")
+        if zero_value_line:
+            warnings.append("Có số lượng nhưng Giá mua và Thành tiền đều bằng 0; giữ dòng lịch sử với giá trị phải trả 0 đồng")
+        if apply and abs(actual_qty) > 1e-9 and not item_name:
+            errors.append("Thiếu tên hàng")
+        if apply and abs(actual_qty) > 1e-9 and not supplier:
+            errors.append("Thiếu nhà cung cấp")
+        if apply and abs(actual_qty) > 1e-9 and buy_price <= 0 and not zero_value_line:
+            errors.append("Thiếu giá mua")
+        if "actual_qty" in fields and abs(cached_actual - actual_qty) > 0.001:
+            warnings.append("Số thực tế lưu trong Excel lệch công thức; hệ thống tính lại từ hỏng/thêm/giảm/thiếu")
+        if raw_source_amount not in (None, "") and abs(source_amount - calculated_amount) > 1:
+            warnings.append("Thành tiền trong file lệch SL thực tế × Giá mua; hệ thống giữ số tiền khách đã chốt")
+        status = "error" if errors else ("skip" if not apply else "ready")
+        item = {
+            "source_row": row_number,
+            "purchase_date": purchase_date,
+            "kitchen": kitchen,
+            "item_name": item_name,
+            "qty": qty,
+            "unit": mapping_cell_text(cell("unit")),
+            "supplier": supplier,
+            "buy_price": buy_price,
+            "damaged_qty": damaged,
+            "added_qty": added,
+            "reduced_qty": reduced,
+            "missing_qty": missing,
+            "actual_qty": actual_qty,
+            "source_amount": source_amount,
+            "calculated_amount": calculated_amount,
+            "amount": amount,
+            "note": mapping_cell_text(cell("note")),
+            "status": status,
+            "errors": errors,
+            "warnings": warnings,
+        }
+        rows.append(item)
+        if apply and not errors:
+            items.append(item)
+
+    if scanned >= MAPPING_IMPORT_MAX_ROWS and worksheet.max_row > header_row + MAPPING_IMPORT_MAX_ROWS:
+        raise ValueError(f"File vượt quá giới hạn {MAPPING_IMPORT_MAX_ROWS:,} dòng dữ liệu")
+    if not rows:
+        raise ValueError("Bảng công nợ không có dòng dữ liệu")
+    counts = {
+        "total": len(rows),
+        "ready": len(items),
+        "skipped": sum(item["status"] == "skip" for item in rows),
+        "errors": sum(bool(item["errors"]) for item in rows),
+        "warnings": sum(bool(item["warnings"]) for item in rows),
+        "suppliers": len({item["supplier"] for item in items}),
+    }
+    return {
+        "sheet": worksheet.title,
+        "header_row": header_row,
+        "rows": rows[:200],
+        "issues": [item for item in rows if item["errors"] or item["warnings"]][:1000],
+        "items": items,
+        "counts": counts,
+        "totals": {
+            "actual_qty": sum(item["actual_qty"] for item in items),
+            "amount": sum(item["amount"] for item in items),
+        },
+        "preview_truncated": len(rows) > 200,
+        "can_confirm": counts["errors"] == 0 and counts["ready"] > 0,
+    }
 
 
 def net_received(order) -> float:
@@ -1682,22 +2930,39 @@ def net_delivered(order) -> float:
 
 
 def inventory_rows(conn, as_of="", include_zero=False):
-    params = []
-    date_sql = ""
     if as_of:
-        date_sql = " AND t.txn_date<=?"
-        params.append(as_of)
-    query = f"""
+        # Posted movements are chronological, but an active reservation is a
+        # global claim on stock regardless of its requested delivery date.  If
+        # future reservations were hidden here, a later back-dated draft could
+        # reserve the same units a second time.
+        query = """
+            SELECT p.code product_code,p.name product_name,p.unit,
+                   COALESCE(SUM(CASE WHEN t.status='posted' AND t.txn_date<=:as_of
+                                     THEN t.qty_in-t.qty_out ELSE 0 END),0) accounting_qty,
+                   COALESCE(SUM(CASE WHEN (t.status='posted' AND t.txn_date<=:as_of)
+                                          OR t.status='reserved'
+                                     THEN t.qty_in-t.qty_out ELSE 0 END),0) available_qty,
+                   COALESCE(SUM(CASE WHEN t.status='posted' AND t.txn_date<=:as_of
+                                     THEN t.qty_in*t.unit_cost ELSE 0 END),0) input_value,
+                   COALESCE(SUM(CASE WHEN t.status='posted' AND t.txn_date<=:as_of
+                                     THEN t.qty_out*t.unit_cost ELSE 0 END),0) output_value
+            FROM products p LEFT JOIN inventory_transactions t ON t.product_code=p.code
+            GROUP BY p.code,p.name,p.unit
+            ORDER BY p.name
+        """
+        rows = [dict(row) for row in conn.execute(query, {"as_of": as_of})]
+    else:
+        query = """
         SELECT p.code product_code,p.name product_name,p.unit,
                COALESCE(SUM(CASE WHEN t.status='posted' THEN t.qty_in-t.qty_out ELSE 0 END),0) accounting_qty,
                COALESCE(SUM(CASE WHEN t.status IN ('posted','reserved') THEN t.qty_in-t.qty_out ELSE 0 END),0) available_qty,
                COALESCE(SUM(CASE WHEN t.status='posted' THEN t.qty_in*t.unit_cost ELSE 0 END),0) input_value,
                COALESCE(SUM(CASE WHEN t.status='posted' THEN t.qty_out*t.unit_cost ELSE 0 END),0) output_value
-        FROM products p LEFT JOIN inventory_transactions t ON t.product_code=p.code {date_sql}
+        FROM products p LEFT JOIN inventory_transactions t ON t.product_code=p.code
         GROUP BY p.code,p.name,p.unit
         ORDER BY p.name
-    """
-    rows = [dict(row) for row in conn.execute(query, params)]
+        """
+        rows = [dict(row) for row in conn.execute(query)]
     if not include_zero:
         rows = [row for row in rows if abs(row["accounting_qty"]) > 1e-9 or abs(row["available_qty"]) > 1e-9]
     return rows
@@ -1711,6 +2976,12 @@ def post_purchase_list_inventory(conn, batch_id: int, now_iso):
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
         return 0
+    # These lines are a projection of the approved order rows. Rebuild the
+    # whole projection so removed/toggled rows cannot remain in stock.
+    conn.execute(
+        "DELETE FROM inventory_transactions WHERE source_type='BK_INPUT' AND source_id=?",
+        (str(batch_id),),
+    )
     rate_row = conn.execute("SELECT value FROM settings WHERE key='purchase_rate'").fetchone()
     purchase_rate = as_number(rate_row["value"] if rate_row else 0.95, 0.95)
     posted = 0
@@ -1746,11 +3017,26 @@ def normalize_invoice(remote: dict, invoice_type: str, now: str) -> dict:
     remote_id = str(first_value(remote, "_id", "id", "invoiceId", default="")).strip()
     if not remote_id:
         raise MsmiError("Hóa đơn mSMI thiếu khóa _id")
-    subtotal = as_number(first_value(remote, "tgtcthue", "subtotal", "totalBeforeTax"))
-    tax_amount = as_number(first_value(remote, "tgtthue", "taxAmount", "totalTax"))
-    total = as_number(first_value(remote, "tgtttbso", "tgtttbchu", "totalAmount", "total"))
+    subtotal = msmi_number(
+        first_value(remote, "tgtcthue", "subtotal", "totalBeforeTax"), "Tiền trước thuế",
+    )
+    tax_amount = msmi_number(
+        first_value(remote, "tgtthue", "taxAmount", "totalTax"), "Tiền thuế",
+    )
+    total = msmi_number(
+        first_value(remote, "tgtttbso", "tgtttbchu", "totalAmount", "total"), "Tổng tiền",
+    )
+    if subtotal < 0 or tax_amount < 0 or total < 0:
+        raise MsmiError("Hóa đơn mSMI có tổng tiền âm; cần đối chiếu thủ công")
     if total <= 0:
         total = subtotal + tax_amount
+    invoice_date = as_date(first_value(remote, "tdlap", "nlap", "invoiceDate", "signedDate"))
+    if not invoice_date:
+        raise MsmiError("Hóa đơn mSMI thiếu ngày lập hợp lệ")
+    try:
+        raw_json = json.dumps(remote, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        raise MsmiError("Hóa đơn mSMI chứa dữ liệu JSON không hợp lệ") from None
     return {
         "remote_id": remote_id,
         "invoice_type": invoice_type,
@@ -1758,25 +3044,110 @@ def normalize_invoice(remote: dict, invoice_type: str, now: str) -> dict:
         "seller_name": str(first_value(remote, "tenNban", "nbten", "sellerName")),
         "invoice_number": str(first_value(remote, "shdon", "soHoaDon", "invoiceNumber")),
         "invoice_series": str(first_value(remote, "khhdon", "khmshdon", "series", "invoiceSeries")),
-        "invoice_date": as_date(first_value(remote, "tdlap", "nlap", "invoiceDate", "signedDate")),
+        "invoice_date": invoice_date,
         "subtotal": subtotal,
         "tax_amount": tax_amount,
         "total_amount": total,
-        "raw_json": json.dumps(remote, ensure_ascii=False, separators=(",", ":")),
+        "raw_json": raw_json,
         "synced_at": now,
     }
 
 
 def normalize_invoice_item(remote_item: dict, line_index: int) -> dict:
+    qty = msmi_number(first_value(remote_item, "sluong", "quantity", "qty"), f"Số lượng dòng {line_index}")
+    unit_price = msmi_number(first_value(remote_item, "dgia", "unitPrice", "price"), f"Đơn giá dòng {line_index}")
+    amount = msmi_number(first_value(remote_item, "thtien", "amount", "total"), f"Thành tiền dòng {line_index}")
+    if qty < 0 or unit_price < 0 or amount < 0:
+        raise MsmiError(
+            f"Dòng {line_index} mSMI có số lượng, đơn giá hoặc thành tiền âm; cần đối chiếu thủ công"
+        )
+    nature = str(first_value(remote_item, "tchat", "nature", "itemNature", "type")).strip()
+    inventory_eligible = qty > 0 and (unit_price > 0 or amount == 0)
+    validation_note = "" if inventory_eligible else (
+        "Không ghi kho: dòng nguồn không có số lượng/đơn giá dương; vẫn giữ nguyên để đối chiếu hóa đơn"
+    )
     return {
         "line_index": line_index,
         "source_item_code": str(first_value(remote_item, "ma", "mhhhoa", "itemCode", "code")),
         "source_item_name": str(first_value(remote_item, "ten", "tenhh", "itemName", "name")),
         "source_unit": str(first_value(remote_item, "dvtinh", "dvt", "unit")),
-        "qty": as_number(first_value(remote_item, "sluong", "quantity", "qty")),
-        "unit_price": as_number(first_value(remote_item, "dgia", "unitPrice", "price")),
-        "amount": as_number(first_value(remote_item, "thtien", "amount", "total")),
+        "qty": qty,
+        "unit_price": unit_price,
+        "amount": amount,
         "tax_rate": str(first_value(remote_item, "tsuat", "taxRate", "tax")),
+        "source_nature": nature,
+        "inventory_eligible": 1 if inventory_eligible else 0,
+        "validation_note": validation_note,
+    }
+
+
+def quarantine_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now: str, error: Exception):
+    """Persist an identifiable bad source invoice for review without inventing accounting values."""
+    remote_id = str(first_value(remote, "_id", "id", "invoiceId", default="")).strip()
+    if not remote_id:
+        raise MsmiError("Hóa đơn mSMI lỗi dữ liệu và thiếu khóa _id nên không thể cách ly an toàn")
+    try:
+        raw_json = json.dumps(remote, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        raise MsmiError("Hóa đơn mSMI lỗi dữ liệu chứa JSON không hợp lệ nên không thể cách ly an toàn") from None
+
+    def safe_nonnegative(*keys):
+        try:
+            value = msmi_number(first_value(remote, *keys), "Giá trị hóa đơn lỗi")
+            return value if value >= 0 else 0
+        except MsmiError:
+            return 0
+
+    existing = conn.execute(
+        "SELECT id,receipt_status FROM msmi_invoices WHERE remote_id=?", (remote_id,)
+    ).fetchone()
+    message = f"Dữ liệu nguồn cần đối chiếu thủ công: {str(error)[:220]}"
+    if existing and existing["receipt_status"] == "posted":
+        conn.execute(
+            """UPDATE msmi_invoices SET sync_status='review_required',error_message=?,
+                      synced_at=?,updated_at=? WHERE id=?""",
+            (message, now, now, existing["id"]),
+        )
+        return existing["id"], False, {
+            "remote_id": remote_id,
+            "invoice_date": "",
+        }
+
+    invoice_date = as_date(first_value(remote, "tdlap", "nlap", "invoiceDate", "signedDate"))
+    conn.execute(
+        """INSERT INTO msmi_invoices(
+               remote_id,tenant,invoice_type,seller_tax_code,seller_name,invoice_number,invoice_series,
+               invoice_date,subtotal,tax_amount,total_amount,sync_status,receipt_status,raw_json,
+               error_message,synced_at,created_at,updated_at
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'review_required','blocked',?,?,?,?,?)
+           ON CONFLICT(remote_id) DO UPDATE SET
+               tenant=excluded.tenant,invoice_type=excluded.invoice_type,
+               seller_tax_code=excluded.seller_tax_code,seller_name=excluded.seller_name,
+               invoice_number=excluded.invoice_number,invoice_series=excluded.invoice_series,
+               invoice_date=excluded.invoice_date,subtotal=excluded.subtotal,
+               tax_amount=excluded.tax_amount,total_amount=excluded.total_amount,
+               sync_status='review_required',receipt_status='blocked',raw_json=excluded.raw_json,
+               error_message=excluded.error_message,synced_at=excluded.synced_at,updated_at=excluded.updated_at""",
+        (
+            remote_id, tenant, invoice_type,
+            str(first_value(remote, "mstNban", "nbmst", "sellerTaxCode", "sellerTaxId")),
+            str(first_value(remote, "tenNban", "nbten", "sellerName")),
+            str(first_value(remote, "shdon", "soHoaDon", "invoiceNumber")),
+            str(first_value(remote, "khhdon", "khmshdon", "series", "invoiceSeries")),
+            invoice_date,
+            safe_nonnegative("tgtcthue", "subtotal", "totalBeforeTax"),
+            safe_nonnegative("tgtthue", "taxAmount", "totalTax"),
+            safe_nonnegative("tgtttbso", "tgtttbchu", "totalAmount", "total"),
+            raw_json, message, now, now, now,
+        ),
+    )
+    invoice_id = conn.execute(
+        "SELECT id FROM msmi_invoices WHERE remote_id=?", (remote_id,)
+    ).fetchone()["id"]
+    conn.execute("DELETE FROM msmi_invoice_items WHERE invoice_id=?", (invoice_id,))
+    return invoice_id, existing is None, {
+        "remote_id": remote_id,
+        "invoice_date": invoice_date,
     }
 
 
@@ -1790,7 +3161,65 @@ def saved_mapping(conn, tenant: str, seller_tax_code: str, item: dict):
 
 def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now: str) -> tuple[int, bool]:
     data = normalize_invoice(remote, invoice_type, now)
-    existing = conn.execute("SELECT id FROM msmi_invoices WHERE remote_id=?", (data["remote_id"],)).fetchone()
+    existing = conn.execute("SELECT * FROM msmi_invoices WHERE remote_id=?", (data["remote_id"],)).fetchone()
+    detail_rows = invoice_details(remote)
+    normalized_items = [
+        normalize_invoice_item(raw_item if isinstance(raw_item, dict) else {}, index)
+        for index, raw_item in enumerate(detail_rows, start=1)
+    ]
+
+    def business_signature(header, items):
+        header_fields = {
+            "tenant": str(header.get("tenant") or tenant),
+            "invoice_type": str(header.get("invoice_type") or invoice_type),
+            "seller_tax_code": str(header.get("seller_tax_code") or ""),
+            "seller_name": str(header.get("seller_name") or ""),
+            "invoice_number": str(header.get("invoice_number") or ""),
+            "invoice_series": str(header.get("invoice_series") or ""),
+            "invoice_date": str(header.get("invoice_date") or ""),
+            "subtotal": round(as_number(header.get("subtotal")), 6),
+            "tax_amount": round(as_number(header.get("tax_amount")), 6),
+            "total_amount": round(as_number(header.get("total_amount")), 6),
+        }
+        item_fields = [{
+            "line_index": int(item.get("line_index") or 0),
+            "source_item_code": str(item.get("source_item_code") or ""),
+            "source_item_name": str(item.get("source_item_name") or ""),
+            "source_unit": str(item.get("source_unit") or ""),
+            "qty": round(as_number(item.get("qty")), 6),
+            "unit_price": round(as_number(item.get("unit_price")), 6),
+            "amount": round(as_number(item.get("amount")), 6),
+            "tax_rate": str(item.get("tax_rate") or ""),
+            "source_nature": str(item.get("source_nature") or ""),
+            "inventory_eligible": int(item.get("inventory_eligible", 1) or 0),
+        } for item in items]
+        return json.dumps({"header": header_fields, "items": item_fields}, ensure_ascii=False, sort_keys=True)
+
+    if existing and existing["receipt_status"] == "posted":
+        stored_items = [dict(row) for row in conn.execute(
+            "SELECT * FROM msmi_invoice_items WHERE invoice_id=? ORDER BY line_index", (existing["id"],),
+        )]
+        changed = business_signature(dict(existing), stored_items) != business_signature(data, normalized_items)
+        if changed:
+            message = "Hóa đơn mSMI đã thay đổi sau khi tạo phiếu nhập; kho được giữ nguyên và cần đối chiếu thủ công"
+            conn.execute(
+                """UPDATE msmi_invoices SET sync_status='review_required',error_message=?,
+                   synced_at=?,updated_at=? WHERE id=?""",
+                (message, now, now, existing["id"]),
+            )
+            conn.execute(
+                """INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at)
+                   VALUES('msmi.remote_change_after_receipt','msmi_invoice',?,'warning',?,'{}',?)""",
+                (data["remote_id"], message, now),
+            )
+        else:
+            conn.execute(
+                """UPDATE msmi_invoices SET sync_status='synced',error_message=NULL,
+                   synced_at=?,updated_at=? WHERE id=?""",
+                (now, now, existing["id"]),
+            )
+        return existing["id"], False
+
     conn.execute(
         """INSERT INTO msmi_invoices(
             remote_id,tenant,invoice_type,seller_tax_code,seller_name,invoice_number,invoice_series,
@@ -1808,32 +3237,32 @@ def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now:
          data["tax_amount"], data["total_amount"], data["raw_json"], now, now, now),
     )
     invoice_id = conn.execute("SELECT id FROM msmi_invoices WHERE remote_id=?", (data["remote_id"],)).fetchone()["id"]
+    # Unposted invoices are safe to rebuild from the remote source. Mappings are
+    # recovered only by the exact seller + source code + source name key.
+    conn.execute("DELETE FROM msmi_invoice_items WHERE invoice_id=?", (invoice_id,))
     mapped = 0
-    detail_rows = invoice_details(remote)
-    for index, raw_item in enumerate(detail_rows, start=1):
-        item = normalize_invoice_item(raw_item if isinstance(raw_item, dict) else {}, index)
-        mapping = saved_mapping(conn, tenant, data["seller_tax_code"], item)
+    inventory_items = 0
+    for item in normalized_items:
+        eligible = bool(item["inventory_eligible"])
+        inventory_items += eligible
+        mapping = saved_mapping(conn, tenant, data["seller_tax_code"], item) if eligible else None
         product_code = mapping["product_code"] if mapping else ""
         conn.execute(
             """INSERT INTO msmi_invoice_items(
                 invoice_id,line_index,source_item_code,source_item_name,source_unit,qty,unit_price,
-                amount,tax_rate,product_code,mapping_status
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(invoice_id,line_index) DO UPDATE SET
-                source_item_code=excluded.source_item_code,source_item_name=excluded.source_item_name,
-                source_unit=excluded.source_unit,qty=excluded.qty,unit_price=excluded.unit_price,
-                amount=excluded.amount,tax_rate=excluded.tax_rate,
-                product_code=CASE WHEN msmi_invoice_items.product_code!='' THEN msmi_invoice_items.product_code ELSE excluded.product_code END,
-                mapping_status=CASE WHEN msmi_invoice_items.product_code!='' OR excluded.product_code!='' THEN 'mapped' ELSE 'unmapped' END""",
-            (invoice_id, index, item["source_item_code"], item["source_item_name"], item["source_unit"],
-             item["qty"], item["unit_price"], item["amount"], item["tax_rate"], product_code,
-             "mapped" if product_code else "unmapped"),
+                amount,tax_rate,source_nature,inventory_eligible,validation_note,product_code,mapping_status
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (invoice_id, item["line_index"], item["source_item_code"], item["source_item_name"], item["source_unit"],
+             item["qty"], item["unit_price"], item["amount"], item["tax_rate"], item["source_nature"],
+             item["inventory_eligible"], item["validation_note"], product_code,
+             "mapped" if product_code else ("unmapped" if eligible else "not_inventory")),
         )
         mapped += bool(product_code)
-    receipt_status = "ready" if detail_rows and mapped == len(detail_rows) else "pending_mapping"
-    current = conn.execute("SELECT receipt_status FROM msmi_invoices WHERE id=?", (invoice_id,)).fetchone()
-    if current and current["receipt_status"] != "posted":
-        conn.execute("UPDATE msmi_invoices SET receipt_status=? WHERE id=?", (receipt_status, invoice_id))
+    if not inventory_items:
+        receipt_status = "not_inventory"
+    else:
+        receipt_status = "ready" if mapped == inventory_items else "pending_mapping"
+    conn.execute("UPDATE msmi_invoices SET receipt_status=? WHERE id=?", (receipt_status, invoice_id))
     return invoice_id, existing is None
 
 
@@ -1842,50 +3271,167 @@ def sync_msmi(conn, client, now_iso, tenant="default", max_pages=5, page_size=19
     new_count = 0
     seen_count = 0
     item_count = 0
+    review_count = 0
     pages = 0
-    newest_id = ""
-    newest_date = ""
+    progress_pages = 0
+    state = conn.execute(
+        "SELECT * FROM msmi_sync_state WHERE invoice_type=?", (invoice_type,)
+    ).fetchone()
+    newest_id = str(state["last_remote_id"] or "") if state else ""
+    newest_date = str(state["last_invoice_date"] or "") if state else ""
+    newest_captured = False
+    backfill_complete = bool(state["backfill_complete"]) if state else False
+    backfill_anchor_id = str(state["backfill_anchor_id"] or "") if state else ""
+    backfill_anchor_date = str(state["backfill_anchor_date"] or "") if state else ""
+    reconcile_next_page = max(int(state["reconcile_next_page"] or 1), 1) if state else 1
+    page_limit = max(2, min(int(max_pages), 50))
+
+    def consume(remote):
+        nonlocal new_count, seen_count, item_count, review_count, newest_id, newest_date, newest_captured
+        timestamp = now_iso()
+        try:
+            invoice_id, created = upsert_msmi_invoice(conn, remote, invoice_type, tenant, timestamp)
+            normalized = normalize_invoice(remote, invoice_type, timestamp)
+        except MsmiError as error:
+            invoice_id, created, normalized = quarantine_msmi_invoice(
+                conn, remote, invoice_type, tenant, timestamp, error,
+            )
+            review_count += 1
+        if created:
+            new_count += 1
+        else:
+            seen_count += 1
+        item_count += conn.execute(
+            "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=?", (invoice_id,)
+        ).fetchone()["n"]
+        if not newest_captured:
+            newest_id = normalized["remote_id"]
+            newest_date = normalized["invoice_date"]
+            newest_captured = True
+        return normalized, created
+
+    # One sync is atomic: if a later page fails, invoices from earlier pages
+    # are rolled back before the durable error state is recorded.
+    savepoint = "msmi_sync_atomic"
+    conn.execute(f"SAVEPOINT {savepoint}")
     try:
-        for page in range(max(1, min(int(max_pages), 50))):
-            result = client.list_invoices(invoice_type=invoice_type, page=page, size=page_size)
-            pages += 1
-            remote_items = result["items"]
-            if not remote_items:
-                break
-            page_all_seen = True
-            for remote in remote_items:
-                if not isinstance(remote, dict):
+        if backfill_complete:
+            # Always scan the newest page, then use the remaining page budget
+            # as a rolling reconciliation cursor through older history.  A
+            # back-dated/late invoice can therefore never hide forever behind
+            # one page containing only already-known IDs.
+            page_sequence = [0] + list(
+                range(reconcile_next_page, reconcile_next_page + page_limit - 1)
+            )
+            next_reconcile_page = reconcile_next_page
+            for page in page_sequence:
+                result = client.list_invoices(invoice_type=invoice_type, page=page, size=page_size)
+                pages += 1
+                remote_items = result["items"]
+                if not remote_items:
+                    if page > 0:
+                        next_reconcile_page = 1
+                    break
+                for remote in remote_items:
+                    if not isinstance(remote, dict):
+                        continue
+                    consume(remote)
+                if page > 0:
+                    next_reconcile_page = page + 1
+                if not result["has_more"]:
+                    next_reconcile_page = 1
+                    break
+            reconcile_next_page = next_reconcile_page
+        else:
+            # Initial history import is resumable.  A page number alone is not a
+            # safe cursor because newly arriving invoices shift every later
+            # page.  Instead, locate the exact oldest processed invoice again,
+            # then spend max_pages only on records *after* that anchor.  Pages
+            # used to relocate the anchor are intentionally not counted as
+            # progress; this prevents both skipped history and permanent stalls.
+            locating_anchor = bool(backfill_anchor_id)
+            page = 0
+            anchor_scan_limit = 5000
+            while True:
+                if page >= anchor_scan_limit:
+                    raise MsmiError("Không tìm thấy mốc tiếp tục mSMI trong giới hạn an toàn")
+                result = client.list_invoices(invoice_type=invoice_type, page=page, size=page_size)
+                pages += 1
+                remote_items = result["items"]
+                if not remote_items:
+                    backfill_complete = True
+                    break
+
+                page_made_progress = False
+                for remote in remote_items:
+                    if not isinstance(remote, dict):
+                        continue
+                    normalized, _ = consume(remote)
+                    if locating_anchor:
+                        if normalized["remote_id"] == backfill_anchor_id:
+                            locating_anchor = False
+                        continue
+                    # The anchor itself was already persisted.  Only records
+                    # following it advance the backfill cursor.
+                    backfill_anchor_id = normalized["remote_id"]
+                    backfill_anchor_date = normalized["invoice_date"]
+                    page_made_progress = True
+
+                if locating_anchor:
+                    # If the remote invoice was deleted/reordered, scan to the
+                    # end and upsert everything encountered.  This may cost more
+                    # reads once, but it is the only safe behavior: never guess a
+                    # page and silently skip accounting history.
+                    if not result["has_more"]:
+                        backfill_complete = True
+                        break
+                    page += 1
                     continue
-                invoice_id, created = upsert_msmi_invoice(conn, remote, invoice_type, tenant, now_iso())
-                if created:
-                    new_count += 1
-                    page_all_seen = False
-                else:
-                    seen_count += 1
-                item_count += conn.execute(
-                    "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=?", (invoice_id,)
-                ).fetchone()["n"]
-                normalized = normalize_invoice(remote, invoice_type, now_iso())
-                if not newest_id:
-                    newest_id = normalized["remote_id"]
-                    newest_date = normalized["invoice_date"]
-            # mSMI returns newest records first. Once a complete page is already
-            # known, older pages have already been synchronized.
-            if page_all_seen or not result["has_more"]:
-                break
+
+                if page_made_progress:
+                    progress_pages += 1
+                if not result["has_more"]:
+                    backfill_complete = True
+                    break
+                if progress_pages >= page_limit:
+                    break
+                page += 1
+
         conn.execute(
-            """INSERT INTO msmi_sync_state(invoice_type,last_remote_id,last_invoice_date,last_synced_at,last_status,last_error)
-               VALUES(?,?,?,?,?,'') ON CONFLICT(invoice_type) DO UPDATE SET
+            """INSERT INTO msmi_sync_state(
+                   invoice_type,last_remote_id,last_invoice_date,last_synced_at,last_status,last_error,
+                   backfill_anchor_id,backfill_anchor_date,backfill_complete,reconcile_next_page
+               ) VALUES(?,?,?,?,?,'',?,?,?,?) ON CONFLICT(invoice_type) DO UPDATE SET
                last_remote_id=excluded.last_remote_id,last_invoice_date=excluded.last_invoice_date,
-               last_synced_at=excluded.last_synced_at,last_status='ok',last_error=''""",
-            (invoice_type, newest_id, newest_date, now_iso(), "ok"),
+               last_synced_at=excluded.last_synced_at,last_status='ok',last_error='',
+               backfill_anchor_id=excluded.backfill_anchor_id,
+               backfill_anchor_date=excluded.backfill_anchor_date,
+               backfill_complete=excluded.backfill_complete,
+               reconcile_next_page=excluded.reconcile_next_page""",
+            (invoice_type, newest_id, newest_date, now_iso(), "ok",
+             backfill_anchor_id, backfill_anchor_date, 1 if backfill_complete else 0,
+             reconcile_next_page),
         )
         audit(conn, now_iso, "msmi.sync", "ok", metadata={
             "new_invoices": new_count, "known_invoices": seen_count,
             "invoice_items": item_count, "pages": pages,
+            "review_required": review_count,
+            "backfill_progress_pages": progress_pages,
+            "backfill_complete": backfill_complete,
+            "reconcile_next_page": reconcile_next_page,
         })
-        return {"new_invoices": new_count, "known_invoices": seen_count, "items": item_count, "pages": pages}
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        return {
+            "new_invoices": new_count, "known_invoices": seen_count,
+            "items": item_count, "pages": pages,
+            "review_required": review_count,
+            "backfill_complete": backfill_complete,
+            "more_history": not backfill_complete,
+            "reconcile_next_page": reconcile_next_page,
+        }
     except Exception as error:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         message = str(error)[:300]
         conn.execute(
             """INSERT INTO msmi_sync_state(invoice_type,last_synced_at,last_status,last_error)
@@ -2002,6 +3548,120 @@ def number_to_vietnamese(value: float) -> str:
     return text[:1].upper() + text[1:] + " đồng"
 
 
+def windows_printer_state() -> dict:
+    """Return installed/default printers without changing Windows settings."""
+
+    if os.name != "nt":
+        return {"supported": False, "default": "", "installed": [], "error": "Chỉ hỗ trợ Windows"}
+    try:
+        import win32print
+
+        flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+        installed = sorted({
+            str(item[2]).strip()
+            for item in win32print.EnumPrinters(flags)
+            if len(item) > 2 and str(item[2]).strip()
+        })
+        try:
+            default = str(win32print.GetDefaultPrinter() or "").strip()
+        except Exception:
+            default = ""
+        return {"supported": True, "default": default, "installed": installed, "error": ""}
+    except Exception:
+        return {
+            "supported": True,
+            "default": "",
+            "installed": [],
+            "error": "Không đọc được danh sách máy in Windows",
+        }
+
+
+def safe_print_path(data_dir: Path, batch_id: int, value: str) -> Path:
+    root = (data_dir / "print_jobs" / str(batch_id)).resolve()
+    path = Path(value).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("Đường dẫn file in nằm ngoài thư mục phiên được phép")
+    return path
+
+
+def claim_approved_print_jobs(conn, batch_id: int, job_ids: list[int]) -> bool:
+    """Atomically claim the exact approved jobs before touching Windows.
+
+    The caller must commit this transition before invoking ``os.startfile``.
+    A savepoint keeps a future multi-document bundle all-or-nothing if one row
+    was claimed, invalidated or submitted by another request in the meantime.
+    """
+
+    ids = sorted({int(job_id) for job_id in job_ids})
+    if not ids:
+        return False
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute("SAVEPOINT claim_print_jobs")
+    try:
+        changed = conn.execute(
+            f"""UPDATE print_jobs
+                SET status='submitting',submitted_at=NULL,printed_at=NULL,
+                    printer_name=NULL,error_message=NULL
+                WHERE batch_id=? AND status='approved' AND id IN ({placeholders})""",
+            (batch_id, *ids),
+        ).rowcount
+        if changed != len(ids):
+            conn.execute("ROLLBACK TO claim_print_jobs")
+            conn.execute("RELEASE claim_print_jobs")
+            return False
+        conn.execute("RELEASE claim_print_jobs")
+        return True
+    except Exception:
+        conn.execute("ROLLBACK TO claim_print_jobs")
+        conn.execute("RELEASE claim_print_jobs")
+        raise
+
+
+def finish_claimed_print_jobs(
+    conn,
+    job_ids: list[int],
+    *,
+    status: str,
+    submitted_at=None,
+    printer_name="",
+    copies=1,
+    error_message=None,
+) -> bool:
+    """CAS a claimed bundle to its terminal, non-retryable state."""
+
+    if status not in {"submitted", "submission_unknown"}:
+        raise ValueError("Trạng thái kết thúc lệnh in không hợp lệ")
+    ids = sorted({int(job_id) for job_id in job_ids})
+    if not ids:
+        return False
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute("SAVEPOINT finish_print_jobs")
+    try:
+        changed = conn.execute(
+            f"""UPDATE print_jobs
+                SET status=?,submitted_at=?,printed_at=NULL,printer_name=?,copies=?,error_message=?
+                WHERE status='submitting' AND id IN ({placeholders})""",
+            (
+                status,
+                submitted_at if status == "submitted" else None,
+                printer_name,
+                copies,
+                error_message,
+                *ids,
+            ),
+        ).rowcount
+        if changed != len(ids):
+            conn.execute("ROLLBACK TO finish_print_jobs")
+            conn.execute("RELEASE finish_print_jobs")
+            return False
+        conn.execute("RELEASE finish_print_jobs")
+        return True
+    except Exception:
+        conn.execute("ROLLBACK TO finish_print_jobs")
+        conn.execute("RELEASE finish_print_jobs")
+        raise
+
+
 def register_contract_routes(app, ctx):
     db_factory = ctx["db"]
     now_iso = ctx["now_iso"]
@@ -2010,11 +3670,174 @@ def register_contract_routes(app, ctx):
     tax_factor = ctx["tax_factor"]
     setting_get = ctx["setting_get"]
     setting_set = ctx["setting_set"]
+    create_minvoice_client = ctx.get("create_minvoice_client")
     root = ctx["root"]
     data_dir = ctx["data_dir"]
 
+    def xcom_payment_error_response(exc):
+        status = 404 if exc.code == "not_found" else 409 if exc.code in {
+            "missing_config", "missing_scope", "missing_tariff", "no_actual_attendance",
+            "preview_required", "preview_not_found", "preview_used", "preview_expired",
+            "preview_mismatch", "stale_preview",
+        } else 400
+        return jsonify({
+            "ok": False,
+            "error": str(exc),
+            "code": exc.code,
+            "details": exc.details,
+        }), status
+
     def create_msmi_client():
         return MsmiClient(MsmiConfig.from_env_files([root / ".env", data_dir.parent / ".env"]))
+
+    invoice_snapshot_columns = (
+        "buyer_name_snapshot", "buyer_tax_code_snapshot", "buyer_address_snapshot",
+        "buyer_email_snapshot", "company_name_snapshot", "company_tax_code_snapshot",
+        "company_address_snapshot", "payment_requester_snapshot",
+        "payment_bank_name_snapshot", "payment_bank_account_snapshot",
+    )
+
+    def current_invoice_snapshot(conn, draft):
+        buyer = conn.execute(
+            "SELECT * FROM outgoing_buyer_profiles WHERE contractor=?", (draft["contractor"],),
+        ).fetchone()
+        if not buyer or any(not clean_text(buyer[key]) for key in ("legal_name", "tax_code", "address")):
+            raise ValueError(
+                "Cần lưu đủ tên pháp lý, mã số thuế và địa chỉ người mua trước khi khóa hóa đơn"
+            )
+        snapshot = {
+            "buyer_name_snapshot": clean_text(buyer["legal_name"]),
+            "buyer_tax_code_snapshot": clean_text(buyer["tax_code"]),
+            "buyer_address_snapshot": clean_text(buyer["address"]),
+            "buyer_email_snapshot": clean_text(buyer["email"]),
+            "company_name_snapshot": clean_text(setting_get(conn, "company", "")),
+            "company_tax_code_snapshot": clean_text(setting_get(conn, "company_tax_code", "")),
+            "company_address_snapshot": clean_text(setting_get(conn, "company_address", "")),
+            "payment_requester_snapshot": clean_text(setting_get(conn, "payment_requester", "")),
+            "payment_bank_name_snapshot": clean_text(setting_get(conn, "payment_bank_name", "")),
+            "payment_bank_account_snapshot": clean_text(setting_get(conn, "payment_bank_account", "")),
+        }
+        required = tuple(column for column in invoice_snapshot_columns if column != "buyer_email_snapshot")
+        if any(not snapshot[column] for column in required):
+            raise ValueError("Thiếu hồ sơ công ty hoặc tài khoản thanh toán để khóa cùng hóa đơn")
+        return snapshot, buyer
+
+    def stored_invoice_snapshot(draft):
+        snapshot = {column: clean_text(draft[column]) for column in invoice_snapshot_columns}
+        required = tuple(column for column in invoice_snapshot_columns if column != "buyer_email_snapshot")
+        return snapshot if all(snapshot[column] for column in required) else None
+
+    def snapshot_update_values(snapshot):
+        return tuple(snapshot[column] for column in invoice_snapshot_columns)
+
+    def finite_number(value, default=0.0, label="Giá trị"):
+        if value in (None, ""):
+            result = float(default)
+        else:
+            result = number_value(value, math.nan)
+        try:
+            result = float(result)
+        except (TypeError, ValueError, OverflowError):
+            result = math.nan
+        if not math.isfinite(result):
+            raise ValueError(f"{label} phải là số hữu hạn")
+        return result
+
+    def finite_integer(value, default=0, label="Giá trị"):
+        result = finite_number(value, default, label)
+        if abs(result - round(result)) > 1e-9:
+            raise ValueError(f"{label} phải là số nguyên")
+        return int(round(result))
+
+    def minvoice_reconciliation_mismatches(remote_data, draft, series, local_lines):
+        data = remote_data
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            data = data["data"]
+        if not isinstance(data, dict):
+            return ["dữ liệu đối soát không đúng cấu trúc"]
+
+        def present(*keys):
+            for key in keys:
+                if key in data and data[key] not in (None, ""):
+                    return data[key]
+            return None
+
+        mismatches = []
+        remote_series = present("inv_invoiceSeries", "khhdon", "series", "invoiceSeries")
+        if remote_series is None:
+            mismatches.append("thiếu ký hiệu để đối soát")
+        elif clean_text(remote_series).upper() != clean_text(series).upper():
+            mismatches.append("ký hiệu")
+        remote_date = present("inv_invoiceIssuedDate", "tdlap", "invoiceDate", "issuedDate")
+        if remote_date is None:
+            mismatches.append("thiếu ngày để đối soát")
+        elif as_date(remote_date) != clean_text(draft["invoice_date"]):
+            mismatches.append("ngày hóa đơn")
+        remote_tax_code = present("inv_buyerTaxCode", "nmmst", "buyerTaxCode")
+        local_tax_code = clean_text(draft["buyer_tax_code_snapshot"])
+        if local_tax_code:
+            if remote_tax_code is None:
+                mismatches.append("thiếu mã số thuế người mua để đối soát")
+            elif clean_text(remote_tax_code) != local_tax_code:
+                mismatches.append("mã số thuế người mua")
+        for label, aliases, expected in (
+            ("tiền trước thuế", ("inv_TotalAmountWithoutVat", "tgtcthue", "subtotal"), draft["subtotal"]),
+            ("tiền thuế", ("inv_vatAmount", "tgtthue", "taxAmount"), draft["tax_amount"]),
+            ("tổng tiền", ("inv_TotalAmount", "tgtttbso", "totalAmount", "total"), draft["total_amount"]),
+        ):
+            remote_value = present(*aliases)
+            if remote_value is None:
+                mismatches.append(f"thiếu {label} để đối soát")
+                continue
+            parsed_value = number_value(remote_value, math.nan)
+            if not math.isfinite(parsed_value) or abs(parsed_value - float(expected)) > 1:
+                mismatches.append(label)
+
+        remote_lines = present("details", "hdhhdvu", "invoiceItems")
+        if isinstance(remote_lines, list) and remote_lines and all(
+            isinstance(wrapper, dict) and isinstance(wrapper.get("data"), list)
+            for wrapper in remote_lines
+        ):
+            remote_lines = [line for wrapper in remote_lines for line in wrapper["data"]]
+        if not isinstance(remote_lines, list) or not remote_lines:
+            mismatches.append("thiếu chi tiết hàng hóa để đối soát")
+            return mismatches
+        if len(remote_lines) != len(local_lines):
+            mismatches.append("số dòng hàng")
+            return mismatches
+        for index, (remote_line, local_line) in enumerate(zip(remote_lines, local_lines), 1):
+            if not isinstance(remote_line, dict):
+                mismatches.append(f"cấu trúc dòng {index}")
+                continue
+            remote_code = first_value(
+                remote_line, "inv_itemCode", "ma", "itemCode", "product_code", default=None,
+            )
+            remote_qty = first_value(
+                remote_line, "inv_quantity", "sluong", "quantity", "qty", default=None,
+            )
+            remote_price = first_value(
+                remote_line, "inv_unitPrice", "dgia", "unitPrice", "unit_price", default=None,
+            )
+            remote_tax = first_value(remote_line, "ma_thue", "tax", "tax_rate", default=None)
+            remote_nature = first_value(remote_line, "tchat", "invoice_nature", default=None)
+            if None in (remote_code, remote_qty, remote_price, remote_tax, remote_nature):
+                mismatches.append(f"dòng {index} thiếu trường đối soát")
+                continue
+            parsed_qty = number_value(remote_qty, math.nan)
+            parsed_price = number_value(remote_price, math.nan)
+            if (
+                clean_text(remote_code).upper() != clean_text(local_line["product_code"]).upper()
+                or not math.isfinite(parsed_qty)
+                or abs(parsed_qty - float(local_line["qty"])) > 1e-6
+                or not math.isfinite(parsed_price)
+                or abs(parsed_price - float(local_line["unit_price"])) > 1
+                or clean_text(remote_tax) != clean_text(local_line["tax"])
+                or clean_text(remote_nature) != clean_text(local_line["invoice_nature"])
+            ):
+                mismatches.append(f"chi tiết dòng {index}")
+        return mismatches
 
     def invoice_payload(conn, limit=100, invoice_id=None):
         params = []
@@ -2026,16 +3849,19 @@ def register_contract_routes(app, ctx):
                            i.invoice_number,i.invoice_series,i.invoice_date,i.subtotal,i.tax_amount,
                            i.total_amount,i.sync_status,i.receipt_status,i.error_message,i.synced_at,
                            COUNT(li.id) item_count,
-                           SUM(CASE WHEN li.mapping_status='mapped' THEN 1 ELSE 0 END) mapped_count
+                           SUM(CASE WHEN li.inventory_eligible=1 THEN 1 ELSE 0 END) inventory_item_count,
+                           SUM(CASE WHEN li.inventory_eligible=1 AND li.mapping_status='mapped' THEN 1 ELSE 0 END) mapped_count
                     FROM msmi_invoices i LEFT JOIN msmi_invoice_items li ON li.invoice_id=i.id
                     {where} GROUP BY i.id ORDER BY i.invoice_date DESC,i.id DESC LIMIT ?"""
         params.append(max(1, min(int(limit), 500)))
         invoices = [dict(row) for row in conn.execute(query, params)]
         for item in invoices:
             item["mapped_count"] = item["mapped_count"] or 0
+            item["inventory_item_count"] = item["inventory_item_count"] or 0
             item["items"] = [dict(row) for row in conn.execute(
                 """SELECT li.id,li.line_index,li.source_item_code,li.source_item_name,li.source_unit,
-                          li.qty,li.unit_price,li.amount,li.tax_rate,li.product_code,li.mapping_status,
+                          li.qty,li.unit_price,li.amount,li.tax_rate,li.source_nature,
+                          li.inventory_eligible,li.validation_note,li.product_code,li.mapping_status,
                           p.name product_name,p.unit product_unit
                    FROM msmi_invoice_items li LEFT JOIN products p ON p.code=li.product_code
                    WHERE li.invoice_id=? ORDER BY li.line_index""",
@@ -2125,6 +3951,7 @@ def register_contract_routes(app, ctx):
         inserted_names = updated_names = unchanged_names = 0
         try:
             with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 if catalog_database_state_hash(conn) != pending["database_state_hash"]:
                     raise ValueError(
                         "Danh mục đã thay đổi sau khi xem trước; dữ liệu chưa được ghi, vui lòng chọn lại file"
@@ -2233,6 +4060,7 @@ def register_contract_routes(app, ctx):
             workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True, keep_links=False)
             with db_factory() as conn:
                 preview = parse_mapping_workbook(conn, workbook, mapping_type)
+                database_state_hash = mapping_database_state_hash(conn, mapping_type)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception:
@@ -2250,6 +4078,7 @@ def register_contract_routes(app, ctx):
             "header_row": preview["header_row"],
             "items": preview.pop("items"),
             "counts": preview["counts"],
+            "database_state_hash": database_state_hash,
             "has_errors": not preview["can_confirm"],
         }
         with MAPPING_IMPORT_LOCK:
@@ -2285,6 +4114,11 @@ def register_contract_routes(app, ctx):
         inserted = updated = unchanged = 0
         try:
             with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if mapping_database_state_hash(conn, mapping_type) != pending["database_state_hash"]:
+                    raise ValueError(
+                        "Dữ liệu ánh xạ đã thay đổi sau khi xem trước; dữ liệu chưa được ghi, vui lòng chọn lại file"
+                    )
                 for item in pending["items"]:
                     code = item["code"]
                     target_value = item["target_value"]
@@ -2368,9 +4202,11 @@ def register_contract_routes(app, ctx):
             workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True, keep_links=False)
             with db_factory() as conn:
                 preview = parse_kitchen_workbook(conn, workbook, work_date)
+                database_state_hash = kitchen_import_database_state_hash(conn)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception:
+            app.logger.exception("Kitchen workbook preview failed")
             return jsonify({"ok": False, "error": "Không đọc được file xưởng cơm; vui lòng kiểm tra lại file"}), 400
         finally:
             if workbook is not None:
@@ -2384,6 +4220,7 @@ def register_contract_routes(app, ctx):
                 "work_date": work_date,
                 "plans": preview["plans"],
                 "counts": preview["counts"],
+                "database_state_hash": database_state_hash,
                 "has_errors": not preview["can_confirm"],
             }
         return jsonify({
@@ -2402,16 +4239,39 @@ def register_contract_routes(app, ctx):
             return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi dữ liệu"}), 400
         token = clean_text(body.get("token"))
         with KITCHEN_IMPORT_LOCK:
-            pending = PENDING_KITCHEN_IMPORTS.pop(token, None)
-        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            pending_source = PENDING_KITCHEN_IMPORTS.get(token)
+        if not pending_source or time.time() - pending_source["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            with KITCHEN_IMPORT_LOCK:
+                PENDING_KITCHEN_IMPORTS.pop(token, None)
             return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file"}), 410
-        if pending["has_errors"]:
-            return jsonify({"ok": False, "error": "File còn nhóm lỗi nên chưa thể nhập"}), 400
+        pending = deepcopy(pending_source)
+        override_errors = apply_kitchen_meal_count_overrides(
+            pending["plans"], body.get("meal_count_overrides") or {}
+        )
+        if override_errors:
+            return jsonify({"ok": False, "error": override_errors[0]}), 400
+        remaining_errors = [
+            f"{plan['sheet']} · {plan['kitchen']} · {plan['shift']}: {plan['errors'][0]}"
+            for plan in pending["plans"] if plan.get("errors")
+        ]
+        if remaining_errors:
+            return jsonify({"ok": False, "error": remaining_errors[0]}), 400
+        with KITCHEN_IMPORT_LOCK:
+            if PENDING_KITCHEN_IMPORTS.get(token) is not pending_source:
+                return jsonify({"ok": False, "error": "Phiên xem trước đã thay đổi; vui lòng chọn lại file"}), 409
+            PENDING_KITCHEN_IMPORTS.pop(token, None)
 
         inserted = updated = saved_items = saved_mappings = 0
         try:
             with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if kitchen_import_database_state_hash(conn) != pending["database_state_hash"]:
+                    raise ValueError(
+                        "Dữ liệu xưởng cơm hoặc bảng giá đã thay đổi sau khi xem trước; "
+                        "dữ liệu chưa được ghi, vui lòng chọn lại file"
+                    )
                 for plan in pending["plans"]:
+                    plan_work_date = plan["work_date"]
                     conn.execute(
                         "INSERT INTO kitchens(code,name) VALUES(?,?) ON CONFLICT(code) DO NOTHING",
                         (plan["kitchen"], plan["kitchen"]),
@@ -2437,7 +4297,7 @@ def register_contract_routes(app, ctx):
                                status='draft',note=?,source_file=?,source_sheet=?,source_row_start=?,
                                source_row_end=?,menu_count=?,servings_per_menu=?,meal_price=?,other_cost=?,
                                source_financials_json=?,import_key=?,updated_at=? WHERE id=?""",
-                            (pending["work_date"], plan["kitchen"], plan["shift"], plan["meal_count"],
+                            (plan_work_date, plan["kitchen"], plan["shift"], plan["meal_count"],
                              plan["xcom_code"], plan["menu_name"], pending["filename"], plan["sheet"],
                              plan["source_row_start"], plan["source_row_end"], plan["menu_count"],
                              plan["servings_per_menu"], plan["meal_price"], plan["other_cost"],
@@ -2453,7 +4313,7 @@ def register_contract_routes(app, ctx):
                                import_key,source_file,source_sheet,source_row_start,source_row_end,menu_count,
                                servings_per_menu,meal_price,other_cost,source_financials_json
                                ) VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (pending["work_date"], plan["kitchen"], plan["shift"], plan["meal_count"],
+                            (plan_work_date, plan["kitchen"], plan["shift"], plan["meal_count"],
                              plan["xcom_code"], plan["menu_name"], now_iso(), now_iso(), plan["import_key"],
                              pending["filename"], plan["sheet"], plan["source_row_start"], plan["source_row_end"],
                              plan["menu_count"], plan["servings_per_menu"], plan["meal_price"], plan["other_cost"],
@@ -2468,6 +4328,22 @@ def register_contract_routes(app, ctx):
                             raise ValueError(
                                 f"Mã {item['product_code']} không còn trong danh mục; dữ liệu chưa được ghi"
                             )
+                        # Confirmation locks the exact current-file/current-period
+                        # HATRAN value.  Later catalogue changes cannot silently
+                        # rewrite historical cost.
+                        conn.execute(
+                            """INSERT INTO dated_prices(product_code,price_group,period,price_value,updated_at)
+                               VALUES(?,'HATRAN',?,?,?)
+                               ON CONFLICT(product_code,price_group,period) DO NOTHING""",
+                            (item["product_code"], plan_work_date[:7], item["buy_price"], now_iso()),
+                        )
+                        # Store one canonical post-confirmation provenance.  On
+                        # the first import the price comes from this workbook;
+                        # on a replay it is read from the just-locked period.
+                        # Those paths must produce byte-for-byte equal state.
+                        confirmed_price_source = (
+                            f"HATRAN {plan_work_date[:7]} · giá kỳ đã khóa"
+                        )
                         conn.execute(
                             """INSERT INTO meal_plan_items(
                                plan_id,dish_name,product_code,product_name,norm_qty,unit,supplier,buy_price,
@@ -2475,7 +4351,7 @@ def register_contract_routes(app, ctx):
                                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (plan_id, item["dish_name"], item["product_code"], item["product_name"],
                              item["norm_qty"], item["unit"], item["supplier"], item["buy_price"],
-                             item["price_source"], item["norm_per_1000"], item["applicable_meal_count"],
+                             confirmed_price_source, item["norm_per_1000"], item["applicable_meal_count"],
                              item["source_row"], item["source_amount"]),
                         )
                         saved_items += 1
@@ -2492,13 +4368,22 @@ def register_contract_routes(app, ctx):
                     "ok",
                     entity_type="meal_plan",
                     entity_id=pending["work_date"],
-                    metadata={"filename": pending["filename"], **result_counts},
+                    metadata={
+                        "filename": pending["filename"],
+                        "work_dates": sorted({plan["work_date"] for plan in pending["plans"]}),
+                        **result_counts,
+                    },
                 )
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 409
         except Exception:
             return jsonify({"ok": False, "error": "Không ghi được file xưởng cơm; dữ liệu chưa được thay đổi"}), 409
-        return jsonify({"ok": True, "work_date": pending["work_date"], **result_counts})
+        return jsonify({
+            "ok": True,
+            "work_date": pending["work_date"],
+            "work_dates": sorted({plan["work_date"] for plan in pending["plans"]}),
+            **result_counts,
+        })
 
     @app.get("/api/mappings/<mapping_type>")
     def api_mapping_list(mapping_type):
@@ -2536,6 +4421,7 @@ def register_contract_routes(app, ctx):
                    ORDER BY work_date,kitchen,shift""",
                 (month,),
             )]
+            printer_state = windows_printer_state()
             return jsonify({
                 "ok": True,
                 "inventory": inventory,
@@ -2555,6 +4441,7 @@ def register_contract_routes(app, ctx):
                     "kitchens": len({row["kitchen"] for row in meal_attendance}),
                 },
                 "kitchen_units": [dict(row) for row in conn.execute("SELECT * FROM kitchen_units ORDER BY kitchen_code")],
+                "xcom_payment_profiles": list_payment_profiles(conn),
                 "payroll": payroll_rows(conn, month),
                 "labor_costs": labor,
                 "staff": [dict(row) for row in conn.execute("SELECT * FROM staff ORDER BY full_name")],
@@ -2563,6 +4450,10 @@ def register_contract_routes(app, ctx):
                     "name": setting_get(conn, "printer_name", ""),
                     "copies": int(as_number(setting_get(conn, "print_copies", "1"), 1)),
                     "paper": setting_get(conn, "print_paper", "A4"),
+                    "default": printer_state["default"],
+                    "installed": printer_state["installed"],
+                    "supported": printer_state["supported"],
+                    "error": printer_state["error"],
                 },
                 "document_settings": {
                     "requester": setting_get(conn, "payment_requester", ""),
@@ -2614,6 +4505,7 @@ def register_contract_routes(app, ctx):
             workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True, keep_links=False)
             with db_factory() as conn:
                 preview = parse_opening_workbook(conn, workbook, period)
+                database_state_hash = opening_import_database_state_hash(conn, period)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception:
@@ -2635,6 +4527,7 @@ def register_contract_routes(app, ctx):
                 "items": pending_items,
                 "counts": preview["counts"],
                 "totals": preview["totals"],
+                "database_state_hash": database_state_hash,
                 "has_errors": not preview["can_confirm"],
             }
         return jsonify({
@@ -2661,6 +4554,13 @@ def register_contract_routes(app, ctx):
         inserted_products = inserted = updated = 0
         try:
             with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if opening_import_database_state_hash(conn, pending["period"]) != pending["database_state_hash"]:
+                    raise ValueError(
+                        "Danh mục hoặc tồn đầu kỳ đã thay đổi sau khi xem trước; "
+                        "dữ liệu chưa được ghi, vui lòng chọn lại file"
+                    )
+                incoming_codes = {item["product_code"] for item in pending["items"]}
                 for item in pending["items"]:
                     code = item["product_code"]
                     product = conn.execute("SELECT code FROM products WHERE code=?", (code,)).fetchone()
@@ -2702,10 +4602,23 @@ def register_contract_routes(app, ctx):
                          max(number_value(item["unit_cost"]), 0), pending["period"], code,
                          note, now_iso(), now_iso()),
                     )
+                stale_rows = conn.execute(
+                    "SELECT source_line FROM inventory_transactions WHERE source_type='OPENING' AND source_id=?",
+                    (pending["period"],),
+                ).fetchall()
+                stale_codes = [row["source_line"] for row in stale_rows if row["source_line"] not in incoming_codes]
+                if stale_codes:
+                    placeholders = ",".join("?" for _ in stale_codes)
+                    conn.execute(
+                        f"DELETE FROM inventory_transactions WHERE source_type='OPENING' AND source_id=? "
+                        f"AND source_line IN ({placeholders})",
+                        (pending["period"], *stale_codes),
+                    )
                 result_counts = {
                     "inserted_products": inserted_products,
                     "inserted": inserted,
                     "updated": updated,
+                    "deleted_stale": len(stale_codes),
                     "processed": len(pending["items"]),
                 }
                 audit(
@@ -2733,6 +4646,9 @@ def register_contract_routes(app, ctx):
 
     @app.post("/api/kitchen/attendance/import/preview")
     def api_meal_attendance_import_preview():
+        period_override = clean_text(request.form.get("period"))
+        if period_override and not re.fullmatch(r"\d{4}-\d{2}", period_override):
+            return jsonify({"ok": False, "error": "Kỳ chấm suất phải có dạng YYYY-MM"}), 400
         upload = request.files.get("file")
         if not upload or not upload.filename:
             return jsonify({"ok": False, "error": "Chưa chọn file chấm suất ăn"}), 400
@@ -2760,7 +4676,8 @@ def register_contract_routes(app, ctx):
         try:
             workbook = load_workbook(io.BytesIO(payload), read_only=False, data_only=True, keep_links=False)
             with db_factory() as conn:
-                preview = parse_meal_attendance_workbook(conn, workbook)
+                preview = parse_meal_attendance_workbook(conn, workbook, period_override)
+                database_state_hash = meal_attendance_database_state_hash(conn, preview["periods"])
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception:
@@ -2780,6 +4697,7 @@ def register_contract_routes(app, ctx):
                 "items": pending_items,
                 "counts": preview["counts"],
                 "totals": preview["totals"],
+                "database_state_hash": database_state_hash,
                 "has_errors": not preview["can_confirm"],
             }
         return jsonify({
@@ -2804,6 +4722,12 @@ def register_contract_routes(app, ctx):
         inserted = updated = unchanged = deleted = 0
         try:
             with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if meal_attendance_database_state_hash(conn, pending["periods"]) != pending["database_state_hash"]:
+                    raise ValueError(
+                        "Chấm suất ăn trong kỳ đã thay đổi sau khi xem trước; "
+                        "dữ liệu chưa được ghi, vui lòng chọn lại file"
+                    )
                 existing = {
                     (row["work_date"], row["kitchen"], row["shift"]): dict(row)
                     for period in pending["periods"]
@@ -2858,6 +4782,8 @@ def register_contract_routes(app, ctx):
                         **result_counts,
                     },
                 )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 409
         except Exception:
             return jsonify({"ok": False, "error": "Không ghi được chấm suất ăn; dữ liệu chưa được thay đổi"}), 409
         return jsonify({
@@ -2872,13 +4798,39 @@ def register_contract_routes(app, ctx):
         items = body.get("items") or []
         if not re.fullmatch(r"\d{4}-\d{2}", period) or not isinstance(items, list):
             return jsonify({"ok": False, "error": "Kỳ tồn đầu phải có dạng YYYY-MM và có danh sách hàng"}), 400
+        try:
+            datetime.strptime(period + "-01", "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"ok": False, "error": "Kỳ tồn đầu không hợp lệ"}), 400
         txn_date = period + "-01"
+        try:
+            if any(not isinstance(item, dict) for item in items):
+                raise ValueError("Danh sách tồn đầu có dòng không hợp lệ")
+            normalized_items = [{
+                **item,
+                "_qty": finite_number(item.get("qty"), 0, "Số lượng tồn đầu"),
+                "_unit_cost": finite_number(item.get("unit_cost"), 0, "Đơn giá tồn đầu"),
+            } for item in items]
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         with db_factory() as conn:
+            known_codes = {
+                row["code"] for row in conn.execute("SELECT code FROM products")
+            }
+            missing_codes = sorted({
+                clean_text(item.get("product_code")).upper()
+                for item in normalized_items
+                if clean_text(item.get("product_code")).upper() not in known_codes
+            })
+            if missing_codes:
+                return jsonify({
+                    "ok": False,
+                    "error": "Tồn đầu có mã hàng chưa tồn tại: " + ", ".join(missing_codes[:10]),
+                }), 400
             saved = 0
-            for item in items:
+            for item in normalized_items:
                 code = clean_text(item.get("product_code")).upper()
-                if not code or not conn.execute("SELECT 1 FROM products WHERE code=?", (code,)).fetchone():
-                    continue
+                qty = item["_qty"]
                 conn.execute(
                     """INSERT INTO inventory_transactions(
                         txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
@@ -2887,9 +4839,8 @@ def register_contract_routes(app, ctx):
                     ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
                         qty_in=excluded.qty_in,qty_out=excluded.qty_out,unit_cost=excluded.unit_cost,
                         note=excluded.note,updated_at=excluded.updated_at""",
-                    (txn_date, code, max(number_value(item.get("qty")), 0),
-                     max(-number_value(item.get("qty")), 0),
-                     max(number_value(item.get("unit_cost")), 0), period, code,
+                    (txn_date, code, max(qty, 0), max(-qty, 0),
+                     max(item["_unit_cost"], 0), period, code,
                      clean_text(item.get("note")), now_iso(), now_iso()),
                 )
                 saved += 1
@@ -2901,9 +4852,16 @@ def register_contract_routes(app, ctx):
     def api_inventory_adjustment():
         body = request.get_json(force=True) or {}
         code = clean_text(body.get("product_code")).upper()
-        qty = number_value(body.get("qty"))
+        try:
+            qty = finite_number(body.get("qty"), 0, "Số lượng điều chỉnh")
+            unit_cost = finite_number(body.get("unit_cost"), 0, "Đơn giá điều chỉnh")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         if not code or qty == 0:
             return jsonify({"ok": False, "error": "Cần mã hàng và số lượng điều chỉnh khác 0"}), 400
+        txn_date = clean_text(body.get("txn_date")) or date.today().isoformat()
+        if as_date(txn_date) != txn_date:
+            return jsonify({"ok": False, "error": "Ngày điều chỉnh phải hợp lệ dạng YYYY-MM-DD"}), 400
         with db_factory() as conn:
             if not conn.execute("SELECT 1 FROM products WHERE code=?", (code,)).fetchone():
                 return jsonify({"ok": False, "error": "Mã hàng chưa có trong danh mục"}), 400
@@ -2913,8 +4871,8 @@ def register_contract_routes(app, ctx):
                     txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
                     status,note,created_at,updated_at
                 ) VALUES(?,?,?,?,?,'ADJUSTMENT',?,'','posted',?,?,?)""",
-                (body.get("txn_date") or date.today().isoformat(), code, max(qty, 0), max(-qty, 0),
-                 max(number_value(body.get("unit_cost")), 0), source_id, clean_text(body.get("note")),
+                (txn_date, code, max(qty, 0), max(-qty, 0),
+                 max(unit_cost, 0), source_id, clean_text(body.get("note")),
                  now_iso(), now_iso()),
             )
             audit(conn, now_iso, "inventory.adjust", "ok", entity_type="product", entity_id=code,
@@ -2997,6 +4955,15 @@ def register_contract_routes(app, ctx):
                 return jsonify({"ok": True, **result, "invoices": invoice_payload(conn, 30)})
             except MsmiError as error:
                 return jsonify({"ok": False, "error": str(error), "read_only": True}), 502
+            except Exception:
+                reference = uuid.uuid4().hex[:10].upper()
+                app.logger.exception("mSMI sync failed [%s]", reference)
+                return jsonify({
+                    "ok": False,
+                    "error": f"Không đồng bộ được mSMI. Vui lòng thử lại hoặc báo mã {reference} cho bên hỗ trợ.",
+                    "reference": reference,
+                    "read_only": True,
+                }), 502
 
     @app.get("/api/msmi/invoices")
     def api_msmi_invoices():
@@ -3010,12 +4977,24 @@ def register_contract_routes(app, ctx):
         body = request.get_json(force=True) or {}
         product_code = clean_text(body.get("product_code")).upper()
         with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             item = conn.execute(
-                """SELECT li.*,i.tenant,i.seller_tax_code,i.id invoice_id FROM msmi_invoice_items li
+                """SELECT li.*,i.tenant,i.seller_tax_code,i.id invoice_id,i.receipt_status
+                   FROM msmi_invoice_items li
                    JOIN msmi_invoices i ON i.id=li.invoice_id WHERE li.id=?""", (item_id,)
             ).fetchone()
             if not item:
                 return jsonify({"ok": False, "error": "Không tìm thấy dòng hóa đơn"}), 404
+            if item["receipt_status"] == "posted":
+                return jsonify({
+                    "ok": False,
+                    "error": "Phiếu nhập đã ghi kho; không được đổi ghép mã. Hãy lập điều chỉnh kho có kiểm soát nếu cần sửa",
+                }), 409
+            if not item["inventory_eligible"]:
+                return jsonify({
+                    "ok": False,
+                    "error": "Dòng này không có số lượng/đơn giá đủ điều kiện ghi kho nên không được ghép mã hàng",
+                }), 409
             if not conn.execute("SELECT 1 FROM products WHERE code=?", (product_code,)).fetchone():
                 return jsonify({"ok": False, "error": "Mã hàng đích chưa có trong danh mục"}), 400
             conn.execute(
@@ -3031,12 +5010,20 @@ def register_contract_routes(app, ctx):
                 (product_code, item_id),
             )
             remaining = conn.execute(
-                "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=? AND mapping_status!='mapped'",
+                """SELECT COUNT(*) n FROM msmi_invoice_items
+                   WHERE invoice_id=? AND inventory_eligible=1 AND mapping_status!='mapped'""",
+                (item["invoice_id"],),
+            ).fetchone()["n"]
+            eligible_count = conn.execute(
+                "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=? AND inventory_eligible=1",
                 (item["invoice_id"],),
             ).fetchone()["n"]
             conn.execute(
                 "UPDATE msmi_invoices SET receipt_status=?,updated_at=? WHERE id=? AND receipt_status!='posted'",
-                ("ready" if remaining == 0 else "pending_mapping", now_iso(), item["invoice_id"]),
+                (
+                    "not_inventory" if eligible_count == 0 else ("ready" if remaining == 0 else "pending_mapping"),
+                    now_iso(), item["invoice_id"],
+                ),
             )
             audit(conn, now_iso, "msmi.mapping", "ok", entity_type="invoice_item", entity_id=item_id,
                   metadata={"product_code": product_code})
@@ -3045,17 +5032,48 @@ def register_contract_routes(app, ctx):
     @app.post("/api/msmi/invoices/<int:invoice_id>/receipt")
     def api_msmi_receipt(invoice_id):
         with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             invoice = conn.execute("SELECT * FROM msmi_invoices WHERE id=?", (invoice_id,)).fetchone()
             if not invoice:
                 return jsonify({"ok": False, "error": "Không tìm thấy hóa đơn đầu vào"}), 404
+            if invoice["sync_status"] != "synced":
+                return jsonify({
+                    "ok": False,
+                    "error": "Hóa đơn đang cần đối chiếu sau đồng bộ; chưa được tạo phiếu nhập",
+                }), 409
             items = [dict(row) for row in conn.execute(
-                "SELECT * FROM msmi_invoice_items WHERE invoice_id=? ORDER BY line_index", (invoice_id,)
+                """SELECT * FROM msmi_invoice_items
+                   WHERE invoice_id=? AND inventory_eligible=1 ORDER BY line_index""", (invoice_id,)
             )]
             if not items:
-                return jsonify({"ok": False, "error": "Hóa đơn không có chi tiết hàng hóa"}), 400
+                return jsonify({
+                    "ok": False,
+                    "error": "Hóa đơn không có dòng hàng đủ số lượng/đơn giá để tạo phiếu nhập kho",
+                }), 400
             missing = [item for item in items if item["mapping_status"] != "mapped" or not item["product_code"]]
             if missing:
                 return jsonify({"ok": False, "error": f"Còn {len(missing)} dòng chưa ghép mã hàng"}), 400
+            try:
+                if as_date(invoice["invoice_date"]) != invoice["invoice_date"]:
+                    raise MsmiError("Ngày hóa đơn mSMI không hợp lệ")
+                for item in items:
+                    qty = msmi_number(item["qty"], f"Số lượng dòng {item['line_index']}")
+                    unit_price = msmi_number(item["unit_price"], f"Đơn giá dòng {item['line_index']}")
+                    amount = msmi_number(item["amount"], f"Thành tiền dòng {item['line_index']}")
+                    if qty <= 0 or unit_price < 0 or amount < 0:
+                        raise MsmiError(
+                            f"Dòng {item['line_index']} có số lượng/giá trị không hợp lệ"
+                        )
+            except MsmiError as exc:
+                conn.execute(
+                    "UPDATE msmi_invoices SET sync_status='review_required',error_message=?,updated_at=? WHERE id=?",
+                    (str(exc), now_iso(), invoice_id),
+                )
+                audit(
+                    conn, now_iso, "msmi.create_receipt", "blocked", str(exc),
+                    entity_type="msmi_invoice", entity_id=invoice_id,
+                )
+                return jsonify({"ok": False, "error": str(exc)}), 409
             posted = 0
             for item in items:
                 conn.execute(
@@ -3074,12 +5092,22 @@ def register_contract_routes(app, ctx):
                 (now_iso(), invoice_id),
             )
             audit(conn, now_iso, "msmi.create_receipt", "ok", entity_type="msmi_invoice", entity_id=invoice_id,
-                  metadata={"new_inventory_lines": posted})
+                  metadata={
+                      "new_inventory_lines": posted,
+                      "non_inventory_lines": conn.execute(
+                          "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=? AND inventory_eligible=0",
+                          (invoice_id,),
+                      ).fetchone()["n"],
+                  })
             return jsonify({"ok": True, "new_inventory_lines": posted, "idempotent": posted == 0})
 
     @app.post("/api/outgoing-invoices/draft/<int:batch_id>")
     def api_create_outgoing_drafts(batch_id):
         with db_factory() as conn:
+            # Serialize the stock check and the reservation writes.  A deferred
+            # transaction lets two batches both observe the same stock (or an
+            # order mutate after we read it) before either draft exists.
+            conn.execute("BEGIN IMMEDIATE")
             batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
             if not batch:
                 return jsonify({"ok": False, "error": "Không tìm thấy phiên đơn"}), 404
@@ -3088,6 +5116,21 @@ def register_contract_routes(app, ctx):
             orders = [dict(row) for row in conn.execute(
                 "SELECT * FROM orders WHERE batch_id=? ORDER BY contractor,id", (batch_id,)
             )]
+            orders = [item for item in orders if net_delivered(item) > 1e-9]
+            if not orders:
+                return jsonify({
+                    "ok": False,
+                    "error": "Phiên không còn lượng thực giao dương để lập hóa đơn đầu ra",
+                }), 409
+            issued_contractors = {
+                row["contractor"] for row in conn.execute(
+                    "SELECT contractor FROM outgoing_invoice_drafts WHERE batch_id=? AND status='issued'",
+                    (batch_id,),
+                )
+            }
+            demand_orders = [
+                item for item in orders if item["contractor"] not in issued_contractors
+            ]
             stock = inventory_lookup(conn, batch["work_date"])
             available = {code: max(row["available_qty"], 0) for code, row in stock.items()}
             # Khi người dùng bấm tạo lại, tồn khả dụng đã trừ phần chính dự thảo
@@ -3106,7 +5149,7 @@ def register_contract_routes(app, ctx):
                     available.get(reserved["product_code"], 0) + reserved["qty"]
                 )
             shortages = defaultdict(lambda: {"required": 0, "available": 0, "product_name": ""})
-            for item in orders:
+            for item in demand_orders:
                 qty = net_delivered(item)
                 code = item["product_code"]
                 have = available.get(code, 0)
@@ -3131,17 +5174,36 @@ def register_contract_routes(app, ctx):
                 if existing and existing["status"] == "issued":
                     created.append(dict(existing))
                     continue
-                subtotal = sum(net_delivered(item) * number_value(item["sell_price"]) for item in group)
-                total = sum(net_delivered(item) * number_value(item["sell_price"]) * tax_factor(item["tax"]) for item in group)
-                tax_amount = total - subtotal
+                if existing and existing["minvoice_status"] in {"saved", "saving", "unknown"}:
+                    created.append(dict(existing))
+                    continue
+                calculated_lines = []
+                for item in group:
+                    qty = net_delivered(item)
+                    unit_price = vnd_round(number_value(item["sell_price"]))
+                    amount = vnd_product(qty, unit_price)
+                    vat_percent = invoice_tax_percent(item["tax"])
+                    line_tax = 0 if vat_percent <= 0 else vnd_product(amount, vat_percent / 100)
+                    calculated_lines.append((item, qty, unit_price, amount, line_tax))
+                subtotal = sum(line[3] for line in calculated_lines)
+                tax_amount = sum(line[4] for line in calculated_lines)
+                total = subtotal + tax_amount
                 conn.execute(
                     """INSERT INTO outgoing_invoice_drafts(
-                        batch_id,contractor,invoice_date,status,subtotal,tax_amount,total_amount,created_at
-                    ) VALUES(?,?,?,'draft',?,?,?,?)
+                        batch_id,contractor,invoice_date,status,subtotal,tax_amount,total_amount,
+                        created_at,external_key_uuid
+                    ) VALUES(?,?,?,'draft',?,?,?,?,?)
                     ON CONFLICT(batch_id,contractor) DO UPDATE SET
                         invoice_date=excluded.invoice_date,status='draft',subtotal=excluded.subtotal,
-                        tax_amount=excluded.tax_amount,total_amount=excluded.total_amount""",
-                    (batch_id, contractor, batch["work_date"], subtotal, tax_amount, total, now_iso()),
+                        tax_amount=excluded.tax_amount,total_amount=excluded.total_amount,
+                        external_key_uuid=CASE
+                          WHEN TRIM(COALESCE(outgoing_invoice_drafts.external_key_uuid,''))=''
+                          THEN excluded.external_key_uuid
+                          ELSE outgoing_invoice_drafts.external_key_uuid END""",
+                    (
+                        batch_id, contractor, batch["work_date"], subtotal, tax_amount, total,
+                        now_iso(), uuid.uuid4().hex.upper(),
+                    ),
                 )
                 draft = conn.execute(
                     "SELECT * FROM outgoing_invoice_drafts WHERE batch_id=? AND contractor=?",
@@ -3154,9 +5216,7 @@ def register_contract_routes(app, ctx):
                     "WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",
                     (now_iso(), str(draft_id)),
                 )
-                for item in group:
-                    qty = net_delivered(item)
-                    amount = qty * number_value(item["sell_price"])
+                for item, qty, unit_price, amount, _ in calculated_lines:
                     invoice_name_row = conn.execute(
                         "SELECT invoice_name FROM outgoing_product_names WHERE product_code=?",
                         (item["product_code"],),
@@ -3164,10 +5224,11 @@ def register_contract_routes(app, ctx):
                     invoice_name = invoice_name_row["invoice_name"] if invoice_name_row else item["product_name"]
                     conn.execute(
                         """INSERT INTO outgoing_invoice_lines(
-                            draft_id,order_id,product_code,product_name,qty,unit,unit_price,tax,amount
-                        ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                            draft_id,order_id,product_code,product_name,qty,unit,unit_price,tax,
+                            invoice_nature,amount
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                         (draft_id, item["id"], item["product_code"], invoice_name, qty,
-                         item["unit"], item["sell_price"], item["tax"], amount),
+                         item["unit"], unit_price, item["tax"], item.get("invoice_nature") or "1", amount),
                     )
                     conn.execute(
                         """INSERT INTO inventory_transactions(
@@ -3210,23 +5271,129 @@ def register_contract_routes(app, ctx):
         if not body.get("confirmed"):
             return jsonify({"ok": False, "error": "Cần xác nhận người dùng đã ký và phát hành hóa đơn"}), 400
         with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             draft = conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,)).fetchone()
             if not draft:
                 return jsonify({"ok": False, "error": "Không tìm thấy dự thảo hóa đơn"}), 404
             if draft["status"] == "cancelled":
                 return jsonify({"ok": False, "error": "Dự thảo đã hủy; cần tạo lại trước khi xác nhận phát hành"}), 409
+            if draft["status"] == "issued":
+                return jsonify({
+                    "ok": True,
+                    "idempotent": True,
+                    "invoice_number": draft["issued_invoice_number"] or "",
+                    "invoice_series": draft["issued_invoice_series"] or "",
+                    "invoice_date": draft["issued_invoice_date"] or draft["invoice_date"],
+                })
+            invoice_number = unicodedata.normalize(
+                "NFKC", clean_text(body.get("invoice_number"))
+            )
+            invoice_series = unicodedata.normalize(
+                "NFKC", clean_text(body.get("invoice_series") or draft["minvoice_series"])
+            ).upper()
+            invoice_date = as_date(body.get("invoice_date"))
+            if not re.fullmatch(r"\d{1,20}", invoice_number):
+                return jsonify({"ok": False, "error": "Số hóa đơn đã phát hành chỉ được gồm 1–20 chữ số"}), 400
+            if not invoice_series or len(invoice_series) > 50 or any(ord(ch) < 32 for ch in invoice_series):
+                return jsonify({"ok": False, "error": "Cần ký hiệu hóa đơn hợp lệ, tối đa 50 ký tự"}), 400
+            if not invoice_date:
+                return jsonify({"ok": False, "error": "Ngày hóa đơn phải hợp lệ dạng YYYY-MM-DD"}), 400
+            snapshot = stored_invoice_snapshot(draft)
+            if not snapshot:
+                if clean_text(draft["minvoice_status"]) in {"saved", "saving", "unknown"}:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Bản nháp M-Invoice cũ chưa có hồ sơ bất biến. Cần đối chiếu hóa đơn rồi xác nhận khóa hồ sơ cũ trước khi ghi phát hành",
+                    }), 409
+                try:
+                    snapshot, _ = current_invoice_snapshot(conn, draft)
+                except ValueError as exc:
+                    return jsonify({"ok": False, "error": str(exc)}), 409
+            duplicate = conn.execute(
+                """SELECT id FROM outgoing_invoice_drafts
+                   WHERE id!=? AND UPPER(TRIM(COALESCE(issued_invoice_series,'')))=?
+                     AND TRIM(COALESCE(issued_invoice_number,''))=?""",
+                (draft_id, invoice_series, invoice_number),
+            ).fetchone()
+            if duplicate:
+                return jsonify({"ok": False, "error": "Ký hiệu và số hóa đơn này đã được ghi nhận"}), 409
             if draft["status"] != "issued":
                 conn.execute(
-                    "UPDATE outgoing_invoice_drafts SET status='issued',issued_at=? WHERE id=?",
-                    (now_iso(), draft_id),
+                    """UPDATE outgoing_invoice_drafts
+                       SET status='issued',issued_at=?,issued_invoice_number=?,
+                           issued_invoice_series=?,issued_invoice_date=?,buyer_name_snapshot=?,
+                           buyer_tax_code_snapshot=?,buyer_address_snapshot=?,buyer_email_snapshot=?,
+                           company_name_snapshot=?,company_tax_code_snapshot=?,company_address_snapshot=?,
+                           payment_requester_snapshot=?,payment_bank_name_snapshot=?,
+                           payment_bank_account_snapshot=? WHERE id=? AND status='draft'""",
+                    (
+                        now_iso(), invoice_number, invoice_series, invoice_date,
+                        *snapshot_update_values(snapshot),
+                        draft_id,
+                    ),
                 )
+                if conn.execute("SELECT changes() n").fetchone()["n"] != 1:
+                    return jsonify({"ok": False, "error": "Trạng thái hóa đơn vừa thay đổi; vui lòng tải lại"}), 409
                 conn.execute(
                     "UPDATE inventory_transactions SET status='posted',updated_at=? "
                     "WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",
                     (now_iso(), str(draft_id)),
                 )
-                audit(conn, now_iso, "outgoing.confirm_issued", "ok", entity_type="outgoing_invoice", entity_id=draft_id)
-            return jsonify({"ok": True, "idempotent": draft["status"] == "issued"})
+                audit(conn, now_iso, "outgoing.confirm_issued", "ok", entity_type="outgoing_invoice", entity_id=draft_id,
+                      metadata={"invoice_number": invoice_number, "invoice_series": invoice_series,
+                                "invoice_date": invoice_date})
+            return jsonify({"ok": True, "idempotent": False, "invoice_number": invoice_number,
+                            "invoice_series": invoice_series, "invoice_date": invoice_date})
+
+    @app.post("/api/outgoing-invoices/<int:draft_id>/capture-legacy-snapshot")
+    def api_capture_legacy_invoice_snapshot(draft_id):
+        body = request.get_json(silent=True) or {}
+        if body.get("confirmed_profile_matches_invoice") is not True:
+            return jsonify({
+                "ok": False,
+                "error": "Cần đối chiếu hồ sơ hiện tại với bản nháp/hóa đơn cũ rồi xác nhận rõ",
+            }), 400
+        with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            draft = conn.execute(
+                "SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,),
+            ).fetchone()
+            if not draft:
+                return jsonify({"ok": False, "error": "Không tìm thấy hóa đơn"}), 404
+            existing = stored_invoice_snapshot(draft)
+            if existing:
+                return jsonify({"ok": True, "idempotent": True})
+            if draft["status"] != "issued" and clean_text(draft["minvoice_status"]) not in {
+                "saved", "saving", "unknown",
+            }:
+                return jsonify({
+                    "ok": False,
+                    "error": "Chỉ khóa hồi tố cho hóa đơn đã phát hành hoặc bản nháp M-Invoice cũ",
+                }), 409
+            try:
+                snapshot, _ = current_invoice_snapshot(conn, draft)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 409
+            conn.execute(
+                """UPDATE outgoing_invoice_drafts SET
+                       buyer_name_snapshot=?,buyer_tax_code_snapshot=?,buyer_address_snapshot=?,
+                       buyer_email_snapshot=?,company_name_snapshot=?,company_tax_code_snapshot=?,
+                       company_address_snapshot=?,payment_requester_snapshot=?,
+                       payment_bank_name_snapshot=?,payment_bank_account_snapshot=?
+                   WHERE id=?""",
+                (*snapshot_update_values(snapshot), draft_id),
+            )
+            if conn.execute("SELECT changes() n").fetchone()["n"] != 1:
+                return jsonify({
+                    "ok": False,
+                    "error": "Hồ sơ hóa đơn vừa thay đổi; vui lòng tải lại",
+                }), 409
+            audit(
+                conn, now_iso, "outgoing.capture_legacy_snapshot", "ok",
+                entity_type="outgoing_invoice", entity_id=draft_id,
+                metadata={"explicit_historical_confirmation": True},
+            )
+            return jsonify({"ok": True, "idempotent": False})
 
     @app.post("/api/outgoing-invoices/<int:draft_id>/cancel")
     def api_cancel_outgoing_draft(draft_id):
@@ -3234,11 +5401,17 @@ def register_contract_routes(app, ctx):
         if not body.get("confirmed"):
             return jsonify({"ok": False, "error": "Cần xác nhận hủy dự thảo hóa đơn"}), 400
         with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             draft = conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,)).fetchone()
             if not draft:
                 return jsonify({"ok": False, "error": "Không tìm thấy dự thảo hóa đơn"}), 404
             if draft["status"] == "issued":
                 return jsonify({"ok": False, "error": "Hóa đơn đã phát hành nên không thể hủy dự thảo"}), 409
+            if draft["minvoice_status"] in {"saved", "saving", "unknown"}:
+                return jsonify({
+                    "ok": False,
+                    "error": "Dự thảo đã lưu hoặc chưa đối soát xong với M-Invoice; không được hủy cục bộ",
+                }), 409
             if draft["status"] != "cancelled":
                 conn.execute(
                     "UPDATE outgoing_invoice_drafts SET status='cancelled' WHERE id=?", (draft_id,)
@@ -3257,7 +5430,484 @@ def register_contract_routes(app, ctx):
             rows = [dict(row) for row in conn.execute(
                 "SELECT * FROM outgoing_invoice_drafts ORDER BY invoice_date DESC,id DESC LIMIT 200"
             )]
+            profiles = {
+                row["contractor"]: dict(row)
+                for row in conn.execute("SELECT * FROM outgoing_buyer_profiles")
+            }
+            for row in rows:
+                row["buyer"] = profiles.get(row["contractor"])
             return jsonify({"ok": True, "items": rows})
+
+    @app.put("/api/outgoing-buyers/<contractor>")
+    def api_outgoing_buyer(contractor):
+        body = request.get_json(force=True) or {}
+        code = clean_text(contractor).upper()
+        legal_name = clean_text(body.get("legal_name"))
+        display_name = clean_text(body.get("display_name"))
+        tax_code = clean_text(body.get("tax_code"))
+        address = clean_text(body.get("address"))
+        email = clean_text(body.get("email"))
+        if not code or not address:
+            return jsonify({"ok": False, "error": "Cần nhà thầu và địa chỉ người mua"}), 400
+        if bool(legal_name) != bool(tax_code):
+            return jsonify({"ok": False, "error": "Người mua là công ty phải có đủ tên pháp lý và mã số thuế"}), 400
+        if tax_code and not re.fullmatch(r"\d{10}(?:-\d{3})?", tax_code):
+            return jsonify({"ok": False, "error": "Mã số thuế người mua không hợp lệ"}), 400
+        if not legal_name and not display_name:
+            return jsonify({"ok": False, "error": "Cần tên người mua"}), 400
+        with db_factory() as conn:
+            conn.execute(
+                """INSERT INTO outgoing_buyer_profiles(
+                       contractor,display_name,legal_name,tax_code,address,email,updated_at
+                   ) VALUES(?,?,?,?,?,?,?) ON CONFLICT(contractor) DO UPDATE SET
+                       display_name=excluded.display_name,legal_name=excluded.legal_name,
+                       tax_code=excluded.tax_code,address=excluded.address,email=excluded.email,
+                       updated_at=excluded.updated_at""",
+                (code, display_name, legal_name, tax_code, address, email, now_iso()),
+            )
+            audit(conn, now_iso, "outgoing.buyer_profile", "ok", entity_type="contractor", entity_id=code)
+            return jsonify({"ok": True, "contractor": code})
+
+    @app.post("/api/minvoice/drafts/<int:draft_id>")
+    def api_save_minvoice_draft(draft_id):
+        client_factory = app.config.get("MINVOICE_CLIENT_FACTORY") or create_minvoice_client
+        if client_factory is None:
+            return jsonify({"ok": False, "error": "Chưa cấu hình M-Invoice client"}), 500
+        body = request.get_json(force=True) or {}
+        dry_run = body.get("dry_run", True) is not False
+        confirmed = body.get("confirm_remote_write") is True
+        if not dry_run and not confirmed:
+            return jsonify({"ok": False, "error": "Cần xác nhận rõ trước khi lưu dự thảo lên M-Invoice"}), 400
+        try:
+            minvoice_client = client_factory()
+        except MinvoiceError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+        requested_series = clean_text(body.get("series")).upper()
+        timestamp = now_iso()
+        reconcile_only = False
+        payload = None
+        with db_factory() as conn:
+            if not dry_run:
+                conn.execute("BEGIN IMMEDIATE")
+            draft = conn.execute(
+                "SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,),
+            ).fetchone()
+            if not draft:
+                return jsonify({"ok": False, "error": "Không tìm thấy dự thảo hóa đơn"}), 404
+            if draft["status"] != "draft":
+                return jsonify({"ok": False, "error": "Chỉ dự thảo chưa phát hành mới được lưu lên M-Invoice"}), 409
+            if not dry_run and draft["minvoice_status"] == "saved":
+                return jsonify({
+                    "ok": True, "dry_run": False, "remote_write": False, "idempotent": True,
+                    "remote_id": draft["minvoice_remote_id"],
+                    "message": "Dự thảo này đã được lưu lên M-Invoice",
+                    "requires_user_sign_and_issue": True,
+                })
+            persisted_series = clean_text(draft["minvoice_series"]).upper()
+            minvoice_status = clean_text(draft["minvoice_status"]) or "not_sent"
+            if (
+                not dry_run
+                and minvoice_status in {"saving", "unknown"}
+                and persisted_series
+                and requested_series
+                and requested_series != persisted_series
+            ):
+                return jsonify({
+                    "ok": False,
+                    "error": "Không được đổi ký hiệu khi lần lưu M-Invoice trước đang chờ đối soát",
+                    "minvoice_status": minvoice_status,
+                }), 409
+            # Reconciliation must retain the exact series used by the possibly
+            # successful POST.  A newly confirmed attempt may still choose a
+            # different series after a definitive error/not-found result.
+            series = (
+                persisted_series
+                if not dry_run and minvoice_status in {"saving", "unknown"}
+                else requested_series or persisted_series
+            )
+            if not series:
+                return jsonify({"ok": False, "error": "Cần chọn ký hiệu hóa đơn M-Invoice"}), 400
+            installation_uuid = re.sub(
+                r"[^A-Z0-9]", "", clean_text(setting_get(conn, "installation_uuid", "")).upper()
+            )
+            if not installation_uuid:
+                return jsonify({
+                    "ok": False,
+                    "error": "Thiếu mã định danh cài đặt; không thể tạo khóa chống trùng M-Invoice an toàn",
+                }), 500
+            draft_external_uuid = re.sub(
+                r"[^A-Z0-9]", "", clean_text(draft["external_key_uuid"]).upper()
+            )
+            if not draft_external_uuid:
+                draft_external_uuid = uuid.uuid4().hex.upper()
+                if not dry_run:
+                    conn.execute(
+                        "UPDATE outgoing_invoice_drafts SET external_key_uuid=? WHERE id=?",
+                        (draft_external_uuid, draft_id),
+                    )
+            key_api = clean_text(draft["minvoice_key_api"]) or (
+                f"TDP-{installation_uuid[:12]}-{draft_external_uuid[:32]}"
+            )
+
+            if not dry_run and minvoice_status == "saving":
+                if minvoice_saving_is_fresh(draft["minvoice_started_at"], timestamp):
+                    return jsonify({
+                        "ok": False,
+                        "error": "Dự thảo đang được gửi lên M-Invoice; không được gửi đồng thời",
+                        "minvoice_status": "saving",
+                    }), 409
+                conn.execute(
+                    """UPDATE outgoing_invoice_drafts
+                       SET minvoice_status='unknown',minvoice_error=?
+                       WHERE id=? AND minvoice_status='saving'""",
+                    ("Lần lưu trước bị gián đoạn; cần đối soát key_api", draft_id),
+                )
+                reconcile_only = True
+            elif not dry_run and minvoice_status == "unknown":
+                reconcile_only = True
+
+            snapshot = None
+            if not reconcile_only:
+                if not dry_run:
+                    try:
+                        snapshot, buyer = current_invoice_snapshot(conn, draft)
+                    except ValueError as exc:
+                        return jsonify({"ok": False, "error": str(exc)}), 409
+                else:
+                    buyer = conn.execute(
+                        "SELECT * FROM outgoing_buyer_profiles WHERE contractor=?", (draft["contractor"],),
+                    ).fetchone()
+                    if not buyer:
+                        return jsonify({
+                            "ok": False,
+                            "error": f"Chưa lưu thông tin người mua cho {draft['contractor']}",
+                        }), 400
+                lines = [dict(row) for row in conn.execute(
+                    "SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id", (draft_id,),
+                )]
+                if not lines:
+                    return jsonify({"ok": False, "error": "Dự thảo chưa có dòng hàng"}), 400
+                payload = {
+                    "invoice_date": draft["invoice_date"],
+                    "series": series,
+                    "currency": "VND",
+                    "payment_method": clean_text(body.get("payment_method")) or "TM/CK",
+                    "order_number": f"TDP-{draft['batch_id']}-{draft['contractor']}",
+                    "key_api": key_api,
+                    "buyer": {
+                        "display_name": buyer["display_name"],
+                        "legal_name": snapshot["buyer_name_snapshot"] if snapshot else buyer["legal_name"],
+                        "tax_code": snapshot["buyer_tax_code_snapshot"] if snapshot else buyer["tax_code"],
+                        "address": snapshot["buyer_address_snapshot"] if snapshot else buyer["address"],
+                        "email": snapshot["buyer_email_snapshot"] if snapshot else buyer["email"],
+                    },
+                    "lines": [{
+                        "code": line["product_code"],
+                        "name": line["product_name"],
+                        "unit": line["unit"],
+                        "quantity": line["qty"],
+                        "unit_price": line["unit_price"],
+                        "tax": line["tax"],
+                        "tchat": 2 if clean_text(line.get("invoice_nature")) == "2" else 1,
+                    } for line in lines],
+                }
+
+            if not dry_run and not reconcile_only:
+                conn.execute(
+                    """UPDATE outgoing_invoice_drafts
+                       SET minvoice_status='saving',minvoice_series=?,minvoice_key_api=?,
+                           minvoice_started_at=?,minvoice_error=NULL,minvoice_remote_id=NULL,
+                           buyer_name_snapshot=?,buyer_tax_code_snapshot=?,buyer_address_snapshot=?,
+                           buyer_email_snapshot=?,company_name_snapshot=?,company_tax_code_snapshot=?,
+                           company_address_snapshot=?,payment_requester_snapshot=?,
+                           payment_bank_name_snapshot=?,payment_bank_account_snapshot=?
+                       WHERE id=? AND minvoice_status NOT IN ('saved','saving','unknown')""",
+                    (series, key_api, timestamp, *snapshot_update_values(snapshot), draft_id),
+                )
+                if conn.execute("SELECT changes() n").fetchone()["n"] != 1:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Trạng thái M-Invoice vừa thay đổi; tải lại trước khi thao tác",
+                    }), 409
+
+        if not dry_run:
+            try:
+                remote = minvoice_client.get_invoice_info(key_api=key_api)
+            except MinvoiceError as exc:
+                with db_factory() as conn:
+                    if not reconcile_only:
+                        conn.execute(
+                            """UPDATE outgoing_invoice_drafts
+                               SET minvoice_status='error',minvoice_error=? WHERE id=?""",
+                            (str(exc), draft_id),
+                        )
+                    audit(conn, now_iso, "minvoice.reconcile", "error", str(exc),
+                          entity_type="outgoing_invoice", entity_id=draft_id,
+                          metadata={"key_api": key_api, "before_save": not reconcile_only})
+                return jsonify({"ok": False, "error": str(exc)}), 502
+
+            if remote["found"]:
+                remote_id = minvoice_remote_id(remote.get("data"))
+                with db_factory() as validation_conn:
+                    validation_draft = validation_conn.execute(
+                        "SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,),
+                    ).fetchone()
+                    validation_lines = [dict(row) for row in validation_conn.execute(
+                        "SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id", (draft_id,),
+                    )]
+                mismatches = minvoice_reconciliation_mismatches(
+                    remote.get("data"), validation_draft, series, validation_lines,
+                )
+                if mismatches:
+                    message = "Bản nháp M-Invoice trùng key nhưng lệch " + ", ".join(mismatches)
+                    with db_factory() as conn:
+                        conn.execute(
+                            """UPDATE outgoing_invoice_drafts
+                               SET minvoice_status='unknown',minvoice_error=?,minvoice_reconciled_at=?
+                               WHERE id=?""",
+                            (message, now_iso(), draft_id),
+                        )
+                        audit(
+                            conn, now_iso, "minvoice.reconcile", "mismatch", message,
+                            entity_type="outgoing_invoice", entity_id=draft_id,
+                            metadata={"fields": mismatches, "remote_id_received": bool(remote_id)},
+                        )
+                    return jsonify({
+                        "ok": False,
+                        "error": message + "; không được tự liên kết, cần đối chiếu thủ công",
+                        "reconcile_required": True,
+                    }), 409
+                with db_factory() as conn:
+                    conn.execute(
+                        """UPDATE outgoing_invoice_drafts
+                           SET minvoice_status='saved',minvoice_series=?,minvoice_key_api=?,
+                               minvoice_remote_id=?,minvoice_saved_at=?,minvoice_reconciled_at=?,
+                               minvoice_error=NULL WHERE id=?""",
+                        (series, key_api, remote_id, now_iso(), now_iso(), draft_id),
+                    )
+                    audit(conn, now_iso, "minvoice.reconcile", "found",
+                          entity_type="outgoing_invoice", entity_id=draft_id,
+                          metadata={"series": series, "key_api": key_api,
+                                    "remote_id_received": bool(remote_id)})
+                return jsonify({
+                    "ok": True, "dry_run": False, "remote_write": False,
+                    "idempotent": True, "reconciled": True, "remote_id": remote_id,
+                    "message": "Đã tìm thấy bản nháp M-Invoice theo key_api; không gửi lại",
+                    "requires_user_sign_and_issue": True,
+                    "draft_id": draft_id, "contractor": draft["contractor"],
+                })
+
+            if reconcile_only:
+                with db_factory() as conn:
+                    conn.execute(
+                        """UPDATE outgoing_invoice_drafts
+                           SET minvoice_status='not_sent',minvoice_error=NULL,
+                               minvoice_started_at=NULL,minvoice_reconciled_at=?
+                           WHERE id=? AND minvoice_status IN ('saving','unknown')""",
+                        (now_iso(), draft_id),
+                    )
+                    audit(conn, now_iso, "minvoice.reconcile", "not_found",
+                          entity_type="outgoing_invoice", entity_id=draft_id,
+                          metadata={"key_api": key_api})
+                return jsonify({
+                    "ok": False,
+                    "error": "Đối soát không thấy bản nháp trên M-Invoice; hệ thống chưa tự gửi lại. Hãy kiểm tra rồi bấm Lưu nháp lần nữa.",
+                    "reconciled": True, "remote_write": False,
+                    "retry_requires_new_confirmation": True,
+                }), 409
+
+        try:
+            result = minvoice_client.create_draft(
+                payload, dry_run=dry_run, confirm_remote_write=confirmed,
+            )
+        except MinvoiceOutcomeUnknown as exc:
+            with db_factory() as conn:
+                conn.execute(
+                    """UPDATE outgoing_invoice_drafts
+                       SET minvoice_status='unknown',minvoice_error=? WHERE id=?""",
+                    (str(exc), draft_id),
+                )
+                audit(conn, now_iso, "minvoice.save_draft", "unknown", str(exc),
+                      entity_type="outgoing_invoice", entity_id=draft_id,
+                      metadata={"key_api": key_api})
+            return jsonify({
+                "ok": False, "error": str(exc), "minvoice_status": "unknown",
+                "reconcile_required": True, "remote_write": False,
+            }), 409
+        except MinvoiceError as exc:
+            if not dry_run:
+                with db_factory() as conn:
+                    conn.execute(
+                        "UPDATE outgoing_invoice_drafts SET minvoice_status='error',minvoice_error=? WHERE id=?",
+                        (str(exc), draft_id),
+                    )
+                    audit(conn, now_iso, "minvoice.save_draft", "error", str(exc),
+                          entity_type="outgoing_invoice", entity_id=draft_id)
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if result.get("remote_write"):
+            remote_id = minvoice_remote_id(result.get("data"))
+            with db_factory() as conn:
+                conn.execute(
+                    """UPDATE outgoing_invoice_drafts
+                       SET minvoice_status='saved',minvoice_series=?,minvoice_key_api=?,
+                           minvoice_remote_id=?,minvoice_saved_at=?,minvoice_reconciled_at=?,
+                           minvoice_error=NULL WHERE id=?""",
+                    (series, key_api, remote_id, now_iso(), now_iso(), draft_id),
+                )
+                audit(conn, now_iso, "minvoice.save_draft", "ok", entity_type="outgoing_invoice",
+                      entity_id=draft_id, metadata={"series": series, "key_api": key_api,
+                                                    "remote_id_received": bool(remote_id)})
+            result = {key: value for key, value in result.items() if key != "data"}
+            result["remote_id"] = remote_id
+        return jsonify({**result, "draft_id": draft_id, "contractor": draft["contractor"]})
+
+    @app.post("/api/debts/payables/import/preview")
+    def api_payables_import_preview():
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file công nợ phải trả"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file .xlsx hoặc .xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                if len(entries) > 2_000 or sum(item.file_size for item in entries) > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                    return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn để đọc an toàn"}), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with PAYABLE_IMPORT_LOCK:
+            for old_token, item in list(PENDING_PAYABLE_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_PAYABLE_IMPORTS.pop(old_token, None)
+        workbook = None
+        try:
+            workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True, keep_links=False)
+            with db_factory() as conn:
+                preview = parse_historical_payables(conn, workbook)
+                database_state_hash = payables_database_state_hash(conn)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Không đọc được file công nợ phải trả"}), 400
+        finally:
+            if workbook is not None:
+                workbook.close()
+
+        token = uuid.uuid4().hex
+        pending_items = preview.pop("items")
+        source_hash = hashlib.sha256(payload).hexdigest().upper()
+        with PAYABLE_IMPORT_LOCK:
+            PENDING_PAYABLE_IMPORTS[token] = {
+                "created": time.time(),
+                "filename": filename,
+                "source_hash": source_hash,
+                "sheet": preview["sheet"],
+                "items": pending_items,
+                "database_state_hash": database_state_hash,
+                "has_errors": not preview["can_confirm"],
+            }
+        return jsonify({
+            "ok": True, "token": token, "filename": filename, "source_hash": source_hash,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60, **preview,
+        })
+
+    @app.post("/api/debts/payables/import/confirm")
+    def api_payables_import_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi công nợ phải trả"}), 400
+        token = clean_text(body.get("token"))
+        with PAYABLE_IMPORT_LOCK:
+            pending = PENDING_PAYABLE_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file"}), 410
+        if pending["has_errors"]:
+            return jsonify({"ok": False, "error": "File còn dòng lỗi nên chưa thể nhập"}), 400
+        with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if payables_database_state_hash(conn) != pending["database_state_hash"]:
+                return jsonify({
+                    "ok": False,
+                    "error": "Công nợ phải trả đã thay đổi sau khi xem trước; dữ liệu chưa được ghi, vui lòng chọn lại file",
+                }), 409
+            historical_through = max(
+                (item["purchase_date"] for item in pending["items"]), default="",
+            )
+            if historical_through:
+                # The imported workbook is an authoritative historical snapshot.
+                # System purchase orders on/before this date are already covered
+                # by that snapshot and must not be charged a second time.
+                setting_set(conn, "historical_payables_through_date", historical_through)
+            unchanged = conn.execute(
+                "SELECT COUNT(*) n FROM historical_payable_lines WHERE source_hash=? AND source_sheet=?",
+                (pending["source_hash"], pending["sheet"]),
+            ).fetchone()["n"]
+            if unchanged:
+                stale = conn.execute(
+                    "SELECT COUNT(*) n FROM historical_payable_lines WHERE source_hash!=?",
+                    (pending["source_hash"],),
+                ).fetchone()["n"]
+                if stale:
+                    conn.execute(
+                        "DELETE FROM historical_payable_lines WHERE source_hash!=?",
+                        (pending["source_hash"],),
+                    )
+                audit(
+                    conn, now_iso, "debts.payables_import", "unchanged", entity_type="source_file",
+                    entity_id=pending["source_hash"][:16], metadata={
+                        "filename": pending["filename"], "sheet": pending["sheet"], "rows": unchanged,
+                        "removed_stale_rows": stale,
+                    },
+                )
+                return jsonify({
+                    "ok": True, "inserted": 0, "replaced": stale, "unchanged": unchanged,
+                    "idempotent": stale == 0, "source_hash": pending["source_hash"],
+                })
+            # This workbook is an authoritative historical-payables snapshot,
+            # not an append-only journal.  Replace the prior snapshot even when
+            # the customer renamed the revised file; otherwise one filename
+            # change would double every payable line.
+            replaced = conn.execute(
+                "SELECT COUNT(*) n FROM historical_payable_lines"
+            ).fetchone()["n"]
+            conn.execute("DELETE FROM historical_payable_lines")
+            timestamp = now_iso()
+            for item in pending["items"]:
+                conn.execute(
+                    """INSERT INTO historical_payable_lines(
+                           purchase_date,kitchen,item_name,qty,unit,supplier,buy_price,
+                           damaged_qty,added_qty,reduced_qty,missing_qty,actual_qty,
+                           source_amount,calculated_amount,amount,note,
+                           source_file,source_sheet,source_row,source_hash,created_at,updated_at
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        item["purchase_date"], item["kitchen"], item["item_name"], item["qty"],
+                        item["unit"], item["supplier"], item["buy_price"], item["damaged_qty"],
+                        item["added_qty"], item["reduced_qty"], item["missing_qty"],
+                        item["actual_qty"], item["source_amount"], item["calculated_amount"],
+                        item["amount"], item["note"], pending["filename"],
+                        pending["sheet"], item["source_row"], pending["source_hash"], timestamp, timestamp,
+                    ),
+                )
+            audit(
+                conn, now_iso, "debts.payables_import", "ok", entity_type="source_file",
+                entity_id=pending["source_hash"][:16], metadata={
+                    "filename": pending["filename"], "sheet": pending["sheet"],
+                    "rows": len(pending["items"]), "replaced_rows": replaced,
+                    "snapshot_scope": "all_historical_payables",
+                },
+            )
+        return jsonify({
+            "ok": True, "inserted": len(pending["items"]), "replaced": replaced, "unchanged": 0,
+            "idempotent": False,
+            "source_hash": pending["source_hash"],
+        })
 
     @app.post("/api/debt-adjustments")
     def api_debt_adjustment():
@@ -3284,6 +5934,7 @@ def register_contract_routes(app, ctx):
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         with db_factory() as conn:
+            conn.execute("BEGIN")
             return jsonify({"ok": True, **debt_period_payload(conn, period_from, period_to, tax_factor)})
 
     @app.get("/api/export/debts")
@@ -3295,6 +5946,7 @@ def register_contract_routes(app, ctx):
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         with db_factory() as conn:
+            conn.execute("BEGIN")
             payload = debt_period_payload(conn, period_from, period_to, tax_factor)
             workbook = debt_period_workbook(conn, payload)
             return send_workbook(
@@ -3316,20 +5968,229 @@ def register_contract_routes(app, ctx):
             )
             return jsonify({"ok": True})
 
+    @app.get("/api/kitchen/payment-profiles")
+    def api_xcom_payment_profiles():
+        with db_factory() as conn:
+            return jsonify({"ok": True, "items": list_payment_profiles(conn)})
+
+    @app.put("/api/kitchen/payment-profiles/<profile_code>")
+    def api_xcom_payment_profile_upsert(profile_code):
+        body = request.get_json(force=True) or {}
+        body["profile_code"] = clean_text(profile_code).upper()
+        try:
+            with db_factory() as conn:
+                result = upsert_payment_profile(conn, body, now_iso=now_iso)
+                audit(
+                    conn, now_iso, "kitchen.payment_profile.upsert", "ok",
+                    entity_type="xcom_payment_profile", entity_id=result["profile_code"],
+                    metadata={
+                        "document_type": clean_text(body.get("document_type") or "MEAL_SIMPLE").upper(),
+                        "created": result["created"], "changed": result["changed"],
+                    },
+                )
+                profile = next(
+                    item for item in list_payment_profiles(conn)
+                    if item["profile_code"] == result["profile_code"]
+                )
+                return jsonify({"ok": True, **result, "profile": profile})
+        except XcomPaymentError as exc:
+            return xcom_payment_error_response(exc)
+
+    @app.delete("/api/kitchen/payment-profiles/<profile_code>")
+    def api_xcom_payment_profile_delete(profile_code):
+        body = request.get_json(silent=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận xóa hồ sơ thanh toán"}), 400
+        try:
+            with db_factory() as conn:
+                deleted = delete_payment_profile(conn, profile_code)
+                if not deleted:
+                    return jsonify({"ok": False, "error": "Hồ sơ thanh toán không tồn tại"}), 404
+                audit(
+                    conn, now_iso, "kitchen.payment_profile.delete", "ok",
+                    entity_type="xcom_payment_profile", entity_id=clean_text(profile_code).upper(),
+                )
+                return jsonify({"ok": True, "deleted": True})
+        except XcomPaymentError as exc:
+            return xcom_payment_error_response(exc)
+
+    @app.put("/api/kitchen/payment-profiles/<profile_code>/scopes/<scope_type>/<scope_code>")
+    def api_xcom_payment_scope_upsert(profile_code, scope_type, scope_code):
+        try:
+            with db_factory() as conn:
+                result = assign_payment_scope(
+                    conn, profile_code, scope_type, scope_code, now_iso=now_iso
+                )
+                audit(
+                    conn, now_iso, "kitchen.payment_scope.upsert", "ok",
+                    entity_type="xcom_payment_profile", entity_id=result["profile_code"],
+                    metadata={
+                        "scope_type": result["scope_type"], "scope_code": result["scope_code"],
+                        "changed": result["changed"],
+                    },
+                )
+                return jsonify({"ok": True, **result})
+        except XcomPaymentError as exc:
+            return xcom_payment_error_response(exc)
+
+    @app.delete("/api/kitchen/payment-scopes/<scope_type>/<scope_code>")
+    def api_xcom_payment_scope_delete(scope_type, scope_code):
+        body = request.get_json(silent=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận bỏ phạm vi hồ sơ thanh toán"}), 400
+        try:
+            with db_factory() as conn:
+                deleted = remove_payment_scope(conn, scope_type, scope_code)
+                if not deleted:
+                    return jsonify({"ok": False, "error": "Phạm vi không tồn tại"}), 404
+                audit(
+                    conn, now_iso, "kitchen.payment_scope.delete", "ok",
+                    entity_type="xcom_payment_scope",
+                    entity_id=f"{clean_text(scope_type).upper()}:{clean_text(scope_code).upper()}",
+                )
+                return jsonify({"ok": True, "deleted": True})
+        except XcomPaymentError as exc:
+            return xcom_payment_error_response(exc)
+
+    @app.put("/api/kitchen/payment-profiles/<profile_code>/tariffs/<period>/<shift>")
+    def api_xcom_meal_tariff_upsert(profile_code, period, shift):
+        body = request.get_json(force=True) or {}
+        try:
+            with db_factory() as conn:
+                result = upsert_meal_tariff(
+                    conn, profile_code, period, shift, body.get("unit_price"), now_iso=now_iso
+                )
+                audit(
+                    conn, now_iso, "kitchen.meal_tariff.upsert", "ok",
+                    entity_type="xcom_payment_profile", entity_id=result["profile_code"],
+                    metadata={
+                        "period": result["period"], "shift": result["shift"],
+                        "unit_price": result["unit_price"], "changed": result["changed"],
+                    },
+                )
+                return jsonify({"ok": True, **result})
+        except XcomPaymentError as exc:
+            return xcom_payment_error_response(exc)
+
+    @app.delete("/api/kitchen/payment-profiles/<profile_code>/tariffs/<period>/<shift>")
+    def api_xcom_meal_tariff_delete(profile_code, period, shift):
+        body = request.get_json(silent=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận xóa đơn giá suất ăn"}), 400
+        try:
+            with db_factory() as conn:
+                deleted = delete_meal_tariff(conn, profile_code, period, shift)
+                if not deleted:
+                    return jsonify({"ok": False, "error": "Đơn giá kỳ/ca không tồn tại"}), 404
+                audit(
+                    conn, now_iso, "kitchen.meal_tariff.delete", "ok",
+                    entity_type="xcom_payment_profile", entity_id=clean_text(profile_code).upper(),
+                    metadata={"period": clean_text(period), "shift": clean_text(shift)},
+                )
+                return jsonify({"ok": True, "deleted": True})
+        except XcomPaymentError as exc:
+            return xcom_payment_error_response(exc)
+
+    @app.post("/api/kitchen/payment-documents/preview")
+    def api_xcom_payment_document_preview():
+        body = request.get_json(force=True) or {}
+        try:
+            with db_factory() as conn:
+                # One writer snapshot prevents profile/scope/tariff/attendance
+                # edits from being mixed across the preview's multiple reads.
+                conn.execute("BEGIN IMMEDIATE")
+                result = create_payment_preview(
+                    conn,
+                    body.get("profile_code"),
+                    body.get("date_from"),
+                    body.get("date_to"),
+                    body.get("issue_date"),
+                    now_iso=now_iso,
+                )
+                audit(
+                    conn, now_iso, "kitchen.payment_document.preview", "ok",
+                    entity_type="xcom_payment_profile",
+                    entity_id=result["summary"]["profile_code"],
+                    metadata={
+                        "from": result["summary"]["date_from"],
+                        "to": result["summary"]["date_to"],
+                        "issue_date": result["issue_date"],
+                        "input_sha256": result["summary"]["input_sha256"],
+                        "expires_at": result["expires_at"],
+                    },
+                )
+                return jsonify({"ok": True, **result})
+        except XcomPaymentError as exc:
+            return xcom_payment_error_response(exc)
+
+    @app.post("/api/kitchen/payment-documents/export")
+    def api_xcom_payment_document_export():
+        body = request.get_json(force=True) or {}
+        try:
+            with db_factory() as conn:
+                # Token verification, source re-hash and single-use CAS must be
+                # one atomic snapshot.  Export is POST so browser/link prefetch
+                # cannot consume a one-time approval token.
+                conn.execute("BEGIN IMMEDIATE")
+                result = consume_payment_preview(
+                    conn,
+                    body.get("preview_token"),
+                    body.get("profile_code"),
+                    body.get("date_from"),
+                    body.get("date_to"),
+                    body.get("issue_date"),
+                    now_iso=now_iso,
+                )
+                audit(
+                    conn, now_iso, "kitchen.payment_document.export", "ok",
+                    entity_type="xcom_payment_profile", entity_id=result["summary"]["profile_code"],
+                    metadata={
+                        "from": result["summary"]["date_from"],
+                        "to": result["summary"]["date_to"],
+                        "preview_created_at": result["preview_created_at"],
+                        "input_sha256": result["input_sha256"],
+                        "file_sha256": result["file_sha256"],
+                        "document_type": result["summary"]["document_type"],
+                    },
+                )
+                return send_file(
+                    io.BytesIO(result["payload"]),
+                    as_attachment=True,
+                    download_name=result["filename"],
+                    mimetype=result["mimetype"],
+                )
+        except XcomPaymentError as exc:
+            return xcom_payment_error_response(exc)
+
     @app.put("/api/dated-prices/<product_code>")
     def api_dated_price(product_code):
         body = request.get_json(force=True) or {}
         period = clean_text(body.get("period"))
         if not re.fullmatch(r"\d{4}-\d{2}", period):
             return jsonify({"ok": False, "error": "Kỳ giá phải có dạng YYYY-MM"}), 400
+        try:
+            datetime.strptime(period + "-01", "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"ok": False, "error": "Kỳ giá không hợp lệ"}), 400
+        code = clean_text(product_code).upper()
+        price_group = clean_text(body.get("price_group") or "HATRAN").upper()
+        try:
+            price_value = finite_number(body.get("price_value"), 0, "Giá theo kỳ")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if price_value <= 0:
+            return jsonify({"ok": False, "error": "Giá theo kỳ phải lớn hơn 0"}), 400
         with db_factory() as conn:
+            if not conn.execute("SELECT 1 FROM products WHERE code=?", (code,)).fetchone():
+                return jsonify({"ok": False, "error": "Mã hàng chưa có trong danh mục"}), 404
             conn.execute(
                 """INSERT INTO dated_prices(product_code,price_group,period,price_value,updated_at)
                    VALUES(?,?,?,?,?) ON CONFLICT(product_code,price_group,period)
                    DO UPDATE SET price_value=excluded.price_value,updated_at=excluded.updated_at""",
-                (clean_text(product_code).upper(), clean_text(body.get("price_group") or "HATRAN").upper(),
-                 period, number_value(body.get("price_value")), now_iso()),
+                (code, price_group, period, price_value, now_iso()),
             )
+            audit(conn, now_iso, "dated_price.upsert", "ok", entity_type="product", entity_id=code,
+                  metadata={"price_group": price_group, "period": period, "price_value": price_value})
             return jsonify({"ok": True})
 
     @app.get("/api/kitchen/plans")
@@ -3343,18 +6204,39 @@ def register_contract_routes(app, ctx):
         items = body.get("items") or []
         if not body.get("work_date") or not body.get("kitchen") or not body.get("shift"):
             return jsonify({"ok": False, "error": "Cần ngày, bếp và ca"}), 400
-        if number_value(body.get("meal_count")) <= 0:
+        if as_date(body.get("work_date")) != clean_text(body.get("work_date")):
+            return jsonify({"ok": False, "error": "Ngày kế hoạch phải hợp lệ dạng YYYY-MM-DD"}), 400
+        try:
+            if not isinstance(items, list) or any(not isinstance(raw, dict) for raw in items):
+                raise ValueError("Danh sách định lượng không hợp lệ")
+            meal_count = finite_number(body.get("meal_count"), 0, "Số suất")
+            menu_count = finite_integer(body.get("menu_count"), 1, "Số thực đơn")
+            servings_per_menu = finite_number(
+                body.get("servings_per_menu"), 0, "Số suất mỗi thực đơn",
+            ) or (meal_count / max(menu_count, 1))
+            meal_price = finite_number(body.get("meal_price"), 0, "Đơn giá suất ăn")
+            other_cost = finite_number(body.get("other_cost"), 0, "Chi phí khác")
+            plan_id = finite_integer(body.get("id"), 0, "Mã kế hoạch")
+            normalized_items = [{
+                **raw,
+                "_norm_qty": finite_number(raw.get("norm_qty"), 0, "Định lượng nguyên liệu"),
+                "_source_norm": finite_number(
+                    raw.get("source_norm_per_1000"), 0, "Định lượng nguồn",
+                ),
+                "_meal_count": finite_number(
+                    raw.get("applicable_meal_count"), 0, "Số suất áp dụng",
+                ),
+            } for raw in items]
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if meal_count <= 0:
             return jsonify({"ok": False, "error": "Số suất phải lớn hơn 0"}), 400
+        if menu_count <= 0 or servings_per_menu <= 0 or meal_price < 0 or other_cost < 0:
+            return jsonify({"ok": False, "error": "Số thực đơn/suất phải dương và chi phí không được âm"}), 400
         with db_factory() as conn:
             kitchen = clean_text(body["kitchen"]).upper()
             unit = conn.execute("SELECT unit_code FROM kitchen_units WHERE kitchen_code=?", (kitchen,)).fetchone()
             unit_code = clean_text(body.get("xcom_code") or body.get("unit_code")) or (unit["unit_code"] if unit else "")
-            meal_count = number_value(body.get("meal_count"))
-            menu_count = max(int(number_value(body.get("menu_count"), 1)), 1)
-            servings_per_menu = number_value(body.get("servings_per_menu")) or meal_count / menu_count
-            meal_price = max(number_value(body.get("meal_price")), 0)
-            other_cost = max(number_value(body.get("other_cost")), 0)
-            plan_id = int(body.get("id") or 0)
             if plan_id:
                 conn.execute(
                     """UPDATE meal_plans SET work_date=?,kitchen=?,shift=?,meal_count=?,unit_code=?,
@@ -3379,39 +6261,32 @@ def register_contract_routes(app, ctx):
             period = body["work_date"][:7]
             saved = 0
             warnings = []
-            for raw in items:
+            for raw in normalized_items:
                 code = clean_text(raw.get("product_code")).upper()
                 product = conn.execute("SELECT * FROM products WHERE code=?", (code,)).fetchone()
-                if not product or number_value(raw.get("norm_qty")) <= 0:
+                if not product or raw["_norm_qty"] <= 0:
                     continue
-                price = number_value(raw.get("buy_price"))
-                source = "Nhập tại kế hoạch"
-                if price <= 0:
-                    dated = conn.execute(
-                        "SELECT price_value FROM dated_prices WHERE product_code=? AND price_group='HATRAN' AND period=?",
-                        (code, period),
-                    ).fetchone()
-                    if dated:
-                        price = dated["price_value"]
-                        source = f"HATRAN {period}"
-                    else:
-                        group_price = conn.execute(
-                            "SELECT price_value FROM product_prices WHERE product_code=? AND price_group='HATRAN'",
-                            (code,),
-                        ).fetchone()
-                        price = group_price["price_value"] if group_price and group_price["price_value"] else 0
-                        source = "HATRAN danh mục"
-                        warnings.append(f"{code}: chưa có giá HATRAN đúng kỳ {period}")
+                dated = conn.execute(
+                    "SELECT price_value FROM dated_prices WHERE product_code=? AND price_group='HATRAN' AND period=?",
+                    (code, period),
+                ).fetchone()
+                if dated and number_value(dated["price_value"]) > 0:
+                    price = number_value(dated["price_value"])
+                    source = f"HATRAN {period} · giá kỳ đã khóa"
+                else:
+                    price = 0
+                    source = f"HATRAN {period} · chưa có giá"
+                    warnings.append(f"{code}: chưa có giá HATRAN đúng kỳ {period}")
                 conn.execute(
                     """INSERT INTO meal_plan_items(
                         plan_id,dish_name,product_code,product_name,norm_qty,unit,supplier,buy_price,price_source,
                         source_norm_per_1000,applicable_meal_count,source_amount
                     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (plan_id, clean_text(raw.get("dish_name")), code, product["name"],
-                     number_value(raw.get("norm_qty")), clean_text(raw.get("unit")) or product["unit"],
+                     raw["_norm_qty"], clean_text(raw.get("unit")) or product["unit"],
                      clean_text(raw.get("supplier")) or product["supplier"], price, source,
-                     number_value(raw.get("source_norm_per_1000")) or number_value(raw.get("norm_qty")) * 1000,
-                     number_value(raw.get("applicable_meal_count")) or meal_count, 0),
+                     raw["_source_norm"] or raw["_norm_qty"] * 1000,
+                     raw["_meal_count"] or meal_count, 0),
                 )
                 saved += 1
             audit(conn, now_iso, "kitchen.save_plan", "ok", entity_type="meal_plan", entity_id=plan_id,
@@ -3444,6 +6319,22 @@ def register_contract_routes(app, ctx):
             ).fetchone()["n"]
             if missing_price:
                 return jsonify({"ok": False, "error": f"Còn {missing_price} nguyên liệu thiếu giá"}), 400
+            expected_prefix = f"HATRAN {plan['work_date'][:7]}"
+            wrong_period_price = conn.execute(
+                """SELECT COUNT(*) n
+                   FROM meal_plan_items i
+                   LEFT JOIN dated_prices d
+                     ON d.product_code=i.product_code AND d.price_group='HATRAN' AND d.period=?
+                   WHERE i.plan_id=? AND (
+                     d.price_value IS NULL OR d.price_value<=0 OR ABS(i.buy_price-d.price_value)>0.01
+                   )""",
+                (plan["work_date"][:7], plan_id),
+            ).fetchone()["n"]
+            if wrong_period_price:
+                return jsonify({
+                    "ok": False,
+                    "error": f"Còn {wrong_period_price} nguyên liệu chưa dùng giá {expected_prefix}",
+                }), 400
             conn.execute("UPDATE meal_plans SET status='approved',updated_at=? WHERE id=?", (now_iso(), plan_id))
             return jsonify({"ok": True})
 
@@ -3470,6 +6361,18 @@ def register_contract_routes(app, ctx):
         name = clean_text(body.get("full_name"))
         if not code or not name:
             return jsonify({"ok": False, "error": "Cần mã và họ tên nhân sự"}), 400
+        try:
+            staff_numbers = {
+                "base_salary": finite_number(body.get("base_salary"), 0, "Lương cơ bản"),
+                "standard_days": finite_number(body.get("standard_days"), 26, "Ngày công chuẩn"),
+                "standard_hours": finite_number(body.get("standard_hours"), 8, "Giờ công chuẩn"),
+                "bhxh_employee_rate": finite_number(body.get("bhxh_employee_rate"), 0, "Tỷ lệ BHXH nhân viên"),
+                "bhxh_company_rate": finite_number(body.get("bhxh_company_rate"), 0, "Tỷ lệ BHXH công ty"),
+            }
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if any(value < 0 for value in staff_numbers.values()) or staff_numbers["standard_days"] <= 0 or staff_numbers["standard_hours"] <= 0:
+            return jsonify({"ok": False, "error": "Lương/tỷ lệ không được âm; ngày và giờ chuẩn phải dương"}), 400
         with db_factory() as conn:
             conn.execute(
                 """INSERT INTO staff(
@@ -3482,9 +6385,9 @@ def register_contract_routes(app, ctx):
                     standard_hours=excluded.standard_hours,bhxh_employee_rate=excluded.bhxh_employee_rate,
                     bhxh_company_rate=excluded.bhxh_company_rate,active=excluded.active,updated_at=excluded.updated_at""",
                 (code, name, clean_text(body.get("role_name")), clean_text(body.get("kitchen")).upper(),
-                 number_value(body.get("base_salary")), number_value(body.get("standard_days"), 26),
-                 number_value(body.get("standard_hours"), 8), number_value(body.get("bhxh_employee_rate")),
-                 number_value(body.get("bhxh_company_rate")), 0 if body.get("active") is False else 1,
+                 staff_numbers["base_salary"], staff_numbers["standard_days"],
+                 staff_numbers["standard_hours"], staff_numbers["bhxh_employee_rate"],
+                 staff_numbers["bhxh_company_rate"], 0 if body.get("active") is False else 1,
                  now_iso(), now_iso()),
             )
             return jsonify({"ok": True})
@@ -3492,11 +6395,24 @@ def register_contract_routes(app, ctx):
     @app.post("/api/attendance")
     def api_save_attendance():
         body = request.get_json(force=True) or {}
+        work_date = clean_text(body.get("work_date"))
+        try:
+            attendance_numbers = [
+                finite_number(body.get(field), 0, label) for field, label in (
+                    ("normal_hours", "Giờ thường"), ("overtime_hours", "Giờ tăng ca"),
+                    ("sunday_hours", "Giờ Chủ nhật"), ("night_hours", "Giờ đêm"),
+                    ("holiday_hours", "Giờ ngày lễ"),
+                )
+            ]
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if as_date(work_date) != work_date or any(value < 0 for value in attendance_numbers):
+            return jsonify({"ok": False, "error": "Ngày phải hợp lệ và số giờ không được âm"}), 400
         with db_factory() as conn:
             staff_row = conn.execute(
                 "SELECT id FROM staff WHERE employee_code=?", (clean_text(body.get("employee_code")).upper(),)
             ).fetchone()
-            if not staff_row or not body.get("work_date"):
+            if not staff_row:
                 return jsonify({"ok": False, "error": "Nhân sự hoặc ngày chấm công không hợp lệ"}), 400
             conn.execute(
                 """INSERT INTO attendance_entries(
@@ -3507,36 +6423,159 @@ def register_contract_routes(app, ctx):
                     sunday_hours=excluded.sunday_hours,night_hours=excluded.night_hours,
                     holiday_hours=excluded.holiday_hours,note=excluded.note,source=excluded.source,
                     updated_at=excluded.updated_at""",
-                (staff_row["id"], body["work_date"], number_value(body.get("normal_hours")),
-                 number_value(body.get("overtime_hours")), number_value(body.get("sunday_hours")),
-                 number_value(body.get("night_hours")), number_value(body.get("holiday_hours")),
+                (staff_row["id"], work_date, *attendance_numbers,
                  clean_text(body.get("note")), "manual", now_iso()),
             )
             return jsonify({"ok": True})
 
     @app.post("/api/attendance/import")
     def api_import_attendance():
+        return jsonify({
+            "ok": False,
+            "error": "Luồng nạp trực tiếp đã khóa; hãy xem trước file rồi xác nhận",
+        }), 410
+
+    @app.post("/api/attendance/import/preview")
+    def api_attendance_import_preview():
+        period = clean_text(request.form.get("period"))
+        try:
+            validate_legacy_attendance_period(period)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         upload = request.files.get("file")
-        if not upload or not upload.filename or Path(upload.filename).suffix.lower() not in {".xlsx", ".xlsm"}:
-            return jsonify({"ok": False, "error": "Cần file chấm công .xlsx/.xlsm"}), 400
-        temp = data_dir / f"attendance_{datetime.now():%Y%m%d%H%M%S%f}.xlsx"
-        upload.save(temp)
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file chấm công"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file chấm công .xlsx/.xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                expanded_size = sum(item.file_size for item in entries)
+                if len(entries) > 2_000 or expanded_size > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                    return jsonify({
+                        "ok": False,
+                        "error": "File Excel có cấu trúc quá lớn để đọc an toàn",
+                    }), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with LEGACY_ATTENDANCE_IMPORT_LOCK:
+            for old_token, item in list(PENDING_LEGACY_ATTENDANCE_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_LEGACY_ATTENDANCE_IMPORTS.pop(old_token, None)
+
+        values_book = formulas_book = None
+        try:
+            values_book = load_workbook(
+                io.BytesIO(payload), read_only=False, data_only=True, keep_links=False,
+            )
+            formulas_book = load_workbook(
+                io.BytesIO(payload), read_only=False, data_only=False, keep_links=False,
+            )
+            with db_factory() as conn:
+                preview = parse_legacy_attendance_workbooks(
+                    conn, values_book, formulas_book, filename, period,
+                )
+                database_state_hash = legacy_attendance_database_state_hash(conn, period)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Không đọc được file chấm công; vui lòng kiểm tra lại file",
+            }), 400
+        finally:
+            if values_book is not None:
+                values_book.close()
+            if formulas_book is not None:
+                formulas_book.close()
+
+        token = uuid.uuid4().hex
+        snapshot = preview.pop("snapshot")
+        source_hash = hashlib.sha256(payload).hexdigest().upper()
+        with LEGACY_ATTENDANCE_IMPORT_LOCK:
+            PENDING_LEGACY_ATTENDANCE_IMPORTS[token] = {
+                "created": time.time(),
+                "filename": filename,
+                "period": period,
+                "source_hash": source_hash,
+                "database_state_hash": database_state_hash,
+                "snapshot": snapshot,
+                "counts": preview["counts"],
+                "warnings": preview["warnings"],
+            }
+        return jsonify({
+            "ok": True,
+            "token": token,
+            "filename": filename,
+            "source_hash": source_hash,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            **preview,
+        })
+
+    @app.post("/api/attendance/import/confirm")
+    def api_attendance_import_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi chấm công"}), 400
+        token = clean_text(body.get("token"))
+        with LEGACY_ATTENDANCE_IMPORT_LOCK:
+            pending = PENDING_LEGACY_ATTENDANCE_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({
+                "ok": False,
+                "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file",
+            }), 410
         try:
             with db_factory() as conn:
-                result = import_legacy_attendance(conn, temp, upload.filename, now_iso)
-                audit(conn, now_iso, "attendance.import", "ok", metadata=result)
-                return jsonify({"ok": True, **result})
-        finally:
-            try:
-                temp.unlink()
-            except OSError:
-                pass
+                conn.execute("BEGIN IMMEDIATE")
+                if legacy_attendance_database_state_hash(conn, pending["period"]) != pending["database_state_hash"]:
+                    raise ValueError(
+                        "Dữ liệu chấm công/lương đã thay đổi sau khi xem trước; "
+                        "chưa ghi file, vui lòng xem trước lại"
+                    )
+                result = apply_legacy_attendance_snapshot(
+                    conn, pending["snapshot"], pending["filename"], now_iso(),
+                )
+                audit(
+                    conn, now_iso, "attendance.import", "ok",
+                    entity_type="period", entity_id=pending["period"],
+                    metadata={
+                        "filename": pending["filename"],
+                        "source_hash": pending["source_hash"],
+                        **result,
+                    },
+                )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 409
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Không ghi được chấm công; dữ liệu chưa được thay đổi",
+            }), 409
+        return jsonify({"ok": True, **result})
 
     @app.put("/api/payroll-adjustments/<employee_code>/<month>")
     def api_payroll_adjustment(employee_code, month):
         body = request.get_json(force=True) or {}
         if not re.fullmatch(r"\d{4}-\d{2}", month):
             return jsonify({"ok": False, "error": "Tháng phải có dạng YYYY-MM"}), 400
+        numeric_fields = (
+            "allowance", "responsibility", "advance", "probation_deduction",
+            "bhxh_employee_amount", "bhxh_company_amount", "gross_override", "net_override",
+        )
+        try:
+            values = {
+                field: finite_number(body.get(field), 0, field)
+                for field in numeric_fields
+            }
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         with db_factory() as conn:
             person = conn.execute("SELECT id FROM staff WHERE employee_code=?", (employee_code.upper(),)).fetchone()
             if not person:
@@ -3552,11 +6591,8 @@ def register_contract_routes(app, ctx):
                     bhxh_company_amount=excluded.bhxh_company_amount,
                     gross_override=excluded.gross_override,net_override=excluded.net_override,
                     use_override=excluded.use_override,note=excluded.note,updated_at=excluded.updated_at""",
-                (person["id"], month, number_value(body.get("allowance")),
-                 number_value(body.get("responsibility")), number_value(body.get("advance")),
-                 number_value(body.get("probation_deduction")), number_value(body.get("bhxh_employee_amount")),
-                 number_value(body.get("bhxh_company_amount")), number_value(body.get("gross_override")),
-                 number_value(body.get("net_override")), 1 if body.get("use_override") else 0,
+                (person["id"], month, *(values[field] for field in numeric_fields),
+                 1 if body.get("use_override") else 0,
                  clean_text(body.get("note")), now_iso()),
             )
             return jsonify({"ok": True, "payroll": payroll_rows(conn, month)})
@@ -3593,93 +6629,482 @@ def register_contract_routes(app, ctx):
     @app.put("/api/print/settings")
     def api_print_settings():
         body = request.get_json(force=True) or {}
+        paper = clean_text(body.get("paper") or "A4").upper()
+        if paper != "A4":
+            return jsonify({"ok": False, "error": "Bộ PDF hiện được khóa và kiểm tra ở khổ A4"}), 400
+        printer_name = clean_text(body.get("printer_name"))
+        printer_state = windows_printer_state()
+        if printer_name and printer_name not in printer_state["installed"]:
+            return jsonify({"ok": False, "error": "Tên máy in không có trong danh sách Windows"}), 400
+        try:
+            copies = finite_integer(body.get("copies"), 1, "Số bản in")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if not 1 <= copies <= 10:
+            return jsonify({"ok": False, "error": "Số bản in phải từ 1 đến 10"}), 400
         with db_factory() as conn:
-            setting_set(conn, "printer_name", clean_text(body.get("printer_name")))
-            setting_set(conn, "print_copies", max(1, min(int(number_value(body.get("copies"), 1)), 10)))
-            setting_set(conn, "print_paper", clean_text(body.get("paper")) or "A4")
-            return jsonify({"ok": True})
+            setting_set(conn, "printer_name", printer_name)
+            setting_set(conn, "print_copies", copies)
+            setting_set(conn, "print_paper", paper)
+            invalidated = conn.execute(
+                """UPDATE print_jobs SET status='stale',approved_at=NULL,error_message=?
+                   WHERE status IN ('preparing','prepared','approved')""",
+                ("Cấu hình máy in/số bản đã thay đổi; cần chuẩn bị và duyệt lại",),
+            ).rowcount
+            if invalidated:
+                audit(
+                    conn, now_iso, "print.settings_invalidate", "ok",
+                    entity_type="print_settings", entity_id="default",
+                    metadata={"jobs": invalidated, "copies": copies, "printer": printer_name},
+                )
+            return jsonify({
+                "ok": True,
+                "printer": printer_name or printer_state["default"],
+                "copies": copies,
+                "paper": paper,
+                "invalidated_jobs": invalidated,
+                "hardware_ready": bool(
+                    printer_state["supported"]
+                    and (printer_name or printer_state["default"]) in printer_state["installed"]
+                ),
+            })
 
     @app.post("/api/print/prepare/<int:batch_id>")
     def api_prepare_print(batch_id):
         export_dir = data_dir / "print_jobs" / str(batch_id)
         export_dir.mkdir(parents=True, exist_ok=True)
+        claim_id = uuid.uuid4().hex
+        attempt_dir = export_dir / "attempts" / claim_id
+        attempt_dir.mkdir(parents=True, exist_ok=False)
         with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             batch, orders = ctx["require_batch"](conn, batch_id)
             if batch["status"] != "approved":
                 return jsonify({"ok": False, "error": "Phải duyệt phiên đơn trước khi chuẩn bị in"}), 400
-            documents = {
-                "supplier_orders": (ctx["export_supplier_orders"](conn, batch, orders), f"Don_NCC_{batch['work_date']}.xlsx"),
-                "deliveries": (ctx["export_deliveries"](conn, batch, orders), f"Phieu_giao_{batch['work_date']}.xlsx"),
-                "purchases": (ctx["export_purchase_documents"](conn, batch, orders), f"Bang_ke_{batch['work_date']}.xlsx"),
-                "report": (ctx["export_report"](conn, batch, orders), f"Bao_cao_{batch['work_date']}.xlsx"),
-            }
-            prepared = []
-            for document_type, (workbook, filename) in documents.items():
-                path = export_dir / filename
-                workbook.save(path)
-                conn.execute(
-                    """INSERT INTO print_jobs(
-                        batch_id,document_type,file_path,status,created_at
-                    ) VALUES(?,?,?,'prepared',?) ON CONFLICT(batch_id,document_type) DO UPDATE SET
-                        file_path=excluded.file_path,status='prepared',approved_at=NULL,printed_at=NULL,
-                        error_message=NULL,created_at=excluded.created_at""",
-                    (batch_id, document_type, str(path.resolve()), now_iso()),
+            locked_job = conn.execute(
+                """SELECT status FROM print_jobs
+                   WHERE batch_id=?
+                     AND status IN ('preparing','approved','submitting','submitted','submission_unknown','printed')
+                   ORDER BY id DESC LIMIT 1""",
+                (batch_id,),
+            ).fetchone()
+            if locked_job:
+                message = (
+                    "Bộ chứng từ đang/đã gửi sang máy in nên không được ghi đè"
+                    if locked_job["status"] in {"submitting", "submitted", "submission_unknown", "printed"}
+                    else "Bộ PDF đã duyệt; hãy hủy bộ in cũ trước khi chuẩn bị lại"
                 )
-                prepared.append(document_type)
-            audit(conn, now_iso, "print.prepare", "ok", entity_type="batch", entity_id=batch_id,
-                  metadata={"documents": prepared})
-            return jsonify({"ok": True, "prepared": prepared, "requires_approval": True})
+                return jsonify({"ok": False, "error": message}), 409
+            copies = max(1, min(int(as_number(setting_get(conn, "print_copies", "1"), 1)), 10))
+            printer_state = windows_printer_state()
+            prepared_printer = clean_text(setting_get(conn, "printer_name", "")) or printer_state["default"]
+            conn.execute(
+                """INSERT INTO print_jobs(
+                       batch_id,document_type,file_path,status,created_at,paper,copies,printer_name,
+                       error_message,claim_id
+                   ) VALUES(?,?,'','preparing',?,'A4',?,?,NULL,?)
+                   ON CONFLICT(batch_id,document_type) DO UPDATE SET
+                       file_path='',status='preparing',created_at=excluded.created_at,
+                       paper='A4',copies=excluded.copies,printer_name=excluded.printer_name,
+                       file_sha256=NULL,input_sha256=NULL,manifest_path=NULL,page_count=0,
+                       approved_at=NULL,printed_at=NULL,submitted_at=NULL,error_message=NULL,
+                       claim_id=excluded.claim_id""",
+                (batch_id, "pdf_bundle", now_iso(), copies, prepared_printer, claim_id),
+            )
+            # Make the preparing claim visible before the comparatively slow
+            # XLSX/PDF render.  Order mutation sees this row and is rejected.
+            conn.commit()
+            documents = {}
+            try:
+                documents["supplier_orders"] = (
+                    ctx["export_supplier_orders"](conn, batch, orders),
+                    f"Don_NCC_{batch['work_date']}.xlsx",
+                )
+                documents["deliveries"] = (
+                    ctx["export_deliveries"](conn, batch, orders),
+                    f"Phieu_giao_{batch['work_date']}.xlsx",
+                )
+                documents["purchases"] = (
+                    ctx["export_purchase_documents"](conn, batch, orders),
+                    f"Bang_ke_{batch['work_date']}.xlsx",
+                )
+                documents["report"] = (
+                    ctx["export_report"](conn, batch, orders),
+                    f"Bao_cao_{batch['work_date']}.xlsx",
+                )
+                for _, (workbook, filename) in documents.items():
+                    workbook.save(attempt_dir / filename)
+                sections = workbooks_to_sections({
+                    document_type: workbook
+                    for document_type, (workbook, _) in documents.items()
+                })
+                pdf_path = attempt_dir / f"Bo_chung_tu_{batch['work_date']}.pdf"
+                manifest = build_pdf_bundle(
+                    sections,
+                    pdf_path,
+                    company=setting_get(conn, "company", "CÔNG TY TNHH THỰC PHẨM THÀNH ĐẠT PHÁT"),
+                    document_title=f"Bộ chứng từ ngày {batch['work_date']}",
+                    generated_at=now_iso(),
+                )
+                manifest_path = write_manifest(manifest, attempt_dir / "manifest.json")
+            except Exception as exc:
+                app.logger.exception("Print bundle preparation failed for batch %s", batch_id)
+                conn.execute(
+                    """UPDATE print_jobs SET status='stale',error_message=?
+                       WHERE batch_id=? AND document_type='pdf_bundle' AND status='preparing'
+                         AND claim_id=?""",
+                    (f"Chuẩn bị PDF thất bại: {str(exc)[:180]}", batch_id, claim_id),
+                )
+                return jsonify({"ok": False, "error": f"Không tạo được PDF chuẩn in: {str(exc)[:240]}"}), 500
+            finally:
+                for workbook, _ in documents.values():
+                    workbook.close()
+
+            # Refresh after rendering.  A concurrent explicit invalidation may
+            # release the batch; never resurrect that obsolete render.
+            conn.rollback()
+            conn.execute("BEGIN IMMEDIATE")
+            current_batch = conn.execute("SELECT status FROM batches WHERE id=?", (batch_id,)).fetchone()
+            preparing = conn.execute(
+                """SELECT id FROM print_jobs WHERE batch_id=? AND document_type='pdf_bundle'
+                   AND status='preparing' AND claim_id=?""",
+                (batch_id, claim_id),
+            ).fetchone()
+            if not current_batch or current_batch["status"] != "approved" or not preparing:
+                return jsonify({
+                    "ok": False,
+                    "error": "Phiên đơn hoặc yêu cầu chuẩn bị in đã thay đổi; PDF vừa tạo không được duyệt",
+                }), 409
+            conn.execute(
+                "DELETE FROM print_jobs WHERE batch_id=? AND document_type!='pdf_bundle'",
+                (batch_id,),
+            )
+            conn.execute(
+                """UPDATE print_jobs SET
+                       file_path=?,status='prepared',created_at=?,file_sha256=?,input_sha256=?,
+                       manifest_path=?,page_count=?,paper='A4',copies=?,printer_name=?,
+                       approved_at=NULL,printed_at=NULL,submitted_at=NULL,error_message=NULL
+                   WHERE batch_id=? AND document_type='pdf_bundle' AND status='preparing'
+                     AND claim_id=?""",
+                (
+                    str(pdf_path.resolve()), now_iso(), manifest["sha256"], manifest["input_sha256"],
+                    str(manifest_path.resolve()), manifest["pages"], copies, prepared_printer,
+                    batch_id, claim_id,
+                ),
+            )
+            if conn.execute("SELECT changes() n").fetchone()["n"] != 1:
+                return jsonify({
+                    "ok": False,
+                    "error": "Lượt chuẩn bị PDF đã bị thay thế; kết quả cũ không được công bố",
+                }), 409
+            audit(
+                conn, now_iso, "print.prepare", "ok", entity_type="batch", entity_id=batch_id,
+                metadata={
+                    "document": "pdf_bundle", "pages": manifest["pages"],
+                    "sections": manifest["section_count"], "sha256": manifest["sha256"],
+                },
+            )
+            return jsonify({
+                "ok": True,
+                "prepared": ["pdf_bundle"],
+                "requires_approval": True,
+                "pages": manifest["pages"],
+                "sections": manifest["section_count"],
+                "sha256": manifest["sha256"],
+                "pdf_url": f"/api/print/pdf/{batch_id}",
+            })
 
     @app.post("/api/print/approve/<int:batch_id>")
     def api_approve_print(batch_id):
         with db_factory() as conn:
-            count = conn.execute("SELECT COUNT(*) n FROM print_jobs WHERE batch_id=?", (batch_id,)).fetchone()["n"]
+            conn.execute("BEGIN IMMEDIATE")
+            batch = conn.execute("SELECT status FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if not batch or batch["status"] != "approved":
+                return jsonify({"ok": False, "error": "Phiên đơn không còn ở trạng thái đã duyệt"}), 409
+            count = conn.execute(
+                "SELECT COUNT(*) n FROM print_jobs WHERE batch_id=? AND status='prepared'", (batch_id,)
+            ).fetchone()["n"]
             if not count:
-                return jsonify({"ok": False, "error": "Chưa chuẩn bị bộ chứng từ in"}), 400
+                return jsonify({"ok": False, "error": "Không có PDF mới ở trạng thái chờ duyệt"}), 400
             conn.execute(
-                "UPDATE print_jobs SET status='approved',approved_at=?,error_message=NULL WHERE batch_id=?",
+                """UPDATE print_jobs SET status='approved',approved_at=?,error_message=NULL
+                   WHERE batch_id=? AND status='prepared'""",
                 (now_iso(), batch_id),
             )
             audit(conn, now_iso, "print.approve", "ok", entity_type="batch", entity_id=batch_id,
                   metadata={"jobs": count})
             return jsonify({"ok": True, "approved": count})
 
+    @app.post("/api/print/invalidate/<int:batch_id>")
+    def api_invalidate_print(batch_id):
+        body = request.get_json(silent=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận hủy bộ PDF in cũ"}), 400
+        with db_factory() as conn:
+            submitted = conn.execute(
+                """SELECT COUNT(*) n FROM print_jobs
+                   WHERE batch_id=? AND status IN ('submitting','submitted','submission_unknown','printed')""",
+                (batch_id,),
+            ).fetchone()["n"]
+            if submitted:
+                return jsonify({
+                    "ok": False,
+                    "error": "Bộ chứng từ đang/đã gửi sang máy in nên không được hủy khỏi lịch sử",
+                }), 409
+            changed = conn.execute(
+                """UPDATE print_jobs SET status='stale',approved_at=NULL,error_message=?
+                   WHERE batch_id=? AND status NOT IN ('stale','cancelled')""",
+                ("Bộ PDF đã bị hủy vì cần sửa dữ liệu nguồn", batch_id),
+            ).rowcount
+            if changed:
+                audit(conn, now_iso, "print.invalidate", "ok", entity_type="batch", entity_id=batch_id,
+                      metadata={"jobs": changed})
+            return jsonify({"ok": True, "invalidated": changed, "idempotent": changed == 0})
+
     @app.post("/api/print/run/<int:batch_id>")
     def api_run_print(batch_id):
         body = request.get_json(silent=True) or {}
-        dry_run = bool(body.get("dry_run"))
+        dry_run = body.get("dry_run") is True
         with db_factory() as conn:
+            batch = conn.execute("SELECT status FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if not batch or batch["status"] != "approved":
+                return jsonify({"ok": False, "error": "Phiên đơn không còn ở trạng thái đã duyệt"}), 409
             jobs = [dict(row) for row in conn.execute(
                 "SELECT * FROM print_jobs WHERE batch_id=? AND status='approved' ORDER BY id", (batch_id,)
             )]
             if not jobs:
+                locked = conn.execute(
+                    """SELECT status FROM print_jobs
+                       WHERE batch_id=?
+                         AND status IN ('submitting','submitted','submission_unknown','printed')
+                       ORDER BY id DESC LIMIT 1""",
+                    (batch_id,),
+                ).fetchone()
+                if locked:
+                    return jsonify({
+                        "ok": False,
+                        "status": locked["status"],
+                        "error": "Bộ chứng từ đang/đã được Windows tiếp nhận; không gửi lại để tránh in trùng",
+                    }), 409
                 return jsonify({"ok": False, "error": "Không có chứng từ đã duyệt để in"}), 400
-            missing = [job for job in jobs if not Path(job["file_path"]).exists()]
-            if missing:
-                return jsonify({"ok": False, "error": "Có file in bị thiếu; cần chuẩn bị lại"}), 400
-            printer_name = setting_get(conn, "printer_name", "")
-            copies = max(1, min(int(as_number(setting_get(conn, "print_copies", "1"), 1)), 10))
-            if not dry_run:
-                if os.name != "nt" or not hasattr(os, "startfile"):
-                    return jsonify({"ok": False, "error": "In trực tiếp chỉ hỗ trợ trên PC Windows bàn giao"}), 400
+            verified_jobs = []
+            try:
                 for job in jobs:
-                    try:
-                        for _ in range(copies):
-                            os.startfile(job["file_path"], "print")
-                        conn.execute(
-                            "UPDATE print_jobs SET status='printed',printed_at=?,printer_name=?,error_message=NULL WHERE id=?",
-                            (now_iso(), printer_name or "Máy in mặc định Windows", job["id"]),
-                        )
-                    except OSError:
-                        conn.execute(
-                            "UPDATE print_jobs SET status='error',error_message=? WHERE id=?",
-                            ("Windows không mở được lệnh in cho file này", job["id"]),
-                        )
-                        return jsonify({"ok": False, "error": "Windows không gửi được một file sang máy in"}), 500
-            audit(conn, now_iso, "print.run", "dry_run" if dry_run else "ok", entity_type="batch", entity_id=batch_id,
-                  metadata={"jobs": len(jobs), "copies": copies})
-            return jsonify({"ok": True, "dry_run": dry_run, "jobs": len(jobs), "copies": copies,
-                            "printer": printer_name or "Máy in mặc định Windows"})
+                    path = safe_print_path(data_dir, batch_id, job["file_path"])
+                    if not path.is_file():
+                        raise ValueError("PDF in bị thiếu")
+                    if hashlib.sha256(path.read_bytes()).hexdigest() != clean_text(job.get("file_sha256")):
+                        raise ValueError("PDF đã thay đổi sau bước chuẩn bị")
+                    verify_pdf(path, minimum_pages=max(1, int(job.get("page_count") or 1)))
+                    verified_jobs.append((job, path))
+            except (OSError, ValueError, PdfDocumentError) as exc:
+                return jsonify({"ok": False, "error": f"Bộ PDF không còn hợp lệ: {str(exc)[:220]}"}), 409
+
+            if any(clean_text(job.get("paper")).upper() != "A4" for job in jobs):
+                return jsonify({"ok": False, "error": "PDF và cấu hình in phải cùng khổ A4"}), 409
+            approved_copies = {max(1, min(int(as_number(job.get("copies"), 1)), 10)) for job in jobs}
+            approved_printers = {clean_text(job.get("printer_name")) for job in jobs}
+            if len(approved_copies) != 1 or len(approved_printers) != 1:
+                return jsonify({"ok": False, "error": "Cấu hình các chứng từ đã duyệt không đồng nhất"}), 409
+            copies = approved_copies.pop()
+            printer_name = approved_printers.pop()
+            printer_state = windows_printer_state()
+            hardware_ready = bool(
+                printer_state["supported"] and printer_name and printer_name in printer_state["installed"]
+            )
+            if dry_run:
+                audit(
+                    conn, now_iso, "print.run", "dry_run",
+                    entity_type="batch", entity_id=batch_id,
+                    metadata={"jobs": len(jobs), "copies": copies, "hardware_ready": hardware_ready},
+                )
+                return jsonify({
+                    "ok": True,
+                    "dry_run": True,
+                    "status": "verified",
+                    "jobs": len(jobs),
+                    "copies": copies,
+                    "printer": printer_name or "Chưa có máy in mặc định Windows",
+                    "hardware_ready": hardware_ready,
+                    "physical_confirmation_required": False,
+                })
+
+            if not hardware_ready or not hasattr(os, "startfile"):
+                return jsonify({
+                    "ok": False,
+                    "error": "Chưa có máy in Windows hợp lệ; chọn đúng máy in đã cài trước khi bấm in",
+                }), 409
+            try:
+                import win32print
+
+                # Capture a real restore target before claiming the immutable
+                # job.  A valid default is required because printing through
+                # the Windows shell temporarily changes this global setting.
+                restore_printer = str(win32print.GetDefaultPrinter() or "").strip()
+                if not restore_printer or restore_printer not in printer_state["installed"]:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Windows chưa có máy in mặc định hợp lệ để khôi phục sau lệnh in",
+                    }), 409
+            except Exception:
+                return jsonify({
+                    "ok": False,
+                    "error": "Không đọc được máy in mặc định Windows; chưa gửi lệnh in",
+                }), 409
+
+            job_ids = [int(job["id"]) for job in jobs]
+            if not claim_approved_print_jobs(conn, batch_id, job_ids):
+                return jsonify({
+                    "ok": False,
+                    "error": "Bộ chứng từ vừa được một lệnh khác tiếp nhận; không gửi lại để tránh in trùng",
+                }), 409
+            audit(
+                conn, now_iso, "print.run", "submitting",
+                entity_type="batch", entity_id=batch_id,
+                metadata={"jobs": len(jobs), "copies": copies, "hardware_ready": hardware_ready},
+            )
+            # The claim must be durable before the first irreversible shell
+            # call.  The context manager's final commit alone would be too late.
+            conn.commit()
+
+        submission_failed = False
+        restore_failed = False
+        commands_started = 0
+        with PRINT_SUBMISSION_LOCK:
+            live_restore_printer = restore_printer
+            try:
+                current_default = str(win32print.GetDefaultPrinter() or "").strip()
+                if not current_default or current_default not in printer_state["installed"]:
+                    raise RuntimeError("missing live default printer")
+                live_restore_printer = current_default
+                if current_default != printer_name:
+                    win32print.SetDefaultPrinter(printer_name)
+                for _, path in verified_jobs:
+                    for _ in range(copies):
+                        os.startfile(str(path), "print")
+                        commands_started += 1
+            except Exception:
+                submission_failed = True
+            finally:
+                # Always compare the live default.  SetDefaultPrinter can fail
+                # after partially changing Windows state, so a boolean flag is
+                # not a reliable indication that restoration is unnecessary.
+                try:
+                    if str(win32print.GetDefaultPrinter() or "").strip() != live_restore_printer:
+                        win32print.SetDefaultPrinter(live_restore_printer)
+                except Exception:
+                    restore_failed = True
+
+        finished_at = now_iso()
+        if submission_failed:
+            error_message = "Không xác định Windows đã nhận bao nhiêu bản; không được bấm in lại"
+            try:
+                with db_factory() as conn:
+                    finished = finish_claimed_print_jobs(
+                        conn,
+                        job_ids,
+                        status="submission_unknown",
+                        printer_name=printer_name,
+                        copies=copies,
+                        error_message=error_message,
+                    )
+                    if not finished:
+                        raise RuntimeError("print claim changed unexpectedly")
+                    audit(
+                        conn, now_iso, "print.run", "submission_unknown",
+                        entity_type="batch", entity_id=batch_id,
+                        metadata={
+                            "jobs": len(jobs), "copies": copies,
+                            "commands_started": commands_started,
+                            "default_restored": not restore_failed,
+                        },
+                    )
+            except Exception:
+                return jsonify({
+                    "ok": False,
+                    "status": "submitting",
+                    "error": "Lệnh in có thể đã vào hàng đợi nhưng chưa ghi được kết quả; tuyệt đối không bấm lại",
+                }), 500
+            return jsonify({
+                "ok": False,
+                "status": "submission_unknown",
+                "error": "Windows không gửi được trọn bộ PDF; có thể một phần đã vào hàng đợi, không bấm lại",
+                "default_printer_restored": not restore_failed,
+            }), 500
+
+        restore_warning = (
+            "Đã gửi PDF nhưng Windows không khôi phục được máy in mặc định; cần đặt lại thủ công"
+            if restore_failed else None
+        )
+        try:
+            with db_factory() as conn:
+                finished = finish_claimed_print_jobs(
+                    conn,
+                    job_ids,
+                    status="submitted",
+                    submitted_at=finished_at,
+                    printer_name=printer_name,
+                    copies=copies,
+                    error_message=restore_warning,
+                )
+                if not finished:
+                    raise RuntimeError("print claim changed unexpectedly")
+                audit(
+                    conn, now_iso, "print.run", "submitted",
+                    entity_type="batch", entity_id=batch_id,
+                    metadata={
+                        "jobs": len(jobs), "copies": copies,
+                        "commands_started": commands_started,
+                        "default_restored": not restore_failed,
+                    },
+                )
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "status": "submitting",
+                "error": "PDF đã được gửi sang Windows nhưng chưa ghi được kết quả; tuyệt đối không bấm lại",
+            }), 500
+        response = {
+            "ok": True,
+            "dry_run": False,
+            "status": "submitted",
+            "jobs": len(jobs),
+            "copies": copies,
+            "printer": printer_name,
+            "hardware_ready": True,
+            "physical_confirmation_required": True,
+            "default_printer_restored": not restore_failed,
+        }
+        if restore_warning:
+            response["warning"] = restore_warning
+        return jsonify(response)
+
+    @app.get("/api/print/pdf/<int:batch_id>")
+    def api_print_pdf(batch_id):
+        with db_factory() as conn:
+            job = conn.execute(
+                """SELECT * FROM print_jobs WHERE batch_id=? AND document_type='pdf_bundle'
+                   ORDER BY id DESC LIMIT 1""",
+                (batch_id,),
+            ).fetchone()
+            if not job:
+                return jsonify({"ok": False, "error": "Chưa chuẩn bị PDF cho phiên này"}), 404
+            data = dict(job)
+            if data.get("status") in {"stale", "cancelled"}:
+                return jsonify({"ok": False, "error": "Bộ PDF này đã bị hủy; cần chuẩn bị lại"}), 409
+            try:
+                path = safe_print_path(data_dir, batch_id, data["file_path"])
+                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != clean_text(data["file_sha256"]):
+                    raise ValueError("PDF bị thiếu hoặc đã thay đổi")
+                verify_pdf(path, minimum_pages=max(1, int(data.get("page_count") or 1)))
+            except (OSError, ValueError, PdfDocumentError) as exc:
+                return jsonify({"ok": False, "error": str(exc)[:220]}), 409
+            return send_file(
+                path,
+                as_attachment=True,
+                download_name=path.name,
+                mimetype="application/pdf",
+            )
 
     @app.get("/api/print/jobs/<int:batch_id>")
     def api_print_jobs(batch_id):
@@ -3700,52 +7125,122 @@ def register_contract_routes(app, ctx):
 
     @app.get("/api/export/payment-request/<contractor>")
     def api_payment_request(contractor):
+        # Backward-compatible URL, but the source of truth is now restricted
+        # to invoices the user explicitly confirmed as issued.  This prevents
+        # a cancelled/unissued draft from producing an official-looking request.
+        return api_invoice_payment_bundle(contractor)
+
+    @app.get("/api/export/invoice-payment-bundle/<contractor>")
+    def api_invoice_payment_bundle(contractor):
         if Document is None:
             return jsonify({"ok": False, "error": "Máy chưa cài thư viện python-docx"}), 500
-        period_from = request.args.get("from") or date.today().replace(day=1).isoformat()
-        period_to = request.args.get("to") or date.today().isoformat()
+        period_from = clean_text(request.args.get("from"))
+        period_to = clean_text(request.args.get("to"))
+        try:
+            validate_date_range(period_from, period_to)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         contractor = clean_text(contractor).upper()
         with db_factory() as conn:
-            rows = [dict(row) for row in conn.execute(
-                """SELECT o.*,b.work_date FROM orders o JOIN batches b ON b.id=o.batch_id
-                   WHERE b.status='approved' AND o.contractor=? AND b.work_date BETWEEN ? AND ?""",
+            drafts = [dict(row) for row in conn.execute(
+                """SELECT * FROM outgoing_invoice_drafts
+                   WHERE contractor=? AND status='issued'
+                     AND issued_invoice_date BETWEEN ? AND ?
+                   ORDER BY issued_invoice_date,issued_invoice_series,issued_invoice_number,id""",
                 (contractor, period_from, period_to),
             )]
-            amount = sum(net_delivered(row) * number_value(row["sell_price"]) * tax_factor(row["tax"]) for row in rows)
-            if not rows:
-                return jsonify({"ok": False, "error": "Không có dữ liệu đã duyệt trong kỳ"}), 404
-            requester = setting_get(conn, "payment_requester", "")
-            bank_name = setting_get(conn, "payment_bank_name", "")
-            bank_account = setting_get(conn, "payment_bank_account", "")
-            if not requester or not bank_name or not bank_account:
+            if not drafts:
+                return jsonify({"ok": False, "error": "Không có hóa đơn đã phát hành đủ số/ngày trong kỳ"}), 404
+            if any(not clean_text(row.get("issued_invoice_number")) for row in drafts):
+                return jsonify({"ok": False, "error": "Còn hóa đơn chưa ghi số phát hành"}), 409
+            snapshot_fields = (
+                "buyer_name_snapshot", "buyer_tax_code_snapshot", "buyer_address_snapshot",
+                "company_name_snapshot", "company_tax_code_snapshot", "company_address_snapshot",
+                "payment_requester_snapshot", "payment_bank_name_snapshot",
+                "payment_bank_account_snapshot",
+            )
+            if any(any(not clean_text(row.get(field)) for field in snapshot_fields) for row in drafts):
                 return jsonify({
                     "ok": False,
-                    "error": "Thiếu người đại diện hoặc tài khoản nhận tiền; cập nhật tại Cấu hình trước khi xuất",
+                    "error": "Hóa đơn cũ chưa khóa đủ hồ sơ pháp lý/thanh toán; không dùng hồ sơ hiện tại để ghi đè lịch sử",
                 }), 409
-            contractor_row = conn.execute("SELECT name FROM contractors WHERE code=?", (contractor,)).fetchone()
-            daily_amounts = defaultdict(float)
-            for row in rows:
-                daily_amounts[row["work_date"]] += (
-                    net_delivered(row) * number_value(row["sell_price"]) * tax_factor(row["tax"])
-                )
-            document = payment_request_document(
-                company=setting_get(conn, "company", ""),
-                recipient=contractor_row["name"] if contractor_row else contractor,
-                requester=requester,
-                bank_name=bank_name,
-                bank_account=bank_account,
-                amount=amount, period_from=period_from, period_to=period_to,
-                details=[
-                    {"work_date": work_date, "amount": daily_amounts[work_date]}
-                    for work_date in sorted(daily_amounts)
-                ],
+            snapshot_keys = {
+                tuple(clean_text(row.get(field)) for field in snapshot_fields)
+                for row in drafts
+            }
+            if len(snapshot_keys) != 1:
+                return jsonify({
+                    "ok": False,
+                    "error": "Các hóa đơn trong kỳ thuộc hồ sơ pháp lý/thanh toán khác nhau; hãy xuất tách kỳ",
+                }), 409
+            snapshot = drafts[0]
+
+            draft_ids = [row["id"] for row in drafts]
+            placeholders = ",".join("?" for _ in draft_ids)
+            lines = [dict(row) for row in conn.execute(
+                f"""SELECT l.*,d.issued_invoice_number,d.issued_invoice_series,d.issued_invoice_date,
+                            d.subtotal invoice_subtotal,d.tax_amount invoice_tax_amount,
+                            d.total_amount invoice_total,b.work_date,o.kitchen
+                     FROM outgoing_invoice_lines l
+                     JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
+                     JOIN orders o ON o.id=l.order_id
+                     JOIN batches b ON b.id=o.batch_id
+                     WHERE l.draft_id IN ({placeholders})
+                     ORDER BY d.issued_invoice_date,d.id,b.work_date,l.id""",
+                draft_ids,
+            )]
+            if not lines:
+                return jsonify({"ok": False, "error": "Hóa đơn đã phát hành không còn dòng giao hàng để đối chiếu"}), 409
+            details = [{
+                "invoice_date": row["issued_invoice_date"],
+                "invoice_series": row["issued_invoice_series"] or "",
+                "invoice_number": row["issued_invoice_number"],
+                "subtotal": vnd_round(row["subtotal"]),
+                "tax_amount": vnd_round(row["tax_amount"]),
+                "total_amount": vnd_round(row["total_amount"]),
+            } for row in drafts]
+            payment_total = sum(item["total_amount"] for item in details)
+            try:
+                statement = invoice_delivery_statement_workbook(lines, drafts, tax_factor)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 409
+            document = invoice_payment_request_document(
+                company=snapshot["company_name_snapshot"],
+                company_tax_code=snapshot["company_tax_code_snapshot"],
+                company_address=snapshot["company_address_snapshot"],
+                recipient=snapshot["buyer_name_snapshot"],
+                recipient_tax_code=snapshot["buyer_tax_code_snapshot"],
+                recipient_address=snapshot["buyer_address_snapshot"],
+                requester=snapshot["payment_requester_snapshot"],
+                bank_name=snapshot["payment_bank_name_snapshot"],
+                bank_account=snapshot["payment_bank_account_snapshot"],
+                period_from=period_from, period_to=period_to, details=details,
             )
-            stream = io.BytesIO()
-            document.save(stream)
-            stream.seek(0)
-            return send_file(stream, as_attachment=True,
-                             download_name=f"De_nghi_thanh_toan_{contractor}_{period_from}_{period_to}.docx",
-                             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            docx_stream = io.BytesIO()
+            document.save(docx_stream)
+            xlsx_stream = io.BytesIO()
+            statement.save(xlsx_stream)
+            statement.close()
+            safe_code = re.sub(r"[^A-Z0-9_-]+", "_", contractor)[:40] or "KHACH_HANG"
+            bundle = io.BytesIO()
+            with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr(f"De_nghi_thanh_toan_{safe_code}_{period_from}_{period_to}.docx", docx_stream.getvalue())
+                archive.writestr(f"Bang_ke_giao_hang_{safe_code}_{period_from}_{period_to}.xlsx", xlsx_stream.getvalue())
+                archive.writestr(
+                    "THONG_TIN_DOI_CHIEU.txt",
+                    (f"Nhà thầu: {contractor}\nTừ ngày: {period_from}\nĐến ngày: {period_to}\n"
+                     f"Số hóa đơn: {len(details)}\nTổng đề nghị: {payment_total:,.0f} VNĐ\n"
+                     "Nguồn: hóa đơn đã xác nhận phát hành và lượng thực giao đã khóa.\n"),
+                )
+            bundle.seek(0)
+            audit(conn, now_iso, "outgoing.invoice_payment_bundle", "ok", entity_type="contractor",
+                  entity_id=contractor, metadata={"from": period_from, "to": period_to,
+                                                   "invoices": len(details), "amount": payment_total})
+            return send_file(
+                bundle, as_attachment=True,
+                download_name=f"Bo_de_nghi_thanh_toan_{safe_code}_{period_from}_{period_to}.zip",
+                mimetype="application/zip",
+            )
 
 
 def _group_rows(rows, key):
@@ -3768,44 +7263,136 @@ def debt_period_payload(conn, period_from: str, period_to: str, tax_factor):
             "period_adjustment": 0, "closing": 0,
         }),
     }
+    party_maps = {"contractor": {}, "supplier": {}}
+
+    def remember_party(party_type, value):
+        code = mapping_cell_text(value)
+        if code:
+            party_maps[party_type].setdefault(code.casefold(), code)
+
+    # Master tables win; later case-only variants from imports/orders are
+    # folded into the same ledger account instead of creating phantom debts.
+    for row in conn.execute("SELECT code FROM contractors ORDER BY code"):
+        remember_party("contractor", row["code"])
+    for row in conn.execute("SELECT code FROM suppliers ORDER BY code"):
+        remember_party("supplier", row["code"])
+    for row in conn.execute("SELECT DISTINCT contractor FROM orders ORDER BY contractor"):
+        remember_party("contractor", row["contractor"])
+    for query in (
+        "SELECT DISTINCT supplier FROM products ORDER BY supplier",
+        "SELECT DISTINCT supplier FROM orders ORDER BY supplier",
+        "SELECT DISTINCT supplier FROM historical_payable_lines ORDER BY supplier",
+    ):
+        for row in conn.execute(query):
+            remember_party("supplier", row["supplier"])
+    for table in ("balances", "payments", "debt_adjustments"):
+        for row in conn.execute(
+            f"SELECT DISTINCT party_type,party_code FROM {table} ORDER BY party_type,party_code"
+        ):
+            if row["party_type"] in party_maps:
+                remember_party(row["party_type"], row["party_code"])
+
+    def party_key(party_type, value):
+        code = mapping_cell_text(value)
+        return party_maps[party_type].get(code.casefold(), code)
+    snapshot_cutoffs = {
+        "contractor": defaultdict(lambda: "0001-01-01"),
+        "supplier": defaultdict(lambda: "0001-01-01"),
+    }
+    snapshots_used = {"contractor": {}, "supplier": {}}
+    cutoff_setting = conn.execute(
+        "SELECT value FROM settings WHERE key='historical_payables_through_date'"
+    ).fetchone()
+    historical_through = mapping_cell_text(
+        cutoff_setting["value"] if cutoff_setting else ""
+    )
+    if not historical_through:
+        historical_row = conn.execute(
+            "SELECT MAX(purchase_date) through_date FROM historical_payable_lines"
+        ).fetchone()
+        historical_through = mapping_cell_text(
+            historical_row["through_date"] if historical_row else ""
+        )
     for row in conn.execute("SELECT * FROM balances"):
-        if row["party_type"] in parties:
-            parties[row["party_type"]][row["party_code"]]["opening"] += row["opening"]
+        code = party_key(row["party_type"], row["party_code"]) if row["party_type"] in parties else ""
+        as_of_date = row["as_of_date"] or "1900-01-01"
+        if row["party_type"] in parties and as_of_date <= period_from:
+            parties[row["party_type"]][code]["opening"] += row["opening"]
+            snapshot_cutoffs[row["party_type"]][code] = as_of_date
+            snapshots_used[row["party_type"]][code] = as_of_date
     for row in conn.execute(
         """SELECT o.*,b.work_date FROM orders o JOIN batches b ON b.id=o.batch_id
            WHERE b.status='approved' AND b.work_date<=? ORDER BY b.work_date,o.id""", (period_to,)
     ):
         item = dict(row)
-        contractor_charge = net_delivered(item) * as_number(item["sell_price"]) * tax_factor(item["tax"])
-        supplier_charge = net_received(item) * as_number(item["buy_price"])
+        contractor_subtotal = vnd_product(net_delivered(item), as_number(item["sell_price"]))
+        vat_percent = invoice_tax_percent(item["tax"])
+        contractor_tax = 0 if vat_percent <= 0 else vnd_product(contractor_subtotal, vat_percent / 100)
+        contractor_charge = contractor_subtotal + contractor_tax
+        supplier_charge = vnd_product(net_received(item), as_number(item["buy_price"]))
         for party_type, code, amount in (
             ("contractor", item["contractor"], contractor_charge),
             ("supplier", item["supplier"], supplier_charge),
         ):
+            code = party_key(party_type, code)
             if not code:
+                continue
+            if (
+                party_type == "supplier"
+                and historical_through
+                and item["work_date"] <= historical_through
+            ):
+                continue
+            if item["work_date"] < snapshot_cutoffs[party_type][code]:
                 continue
             target = parties[party_type][code]
             if item["work_date"] < period_from:
                 target["opening"] += amount
             else:
                 target["period_charge"] += amount
+    historical_summary = {"rows": 0, "amount": 0, "period_rows": 0, "period_amount": 0}
+    for row in conn.execute(
+        """SELECT purchase_date,supplier,amount FROM historical_payable_lines
+           WHERE purchase_date<=? ORDER BY purchase_date,id""", (period_to,)
+    ):
+        supplier = party_key("supplier", row["supplier"])
+        if not supplier:
+            continue
+        if row["purchase_date"] < snapshot_cutoffs["supplier"][supplier]:
+            continue
+        amount = vnd_round(row["amount"])
+        target = parties["supplier"][supplier]
+        historical_summary["rows"] += 1
+        historical_summary["amount"] += amount
+        if row["purchase_date"] < period_from:
+            target["opening"] += amount
+        else:
+            target["period_charge"] += amount
+            historical_summary["period_rows"] += 1
+            historical_summary["period_amount"] += amount
     for row in conn.execute("SELECT * FROM payments WHERE payment_date<=?", (period_to,)):
         party_type = row["party_type"]
         if party_type not in parties:
             continue
-        target = parties[party_type][row["party_code"]]
+        code = party_key(party_type, row["party_code"])
+        if row["payment_date"] < snapshot_cutoffs[party_type][code]:
+            continue
+        target = parties[party_type][code]
         if row["payment_date"] < period_from:
-            target["opening"] -= row["amount"]
+            target["opening"] -= vnd_round(row["amount"])
         else:
-            target["period_paid"] += row["amount"]
+            target["period_paid"] += vnd_round(row["amount"])
     for row in conn.execute("SELECT * FROM debt_adjustments WHERE adjustment_date<=?", (period_to,)):
         if row["party_type"] not in parties:
             continue
-        target = parties[row["party_type"]][row["party_code"]]
+        code = party_key(row["party_type"], row["party_code"])
+        if row["adjustment_date"] < snapshot_cutoffs[row["party_type"]][code]:
+            continue
+        target = parties[row["party_type"]][code]
         if row["adjustment_date"] < period_from:
-            target["opening"] += row["amount"]
+            target["opening"] += vnd_round(row["amount"])
         else:
-            target["period_adjustment"] += row["amount"]
+            target["period_adjustment"] += vnd_round(row["amount"])
     for group in parties.values():
         for values in group.values():
             values["closing"] = (
@@ -3817,6 +7404,9 @@ def debt_period_payload(conn, period_from: str, period_to: str, tax_factor):
         "period_to": period_to,
         "contractors": dict(parties["contractor"]),
         "suppliers": dict(parties["supplier"]),
+        "historical_payables": historical_summary,
+        "historical_payables_through_date": historical_through or None,
+        "snapshots_used": snapshots_used,
     }
 
 
@@ -3939,6 +7529,31 @@ def debt_period_workbook(conn, payload: dict):
             row["created_at"],
         ])
     style_export_sheet(ws, "ĐIỀU CHỈNH CÔNG NỢ", f"Từ {period_from} đến {period_to}", adjustment_headers, (4,))
+
+    ws = workbook.create_sheet("Chi tiết phải trả cũ")
+    payable_headers = [
+        "Ngày", "Bếp", "Tên hàng", "Số lượng đặt", "ĐVT", "NCC", "Giá mua",
+        "Hỏng", "Thêm", "Giảm", "Thiếu", "SL thực tế", "Tiền file nguồn",
+        "Tiền theo công thức", "Chênh lệch", "Thành tiền công nợ", "Ghi chú", "File nguồn", "Dòng",
+    ]
+    ws.append(payable_headers)
+    for row in conn.execute(
+        """SELECT * FROM historical_payable_lines
+           WHERE purchase_date>=? AND purchase_date<=? ORDER BY purchase_date,id""",
+        (period_from, period_to),
+    ):
+        ws.append([
+            row["purchase_date"], row["kitchen"], row["item_name"], row["qty"], row["unit"],
+            row["supplier"], row["buy_price"], row["damaged_qty"], row["added_qty"],
+            row["reduced_qty"], row["missing_qty"], row["actual_qty"], row["source_amount"],
+            row["calculated_amount"], row["source_amount"] - row["calculated_amount"], row["amount"],
+            row["note"], row["source_file"], row["source_row"],
+        ])
+    style_export_sheet(
+        ws, "CHI TIẾT PHẢI TRẢ TỪ FILE KHÁCH",
+        f"Từ {period_from} đến {period_to} · giữ tiền khách đã chốt và hiển thị chênh lệch công thức",
+        payable_headers, (7, 13, 14, 15, 16),
+    )
     return workbook
 
 
@@ -3993,6 +7608,18 @@ def meal_plan_payload(conn, work_date=""):
              FROM meal_plans mp LEFT JOIN kitchen_units ku ON ku.kitchen_code=mp.kitchen
              {where} ORDER BY mp.work_date DESC,mp.kitchen,mp.shift,mp.id""", params
     )]
+    meal_totals_by_kitchen_day = defaultdict(float)
+    for plan in plans:
+        meal_totals_by_kitchen_day[(plan["work_date"], plan["kitchen"])] += max(
+            as_number(plan.get("meal_count")), 0
+        )
+    labor_by_kitchen_day = {
+        (row["work_date"], row["kitchen"]): as_number(row["amount"])
+        for row in conn.execute(
+            """SELECT work_date,kitchen,SUM(amount) amount
+               FROM kitchen_labor_costs GROUP BY work_date,kitchen"""
+        )
+    }
     for plan in plans:
         items = [dict(row) for row in conn.execute(
             "SELECT * FROM meal_plan_items WHERE plan_id=? ORDER BY dish_name,product_name", (plan["id"],)
@@ -4007,7 +7634,16 @@ def meal_plan_payload(conn, work_date=""):
         plan["items"] = items
         plan["food_cost"] = sum(item["cost"] for item in items)
         plan["revenue"] = plan["meal_count"] * plan.get("meal_price", 0)
-        plan["total_cost"] = plan["food_cost"] + plan.get("other_cost", 0)
+        kitchen_day_key = (plan["work_date"], plan["kitchen"])
+        kitchen_day_meals = meal_totals_by_kitchen_day.get(kitchen_day_key, 0)
+        kitchen_day_labor = labor_by_kitchen_day.get(kitchen_day_key, 0)
+        plan["labor_cost"] = (
+            kitchen_day_labor * max(as_number(plan["meal_count"]), 0) / kitchen_day_meals
+            if kitchen_day_meals > 0 else 0
+        )
+        plan["total_cost"] = (
+            plan["food_cost"] + plan.get("other_cost", 0) + plan["labor_cost"]
+        )
         plan["profit"] = plan["revenue"] - plan["total_cost"]
         plan["profit_margin"] = plan["profit"] / plan["revenue"] if plan["revenue"] else 0
         plan["cost_per_meal"] = plan["total_cost"] / plan["meal_count"] if plan["meal_count"] else 0
@@ -4020,6 +7656,15 @@ def meal_plan_payload(conn, work_date=""):
             plan["warnings"].append("Bếp chưa được ghép XCOM (xưởng cơm)")
         if any(item["buy_price"] <= 0 for item in items):
             plan["warnings"].append("Có nguyên liệu thiếu giá")
+        expected_price_source = f"HATRAN {plan['work_date'][:7]}"
+        wrong_period = sum(
+            not mapping_cell_text(item.get("price_source")).startswith(expected_price_source)
+            for item in items
+        )
+        if wrong_period:
+            plan["warnings"].append(
+                f"Có {wrong_period} nguyên liệu chưa dùng giá {expected_price_source}"
+            )
         if plan.get("meal_price", 0) <= 0:
             plan["warnings"].append("Chưa có đơn giá suất ăn")
         plan["warnings"].extend(plan["source_financials"].get("warnings") or [])
@@ -4046,7 +7691,7 @@ def meal_po_workbook(plans, work_date: str):
         title = re.sub(r"[\\/*?:\[\]]", "-", unit_code)[:31]
         ws = wb.create_sheet(title or "PO")
         ws.append([f"PO XƯỞNG CƠM – {approval_label}"])
-        ws.merge_cells("A1:L1")
+        ws.merge_cells("A1:M1")
         ws["A1"].font = Font(name="Arial", size=16, bold=True, color="FFFFFF")
         ws["A1"].fill = PatternFill("solid", fgColor="17324D")
         ws["A1"].alignment = Alignment(horizontal="center")
@@ -4075,15 +7720,16 @@ def meal_po_workbook(plans, work_date: str):
         ws.cell(ws.max_row, 1).fill = PatternFill("solid", fgColor="17324D")
         ws.cell(ws.max_row, 1).alignment = Alignment(horizontal="center")
         ws.append(["Bếp / ca", "Số thực đơn", "Suất/thực đơn", "Tổng suất", "Đơn giá suất",
-                   "Doanh thu", "Chi phí thực phẩm", "Chi phí khác", "Tổng chi", "Lợi nhuận",
-                   "Biên lợi nhuận", "Thực đơn"])
+                   "Doanh thu", "Chi phí thực phẩm", "Chi phí khác", "Chi phí lao động",
+                   "Tổng chi", "Lợi nhuận", "Biên lợi nhuận", "Thực đơn"])
         summary_header = ws.max_row
         for plan in unique_plans:
             ws.append([
                 f"{plan['kitchen']} / {plan['shift']}", plan.get("menu_count", 1),
                 plan.get("servings_per_menu") or plan["meal_count"], plan["meal_count"],
                 plan.get("meal_price", 0), plan["revenue"], plan["food_cost"], plan.get("other_cost", 0),
-                plan["total_cost"], plan["profit"], plan["profit_margin"], plan.get("note", ""),
+                plan.get("labor_cost", 0), plan["total_cost"], plan["profit"], plan["profit_margin"],
+                plan.get("note", ""),
             ])
         for cell in ws[summary_header]:
             cell.font = Font(name="Arial", bold=True, color="FFFFFF")
@@ -4091,16 +7737,16 @@ def meal_po_workbook(plans, work_date: str):
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws.freeze_panes = "A4"
         ws.auto_filter.ref = f"A3:L{detail_end}"
-        widths = [7, 20, 14, 30, 10, 14, 20, 15, 14, 16, 16, 32]
+        widths = [7, 20, 14, 30, 10, 14, 20, 15, 16, 16, 16, 16, 32]
         for index, width in enumerate(widths, 1):
             ws.column_dimensions[chr(64 + index)].width = width
         for row in range(4, detail_end + 1):
             for col in (9, 10):
                 ws.cell(row, col).number_format = "#,##0"
         for row in range(summary_header + 1, ws.max_row + 1):
-            for col in range(5, 11):
+            for col in range(5, 12):
                 ws.cell(row, col).number_format = "#,##0"
-            ws.cell(row, 11).number_format = "0.0%"
+            ws.cell(row, 12).number_format = "0.0%"
     if not wb.sheetnames:
         wb.create_sheet("PO")
     return wb
@@ -4112,167 +7758,839 @@ def employee_code(name: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "", text)[:30] or "NV"
 
 
-def import_legacy_attendance(conn, path: Path, source_name: str, now_iso):
-    values_book = load_workbook(path, data_only=True, read_only=False)
+LEGACY_ATTENDANCE_SOURCE_PREFIX = "LEGACY_ATTENDANCE:"
+LEGACY_PAYROLL_NOTE_PREFIX = "[IMPORT_CHAM_CONG:"
+
+
+def validate_legacy_attendance_period(period: str) -> tuple[int, int]:
+    text = str(period or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}", text):
+        raise ValueError("Kỳ chấm công phải có dạng YYYY-MM")
+    year, month_num = map(int, text.split("-"))
+    try:
+        date(year, month_num, 1)
+    except ValueError:
+        raise ValueError("Kỳ chấm công không hợp lệ") from None
+    return year, month_num
+
+
+def legacy_name_identity(name: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(name or "")).strip()).casefold()
+
+
+def allocate_legacy_employee_codes(conn, names: list[str]) -> dict[str, str]:
+    existing = [dict(row) for row in conn.execute("SELECT employee_code,full_name FROM staff")]
+    by_identity = {legacy_name_identity(row["full_name"]): row["employee_code"] for row in existing}
+    code_owner = {row["employee_code"].upper(): legacy_name_identity(row["full_name"]) for row in existing}
+    result = {}
+    for name in names:
+        identity = legacy_name_identity(name)
+        if not identity or identity in result:
+            continue
+        if identity in by_identity:
+            result[identity] = by_identity[identity]
+            continue
+        base = employee_code(name)
+        if base not in code_owner:
+            code = base
+        else:
+            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest().upper()
+            code = ""
+            for suffix_len in (6, 8, 10, 12):
+                candidate = f"{base[:29 - suffix_len]}-{digest[:suffix_len]}"
+                if candidate not in code_owner or code_owner[candidate] == identity:
+                    code = candidate
+                    break
+            if not code:
+                raise ValueError(f"Không tạo được mã nhân sự không trùng cho {name}")
+        result[identity] = code
+        code_owner[code] = identity
+    return result
+
+
+def legacy_formula_missing(formula_sheet, values_sheet, row: int, column: int) -> bool:
+    if formula_sheet is None:
+        return False
+    formula_cell = formula_sheet.cell(row, column)
+    return formula_cell.data_type == "f" and values_sheet.cell(row, column).value is None
+
+
+def legacy_number(values_sheet, formula_sheet, row: int, column: int, label: str,
+                  errors: list[str], warnings: list[str] | None = None) -> float:
+    cell = values_sheet.cell(row, column)
+    if legacy_formula_missing(formula_sheet, values_sheet, row, column):
+        errors.append(f"{label} ({cell.coordinate}) là công thức chưa có kết quả lưu trong file")
+        return 0.0
+    value = cell.value
+    if value in (None, ""):
+        return 0.0
+    parsed = as_number(value, float("nan"))
+    if not math.isfinite(parsed):
+        message = f"{label} ({cell.coordinate}) ghi '{value}', được hiểu là 0"
+        if warnings is not None:
+            warnings.append(message)
+        else:
+            errors.append(f"{label} ({cell.coordinate}) không phải số hợp lệ: {value}")
+        return 0.0
+    return float(parsed)
+
+
+def legacy_money_number(values_sheet, formula_sheet, row: int, column: int, label: str,
+                        errors: list[str], warnings: list[str]) -> float:
+    cell = values_sheet.cell(row, column)
+    if legacy_formula_missing(formula_sheet, values_sheet, row, column):
+        errors.append(f"{label} ({cell.coordinate}) là công thức chưa có kết quả lưu trong file")
+        return 0.0
+    value = cell.value
+    if value in (None, ""):
+        return 0.0
+    parsed = as_number(value, float("nan"))
+    if math.isfinite(parsed):
+        return float(parsed)
+    tokens = [token.strip() for token in re.findall(r"[-+]?\d[\d\s.,]*", str(value))]
+    numbers = [as_number(token, float("nan")) for token in tokens]
+    numbers = [number for number in numbers if math.isfinite(number)]
+    if len(numbers) == 1:
+        warnings.append(
+            f"{label} ({cell.coordinate}) ghi kèm chữ '{value}'; hệ thống lấy số {numbers[0]:g}"
+        )
+        return float(numbers[0])
+    if not numbers:
+        warnings.append(f"{label} ({cell.coordinate}) ghi '{value}', được hiểu là 0")
+        return 0.0
+    errors.append(f"{label} ({cell.coordinate}) có nhiều số, không xác định được số tiền: {value}")
+    return 0.0
+
+
+def legacy_cell_date(cell) -> str:
+    value = cell.value
+    parsed = as_date(value)
+    if parsed:
+        return parsed
+    if isinstance(value, (int, float)) and 20_000 <= float(value) <= 80_000:
+        try:
+            converted = from_excel(value)
+            return converted.date().isoformat() if isinstance(converted, datetime) else converted.isoformat()
+        except (TypeError, ValueError, OverflowError):
+            return ""
+    return ""
+
+
+def legacy_attendance_database_state_hash(conn, period: str) -> str:
+    payload = {
+        "staff": [tuple(row) for row in conn.execute(
+            "SELECT employee_code,full_name,role_name,base_salary FROM staff ORDER BY employee_code"
+        )],
+        "attendance": [tuple(row) for row in conn.execute(
+            """SELECT s.employee_code,a.work_date,a.normal_hours,a.overtime_hours,a.sunday_hours,
+                      a.night_hours,a.holiday_hours,a.note,a.source
+               FROM attendance_entries a JOIN staff s ON s.id=a.employee_id
+               WHERE substr(a.work_date,1,7)=? ORDER BY s.employee_code,a.work_date""",
+            (period,),
+        )],
+        "payroll": [tuple(row) for row in conn.execute(
+            """SELECT s.employee_code,p.allowance,p.responsibility,p.advance,p.probation_deduction,
+                      p.bhxh_employee_amount,p.bhxh_company_amount,p.gross_override,p.net_override,
+                      p.use_override,p.note
+               FROM payroll_adjustments p JOIN staff s ON s.id=p.employee_id
+               WHERE p.month=? ORDER BY s.employee_code""",
+            (period,),
+        )],
+        "labor": [tuple(row) for row in conn.execute(
+            """SELECT work_date,kitchen,amount,source FROM kitchen_labor_costs
+               WHERE substr(work_date,1,7)=? ORDER BY work_date,kitchen,source""",
+            (period,),
+        )],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest().upper()
+
+
+def parse_legacy_attendance_workbooks(conn, values_book, formulas_book, source_name: str,
+                                      period: str) -> dict:
+    year, month_num = validate_legacy_attendance_period(period)
+    errors = []
+    warnings = []
     attendance_sheet = next(
         (ws for ws in values_book.worksheets if "xưởng cơm" in ws.title.lower()), None
     )
-    staff_count = entry_count = labor_count = payroll_override_count = 0
-    month = ""
-    if attendance_sheet:
-        year = int(as_number(attendance_sheet["C2"].value, date.today().year))
-        month_num = int(as_number(attendance_sheet["C3"].value, date.today().month))
-        month = f"{year:04d}-{month_num:02d}"
-        base_salary = 0
-        payroll_sheet = next((ws for ws in values_book.worksheets if "lương xưởng" in ws.title.lower()), None)
-        if payroll_sheet:
-            base_salary = as_number(payroll_sheet["C2"].value)
-        for row in range(6, attendance_sheet.max_row + 1):
-            name = str(attendance_sheet.cell(row, 2).value or "").strip()
-            if not name or name.upper() in {"HỌ& TÊN", "HỌ VÀ TÊN"}:
-                continue
-            code = employee_code(name)
-            conn.execute(
-                """INSERT INTO staff(
-                    employee_code,full_name,base_salary,standard_days,standard_hours,created_at,updated_at
-                ) VALUES(?,?,?,26,8,?,?) ON CONFLICT(employee_code) DO UPDATE SET
-                    full_name=excluded.full_name,
-                    base_salary=CASE WHEN staff.base_salary<=0 THEN excluded.base_salary ELSE staff.base_salary END,
-                    updated_at=excluded.updated_at""",
-                (code, name, base_salary, now_iso(), now_iso()),
+    if attendance_sheet is None:
+        raise ValueError("Không tìm thấy sheet Xưởng Cơm trong file chấm công")
+    attendance_formula_sheet = (
+        formulas_book[attendance_sheet.title] if formulas_book and attendance_sheet.title in formulas_book.sheetnames else None
+    )
+    sheet_year = legacy_number(
+        attendance_sheet, attendance_formula_sheet, 2, 3, "Năm trên sheet Xưởng Cơm", errors,
+    )
+    sheet_month = legacy_number(
+        attendance_sheet, attendance_formula_sheet, 3, 3, "Tháng trên sheet Xưởng Cơm", errors,
+    )
+    if not sheet_year.is_integer() or not sheet_month.is_integer():
+        errors.append("Năm/tháng trên sheet Xưởng Cơm phải là số nguyên")
+    elif f"{int(sheet_year):04d}-{int(sheet_month):02d}" != period:
+        errors.append(
+            f"Sheet Xưởng Cơm ghi kỳ {int(sheet_year):04d}-{int(sheet_month):02d}, "
+            f"khác kỳ đã chọn {period}"
+        )
+
+    payroll_sheet = next(
+        (ws for ws in values_book.worksheets if "lương xưởng" in ws.title.lower()), None
+    )
+    payroll_formula_sheet = (
+        formulas_book[payroll_sheet.title] if payroll_sheet and formulas_book
+        and payroll_sheet.title in formulas_book.sheetnames else None
+    )
+    base_salary = 0.0
+    if payroll_sheet is not None:
+        base_salary = legacy_number(
+            payroll_sheet, payroll_formula_sheet, 2, 3, "Lương cơ bản", errors,
+        )
+        payroll_month = as_number(payroll_sheet["I1"].value, float("nan"))
+        payroll_year = as_number(payroll_sheet["J1"].value, float("nan"))
+        if math.isfinite(payroll_month) or math.isfinite(payroll_year):
+            if not (math.isfinite(payroll_month) and math.isfinite(payroll_year)
+                    and payroll_month.is_integer() and payroll_year.is_integer()):
+                errors.append("Kỳ trên sheet LƯƠNG XƯỞNG chưa đủ tháng và năm")
+            elif f"{int(payroll_year):04d}-{int(payroll_month):02d}" != period:
+                errors.append(
+                    f"Sheet LƯƠNG XƯỞNG ghi kỳ {int(payroll_year):04d}-{int(payroll_month):02d}, "
+                    f"khác kỳ đã chọn {period}"
+                )
+
+    staff_by_identity = {}
+
+    def remember_staff(name, role=""):
+        identity = legacy_name_identity(name)
+        if not identity:
+            return identity
+        record = staff_by_identity.setdefault(identity, {
+            "name": re.sub(r"\s+", " ", str(name).strip()),
+            "role": "",
+            "base_salary": base_salary,
+        })
+        if role and not record["role"]:
+            record["role"] = re.sub(r"\s+", " ", str(role).strip())
+        return identity
+
+    attendance_records = []
+    for row in range(6, attendance_sheet.max_row + 1):
+        name = re.sub(r"\s+", " ", str(attendance_sheet.cell(row, 2).value or "").strip())
+        if (not name or name == "0" or mapping_key(name) in {
+                "hoten", "hovaten", "tong", "tongluongthang",
+        }):
+            continue
+        identity = remember_staff(name, attendance_sheet.cell(row, 3).value or "")
+        overtime_row = (
+            row + 1 if row + 1 <= attendance_sheet.max_row
+            and not attendance_sheet.cell(row + 1, 2).value else None
+        )
+        wage_cells = []
+        for day_index, column in enumerate(range(6, 37), start=1):
+            try:
+                work_day = date(year, month_num, day_index)
+            except ValueError:
+                break
+            header_cell = attendance_sheet.cell(4, column)
+            if legacy_formula_missing(attendance_formula_sheet, attendance_sheet, 4, column):
+                errors.append(
+                    f"Ngày ở {attendance_sheet.title}!{header_cell.coordinate} là công thức chưa có kết quả lưu"
+                )
+            else:
+                header_date = legacy_cell_date(header_cell)
+                if header_date and header_date != work_day.isoformat():
+                    errors.append(
+                        f"{attendance_sheet.title}!{header_cell.coordinate} ghi {header_date}, "
+                        f"khác ngày phải có {work_day.isoformat()}"
+                    )
+            normal = legacy_number(
+                attendance_sheet, attendance_formula_sheet, row, column,
+                f"Giờ thường của {name}", errors, warnings,
             )
-            staff_id = conn.execute("SELECT id FROM staff WHERE employee_code=?", (code,)).fetchone()["id"]
-            staff_count += 1
-            overtime_row = row + 1 if row + 1 <= attendance_sheet.max_row and not attendance_sheet.cell(row + 1, 2).value else None
-            for day_index, col in enumerate(range(6, 37), start=1):
-                try:
-                    work_date = date(year, month_num, day_index)
-                except ValueError:
-                    break
-                normal = as_number(attendance_sheet.cell(row, col).value)
-                overtime = as_number(attendance_sheet.cell(overtime_row, col).value) if overtime_row else 0
-                # Some legacy rows store a VND daily wage in the date cells,
-                # not hours. Those amounts are imported from LƯƠNG XƯỞNG below.
-                if abs(normal) > 24 or abs(overtime) > 24:
-                    continue
-                if normal == 0 and overtime == 0:
-                    continue
-                sunday = work_date.weekday() == 6
-                conn.execute(
-                    """INSERT INTO attendance_entries(
-                        employee_id,work_date,normal_hours,overtime_hours,sunday_hours,night_hours,
-                        holiday_hours,note,source,updated_at
-                    ) VALUES(?,?,?,?,?,0,0,'',?,?) ON CONFLICT(employee_id,work_date) DO UPDATE SET
-                        normal_hours=excluded.normal_hours,overtime_hours=excluded.overtime_hours,
-                        sunday_hours=excluded.sunday_hours,source=excluded.source,updated_at=excluded.updated_at""",
-                    (staff_id, work_date.isoformat(), 0 if sunday else normal,
-                     0 if sunday else overtime, normal + overtime if sunday else 0,
-                     source_name, now_iso()),
+            overtime = 0.0
+            if overtime_row:
+                overtime = legacy_number(
+                    attendance_sheet, attendance_formula_sheet, overtime_row, column,
+                    f"Giờ tăng ca của {name}", errors, warnings,
                 )
-                entry_count += 1
-
-        if payroll_sheet and month:
-            payroll_records = {}
-            for row in range(4, payroll_sheet.max_row + 1):
-                raw_name = payroll_sheet.cell(row, 2).value
-                name = str(raw_name or "").strip()
-                if not name or name == "0":
-                    continue
-                code = employee_code(name)
-                next_row = row + 1
-                detail_row = row
-                if (next_row <= payroll_sheet.max_row
-                        and not payroll_sheet.cell(next_row, 1).value
-                        and not payroll_sheet.cell(next_row, 2).value
-                        and any(as_number(payroll_sheet.cell(next_row, col).value) for col in range(4, 17))):
-                    detail_row = next_row
-                gross = as_number(payroll_sheet.cell(detail_row, 11).value)
-                net = as_number(payroll_sheet.cell(detail_row, 15).value)
-                if gross == 0 and net != 0:
-                    gross = net
-                payroll_records[code] = {
-                    "name": name,
-                    "role": str(payroll_sheet.cell(row, 3).value or "").strip(),
-                    "allowance": as_number(payroll_sheet.cell(detail_row, 9).value),
-                    "responsibility": as_number(payroll_sheet.cell(detail_row, 10).value),
-                    "advance": as_number(payroll_sheet.cell(detail_row, 12).value),
-                    "probation": as_number(payroll_sheet.cell(detail_row, 13).value),
-                    "bhxh_employee": as_number(payroll_sheet.cell(detail_row, 14).value),
-                    "bhxh_company": as_number(payroll_sheet.cell(detail_row, 16).value),
-                    "gross": gross,
-                    "net": net,
-                }
-
-            # The legacy sheet can carry named supplements below the employee
-            # grid, e.g. "Cho chị An". Attach them to the matching person.
-            for row in range(4, payroll_sheet.max_row + 1):
-                supplement = as_number(payroll_sheet.cell(row, 15).value)
-                label = str(payroll_sheet.cell(row, 16).value or "").strip()
-                if supplement == 0 or not label.lower().startswith("cho "):
-                    continue
-                label_code = employee_code(re.sub(r"^cho\s+(chị|anh|em)?\s*", "", label, flags=re.IGNORECASE))
-                match = next((key for key in payroll_records if key == label_code or key in label_code or label_code in key), None)
-                if match:
-                    payroll_records[match]["gross"] += supplement
-                    payroll_records[match]["net"] += supplement
-
-            for code, record in payroll_records.items():
-                conn.execute(
-                    """INSERT INTO staff(
-                        employee_code,full_name,role_name,base_salary,standard_days,standard_hours,created_at,updated_at
-                    ) VALUES(?,?,?,?,26,8,?,?) ON CONFLICT(employee_code) DO UPDATE SET
-                        full_name=excluded.full_name,role_name=excluded.role_name,
-                        base_salary=CASE WHEN excluded.base_salary>0 THEN excluded.base_salary ELSE staff.base_salary END,
-                        updated_at=excluded.updated_at""",
-                    (code, record["name"], record["role"], base_salary, now_iso(), now_iso()),
+            if normal < 0 or overtime < 0:
+                cells = [attendance_sheet.cell(row, column).coordinate]
+                if overtime_row:
+                    cells.append(attendance_sheet.cell(overtime_row, column).coordinate)
+                errors.append(
+                    f"{attendance_sheet.title}!{'/'.join(cells)} có giờ âm; không được nạp"
                 )
-                staff_id = conn.execute("SELECT id FROM staff WHERE employee_code=?", (code,)).fetchone()["id"]
-                conn.execute(
-                    """INSERT INTO payroll_adjustments(
-                        employee_id,month,allowance,responsibility,advance,probation_deduction,
-                        bhxh_employee_amount,bhxh_company_amount,gross_override,net_override,use_override,note,updated_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(employee_id,month) DO UPDATE SET
-                        allowance=excluded.allowance,responsibility=excluded.responsibility,
-                        advance=excluded.advance,probation_deduction=excluded.probation_deduction,
-                        bhxh_employee_amount=excluded.bhxh_employee_amount,
-                        bhxh_company_amount=excluded.bhxh_company_amount,
-                        gross_override=excluded.gross_override,net_override=excluded.net_override,
-                        use_override=1,note=excluded.note,updated_at=excluded.updated_at""",
-                    (staff_id, month, record["allowance"], record["responsibility"], record["advance"],
-                     record["probation"], record["bhxh_employee"], record["bhxh_company"],
-                     record["gross"], record["net"], f"Nạp từ {source_name}", now_iso()),
-                )
-                payroll_override_count += 1
+                continue
+            if normal > 24 or overtime > 24:
+                wage_cells.append(attendance_sheet.cell(row, column).coordinate)
+                continue
+            if normal == 0 and overtime == 0:
+                continue
+            sunday = work_day.weekday() == 6
+            attendance_records.append({
+                "identity": identity,
+                "work_date": work_day.isoformat(),
+                "normal_hours": 0.0 if sunday else normal,
+                "overtime_hours": 0.0 if sunday else overtime,
+                "sunday_hours": normal + overtime if sunday else 0.0,
+                "night_hours": 0.0,
+                "holiday_hours": 0.0,
+                "note": "",
+            })
+        if wage_cells:
+            visible = ", ".join(wage_cells[:5])
+            extra = f" và {len(wage_cells) - 5} ô khác" if len(wage_cells) > 5 else ""
+            warnings.append(
+                f"{name}: {visible}{extra} có số >24, được coi là tiền công/ngày nên không nhập thành giờ"
+            )
 
-    labor_sheet = next((ws for ws in values_book.worksheets if "chấm công chợ" in ws.title.lower()), None)
-    if labor_sheet:
-        year = int(as_number(labor_sheet["B1"].value, date.today().year))
-        month_num = int(as_number(labor_sheet["D1"].value, date.today().month))
-        month = month or f"{year:04d}-{month_num:02d}"
-        for row in range(4, min(labor_sheet.max_row, 40) + 1):
-            raw_date = labor_sheet.cell(row, 1).value
-            work_date = as_date(raw_date)
-            if not work_date:
-                try:
-                    work_date = date(year, month_num, row - 3).isoformat()
-                except ValueError:
-                    continue
-            for col in range(3, min(labor_sheet.max_column, 24) + 1):
-                kitchen = str(labor_sheet.cell(3, col).value or "").strip().upper()
-                amount = as_number(labor_sheet.cell(row, col).value)
-                if not kitchen or amount == 0:
-                    continue
-                conn.execute(
-                    """INSERT INTO kitchen_labor_costs(work_date,kitchen,amount,source,updated_at)
-                       VALUES(?,?,?,?,?) ON CONFLICT(work_date,kitchen,source) DO UPDATE SET
-                       amount=excluded.amount,updated_at=excluded.updated_at""",
-                    (work_date, kitchen, amount, source_name, now_iso()),
+    payroll_records_by_identity = {}
+    if payroll_sheet is not None:
+        for row in range(4, payroll_sheet.max_row + 1):
+            name = re.sub(r"\s+", " ", str(payroll_sheet.cell(row, 2).value or "").strip())
+            if not name or name == "0" or mapping_key(name).startswith("tong"):
+                continue
+            identity = remember_staff(name, payroll_sheet.cell(row, 3).value or "")
+            next_row = row + 1
+            detail_row = row
+            if (next_row <= payroll_sheet.max_row
+                    and not payroll_sheet.cell(next_row, 1).value
+                    and not payroll_sheet.cell(next_row, 2).value
+                    and any(as_number(payroll_sheet.cell(next_row, col).value) for col in range(4, 17))):
+                detail_row = next_row
+            values = {
+                "allowance": legacy_number(payroll_sheet, payroll_formula_sheet, detail_row, 9, f"Phụ cấp {name}", errors, warnings),
+                "responsibility": legacy_number(payroll_sheet, payroll_formula_sheet, detail_row, 10, f"Trách nhiệm {name}", errors, warnings),
+                "advance": legacy_number(payroll_sheet, payroll_formula_sheet, detail_row, 12, f"Tạm ứng {name}", errors, warnings),
+                "probation": legacy_number(payroll_sheet, payroll_formula_sheet, detail_row, 13, f"Thử việc {name}", errors, warnings),
+                "bhxh_employee": legacy_number(payroll_sheet, payroll_formula_sheet, detail_row, 14, f"BHXH NLĐ {name}", errors, warnings),
+                "bhxh_company": legacy_number(payroll_sheet, payroll_formula_sheet, detail_row, 16, f"BHXH công ty {name}", errors, warnings),
+                "gross": legacy_number(payroll_sheet, payroll_formula_sheet, detail_row, 11, f"Tổng lương {name}", errors, warnings),
+                "net": legacy_number(payroll_sheet, payroll_formula_sheet, detail_row, 15, f"Thực lĩnh {name}", errors, warnings),
+            }
+            if values["gross"] == 0 and values["net"] != 0:
+                values["gross"] = values["net"]
+            payroll_records_by_identity[identity] = {"identity": identity, **values}
+
+        for row in range(4, payroll_sheet.max_row + 1):
+            label = str(payroll_sheet.cell(row, 16).value or "").strip()
+            if not label.lower().startswith("cho "):
+                continue
+            supplement = legacy_number(
+                payroll_sheet, payroll_formula_sheet, row, 15,
+                f"Khoản bổ sung {label}", errors, warnings,
+            )
+            if supplement == 0:
+                continue
+            label_code = employee_code(
+                re.sub(r"^cho\s+(chị|anh|em)?\s*", "", label, flags=re.IGNORECASE)
+            )
+            match = next((
+                identity for identity, record in payroll_records_by_identity.items()
+                if employee_code(staff_by_identity[identity]["name"]) == label_code
+                or employee_code(staff_by_identity[identity]["name"]) in label_code
+                or label_code in employee_code(staff_by_identity[identity]["name"])
+            ), None)
+            if match:
+                payroll_records_by_identity[match]["gross"] += supplement
+                payroll_records_by_identity[match]["net"] += supplement
+            else:
+                warnings.append(f"Không ghép được khoản bổ sung '{label}' ở dòng {row}")
+
+    labor_records = []
+    labor_sheet = next(
+        (ws for ws in values_book.worksheets if "chấm công chợ" in ws.title.lower()), None
+    )
+    labor_formula_sheet = (
+        formulas_book[labor_sheet.title] if labor_sheet and formulas_book
+        and labor_sheet.title in formulas_book.sheetnames else None
+    )
+    if labor_sheet is not None:
+        column_scores = []
+        for column in range(1, min(labor_sheet.max_column, 6) + 1):
+            dated_rows = []
+            for row in range(4, min(labor_sheet.max_row, 45) + 1):
+                parsed = legacy_cell_date(labor_sheet.cell(row, column))
+                if parsed:
+                    dated_rows.append((row, parsed))
+            column_scores.append((len(dated_rows), column, dated_rows))
+        score, date_column, dated_rows = max(column_scores, default=(0, 0, []))
+        if score < 2:
+            errors.append(f"Sheet {labor_sheet.title}: không xác định được cột ngày của chấm công chợ")
+        else:
+            mismatches = [(row, value) for row, value in dated_rows if value[:7] != period]
+            if mismatches:
+                row, value = mismatches[0]
+                errors.append(
+                    f"Sheet {labor_sheet.title}!{labor_sheet.cell(row, date_column).coordinate} "
+                    f"ghi kỳ {value[:7]}, khác kỳ đã chọn {period}"
                 )
-                labor_count += 1
-    values_book.close()
-    return {"month": month, "staff": staff_count, "attendance_entries": entry_count,
-            "labor_cost_entries": labor_count, "payroll_overrides": payroll_override_count,
-            "source": source_name}
+            first_data_row = min(row for row, _ in dated_rows)
+            header_candidates = []
+            for header_row in range(1, first_data_row):
+                text_count = sum(
+                    1 for column in range(date_column + 1, min(labor_sheet.max_column, 24) + 1)
+                    if isinstance(labor_sheet.cell(header_row, column).value, str)
+                    and labor_sheet.cell(header_row, column).value.strip()
+                )
+                header_candidates.append((text_count, header_row))
+            _, header_row = max(header_candidates, default=(0, max(1, first_data_row - 1)))
+            kitchens = {}
+            for column in range(date_column + 1, min(labor_sheet.max_column, 24) + 1):
+                kitchen = re.sub(
+                    r"\s+", " ", str(labor_sheet.cell(header_row, column).value or "").strip()
+                ).upper()
+                if kitchen:
+                    kitchens[column] = kitchen
+            if not kitchens:
+                errors.append(f"Sheet {labor_sheet.title}: không tìm thấy tên bếp ở hàng tiêu đề")
+            seen_labor = set()
+            for row, work_date in dated_rows:
+                if work_date[:7] != period:
+                    continue
+                for column, kitchen in kitchens.items():
+                    amount = legacy_money_number(
+                        labor_sheet, labor_formula_sheet, row, column,
+                        f"Chi phí {kitchen} ngày {work_date}", errors, warnings,
+                    )
+                    if amount < 0:
+                        errors.append(
+                            f"{labor_sheet.title}!{labor_sheet.cell(row, column).coordinate} có chi phí âm"
+                        )
+                        continue
+                    if amount == 0:
+                        continue
+                    key = (work_date, kitchen)
+                    if key in seen_labor:
+                        errors.append(f"Sheet {labor_sheet.title} trùng chi phí {kitchen} ngày {work_date}")
+                        continue
+                    seen_labor.add(key)
+                    labor_records.append({
+                        "work_date": work_date, "kitchen": kitchen, "amount": amount,
+                    })
+
+    if errors:
+        message = "File chấm công chưa thể nạp: " + " · ".join(errors[:12])
+        if len(errors) > 12:
+            message += f" · và {len(errors) - 12} lỗi khác"
+        raise ValueError(message)
+
+    names = [record["name"] for record in staff_by_identity.values()]
+    codes = allocate_legacy_employee_codes(conn, names)
+    staff_records = []
+    for identity, record in staff_by_identity.items():
+        staff_records.append({"identity": identity, "employee_code": codes[identity], **record})
+    for item in attendance_records:
+        item["employee_code"] = codes[item.pop("identity")]
+    payroll_records = []
+    for item in payroll_records_by_identity.values():
+        item["employee_code"] = codes[item.pop("identity")]
+        payroll_records.append(item)
+
+    manual_attendance = 0
+    for item in attendance_records:
+        row = conn.execute(
+            """SELECT a.source FROM attendance_entries a JOIN staff s ON s.id=a.employee_id
+               WHERE s.employee_code=? AND a.work_date=?""",
+            (item["employee_code"], item["work_date"]),
+        ).fetchone()
+        if row and str(row["source"] or "").lower() == "manual":
+            manual_attendance += 1
+    manual_payroll = 0
+    for item in payroll_records:
+        row = conn.execute(
+            """SELECT p.note FROM payroll_adjustments p JOIN staff s ON s.id=p.employee_id
+               WHERE s.employee_code=? AND p.month=?""",
+            (item["employee_code"], period),
+        ).fetchone()
+        if row and not legacy_payroll_note_is_imported(row["note"], period):
+            manual_payroll += 1
+    if manual_attendance:
+        warnings.append(
+            f"Có {manual_attendance} dòng đã sửa tay; hệ thống sẽ giữ nguyên, không ghi đè từ file"
+        )
+    if manual_payroll:
+        warnings.append(
+            f"Có {manual_payroll} khoản lương đã sửa tay; hệ thống sẽ giữ nguyên, không ghi đè từ file"
+        )
+
+    snapshot = {
+        "period": period,
+        "staff": staff_records,
+        "attendance": attendance_records,
+        "payroll": payroll_records,
+        "labor": labor_records,
+    }
+    counts = {
+        "staff": len(staff_records),
+        "attendance_entries": len(attendance_records),
+        "payroll_overrides": len(payroll_records),
+        "labor_cost_entries": len(labor_records),
+        "warnings": len(warnings),
+        "manual_attendance_preserved": manual_attendance,
+        "manual_payroll_preserved": manual_payroll,
+    }
+    return {
+        "month": period,
+        "can_confirm": True,
+        "counts": counts,
+        "warnings": warnings[:100],
+        "snapshot": snapshot,
+    }
+
+
+def legacy_payroll_note_is_imported(note, period: str) -> bool:
+    text = str(note or "").strip()
+    return (
+        text.startswith(f"{LEGACY_PAYROLL_NOTE_PREFIX}{period}]")
+        or (text.lower().startswith("nạp từ ") and ".xls" in text.lower())
+    )
+
+
+def apply_legacy_attendance_snapshot(conn, snapshot: dict, source_name: str, timestamp: str) -> dict:
+    period = snapshot["period"]
+    validate_legacy_attendance_period(period)
+    marker = f"{LEGACY_ATTENDANCE_SOURCE_PREFIX}{period}"
+    payroll_note = f"{LEGACY_PAYROLL_NOTE_PREFIX}{period}] {Path(source_name).name}"
+    for record in snapshot["staff"]:
+        conn.execute(
+            """INSERT INTO staff(
+                   employee_code,full_name,role_name,base_salary,standard_days,standard_hours,
+                   created_at,updated_at
+               ) VALUES(?,?,?,?,26,8,?,?)
+               ON CONFLICT(employee_code) DO UPDATE SET
+                   full_name=excluded.full_name,
+                   role_name=CASE WHEN TRIM(COALESCE(staff.role_name,''))=''
+                                  THEN excluded.role_name ELSE staff.role_name END,
+                   base_salary=CASE WHEN staff.base_salary<=0 THEN excluded.base_salary ELSE staff.base_salary END,
+                   updated_at=excluded.updated_at""",
+            (record["employee_code"], record["name"], record["role"], record["base_salary"],
+             timestamp, timestamp),
+        )
+
+    imported_attendance_before = conn.execute(
+        """SELECT COUNT(*) qty FROM attendance_entries
+           WHERE substr(work_date,1,7)=? AND (
+               source=? OR (LOWER(COALESCE(source,''))!='manual' AND LOWER(COALESCE(source,'')) LIKE '%.xls%')
+           )""",
+        (period, marker),
+    ).fetchone()["qty"]
+    conn.execute(
+        """DELETE FROM attendance_entries
+           WHERE substr(work_date,1,7)=? AND (
+               source=? OR (LOWER(COALESCE(source,''))!='manual' AND LOWER(COALESCE(source,'')) LIKE '%.xls%')
+           )""",
+        (period, marker),
+    )
+    attendance_inserted = attendance_manual_preserved = 0
+    for item in snapshot["attendance"]:
+        staff_id = conn.execute(
+            "SELECT id FROM staff WHERE employee_code=?", (item["employee_code"],),
+        ).fetchone()["id"]
+        existing = conn.execute(
+            "SELECT source FROM attendance_entries WHERE employee_id=? AND work_date=?",
+            (staff_id, item["work_date"]),
+        ).fetchone()
+        if existing:
+            attendance_manual_preserved += 1
+            continue
+        conn.execute(
+            """INSERT INTO attendance_entries(
+                   employee_id,work_date,normal_hours,overtime_hours,sunday_hours,night_hours,
+                   holiday_hours,note,source,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (staff_id, item["work_date"], item["normal_hours"], item["overtime_hours"],
+             item["sunday_hours"], item["night_hours"], item["holiday_hours"], item["note"],
+             marker, timestamp),
+        )
+        attendance_inserted += 1
+
+    imported_payroll_ids = [
+        row["employee_id"] for row in conn.execute(
+            "SELECT employee_id,note FROM payroll_adjustments WHERE month=?", (period,),
+        ) if legacy_payroll_note_is_imported(row["note"], period)
+    ]
+    if imported_payroll_ids:
+        conn.executemany(
+            "DELETE FROM payroll_adjustments WHERE employee_id=? AND month=?",
+            [(employee_id, period) for employee_id in imported_payroll_ids],
+        )
+    payroll_inserted = payroll_manual_preserved = 0
+    for item in snapshot["payroll"]:
+        staff_id = conn.execute(
+            "SELECT id FROM staff WHERE employee_code=?", (item["employee_code"],),
+        ).fetchone()["id"]
+        existing = conn.execute(
+            "SELECT 1 FROM payroll_adjustments WHERE employee_id=? AND month=?",
+            (staff_id, period),
+        ).fetchone()
+        if existing:
+            payroll_manual_preserved += 1
+            continue
+        conn.execute(
+            """INSERT INTO payroll_adjustments(
+                   employee_id,month,allowance,responsibility,advance,probation_deduction,
+                   bhxh_employee_amount,bhxh_company_amount,gross_override,net_override,
+                   use_override,note,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)""",
+            (staff_id, period, item["allowance"], item["responsibility"], item["advance"],
+             item["probation"], item["bhxh_employee"], item["bhxh_company"], item["gross"],
+             item["net"], payroll_note, timestamp),
+        )
+        payroll_inserted += 1
+
+    imported_labor_before = conn.execute(
+        """SELECT COUNT(*) qty FROM kitchen_labor_costs
+           WHERE substr(work_date,1,7)=? AND (source=? OR LOWER(COALESCE(source,'')) LIKE '%.xls%')""",
+        (period, marker),
+    ).fetchone()["qty"]
+    conn.execute(
+        """DELETE FROM kitchen_labor_costs
+           WHERE substr(work_date,1,7)=? AND (source=? OR LOWER(COALESCE(source,'')) LIKE '%.xls%')""",
+        (period, marker),
+    )
+    for item in snapshot["labor"]:
+        conn.execute(
+            """INSERT INTO kitchen_labor_costs(work_date,kitchen,amount,source,updated_at)
+               VALUES(?,?,?,?,?)""",
+            (item["work_date"], item["kitchen"], item["amount"], marker, timestamp),
+        )
+
+    return {
+        "month": period,
+        "staff": len(snapshot["staff"]),
+        "attendance_entries": attendance_inserted,
+        "labor_cost_entries": len(snapshot["labor"]),
+        "payroll_overrides": payroll_inserted,
+        "manual_attendance_preserved": attendance_manual_preserved,
+        "manual_payroll_preserved": payroll_manual_preserved,
+        "replaced_attendance_entries": imported_attendance_before,
+        "replaced_labor_cost_entries": imported_labor_before,
+        "replaced_payroll_overrides": len(imported_payroll_ids),
+        "source": Path(source_name).name,
+    }
+
+
+def import_legacy_attendance(conn, path: Path, source_name: str, now_iso, period: str):
+    validate_legacy_attendance_period(period)
+    values_book = formulas_book = None
+    try:
+        values_book = load_workbook(path, data_only=True, read_only=False, keep_links=False)
+        formulas_book = load_workbook(path, data_only=False, read_only=False, keep_links=False)
+        preview = parse_legacy_attendance_workbooks(
+            conn, values_book, formulas_book, source_name, period,
+        )
+        result = apply_legacy_attendance_snapshot(
+            conn, preview["snapshot"], source_name, now_iso,
+        )
+        result["warnings"] = preview["warnings"]
+        return result
+    finally:
+        if values_book is not None:
+            values_book.close()
+        if formulas_book is not None:
+            formulas_book.close()
+
+
+def invoice_payment_request_document(company: str, company_tax_code: str, company_address: str,
+                                     recipient: str, recipient_tax_code: str, recipient_address: str,
+                                     requester: str, bank_name: str, bank_account: str,
+                                     period_from: str, period_to: str, details: list[dict]):
+    """Create an invoice-based request; no amounts are typed or inferred manually."""
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Cm(1.5)
+    section.bottom_margin = Cm(1.5)
+    section.left_margin = Cm(1.7)
+    section.right_margin = Cm(1.7)
+    normal = document.styles["Normal"]
+    normal.font.name = "Times New Roman"
+    normal.font.size = Pt(12)
+
+    header = document.add_table(rows=1, cols=2)
+    header.autofit = False
+    header.columns[0].width = Cm(8.3)
+    header.columns[1].width = Cm(8.3)
+    left = header.cell(0, 0).paragraphs[0]
+    left.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = left.add_run(company.upper())
+    run.bold = True
+    if company_tax_code:
+        left.add_run(f"\nMST: {company_tax_code}")
+    right = header.cell(0, 1).paragraphs[0]
+    right.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = right.add_run("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc")
+    run.bold = True
+
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_before = Pt(12)
+    title.paragraph_format.space_after = Pt(4)
+    run = title.add_run("ĐỀ NGHỊ THANH TOÁN")
+    run.bold = True
+    run.font.size = Pt(16)
+    subtitle = document.add_paragraph(f"Từ ngày {period_from} đến ngày {period_to}")
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    labels = [
+        ("Kính gửi: ", recipient.upper()),
+        ("Mã số thuế bên mua: ", recipient_tax_code),
+        ("Địa chỉ bên mua: ", recipient_address),
+        ("Đơn vị đề nghị: ", company),
+        ("Địa chỉ đơn vị đề nghị: ", company_address),
+        ("Người đề nghị: ", requester),
+        ("Nội dung: ", "Đề nghị thanh toán các hóa đơn hàng hóa/dịch vụ đã giao trong kỳ"),
+    ]
+    for label, value in labels:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(2)
+        label_run = paragraph.add_run(label)
+        label_run.bold = True
+        paragraph.add_run(str(value or ""))
+
+    table = document.add_table(rows=1, cols=6)
+    table.style = "Table Grid"
+    table.autofit = False
+    widths = (Cm(1), Cm(2.2), Cm(3.3), Cm(3.2), Cm(2.7), Cm(3.2))
+    headers = ("STT", "Ngày HĐ", "Ký hiệu / Số HĐ", "Tiền trước thuế", "Tiền thuế", "Tổng thanh toán")
+    for index, cell in enumerate(table.rows[0].cells):
+        cell.width = widths[index]
+        paragraph = cell.paragraphs[0]
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run(headers[index])
+        run.bold = True
+    header_properties = table.rows[0]._tr.get_or_add_trPr()
+    repeat_header = OxmlElement("w:tblHeader")
+    repeat_header.set(qn("w:val"), "true")
+    header_properties.append(repeat_header)
+
+    total_subtotal = total_tax = total_amount = 0
+    for index, item in enumerate(details, start=1):
+        subtotal = vnd_round(item.get("subtotal"))
+        tax_amount = vnd_round(item.get("tax_amount"))
+        amount = vnd_round(item.get("total_amount"))
+        total_subtotal += subtotal
+        total_tax += tax_amount
+        total_amount += amount
+        invoice_ref = " / ".join(filter(None, [
+            str(item.get("invoice_series") or "").strip(),
+            str(item.get("invoice_number") or "").strip(),
+        ]))
+        invoice_date = as_date(item.get("invoice_date"))
+        if invoice_date:
+            invoice_date = datetime.strptime(invoice_date, "%Y-%m-%d").strftime("%d/%m/%Y")
+        values = (
+            index, invoice_date, invoice_ref,
+            f"{subtotal:,.0f}".replace(",", "."),
+            f"{tax_amount:,.0f}".replace(",", "."),
+            f"{amount:,.0f}".replace(",", "."),
+        )
+        row = table.add_row().cells
+        for column, value in enumerate(values):
+            row[column].width = widths[column]
+            paragraph = row[column].paragraphs[0]
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT if column >= 3 else WD_ALIGN_PARAGRAPH.CENTER
+            paragraph.add_run(str(value))
+    totals = table.add_row().cells
+    totals[0].merge(totals[2])
+    label = totals[0].paragraphs[0]
+    label.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run = label.add_run("TỔNG CỘNG")
+    run.bold = True
+    for column, value in enumerate((total_subtotal, total_tax, total_amount), start=3):
+        paragraph = totals[column].paragraphs[0]
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        run = paragraph.add_run(f"{value:,.0f}".replace(",", "."))
+        run.bold = True
+
+    payment_lines = [
+        ("Số tiền bằng chữ: ", number_to_vietnamese(total_amount) + "./."),
+        ("Hình thức thanh toán: ", "Chuyển khoản"),
+        ("Đơn vị thụ hưởng: ", company),
+        ("Số tài khoản: ", bank_account),
+        ("Tại ngân hàng: ", bank_name),
+    ]
+    for label, value in payment_lines:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(2)
+        run = paragraph.add_run(label)
+        run.bold = True
+        paragraph.add_run(str(value or ""))
+    signatures = document.add_table(rows=1, cols=2)
+    for cell, text in zip(signatures.rows[0].cells, (
+        "NGƯỜI LẬP\n(Ký, ghi rõ họ tên)",
+        "ĐẠI DIỆN CÔNG TY\n(Ký, ghi rõ họ tên, đóng dấu)",
+    )):
+        paragraph = cell.paragraphs[0]
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run(text)
+        run.bold = True
+    return document
+
+
+def invoice_delivery_statement_workbook(lines: list[dict], drafts: list[dict], tax_factor):
+    """Create a delivery statement and refuse any invoice/line total mismatch."""
+    workbook = Workbook()
+    detail = workbook.active
+    detail.title = "Bảng kê giao hàng"
+    headers = [
+        "STT", "Ngày giao", "Ngày HĐ", "Ký hiệu", "Số HĐ", "Bếp", "Mã hàng",
+        "Tên hàng", "ĐVT", "SL thực giao", "Đơn giá", "Tiền trước thuế",
+        "Thuế suất", "Tiền thuế", "Tổng thanh toán",
+    ]
+    detail.append(headers)
+    computed = defaultdict(lambda: {"subtotal": 0, "tax": 0, "total": 0})
+    for index, line in enumerate(lines, start=1):
+        amount = vnd_round(line.get("amount"))
+        vat_percent = invoice_tax_percent(line.get("tax"))
+        tax_amount = 0 if vat_percent <= 0 else vnd_product(amount, vat_percent / 100)
+        total_amount = amount + tax_amount
+        computed[line["draft_id"]]["subtotal"] += amount
+        computed[line["draft_id"]]["tax"] += tax_amount
+        computed[line["draft_id"]]["total"] += total_amount
+        detail.append([
+            index, line.get("work_date"), line.get("issued_invoice_date"),
+            line.get("issued_invoice_series"), line.get("issued_invoice_number"), line.get("kitchen"),
+            line.get("product_code"), line.get("product_name"), line.get("unit"),
+            line.get("qty"), vnd_round(line.get("unit_price")), amount,
+            line.get("tax"), tax_amount, total_amount,
+        ])
+    style_export_sheet(
+        detail, "BẢNG KÊ HÀNG HÓA/DỊCH VỤ ĐÃ GIAO",
+        "Nguồn: lượng thực giao thuộc hóa đơn đã xác nhận phát hành",
+        headers, money_columns=(11, 12, 14, 15),
+    )
+
+    reconcile = workbook.create_sheet("Đối chiếu hóa đơn")
+    reconcile_headers = [
+        "Ngày HĐ", "Ký hiệu", "Số HĐ", "Tiền HĐ trước thuế", "Tiền bảng kê trước thuế",
+        "Thuế HĐ", "Thuế bảng kê", "Tổng HĐ", "Tổng bảng kê", "Chênh lệch",
+    ]
+    reconcile.append(reconcile_headers)
+    mismatches = []
+    for draft in drafts:
+        values = computed[draft["id"]]
+        invoice_subtotal = vnd_round(draft["subtotal"])
+        invoice_tax = vnd_round(draft["tax_amount"])
+        invoice_total = vnd_round(draft["total_amount"])
+        difference = invoice_total - values["total"]
+        if any(abs(value) > 1 for value in (
+            invoice_subtotal - values["subtotal"], invoice_tax - values["tax"], difference,
+        )):
+            mismatches.append(str(draft.get("issued_invoice_number") or draft["id"]))
+        reconcile.append([
+            draft.get("issued_invoice_date"), draft.get("issued_invoice_series"),
+            draft.get("issued_invoice_number"), invoice_subtotal, values["subtotal"],
+            invoice_tax, values["tax"], invoice_total, values["total"], difference,
+        ])
+    if mismatches:
+        workbook.close()
+        raise ValueError("Tổng hóa đơn lệch bảng kê giao hàng: " + ", ".join(mismatches))
+    style_export_sheet(
+        reconcile, "ĐỐI CHIẾU HÓA ĐƠN VÀ BẢNG KÊ",
+        "Chỉ xuất khi toàn bộ chênh lệch nằm trong 1 VNĐ",
+        reconcile_headers, money_columns=(4, 5, 6, 7, 8, 9, 10),
+    )
+    return workbook
 
 
 def payment_request_document(company: str, recipient: str, requester: str, bank_name: str,
@@ -4334,6 +8652,12 @@ def payment_request_document(company: str, recipient: str, requester: str, bank_
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = paragraph.add_run(headers[index])
         run.bold = True
+    # Word otherwise starts a continuation page with bare data rows.  Mark the
+    # header row so monthly requests remain self-explanatory on every page.
+    header_properties = detail_table.rows[0]._tr.get_or_add_trPr()
+    repeat_header = OxmlElement("w:tblHeader")
+    repeat_header.set(qn("w:val"), "true")
+    header_properties.append(repeat_header)
     for index, item in enumerate(detail_rows, start=1):
         row_cells = detail_table.add_row().cells
         work_date = str(item.get("work_date") or "").strip()

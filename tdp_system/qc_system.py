@@ -8,6 +8,7 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 from shutil import rmtree
+from urllib.parse import quote
 
 from docx import Document as DocxDocument
 from openpyxl import Workbook, load_workbook
@@ -152,6 +153,194 @@ def preview_opening(client, payload, period="2026-08", filename="tồn đầu k�
     )
 
 
+def run_tax_template_golden_qc():
+    """Lock the four customer tax templates to the exact audited source files."""
+    source_dir = ROOT / "bosung.30.8.26"
+    assert source_dir.is_dir(), (
+        f"Thiếu thư mục mẫu thuế chuẩn của khách: {source_dir}"
+    )
+
+    headers = [
+        "Mã hàng", "Tên hàng", "Đơn vị tính", "Số lượng", "Đơn giá",
+        "Cộng tiền hàng", "%CK", "Tiền CK", "Tiền trước thuế", "% VAT",
+        "Tiền thuế GTGT", "Tổng tiền", "Tính chất",
+    ]
+    specs = {
+        "thue 0.xlsx": {
+            "size": 15438,
+            "sha256": "82642C993BF26E52B54762E397ED5A1C3F5886F308834582DBCD01C4FBEA0619",
+            "sheets": ["Sheet2", "Sheet3", "Sheet1"],
+            "active": "Sheet2",
+            "dimension": "A1:M10",
+            "rows": 9,
+            "quantity": 55.8,
+            "goods": 4161900,
+            "pretax": 4161900,
+            "tax": 0,
+            "grand": 4161900,
+            "vat": -2,
+            "nature": {"1": 9},
+        },
+        "thue 8.xlsx": {
+            "size": 10649,
+            "sha256": "892C57A688E28AFADDB58E2070E122945A926FB6EF1DC417714A004885D4C573",
+            "sheets": ["Sheet 1 (2)"],
+            "active": "Sheet 1 (2)",
+            "dimension": "A1:M13",
+            "rows": 12,
+            "quantity": 6125,
+            "goods": 28333000,
+            "pretax": 28333000,
+            "tax": 2266640,
+            "grand": 30599640,
+            "vat": 8,
+            "nature": {"1": 12},
+        },
+        "thue 10.xlsx": {
+            "size": 9566,
+            "sha256": "D4548D308CDD236A854972A629DB63B4CEA2FE1B65816EAFF6AEBE57040D0DE9",
+            "sheets": ["Sheet 1 (2)"],
+            "active": "Sheet 1 (2)",
+            "dimension": "A1:M4",
+            "rows": 2,
+            "quantity": 105,
+            "goods": 18060000,
+            "pretax": 18060000,
+            "tax": 1806000,
+            "grand": 19866000,
+            "vat": 10,
+            "nature": {"1": 2},
+        },
+        "thue 10 có khuyến mại.xlsx": {
+            "size": 9706,
+            "sha256": "243EC60B25C3235F447A7C773E66C7948F36B3AA5BE3F3AFD0A4F06A78F0691B",
+            "sheets": ["Sheet 1 (2)"],
+            "active": "Sheet 1 (2)",
+            "dimension": "A1:M5",
+            "rows": 3,
+            "quantity": 109,
+            "goods": 18060000,
+            "pretax": 18060000,
+            "tax": 1806000,
+            "grand": 19866000,
+            "vat": 10,
+            "nature": {"1": 2, "2": 1},
+        },
+    }
+
+    audited_rows = 0
+    for filename, expected in specs.items():
+        source = source_dir / filename
+        assert source.is_file(), f"Thiếu mẫu thuế chuẩn của khách: {source}"
+        actual_size = source.stat().st_size
+        assert actual_size == expected["size"], (
+            f"Sai dung lượng mẫu thuế {filename}: {actual_size}, "
+            f"cần {expected['size']} byte"
+        )
+        actual_hash = hashlib.sha256(source.read_bytes()).hexdigest().upper()
+        assert actual_hash == expected["sha256"], (
+            f"Sai SHA-256 mẫu thuế {filename}: {actual_hash}; "
+            f"cần {expected['sha256']}"
+        )
+
+        workbook = load_workbook(
+            source, read_only=True, data_only=True, keep_links=False,
+        )
+        try:
+            assert workbook.sheetnames == expected["sheets"], (
+                f"Sai danh sách/thứ tự sheet {filename}: {workbook.sheetnames}; "
+                f"cần {expected['sheets']}"
+            )
+            assert workbook.active.title == expected["active"], (
+                f"Sai sheet active {filename}: {workbook.active.title}; "
+                f"cần {expected['active']}"
+            )
+            sheet = workbook[expected["active"]]
+            assert sheet.calculate_dimension() == expected["dimension"], (
+                f"Sai vùng dữ liệu {filename}/{sheet.title}: "
+                f"{sheet.calculate_dimension()}, cần {expected['dimension']}"
+            )
+            actual_headers = [
+                sheet.cell(1, column).value for column in range(1, 14)
+            ]
+            assert actual_headers == headers, (
+                f"Sai tiêu đề mẫu thuế {filename}/{sheet.title}: {actual_headers}"
+            )
+
+            data_rows = [
+                (row_number, list(values))
+                for row_number, values in enumerate(
+                    sheet.iter_rows(min_row=2, max_col=13, values_only=True),
+                    start=2,
+                )
+                if any(value not in (None, "") for value in values)
+            ]
+            assert len(data_rows) == expected["rows"], (
+                f"Sai số dòng dữ liệu {filename}/{sheet.title}: "
+                f"{len(data_rows)}, cần {expected['rows']}"
+            )
+            audited_rows += len(data_rows)
+
+            def total(column_index):
+                return sum(float(values[column_index] or 0) for _, values in data_rows)
+
+            totals = {
+                "quantity": total(3),
+                "goods": total(5),
+                "pretax": total(8),
+                "tax": total(10),
+                "grand": total(11),
+            }
+            for key, actual in totals.items():
+                tolerance = 1e-6 if key == "quantity" else 0.01
+                assert abs(actual - expected[key]) <= tolerance, (
+                    f"Sai tổng {key} mẫu thuế {filename}: {actual}, "
+                    f"cần {expected[key]}"
+                )
+
+            vat_values = {values[9] for _, values in data_rows}
+            assert vat_values == {expected["vat"]}, (
+                f"Sai giá trị % VAT mẫu thuế {filename}: {vat_values}; "
+                f"cần {{{expected['vat']}}}"
+            )
+            nature = Counter(str(values[12]) for _, values in data_rows)
+            assert dict(nature) == expected["nature"], (
+                f"Sai Tính chất mẫu thuế {filename}: {dict(nature)}; "
+                f"cần {expected['nature']}"
+            )
+
+            if filename == "thue 0.xlsx":
+                assert 0 not in vat_values and vat_values == {-2}, (
+                    "thue 0.xlsx phải giữ mã -2 (KKKNT), không được diễn giải "
+                    "thành thuế suất VAT 0%"
+                )
+            elif filename == "thue 10 có khuyến mại.xlsx":
+                promo = next(
+                    (values for row_number, values in data_rows if row_number == 4),
+                    None,
+                )
+                assert promo is not None, (
+                    f"Thiếu dòng khuyến mại nguồn 4 trong {filename}"
+                )
+                for column_index, column_name in (
+                    (4, "E/Đơn giá"), (5, "F/Cộng tiền hàng"), (6, "G/%CK"),
+                    (7, "H/Tiền CK"), (8, "I/Tiền trước thuế"),
+                    (10, "K/Tiền thuế GTGT"), (11, "L/Tổng tiền"),
+                ):
+                    assert promo[column_index] is None, (
+                        f"Dòng khuyến mại {filename}!{column_name} phải để trống, "
+                        f"đang là {promo[column_index]!r}"
+                    )
+                assert str(promo[12]) == "2", (
+                    f"Dòng khuyến mại {filename}!M4 phải có Tính chất=2"
+                )
+        finally:
+            workbook.close()
+
+    assert audited_rows == 26
+    return "4 canonical templates / 26 rows / KKKNT(-2), VAT8, VAT10 / promo blanks passed"
+
+
 def run_catalog_import_qc():
     catalog_db = APP_DIR / "data" / "qc_catalog_test.sqlite3"
     clean_test_db(catalog_db)
@@ -290,6 +479,7 @@ def run_catalog_import_qc():
 
 
 def main():
+    tax_template_result = run_tax_template_golden_qc()
     catalog_import_result = run_catalog_import_qc()
     qc_db = APP_DIR / "data" / "qc_test.sqlite3"
     clean_test_db(qc_db)
@@ -476,6 +666,7 @@ def main():
     }, ensure_ascii=False, indent=2))
 
     master_source = ROOT / "Em Thành.xlsx"
+    assert client.post("/api/import").status_code == 410
     orphan_pending = APP_DIR / "data" / "pending_qc_orphan.xlsx"
     orphan_pending.write_bytes(b"orphaned preview")
     with master_source.open("rb") as handle:
@@ -517,11 +708,22 @@ def main():
 
     source = ROOT / "Tách212223.xlsx"
     with source.open("rb") as handle:
-        response = client.post(
-            "/api/import",
-            data={"work_date": "2026-08-28", "file": (handle, source.name)},
+        source_analysis_response = client.post(
+            "/api/import/analyze",
+            data={"file": (handle, source.name)},
             content_type="multipart/form-data",
         )
+    assert source_analysis_response.status_code == 200
+    source_analysis = source_analysis_response.get_json()
+    qc_selected_sheets = [
+        "ATV ko điều chỉnh", "NHUA không điều chỉnh", "Bảng chưa xuất", "ATV 25",
+    ]
+    assert set(qc_selected_sheets).issubset({item["name"] for item in source_analysis["sheets"]})
+    response = client.post("/api/import/confirm", json={
+        "token": source_analysis["token"],
+        "work_date": "2026-08-28",
+        "sheets": qc_selected_sheets,
+    })
     assert response.status_code == 200, response.get_data(as_text=True)
     payload = response.get_json()
     batch_id = payload["batch"]["id"]
@@ -562,35 +764,42 @@ def main():
     )
     assert mapped_name_response.status_code == 200
     export_sizes = {}
-    mapped_name_seen = False
-    for kind in ("suppliers", "deliveries", "report", "purchases", "invoices"):
+    blocked_invoice_export = client.get(f"/api/export/invoices/{batch_id}")
+    assert blocked_invoice_export.status_code == 409
+    assert "tạo dự thảo" in blocked_invoice_export.get_json()["error"]
+    for kind in ("suppliers", "deliveries", "report", "purchases"):
         result = client.get(f"/api/export/{kind}/{batch_id}")
         assert result.status_code == 200, (kind, result.get_data(as_text=True))
         assert len(result.data) > 1000, kind
         export_sizes[kind] = len(result.data)
-        if kind != "invoices":
-            wb = load_workbook(io.BytesIO(result.data), data_only=True)
-            assert wb.sheetnames
-        else:
-            with zipfile.ZipFile(io.BytesIO(result.data)) as archive:
-                invoice_files = [name for name in archive.namelist() if name.endswith(".xlsx")]
-                assert invoice_files
-                for name in invoice_files:
-                    wb = load_workbook(io.BytesIO(archive.read(name)), data_only=True)
-                    ws = wb.active
-                    assert [ws.cell(1, col).value for col in range(1, 12)] == server.INVOICE_HEADERS
-                    for row in range(2, ws.max_row + 1):
-                        if ws.cell(row, 2).value == mapped_code:
-                            assert ws.cell(row, 4).value == mapped_invoice_name
-                            mapped_name_seen = True
-                        assert round(ws.cell(row, 8).value) == round(ws.cell(row, 5).value * ws.cell(row, 7).value)
-                        if ws.cell(row, 9).value == "KKKNT":
-                            assert round(ws.cell(row, 10).value) == round(ws.cell(row, 8).value)
-                        else:
-                            assert round(ws.cell(row, 10).value) == round(
-                                ws.cell(row, 8).value * (1 + ws.cell(row, 9).value)
-                            )
-    assert mapped_name_seen
+        wb = load_workbook(io.BytesIO(result.data), data_only=True)
+        assert wb.sheetnames
+        wb.close()
+    mapped_order = dict(orders[0])
+    mapped_order["product_name"] = mapped_invoice_name
+    mapped_book = server.invoice_workbook([mapped_order])
+    assert mapped_book.active.cell(2, 2).value == mapped_invoice_name
+    mapped_book.close()
+
+    # VND must use financial HALF_UP rounding and explicit nature 2 must blank
+    # every money column in the customer's exact 13-column layout.
+    rounding_book = server.invoice_workbook([{
+        "product_code": "QC-ROUND", "product_name": "QC rounding", "unit": "kg",
+        "actual_delivered": 0.5, "customer_return_qty": 0, "sell_price": 1,
+        "tax": "0%", "invoice_nature": "1", "note": "",
+    }])
+    rounding_sheet = rounding_book.active
+    assert rounding_sheet.cell(2, 6).value == 1
+    rounding_book.close()
+    promotion_book = server.invoice_workbook([{
+        "product_code": "QC-PROMO", "product_name": "QC promo", "unit": "chai",
+        "actual_delivered": 1, "customer_return_qty": 0, "sell_price": 0,
+        "tax": "10%", "invoice_nature": "2", "note": "",
+    }])
+    promotion_sheet = promotion_book.active
+    assert promotion_sheet.cell(2, 13).value == "2"
+    assert all(promotion_sheet.cell(2, col).value is None for col in (5, 6, 8, 9, 11, 12))
+    promotion_book.close()
 
     # Manual-flow test: new batch, add, edit, approve.
     new_batch = client.post("/api/batches", json={"work_date": "2026-08-29"}).get_json()
@@ -621,6 +830,43 @@ def main():
     })
     assert bulk.status_code == 200, bulk.get_data(as_text=True)
     assert bulk.get_json()["inserted"] == 1
+    promotion = client.post("/api/orders", json={
+        "batch_id": manual_id,
+        "work_date": "2026-08-29",
+        "kitchen": "POT",
+        "product_code": "I000060",
+        "qty": 1,
+        "actual_received": 1,
+        "actual_delivered": 1,
+        "buy_price": 0,
+        "sell_price": 0,
+        "tax": "10%",
+        "invoice_nature": "2",
+        "supplier": "kho",
+        "note": "Explicit promotion QC",
+    })
+    assert promotion.status_code == 200, promotion.get_data(as_text=True)
+    promotion_row = next(
+        row for row in promotion.get_json()["orders"]
+        if row["invoice_nature"] == "2" and not row["errors"]
+    )
+    rejected_grid = client.put("/api/orders/bulk-update", json={
+        "batch_id": manual_id,
+        "items": [{"id": item["id"], "sell_price": 15555}, {"id": 999999999, "sell_price": 1}],
+    })
+    assert rejected_grid.status_code == 409
+    unchanged_after_reject = client.get(f"/api/bootstrap?batch_id={manual_id}").get_json()
+    assert next(row for row in unchanged_after_reject["orders"] if row["id"] == item["id"])["sell_price"] == 16000
+    saved_grid = client.put("/api/orders/bulk-update", json={
+        "batch_id": manual_id,
+        "items": [
+            {"id": item["id"], "actual_delivered": 3, "sell_price": 16000},
+            {"id": promotion_row["id"], "actual_delivered": 1, "sell_price": 0,
+             "invoice_nature": "2", "tax": "0.10"},
+        ],
+    })
+    assert saved_grid.status_code == 200, saved_grid.get_data(as_text=True)
+    assert saved_grid.get_json()["updated"] == 2 and saved_grid.get_json()["error_rows"] == 0
     approved = client.post(f"/api/batches/{manual_id}/approve")
     assert approved.status_code == 200, approved.get_data(as_text=True)
 
@@ -634,8 +880,9 @@ def main():
     })
     assert balance.status_code == 200
     checked = client.get(f"/api/bootstrap?batch_id={manual_id}").get_json()
-    assert checked["summary"]["contractors"]["HATRAN"]["opening"] == 5000
-    assert checked["summary"]["contractors"]["HATRAN"]["paid"] == 10000
+    assert checked["summary"]["scope"] == "batch_only"
+    assert checked["summary"]["contractors"]["HATRAN"]["opening"] == 0
+    assert checked["summary"]["contractors"]["HATRAN"]["paid"] == 0
     debt_adjustment = client.post("/api/debt-adjustments", json={
         "adjustment_date": "2026-08-29", "party_type": "contractor",
         "party_code": "HATRAN", "amount": 2500, "note": "QC điều chỉnh",
@@ -643,12 +890,16 @@ def main():
     assert debt_adjustment.status_code == 200
     debt_period = client.get("/api/debts?from=2026-08-01&to=2026-08-31")
     assert debt_period.status_code == 200
+    assert debt_period.get_json()["contractors"]["HATRAN"]["opening"] == 5000
+    assert debt_period.get_json()["contractors"]["HATRAN"]["period_paid"] == 10000
     assert debt_period.get_json()["contractors"]["HATRAN"]["period_adjustment"] == 2500
     assert client.get("/api/debts?from=2026-09-01&to=2026-08-31").status_code == 400
     debt_export = client.get("/api/export/debts?from=2026-08-01&to=2026-08-31")
     assert debt_export.status_code == 200 and len(debt_export.data) > 1000
     debt_book = load_workbook(io.BytesIO(debt_export.data), data_only=True)
-    assert debt_book.sheetnames == ["Phải thu", "Phải trả", "Thu chi", "Điều chỉnh"]
+    assert debt_book.sheetnames == [
+        "Phải thu", "Phải trả", "Thu chi", "Điều chỉnh", "Chi tiết phải trả cũ",
+    ]
     assert debt_book["Phải thu"]["A3"].value == "Đối tượng"
     assert any(row[0].value == "HATRAN" and row[3].value == 2500 for row in debt_book["Phải thu"].iter_rows(min_row=4))
     debt_book.close()
@@ -688,6 +939,8 @@ def main():
     drafted_again = client.post(f"/api/outgoing-invoices/draft/{manual_id}")
     assert drafted_again.status_code == 200, drafted_again.get_data(as_text=True)
     assert drafted_again.get_json()["drafts"][0]["id"] == draft_id
+    locked_edit = client.put(f"/api/orders/{first_item['id']}", json={"qty": 99})
+    assert locked_edit.status_code == 409 and "dự thảo" in locked_edit.get_json()["error"].lower()
     with server.db() as conn:
         assert conn.execute(
             "SELECT COUNT(*) n FROM outgoing_invoice_lines WHERE draft_id=? AND product_code='I000060' AND product_name='HÀNH TÂY XUẤT HĐ QC'",
@@ -696,7 +949,67 @@ def main():
         assert conn.execute(
             "SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",
             (str(draft_id),),
-        ).fetchone()["n"] == 2
+        ).fetchone()["n"] == 3
+        promotion_line = conn.execute(
+            "SELECT invoice_nature,amount FROM outgoing_invoice_lines WHERE draft_id=? AND invoice_nature='2'",
+            (draft_id,),
+        ).fetchone()
+        assert promotion_line and promotion_line["amount"] == 0
+
+    invoice_export = client.get(f"/api/export/invoices/{manual_id}")
+    assert invoice_export.status_code == 200, invoice_export.get_data(as_text=True)
+    assert len(invoice_export.data) > 1000
+    export_sizes["invoices"] = len(invoice_export.data)
+    with zipfile.ZipFile(io.BytesIO(invoice_export.data)) as archive:
+        invoice_files = [name for name in archive.namelist() if name.endswith(".xlsx")]
+        assert invoice_files
+        promotion_seen = False
+        for name in invoice_files:
+            invoice_book = load_workbook(io.BytesIO(archive.read(name)), data_only=True)
+            invoice_sheet = invoice_book.active
+            assert [invoice_sheet.cell(1, col).value for col in range(1, 14)] == server.INVOICE_HEADERS
+            for row in range(2, invoice_sheet.max_row + 1):
+                assert invoice_sheet.cell(row, 13).value in {"1", "2"}
+                if invoice_sheet.cell(row, 13).value == "2":
+                    promotion_seen = True
+                    assert all(invoice_sheet.cell(row, col).value is None for col in (5, 6, 8, 9, 11, 12))
+                else:
+                    assert round(invoice_sheet.cell(row, 6).value) == round(
+                        invoice_sheet.cell(row, 4).value * invoice_sheet.cell(row, 5).value
+                    )
+            invoice_book.close()
+        assert promotion_seen
+
+    # Exercise the exact UI/API draft payload without any remote write.  The
+    # production client still performs all validation and payload construction.
+    assert client.put("/api/outgoing-buyers/HATRAN", json={
+        "display_name": "QC Buyer", "legal_name": "CÔNG TY QC BUYER",
+        "tax_code": "0200000000", "address": "QC address",
+    }).status_code == 200
+    captured_minvoice = {}
+
+    class DryRunMinvoice:
+        def create_draft(self, payload, dry_run=True, confirm_remote_write=False):
+            assert dry_run is True and confirm_remote_write is False
+            captured_minvoice["source"] = payload
+            built = server.MinvoiceClient(
+                server.MinvoiceConfig("https://example.invalid", "qc", "qc")
+            ).build_draft_payload(payload)
+            captured_minvoice["built"] = built
+            return {"ok": True, "dry_run": True, "remote_write": False, "payload": built}
+
+    server.app.config["MINVOICE_CLIENT_FACTORY"] = DryRunMinvoice
+    try:
+        minvoice_dry_run = client.post(
+            f"/api/minvoice/drafts/{draft_id}",
+            json={"series": "1C26TDP", "dry_run": True},
+        )
+    finally:
+        server.app.config.pop("MINVOICE_CLIENT_FACTORY", None)
+    assert minvoice_dry_run.status_code == 200, minvoice_dry_run.get_data(as_text=True)
+    built_lines = captured_minvoice["built"]["data"][0]["details"][0]["data"]
+    assert any(line["tchat"] == 2 and line["inv_TotalAmount"] == 0 for line in built_lines)
+    assert all(line["tchat"] in {1, 2} for line in built_lines)
     cancelled = client.post(f"/api/outgoing-invoices/{draft_id}/cancel", json={"confirmed": True})
     assert cancelled.status_code == 200
     assert client.post(
@@ -709,8 +1022,42 @@ def main():
         ).fetchone()["n"] == 0
     recreated = client.post(f"/api/outgoing-invoices/draft/{manual_id}")
     assert recreated.status_code == 200 and recreated.get_json()["drafts"][0]["status"] == "draft"
-    issued = client.post(f"/api/outgoing-invoices/{draft_id}/confirm-issued", json={"confirmed": True})
+    assert client.post(
+        f"/api/outgoing-invoices/{draft_id}/confirm-issued", json={"confirmed": True}
+    ).status_code == 400
+    issued_payload = {
+        "confirmed": True, "invoice_number": "00001234",
+        "invoice_series": "1C26TDP", "invoice_date": "2026-08-29",
+    }
+    issued = client.post(f"/api/outgoing-invoices/{draft_id}/confirm-issued", json=issued_payload)
     assert issued.status_code == 200
+    issued_repeat = client.post(f"/api/outgoing-invoices/{draft_id}/confirm-issued", json=issued_payload)
+    assert issued_repeat.status_code == 200 and issued_repeat.get_json()["idempotent"] is True
+    invoice_payment_bundle = client.get(
+        "/api/export/invoice-payment-bundle/HATRAN?from=2026-08-29&to=2026-08-29"
+    )
+    assert invoice_payment_bundle.status_code == 200, invoice_payment_bundle.get_data(as_text=True)
+    with zipfile.ZipFile(io.BytesIO(invoice_payment_bundle.data)) as archive:
+        names = archive.namelist()
+        docx_name = next(name for name in names if name.endswith(".docx"))
+        statement_name = next(name for name in names if name.endswith(".xlsx"))
+        assert "THONG_TIN_DOI_CHIEU.txt" in names
+        invoice_payment_doc = DocxDocument(io.BytesIO(archive.read(docx_name)))
+        invoice_payment_text = "\n".join(
+            [paragraph.text for paragraph in invoice_payment_doc.paragraphs]
+            + [cell.text for table in invoice_payment_doc.tables for row in table.rows for cell in row.cells]
+        )
+        for required in ("ĐỀ NGHỊ THANH TOÁN", "CÔNG TY QC BUYER", "0200000000", "00001234", "1052787580"):
+            assert required in invoice_payment_text, required
+        assert invoice_payment_doc.tables[1].rows[0]._tr.xpath("./w:trPr/w:tblHeader")
+        statement_book = load_workbook(io.BytesIO(archive.read(statement_name)), data_only=True)
+        assert statement_book.sheetnames == ["Bảng kê giao hàng", "Đối chiếu hóa đơn"]
+        differences = [
+            row[9].value for row in statement_book["Đối chiếu hóa đơn"].iter_rows(min_row=4)
+            if row[2].value
+        ]
+        assert differences and all(abs(value or 0) <= 1 for value in differences)
+        statement_book.close()
     assert client.post(f"/api/outgoing-invoices/{draft_id}/cancel", json={"confirmed": True}).status_code == 409
 
     # mSMI incremental/idempotent sync with a mock response; no external write.
@@ -795,12 +1142,48 @@ def main():
     duplicate_kitchen = preview_kitchen(
         client, kitchen_workbook_bytes(duplicate_first=True), work_date="2026-09-03"
     ).get_json()
-    assert duplicate_kitchen["can_confirm"] is False and duplicate_kitchen["counts"]["errors"] == 1
+    assert duplicate_kitchen["can_confirm"] is True
+    assert duplicate_kitchen["counts"]["errors"] == 0
+    assert duplicate_kitchen["counts"]["warnings"] >= 1
+    assert duplicate_kitchen["counts"]["items"] == 3
+
+    # Opening-import is an authoritative period snapshot: a revised file that
+    # removes a code must remove the old OPENING line instead of leaving stock.
+    opening_snapshot_a = opening_workbook_bytes([
+        ["I000060", "Hành tây", "", "I000060", "KKKNT", "kg", 2, 14000, 28000],
+        ["H000007", "Trứng gà", "", "H000007", "KKKNT", "quả", 3, 3000, 9000],
+    ])
+    opening_a = preview_opening(client, opening_snapshot_a, period="2026-06").get_json()
+    assert opening_a["can_confirm"] is True
+    assert client.post("/api/inventory/opening/import/confirm", json={
+        "token": opening_a["token"], "confirmed": True,
+    }).status_code == 200
+    opening_snapshot_b = opening_workbook_bytes([
+        ["I000060", "Hành tây", "", "I000060", "KKKNT", "kg", 5, 14000, 70000],
+    ])
+    opening_b = preview_opening(
+        client, opening_snapshot_b, period="2026-06", filename="revised-renamed-opening.xlsx"
+    ).get_json()
+    opening_b_confirm = client.post("/api/inventory/opening/import/confirm", json={
+        "token": opening_b["token"], "confirmed": True,
+    })
+    assert opening_b_confirm.status_code == 200
+    assert opening_b_confirm.get_json()["deleted_stale"] == 1
+    with server.db() as conn:
+        june_opening = conn.execute(
+            "SELECT product_code,qty_in FROM inventory_transactions "
+            "WHERE source_type='OPENING' AND source_id='2026-06'"
+        ).fetchall()
+        assert [(row["product_code"], row["qty_in"]) for row in june_opening] == [("I000060", 5)]
 
     with server.db() as conn:
         conn.execute(
             """INSERT INTO products(code,name,unit,supplier,buy_price)
                VALUES('QC-XCOM-ROLLBACK','Hàng rollback xưởng cơm','kg','QC',10000)"""
+        )
+        conn.execute(
+            """INSERT INTO product_prices(product_code,price_group,price_text,price_value)
+               VALUES('QC-XCOM-ROLLBACK','HATRAN','10000',10000)"""
         )
     rollback_kitchen = preview_kitchen(
         client, kitchen_workbook_bytes("QC-XCOM-ROLLBACK"), work_date="2026-09-04"
@@ -845,6 +1228,10 @@ def main():
         assert actual_confirm.status_code == 200 and actual_confirm.get_json()["inserted"] == 5
         actual_plans = client.get("/api/kitchen/plans?date=2026-09-01").get_json()["items"]
         assert len(actual_plans) == 5 and sum(len(plan["items"]) for plan in actual_plans) == 54
+        assert all(
+            item["price_source"] == "HATRAN 2026-09 · giá kỳ đã khóa"
+            for plan in actual_plans for item in plan["items"]
+        ), "Nguồn giá sau xác nhận phải được canonical hóa ngay từ lần nhập đầu"
         actual_by_kitchen = {plan["kitchen"]: plan for plan in actual_plans}
         expected_financials = {
             "VINA": (28, 30000, 503580, 297962.962962963),
@@ -908,7 +1295,12 @@ def main():
             json={"token": repeat_actual["token"], "confirmed": True},
         )
         assert repeat_actual_confirm.status_code == 200 and repeat_actual_confirm.get_json()["updated"] == 5
-        assert len(client.get("/api/kitchen/plans?date=2026-09-01").get_json()["items"]) == 5
+        repeated_actual_plans = client.get("/api/kitchen/plans?date=2026-09-01").get_json()["items"]
+        assert len(repeated_actual_plans) == 5
+        assert all(
+            item["price_source"] == "HATRAN 2026-09 · giá kỳ đã khóa"
+            for plan in repeated_actual_plans for item in plan["items"]
+        ), "Nhập lại file xưởng cơm không được đổi provenance giá"
         actual_kitchen_result = "5 plans / 54 items / 3 XCOM sheets / financial reconciliation passed"
 
     # Actual monthly meal-attendance workbook: keep actual meals separate from PO planned meals.
@@ -975,6 +1367,99 @@ def main():
         content_type="multipart/form-data",
     ).status_code == 400
 
+    # Xưởng cơm payment documents: exact actual meals + exact-period tariffs.
+    payment_profile = client.put("/api/kitchen/payment-profiles/QC-BOT", json={
+        "document_type": "MEAL_SIMPLE",
+        "issuer_name": "CÔNG TY TNHH DỊCH VỤ HÀ TRÂN QC",
+        "recipient_name": "CÔNG TY TNHH BOT QC",
+        "beneficiary_name": "CÔNG TY TNHH DỊCH VỤ HÀ TRÂN QC",
+        "bank_account": "0000000001",
+        "bank_name": "NGÂN HÀNG QC",
+        "requester": "NGƯỜI LẬP QC",
+        "vat_rate": 8,
+    })
+    assert payment_profile.status_code == 200, payment_profile.get_data(as_text=True)
+    payment_scope = client.put(
+        "/api/kitchen/payment-profiles/QC-BOT/scopes/KITCHEN/BOT", json={}
+    )
+    assert payment_scope.status_code == 200, payment_scope.get_data(as_text=True)
+    with server.db() as conn:
+        bot_shifts = [
+            row["shift"]
+            for row in conn.execute(
+                """SELECT DISTINCT shift FROM meal_attendance
+                   WHERE kitchen='BOT' AND substr(work_date,1,7)='2026-08'
+                   ORDER BY shift"""
+            )
+        ]
+    assert bot_shifts
+    for shift in bot_shifts:
+        tariff = client.put(
+            f"/api/kitchen/payment-profiles/QC-BOT/tariffs/2026-08/{quote(shift, safe='')}",
+            json={"unit_price": 25000},
+        )
+        assert tariff.status_code == 200, tariff.get_data(as_text=True)
+    payment_preview = client.post("/api/kitchen/payment-documents/preview", json={
+        "profile_code": "QC-BOT",
+        "date_from": "2026-08-01",
+        "date_to": "2026-08-31",
+        "issue_date": "2026-08-31",
+    })
+    assert payment_preview.status_code == 200, payment_preview.get_data(as_text=True)
+    payment_preview_data = payment_preview.get_json()
+    payment_summary = payment_preview_data["summary"]
+    assert payment_summary["actual_count"] == 1313
+    assert payment_summary["subtotal"] == 32825000
+    assert payment_summary["vat_amount"] == 2626000
+    assert payment_summary["total"] == 35451000
+    payment_export_url = "/api/kitchen/payment-documents/export"
+    payment_export_body = {
+        "profile_code": "QC-BOT",
+        "date_from": "2026-08-01",
+        "date_to": "2026-08-31",
+        "issue_date": "2026-08-31",
+    }
+    first_payment_export = client.post(payment_export_url, json={
+        **payment_export_body, "preview_token": payment_preview_data["preview_token"],
+    })
+    reused_payment_preview = client.post(payment_export_url, json={
+        **payment_export_body, "preview_token": payment_preview_data["preview_token"],
+    })
+    assert reused_payment_preview.status_code == 409
+    assert reused_payment_preview.get_json()["code"] == "preview_used"
+    second_payment_preview = client.post("/api/kitchen/payment-documents/preview", json={
+        "profile_code": "QC-BOT",
+        "date_from": "2026-08-01",
+        "date_to": "2026-08-31",
+        "issue_date": "2026-08-31",
+    }).get_json()
+    second_payment_export = client.post(payment_export_url, json={
+        **payment_export_body, "preview_token": second_payment_preview["preview_token"],
+    })
+    assert first_payment_export.status_code == 200 and len(first_payment_export.data) > 10000
+    assert first_payment_export.data == second_payment_export.data
+    assert "wordprocessingml.document" in first_payment_export.content_type
+    xcom_payment_document = DocxDocument(io.BytesIO(first_payment_export.data))
+    xcom_payment_text = "\n".join(
+        [paragraph.text for paragraph in xcom_payment_document.paragraphs]
+        + [
+            cell.text for table in xcom_payment_document.tables
+            for row in table.rows for cell in row.cells
+        ]
+    )
+    for required_text in (
+        "ĐỀ NGHỊ THANH TOÁN", "CÔNG TY TNHH BOT QC", "364", "427", "522",
+        "35.451.000", "0000000001", "NGƯỜI LẬP QC",
+    ):
+        assert required_text in xcom_payment_text, required_text
+    assert any(
+        table.rows and table.rows[0]._tr.xpath("./w:trPr/w:tblHeader")
+        for table in xcom_payment_document.tables
+    )
+    xcom_payment_result = (
+        "1,313 actual meals / exact tariffs / single-use preview / deterministic DOCX passed"
+    )
+
     # Normalized kitchen/menu/cost/XCOM/PO manual flow remains backward compatible.
     assert client.put("/api/kitchen-units/POT", json={"xcom_code": "XCOM-POT"}).status_code == 200
     assert client.put("/api/dated-prices/I000060", json={
@@ -1001,6 +1486,41 @@ def main():
     approved_po_book = load_workbook(io.BytesIO(kitchen_po.data), data_only=True)
     assert approved_po_book.active.cell(1, 1).value == "PO XƯỞNG CƠM – ĐÃ DUYỆT"
     approved_po_book.close()
+    with server.db() as conn:
+        conn.execute(
+            """INSERT INTO kitchen_labor_costs(work_date,kitchen,amount,source,updated_at)
+               VALUES('2026-08-30','POT',100000,'QC-LABOR',?)""",
+            (server.now_iso(),),
+        )
+        costed_plan = contract_modules.meal_plan_payload(conn, "2026-08-30")[0]
+    assert costed_plan["labor_cost"] == 100000
+    assert costed_plan["total_cost"] == costed_plan["food_cost"] + costed_plan["other_cost"] + 100000
+    assert client.put("/api/dated-prices/I000060", json={
+        "period": "2026-13", "price_group": "HATRAN", "price_value": 16000,
+    }).status_code == 400
+    assert client.put("/api/dated-prices/I000060", json={
+        "period": "2026-10", "price_group": "HATRAN", "price_value": 0,
+    }).status_code == 400
+    # A timeless catalogue HATRAN value must not be borrowed into a new month.
+    missing_period_plan = client.post("/api/kitchen/plans", json={
+        "work_date": "2026-10-01", "kitchen": "POT", "shift": "Trưa",
+        "meal_count": 10, "meal_price": 25000,
+        "items": [{"dish_name": "Canh", "product_code": "I000060", "norm_qty": 0.08}],
+    })
+    assert missing_period_plan.status_code == 200
+    missing_period_id = missing_period_plan.get_json()["id"]
+    assert any("đúng kỳ 2026-10" in warning for warning in missing_period_plan.get_json()["warnings"])
+    assert client.post(f"/api/kitchen/plans/{missing_period_id}/approve").status_code == 400
+    assert client.put("/api/dated-prices/I000060", json={
+        "period": "2026-10", "price_group": "HATRAN", "price_value": 17000,
+    }).status_code == 200
+    repriced = client.post("/api/kitchen/plans", json={
+        "id": missing_period_id, "work_date": "2026-10-01", "kitchen": "POT", "shift": "Trưa",
+        "meal_count": 10, "meal_price": 25000,
+        "items": [{"dish_name": "Canh", "product_code": "I000060", "norm_qty": 0.08}],
+    })
+    assert repriced.status_code == 200
+    assert client.post(f"/api/kitchen/plans/{missing_period_id}/approve").status_code == 200
     unmapped_plan = client.post("/api/kitchen/plans", json={
         "work_date": "2026-08-31", "kitchen": "CHUA-GHEP", "shift": "Trưa",
         "meal_count": 10, "meal_price": 25000,
@@ -1029,11 +1549,23 @@ def main():
     qc_pay = next(row for row in payroll.get_json()["items"] if row["employee_code"] == "NVQC")
     assert qc_pay["net_salary"] > 0
     attendance_source = ROOT / "bosung.30.8.26" / "CHẤM CÔNG+ SUẤT ĂN  2026" / "CHẤM CÔNG T8.2026.xlsx"
+    locked_attendance_import = client.post("/api/attendance/import")
+    assert locked_attendance_import.status_code == 410
     with attendance_source.open("rb") as handle:
-        imported_attendance = client.post(
-            "/api/attendance/import", data={"file": (handle, attendance_source.name)},
+        attendance_preview = client.post(
+            "/api/attendance/import/preview",
+            data={"period": "2026-08", "file": (handle, attendance_source.name)},
             content_type="multipart/form-data",
         )
+    assert attendance_preview.status_code == 200, attendance_preview.get_data(as_text=True)
+    attendance_preview_data = attendance_preview.get_json()
+    assert attendance_preview_data["can_confirm"] is True
+    assert attendance_preview_data["month"] == "2026-08"
+    assert attendance_preview_data["counts"]["attendance_entries"] > 0
+    assert attendance_preview_data["counts"]["labor_cost_entries"] > 0
+    imported_attendance = client.post("/api/attendance/import/confirm", json={
+        "token": attendance_preview_data["token"], "confirmed": True,
+    })
     assert imported_attendance.status_code == 200, imported_attendance.get_data(as_text=True)
     assert imported_attendance.get_json()["attendance_entries"] > 0
     assert imported_attendance.get_json()["labor_cost_entries"] > 0
@@ -1159,13 +1691,74 @@ def main():
         assert repeat_opening_confirm.get_json()["updated"] == 334
         actual_opening_result = "395 rows / 334 TDP codes / signed quantity and VND value reconciled"
 
+    actual_payables_source = ROOT / "bosung.30.8.26" / "Công nợ phải trả Thành Đạt Phát.xlsx"
+    actual_payables_result = "not_present"
+    if actual_payables_source.exists():
+        assert hashlib.sha256(actual_payables_source.read_bytes()).hexdigest().upper() == (
+            "BC54C62E7B7141BA1846EB5BD7EEC9E11B9CC8DA68FB138D0EA0F0CDD7BAF473"
+        )
+        with server.db() as conn:
+            conn.execute(
+                """INSERT INTO historical_payable_lines(
+                       purchase_date,kitchen,item_name,qty,unit,supplier,buy_price,actual_qty,
+                       amount,source_file,source_sheet,source_row,source_hash,created_at,updated_at
+                   ) VALUES('2026-01-01','QC','Dòng snapshot cũ',1,'kg','QC',1,1,1,
+                            'old-renamed.xlsx','Data',2,'OLDHASH',?,?)""",
+                (server.now_iso(), server.now_iso()),
+            )
+        with actual_payables_source.open("rb") as handle:
+            actual_payables_response = client.post(
+                "/api/debts/payables/import/preview",
+                data={"file": (handle, actual_payables_source.name)},
+                content_type="multipart/form-data",
+            )
+        assert actual_payables_response.status_code == 200, actual_payables_response.get_data(as_text=True)
+        actual_payables = actual_payables_response.get_json()
+        assert actual_payables["can_confirm"] is True
+        assert actual_payables["counts"] == {
+            "total": 9976, "ready": 9975, "skipped": 1, "errors": 0,
+            "warnings": 51, "suppliers": 28,
+        }
+        assert len(actual_payables["issues"]) == 51
+        assert any(item["source_row"] > 200 for item in actual_payables["issues"])
+        assert abs(actual_payables["totals"]["amount"] - 2327247386.1) < 0.01
+        assert client.post(
+            "/api/debts/payables/import/confirm", json={"token": actual_payables["token"]},
+        ).status_code == 400
+        actual_payables_confirm = client.post(
+            "/api/debts/payables/import/confirm",
+            json={"token": actual_payables["token"], "confirmed": True},
+        )
+        assert actual_payables_confirm.status_code == 200
+        assert actual_payables_confirm.get_json()["inserted"] == 9975
+        assert actual_payables_confirm.get_json()["replaced"] == 1
+        with server.db() as conn:
+            assert conn.execute("SELECT COUNT(*) n FROM historical_payable_lines").fetchone()["n"] == 9975
+            assert not conn.execute(
+                "SELECT 1 FROM historical_payable_lines WHERE source_hash='OLDHASH'"
+            ).fetchone()
+        with actual_payables_source.open("rb") as handle:
+            repeat_payables = client.post(
+                "/api/debts/payables/import/preview",
+                data={"file": (handle, "renamed-payables.xlsx")},
+                content_type="multipart/form-data",
+            ).get_json()
+        repeat_payables_confirm = client.post(
+            "/api/debts/payables/import/confirm",
+            json={"token": repeat_payables["token"], "confirmed": True},
+        )
+        assert repeat_payables_confirm.status_code == 200
+        assert repeat_payables_confirm.get_json()["inserted"] == 0
+        assert repeat_payables_confirm.get_json()["unchanged"] == 9975
+        actual_payables_result = "9,976 rows / 9,975 payable lines / 0 errors / repeat safe"
+
     # Multi-period debts, payment request and approval-gated print dry-run.
     debts = client.get("/api/debts?from=2026-08-01&to=2026-08-31")
     assert debts.status_code == 200 and "HATRAN" in debts.get_json()["contractors"]
     blank_settings = client.put("/api/document-settings", json={"payment_bank_account": ""})
     assert blank_settings.status_code == 200
-    blocked_request = client.get("/api/export/payment-request/HATRAN?from=2026-08-01&to=2026-08-31")
-    assert blocked_request.status_code == 409 and "Cấu hình" in blocked_request.get_json()["error"]
+    frozen_request = client.get("/api/export/payment-request/HATRAN?from=2026-08-01&to=2026-08-31")
+    assert frozen_request.status_code == 200, frozen_request.get_data(as_text=True)
     restored_settings = client.put("/api/document-settings", json={
         "payment_requester": "VŨ THỊ THỤY",
         "payment_bank_name": "Ngân hàng TMCP Ngoại Thương Việt Nam",
@@ -1174,7 +1767,14 @@ def main():
     assert restored_settings.status_code == 200
     payment_request = client.get("/api/export/payment-request/HATRAN?from=2026-08-01&to=2026-08-31")
     assert payment_request.status_code == 200 and len(payment_request.data) > 1000
-    payment_document = DocxDocument(io.BytesIO(payment_request.data))
+    assert payment_request.content_type.startswith("application/zip")
+    with zipfile.ZipFile(io.BytesIO(payment_request.data)) as payment_bundle:
+        bundle_names = payment_bundle.namelist()
+        payment_docx_name = next(name for name in bundle_names if name.endswith(".docx"))
+        assert any(name.endswith(".xlsx") for name in bundle_names)
+        assert "THONG_TIN_DOI_CHIEU.txt" in bundle_names
+        payment_docx_bytes = payment_bundle.read(payment_docx_name)
+    payment_document = DocxDocument(io.BytesIO(payment_docx_bytes))
     payment_text = "\n".join(
         [paragraph.text for paragraph in payment_document.paragraphs]
         + [cell.text for table in payment_document.tables for row in table.rows for cell in row.cells]
@@ -1186,11 +1786,19 @@ def main():
     ):
         assert required_text in payment_text, required_text
     assert "................................" not in payment_text
+    assert payment_document.tables[1].rows[0]._tr.xpath("./w:trPr/w:tblHeader")
     prepared = client.post(f"/api/print/prepare/{manual_id}")
     assert prepared.status_code == 200, prepared.get_data(as_text=True)
     assert client.post(f"/api/print/approve/{manual_id}").status_code == 200
     print_dry_run = client.post(f"/api/print/run/{manual_id}", json={"dry_run": True})
-    assert print_dry_run.status_code == 200 and print_dry_run.get_json()["jobs"] == 4
+    assert print_dry_run.status_code == 200 and print_dry_run.get_json()["jobs"] == 1
+    assert print_dry_run.get_json()["status"] == "verified"
+    print_pdf = client.get(f"/api/print/pdf/{manual_id}")
+    assert print_pdf.status_code == 200 and print_pdf.data.startswith(b"%PDF-")
+    assert print_pdf.headers["Content-Type"].startswith("application/pdf")
+    # ``send_file`` keeps the Windows file handle open until the test response is
+    # explicitly closed.  Release it before removing the isolated print folder.
+    print_pdf.close()
 
     operations = client.get("/api/operations/bootstrap?as_of=2026-08-31&month=2026-08&date=2026-08-30")
     assert operations.status_code == 200
@@ -1222,8 +1830,11 @@ def main():
         "kitchenWorkbookImport": "passed",
         "actualCustomerKitchenWorkbook": actual_kitchen_result,
         "actualMealAttendanceWorkbook": "205 daily kitchen/shift rows / 6,020 meals / repeat safe",
+        "xcomPaymentDocuments": xcom_payment_result,
         "actualOpeningInventoryWorkbook": actual_opening_result,
         "actualCustomerCatalogWorkbook": catalog_import_result,
+        "actualCustomerTaxTemplates": tax_template_result,
+        "actualHistoricalPayablesWorkbook": actual_payables_result,
         "attendancePayrollLegacyImport": "passed",
         "paymentRequestAndPrintApproval": "passed",
     }, ensure_ascii=False, indent=2))
