@@ -22,8 +22,8 @@ def main():
         from flask import Flask, jsonify
         from waitress import serve
         bootstrap = Flask('tdp_bootstrap')
-        bootstrap.add_url_rule('/health', view_func=lambda: jsonify(ok=True, database_ready=False, bootstrap=True))
-        bootstrap.add_url_rule('/', view_func=lambda: ('Đang chuẩn bị dữ liệu. Vui lòng quay lại sau.', 503))
+        bootstrap.add_url_rule('/health', endpoint='health', view_func=lambda: jsonify(ok=True, database_ready=False, bootstrap=True))
+        bootstrap.add_url_rule('/', endpoint='preparing', view_func=lambda: ('Đang chuẩn bị dữ liệu. Vui lòng quay lại sau.', 503))
         def await_upload():
             while not (data / '.bootstrap-ready').exists():
                 time.sleep(2)

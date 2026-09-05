@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import gzip
 import secrets
 import threading
 import time
@@ -73,7 +74,7 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
                         error='Đã thử quá nhiều lần. Vui lòng thử lại sau 10 phút.'), 429
                 attempts[peer].append(now)
             valid_password = check_password_hash(password_hash, request.form.get('password', ''))
-            if hmac.compare_digest(request.form.get('username', ''), username) and valid_password:
+            if hmac.compare_digest(request.form.get('username', '').encode(), username.encode()) and valid_password:
                 with lock:
                     attempts.pop(peer, None)
                 session.clear()
@@ -96,4 +97,16 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
         response.headers['Cache-Control'] = 'private, no-store'
         if secure:
             response.headers['Strict-Transport-Security'] = 'max-age=31536000'
+        if (response.status_code == 200 and request.accept_encodings['gzip'] > 0
+                and not response.headers.get('Content-Encoding') and not response.headers.get('Content-Range')
+                and response.mimetype in {'application/json', 'application/javascript', 'text/javascript', 'text/css', 'text/html'}):
+            response.direct_passthrough = False
+            payload = response.get_data()
+            if len(payload) >= 1024:
+                compressed = gzip.compress(payload, compresslevel=5)
+                if len(compressed) < len(payload):
+                    response.set_data(compressed)
+                    response.headers['Content-Encoding'] = 'gzip'
+                    response.vary.add('Accept-Encoding')
+                    response.headers.pop('ETag', None)
         return response
