@@ -55,3 +55,17 @@ class CloudAuthTests(unittest.TestCase):
         self.assertEqual(response.headers['Content-Encoding'], 'gzip')
         self.assertIn(b'fixture-value', gzip.decompress(response.data))
         self.assertIn('Accept-Encoding', response.headers['Vary'])
+
+    def test_railway_https_survives_waitress_proxy_processing(self):
+        from waitress.proxy_headers import proxy_headers_middleware
+        from .cloud_server import PROXY_OPTIONS
+        self.app.wsgi_app = proxy_headers_middleware(self.app.wsgi_app, **PROXY_OPTIONS)
+        headers = {'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '203.0.113.9'}
+        page = self.client.get('/login', headers=headers)
+        token = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        result = self.client.post('/login', headers=headers,
+            data={'csrf': token, 'username': 'admin', 'password': 'fixture-password'})
+        self.assertEqual(result.status_code, 302)
+        result = self.client.post('/api/private', headers={**headers, 'Origin': 'https://localhost'})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(self.client.post('/api/private', headers={**headers, 'Origin':'https://bad.invalid'}).status_code, 403)

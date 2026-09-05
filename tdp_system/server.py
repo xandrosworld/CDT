@@ -28,7 +28,7 @@ from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory, session
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -4483,7 +4483,9 @@ def api_backup_status():
 def api_backup():
     # A consistent SQLite copy while the app is live.
     try:
-        if not ipaddress.ip_address(request.remote_addr or "").is_loopback:
+        hosted_admin = app.config.get("TDP_CLOUD_ADMIN_USER")
+        authenticated_admin = bool(hosted_admin and session.get("user") == hosted_admin)
+        if not authenticated_admin and not ipaddress.ip_address(request.remote_addr or "").is_loopback:
             return jsonify({
                 "ok": False,
                 "error": "Chỉ được tải toàn bộ bản sao dữ liệu trực tiếp trên máy chủ",

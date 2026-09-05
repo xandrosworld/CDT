@@ -7,6 +7,12 @@ import threading
 import time
 from pathlib import Path
 
+PROXY_OPTIONS = {
+    'trusted_proxy': '*',
+    'trusted_proxy_count': 1,
+    'trusted_proxy_headers': {'x-forwarded-for', 'x-forwarded-proto'},
+}
+
 
 def main():
     if hasattr(time, 'tzset'):
@@ -54,11 +60,10 @@ def main():
     except ImportError:
         import server
         from cloud_auth import install_cloud_auth
-    from werkzeug.middleware.proxy_fix import ProxyFix
     from waitress import serve
 
-    # Railway terminates TLS; trust its immediate proxy for scheme and client IP.
-    server.app.wsgi_app = ProxyFix(server.app.wsgi_app, x_for=1, x_proto=1)
+    # Configure Waitress itself: it otherwise strips proxy headers before Flask.
+    # The service is reachable publicly only through Railway's immediate proxy.
     install_cloud_auth(server.app, username=os.environ.get('TDP_ADMIN_USER', ''),
         password_hash=os.environ.get('TDP_ADMIN_PASSWORD_HASH', ''),
         secret_key=os.environ.get('TDP_SESSION_SECRET', ''))
@@ -73,7 +78,8 @@ def main():
     stop, worker = server.start_backup_worker(server.auto_backup)
     print('TDP hosted application ready; persistent database initialized', flush=True)
     try:
-        serve(server.app, host='0.0.0.0', port=int(os.environ.get('PORT', '8080')), threads=4)
+        serve(server.app, host='0.0.0.0', port=int(os.environ.get('PORT', '8080')),
+              threads=4, **PROXY_OPTIONS)
     finally:
         stop.set()
         worker.join(timeout=2)

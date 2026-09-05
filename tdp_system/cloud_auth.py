@@ -32,7 +32,7 @@ button{background:#087f73;color:white;border:0;margin-top:24px;cursor:pointer}
 def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True):
     if not username or not password_hash.startswith(('scrypt:', 'pbkdf2:')) or len(secret_key) < 32:
         raise RuntimeError('Hosted mode requires a username, password hash and strong session secret')
-    app.config.update(SECRET_KEY=secret_key, SESSION_COOKIE_NAME='tdp_session',
+    app.config.update(SECRET_KEY=secret_key, TDP_CLOUD_ADMIN_USER=username, SESSION_COOKIE_NAME='tdp_session',
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SECURE=secure,
                       SESSION_COOKIE_SAMESITE='Lax', PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
     attempts = defaultdict(deque)
