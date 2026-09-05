@@ -1,5 +1,6 @@
 import re
 import gzip
+import io
 import unittest
 
 from flask import Flask
@@ -69,3 +70,14 @@ class CloudAuthTests(unittest.TestCase):
         result = self.client.post('/api/private', headers={**headers, 'Origin': 'https://localhost'})
         self.assertEqual(result.status_code, 200)
         self.assertEqual(self.client.post('/api/private', headers={**headers, 'Origin':'https://bad.invalid'}).status_code, 403)
+
+    def test_streamed_index_still_loads_with_logout_and_compression(self):
+        from flask import send_file
+        html = '<html><button class="user-chip" title="Hai người có thể cùng sử dụng">VT</button>' + 'x'*2000 + '</html>'
+        self.app.add_url_rule('/', endpoint='index', view_func=lambda: send_file(io.BytesIO(html.encode()), mimetype='text/html'))
+        self.login()
+        response = self.client.get('/', headers={'Accept-Encoding':'gzip'})
+        self.assertEqual(response.status_code, 200)
+        result = gzip.decompress(response.data).decode()
+        self.assertIn('action="/logout"', result)
+        self.assertNotIn('>VT</button>', result)

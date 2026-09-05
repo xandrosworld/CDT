@@ -92,6 +92,7 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
     @app.after_request
     def cloud_headers(response):
         if request.path == '/' and response.status_code == 200 and response.mimetype == 'text/html':
+            response.direct_passthrough = False
             html = response.get_data(as_text=True)
             old = '<button class="user-chip" title="Hai người có thể cùng sử dụng">VT</button>'
             response.set_data(html.replace(old,
