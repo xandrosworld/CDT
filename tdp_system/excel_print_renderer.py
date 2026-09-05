@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -131,6 +132,50 @@ def verify_excel_pdf(
     }
 
 
+def _export_libreoffice_sheets(sources, *, paper, render_dir):
+    """Render preserved workbook artwork on Linux using isolated Calc profiles."""
+    from openpyxl import load_workbook
+    executable = shutil.which('libreoffice') or shutil.which('soffice')
+    if not executable:
+        raise ExcelPrintError('Máy chủ chưa cài bộ chuyển PDF LibreOffice')
+    rendered = []
+    profile = render_dir / 'lo-profile'
+    for source_index, source in enumerate(sources, 1):
+        probe = load_workbook(source['path'], read_only=False, data_only=False)
+        names = [sheet.title for sheet in probe if sheet.sheet_state == 'visible']
+        probe.close()
+        for sheet_index, name in enumerate(names, 1):
+            workbook = load_workbook(source['path'], read_only=False, data_only=False)
+            try:
+                selected = workbook[name]
+                for sheet in workbook:
+                    sheet.sheet_state = 'visible' if sheet.title == name else 'hidden'
+                workbook.active = workbook.index(selected)
+                selected.page_setup.paperSize = str(EXCEL_PAPER_SIZES[paper])
+                selected.page_setup.fitToWidth = 1
+                selected.sheet_properties.pageSetUpPr.fitToPage = True
+                path = render_dir / f'{source_index:02d}_{sheet_index:03d}.xlsx'
+                workbook.save(path)
+            finally:
+                workbook.close()
+            try:
+                result = subprocess.run([executable, '-env:UserInstallation=' + profile.as_uri(),
+                    '--headless', '--nologo', '--nodefault', '--norestore', '--convert-to',
+                    'pdf:calc_pdf_Export', '--outdir', str(render_dir), str(path)],
+                    capture_output=True, timeout=120)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise ExcelPrintError('Chưa chuyển được PDF trên máy chủ; hãy thử lại.') from exc
+            pdf_path = path.with_suffix('.pdf')
+            if result.returncode or not pdf_path.is_file():
+                raise ExcelPrintError('Bộ chuyển PDF không tạo được chứng từ. File Excel vẫn có thể tải.')
+            rendered.append({'path': pdf_path, 'document_type': source['document_type'],
+                'title': source['title'], 'workbook': source['path'].name, 'sheet': name,
+                'pages': _raw_pdf_page_count(pdf_path)})
+    if not rendered:
+        raise ExcelPrintError('Không có trang Excel hiển thị để tạo PDF')
+    return rendered
+
+
 def _export_visible_sheets(
     sources: Sequence[Mapping[str, Any]],
     *,
@@ -138,7 +183,7 @@ def _export_visible_sheets(
     render_dir: Path,
 ) -> list[dict[str, Any]]:
     if os.name != "nt":
-        raise ExcelPrintError("Tạo PDF đúng mẫu cần chạy trên Windows có Microsoft Excel")
+        return _export_libreoffice_sheets(sources, paper=paper, render_dir=render_dir)
     try:
         import pythoncom
         import win32com.client

@@ -4,6 +4,8 @@
 > chuyển sang web Railway cho khách, không tiếp tục bàn giao EXE như trước.
 > Mốc Git này chưa phải bản đã triển khai/nghiệm thu Railway. Xem **13.12**.
 
+> **Đang triển khai Railway qua GitHub theo chỉ đạo tiếp theo:** xem **13.13**.
+
 > **Lỗi 1 (BUG-0509-04): đã sửa và kiểm chứng bằng EXE ứng viên `2026.09.05.2`.**
 > Chạy chính EXE trên bản sao DB cũ đạt **257 → 266**, mở lại lần hai vẫn đúng;
 > danh sách/API và Excel khớp tập hóa đơn, tổng tiền **919.234.874 đồng**.
@@ -787,3 +789,14 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Lần này lưu mốc source; chưa triển khai Railway. Bước chuyển web cần kiểm tra đường dẫn DB/lưu trữ bền vững, sao lưu/khôi phục và nâng cấp dữ liệu, cấu hình môi trường, đăng nhập/phân quyền trước khi mở Internet, cùng các phụ thuộc Windows/in Excel/PDF. `requirements.txt` hiện còn `pywin32` và công cụ đóng gói desktop; không coi source desktop hiện tại là cấu hình Linux đã kiểm chứng.
 - Kiểm tra trước commit: chạy **69 module / 520 test trong 417,141 giây**, **519 đạt, 1 thất bại** do test `test_payroll_ui` cũ vẫn yêu cầu hiện hai menu đã được chủ dự án quyết định ẩn ở mục 2.1 và khóa cứng phiên bản JS cũ. Đã cập nhật test theo quyết định này: hai menu không hiện, kho thực tế vẫn hiện, phần triển khai/API cũ vẫn còn. Chạy riêng test vừa sửa **đạt 1/1**; không thay code sản phẩm để vượt test, không chạy lại toàn bộ 520 sau thay đổi chỉ ở test.
 - Log bộ tổng lưu local: `D:\TDP_BUG1_QA\temp\tdp-git-checkpoint-mc7o2k6a\tests.log`. Bộ test dùng DB/exports cô lập và cấu hình connector offline. Kiểm tra cú pháp các file Python trong commit và **24 file JS/MJS** đạt; `git diff --cached --check` đạt sau chuẩn hóa khoảng trắng tài liệu. Kiểm tra các giá trị bí mật thực trong `.env` không xuất hiện ở file staged; các vị trí regex báo nghi vấn đều là placeholder kiểm thử. Danh mục CCCD, DB và `.env` vẫn bị Git bỏ qua.
+
+### 13.13. Triển khai Railway qua GitHub — đang thực hiện
+
+- Chủ dự án đã cho phép deploy, cấu hình biến, chuyển DB/tài nguyên lên Railway rồi kiểm thử như người dùng thật. Chỉ đạo bổ sung: **deploy từ `xandrosworld/CDT`, nhánh `main`**, để push sau tự cập nhật. Không dùng upload source local làm nguồn triển khai.
+- Railway đã đăng nhập; project `thanh-dat-phat` (`6a082880-d1c8-4151-aa58-a6e5c15097b1`), environment `production` (`a13cdd3b-9265-43aa-b435-2fdddf5882bf`), service `tdp-web` (`352a9558-f37a-4777-a14f-facc9e894323`), volume `tdp-web-volume` (`d14068eb-edb4-48aa-bc32-2fb2aa7a804b`) gắn `/data`.
+- Docker Linux riêng dùng Python/Waitress, đọc `PORT`, một instance; SQLite `/data/tdp.sqlite3`, file xuất `/data/exports`, mẫu/dữ liệu tham chiếu `/data/assets`. Không đóng DB/bí mật vào image hoặc Git. Source có cổng đăng nhập bằng mật khẩu băm, cookie HttpOnly/Secure, chặn ghi khác nguồn và hạn chế thử mật khẩu; cấu hình thiếu thì dừng.
+- Bản chuyển DB lấy từ dữ liệu local đã có, tạo snapshot và sửa ngày có bằng chứng; không được diễn đạt là DB mới nhất trên máy khách. Chuẩn bị 75 tài nguyên Office cần dùng/đối chiếu, tổng DB+tài nguyên khoảng 81 MB; chưa phải toàn bộ file tải về/media/build desktop.
+- Railway cần container chạy để upload volume. Bước bootstrap chỉ trả trạng thái chuẩn bị, không mở API nghiệp vụ và không tạo DB trống. Chỉ khởi động ứng dụng thật sau khi upload xong DB/tài nguyên và marker; DB thiếu ở chế độ vận hành thì dừng, không âm thầm tạo lại.
+- Thêm chuyển Excel→PDF bằng LibreOffice cho Linux; giữ workbook/mẫu và render từng sheet hiển thị. Cần kiểm tra bố cục PDF thực tế trên Railway; không coi tương đương Microsoft Excel 100% khi chưa có ảnh đối chiếu.
+- Kiểm tra ban đầu: **7 test đạt** về đăng nhập, CSRF, chống thử mật khẩu và bộ render PDF hiện có. Đang kiểm tra deploy, chuyển dữ liệu, khởi động lại, xuất file và trình duyệt; chưa ghi thành công trước kết quả.
+- Đã đọc lại Google Sheet `1c1C4Imexri4VRolrNSSmWmSnpmM0hgj0TCCbm9if3D8`, tab `Khách hàng kiểm tra`, A1:I22: 14 mục vẫn `Chưa chốt` / `Đã sửa sau cuộc gọi` / `Chưa kiểm tra`. Không sửa cột nghiệm thu của khách; dùng cùng README để đối chiếu sau deploy.

@@ -1,0 +1,17 @@
+**
+!Dockerfile
+!requirements-web.txt
+!tdp_system/
+!tdp_system/*.py
+tdp_system/test_*.py
+tdp_system/browser_*.py
+tdp_system/qc_*.py
+!tdp_system/static/
+!tdp_system/static/**
+!tdp_system/templates/
+!tdp_system/templates/daily_order_template.xlsx
+!tdp_system/templates/bot_payment_template.xlsx
+!tdp_system/templates/payroll_template.xlsx
+!tdp_system/templates/simple_payment_request_template.docx
+!demo_tdp/
+!demo_tdp/styles.css
