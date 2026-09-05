@@ -2358,7 +2358,10 @@ def api_minvoice_status():
             },
             "read_only": True,
             "status_check_read_only": True,
-            "draft_save_available": True,
+            "draft_save_available": not account.get('test_environment', False),
+            "test_environment": account.get('test_environment', False),
+            "warning": ('Đang kết nối máy chủ kiểm thử M-Invoice; cần URL và tài khoản chính thức của Thành Đạt Phát.'
+                        if account.get('test_environment', False) else ''),
             "automatic_sign_or_issue": False,
             "official_api": True,
         })

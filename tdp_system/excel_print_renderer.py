@@ -27,7 +27,7 @@ from reportlab.lib.pagesizes import A4, A5
 
 EXCEL_PAPER_SIZES = {"A4": 9, "A5": 11}
 PDF_PAPER_SIZES = {"A4": A4, "A5": A5}
-FORMAT_VERSION = "tdp-excel-artwork-pdf-v1"
+FORMAT_VERSION = "tdp-excel-artwork-pdf-v2"
 
 
 class ExcelPrintError(RuntimeError):
@@ -150,6 +150,12 @@ def _export_libreoffice_sheets(sources, *, paper, render_dir):
                 selected = workbook[name]
                 for sheet in workbook:
                     sheet.sheet_state = 'visible' if sheet.title == name else 'hidden'
+                    sheet.sheet_view.tabSelected = sheet.title == name
+                    if sheet.title != name:
+                        # Calc exports hidden XLSX sheets that retain print ranges.
+                        # Keep formula dependencies, but remove their print definitions
+                        # only in this disposable rendering copy.
+                        sheet.print_area = None
                 workbook.active = workbook.index(selected)
                 selected.page_setup.paperSize = str(EXCEL_PAPER_SIZES[paper])
                 selected.page_setup.fitToWidth = 1
@@ -161,7 +167,8 @@ def _export_libreoffice_sheets(sources, *, paper, render_dir):
             try:
                 result = subprocess.run([executable, '-env:UserInstallation=' + profile.as_uri(),
                     '--headless', '--nologo', '--nodefault', '--norestore', '--convert-to',
-                    'pdf:calc_pdf_Export', '--outdir', str(render_dir), str(path)],
+                    'pdf:calc_pdf_Export:{"SinglePageSheets":{"type":"boolean","value":"false"}}',
+                    '--outdir', str(render_dir), str(path)],
                     capture_output=True, timeout=120)
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise ExcelPrintError('Chưa chuyển được PDF trên máy chủ; hãy thử lại.') from exc

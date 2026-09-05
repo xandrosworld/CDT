@@ -189,6 +189,15 @@ class InvoiceOutputSyncTests(unittest.TestCase):
             **kwargs,
         )
 
+    def test_provider_test_environment_cannot_enter_business_database(self):
+        client = OutputFixtureMsmi([output_invoice(1)])
+        client.is_test_environment = True
+        with self.assertRaisesRegex(InvoiceOutputSyncError, 'kiểm thử'):
+            self.sync(client)
+        self.assertEqual(client.calls, [])
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM outgoing_source_invoices').fetchone()[0], 0)
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
+
     def test_documented_minvoice_schema_and_status_contract_are_normalized(self):
         cases = {
             (0, 4): "issued",

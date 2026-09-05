@@ -7723,7 +7723,7 @@ def register_contract_routes(app, ctx):
             }
             for row in rows:
                 row["buyer"] = profiles.get(row["contractor"])
-            return jsonify({"ok": True, "items": rows})
+            return jsonify({"ok": True, "items": rows, "buyer_profiles": profiles})
 
     @app.put("/api/outgoing-buyers/<contractor>")
     def api_outgoing_buyer(contractor):

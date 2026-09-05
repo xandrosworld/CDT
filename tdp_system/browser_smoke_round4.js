@@ -64,6 +64,21 @@ async function main(){
   assert.equal(await ev('document.documentElement.scrollWidth>innerWidth'),false);
   await ev('new Promise(r=>setTimeout(r,600))');
   fs.writeFileSync('D:/TDP_ROUND4/printing-browser.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await click('[data-view="documents"]');
+  await wait(`document.querySelector('#paymentRequestForm select[name=contractor] option[value]:not([value=""])')`);
+  const party = await ev(`document.querySelector('#paymentRequestForm select[name=contractor] option[value]:not([value=""])').value`);
+  await set('#paymentRequestForm input[name=from]', '2026-08-01');
+  await set('#paymentRequestForm input[name=to]', '2026-08-31');
+  await set('#paymentRequestForm select[name=contractor]', party);
+  await wait(`document.querySelector('#buyerProfileForm')`);
+  await set('#buyerProfileForm input[name=legal_name]', 'Công ty kiểm thử');
+  await set('#buyerProfileForm input[name=tax_code]', '0209999999');
+  await set('#buyerProfileForm input[name=address]', 'Địa chỉ kiểm thử');
+  await ev(`document.querySelector('#buyerProfileForm').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))`);
+  await wait(`fetch('/api/outgoing-invoices').then(r=>r.json()).then(r=>r.buyer_profiles[${JSON.stringify(party)}]?.tax_code==='0209999999')`);
+  await click('[data-view="orders"]');await click('[data-view="documents"]');
+  assert.equal(await ev(`document.querySelector('#paymentRequestForm input[name=from]').value`),'2026-08-01');
+  assert.equal(await ev(`document.querySelector('#buyerProfileForm input[name=tax_code]').value`),'0209999999');
   assert.deepEqual(errors,[]);
   console.log('Round 4 browser PASS: inline sheets, selection, filters, white sticky headers, zoom, one-click print, no navigation, 1440/1024.');
  }finally{ws.close();}

@@ -1,0 +1,56 @@
+# Kiểm tra nghiệm thu trên Railway
+
+Ứng dụng: https://tdp-web-production-5a66.up.railway.app/login
+
+Checklist khách hàng: https://docs.google.com/spreadsheets/d/1c1C4Imexri4VRolrNSSmWmSnpmM0hgj0TCCbm9if3D8/edit?gid=1127847104
+
+Ngày kiểm tra: 05/09/2026. Kết quả kỹ thuật dưới đây không thay cho xác nhận của khách trong Google Sheet. Tài khoản đăng nhập được bàn giao riêng; tài liệu này không chứa mật khẩu hoặc khóa kết nối.
+
+## Trình tự khách kiểm tra
+
+Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu thử riêng hoặc dữ liệu nghiệp vụ đã được người phụ trách xác nhận. Kiểm thử tự động đã dùng cơ sở dữ liệu riêng.
+
+| Mục | Thao tác và tiêu chí kiểm tra | Bằng chứng kỹ thuật |
+|---|---|---|
+| 1. Đơn hàng | Lọc dòng lỗi, tìm hàng, cuộn bảng. Tiêu đề giữ vị trí; tổng phản ánh đúng các dòng đang lọc. | Kiểm thử nghiệp vụ và trình duyệt lượt 2. |
+| 2. Nhà cung cấp | Chọn NCC, sao chép đơn, kiểm tra đánh dấu đã đặt sau khi sao chép thành công; mở lại khi cần. | Lượt 2; kiểm tra thêm file đặt hàng 03/09 trên bản sao DB. |
+| 3. Menu | Chuyển các màn hình đang sử dụng; không còn menu thừa đã thống nhất. Dữ liệu cũ không bị xóa. | Lượt 5; kiểm tra các bảng nghiệp vụ trước/sau triển khai. |
+| 4. Xem chứng từ | Mở phiếu giao, bảng kê/biên nhận, báo giá, hồ sơ thanh toán. Xem trực tiếp, đổi sheet, cuộn và thu/phóng. | Lượt 4; xuất Excel và PDF phiếu giao thật trên Railway. |
+| 5. Chọn và in nhiều | Lọc bếp/ngày, chọn một hoặc nhiều phiếu, bỏ chọn, xem trước và in. Chỉ những sheet được chọn mới xuất. | Lượt 4; kiểm tra riêng bộ chuyển PDF Linux. |
+| 6. Nội dung phiếu | Đối chiếu đơn vị, thông tin đơn vị mua/bán, địa chỉ, người nhận, chữ ký và tổng tiền làm tròn. | Kiểm thử mẫu chứng từ; PDF A4 và ảnh từng trang. |
+| 7. Hóa đơn đầu vào | Chọn 01–31/08/2026, tải nguồn. Tổng là 266 hóa đơn; ngày đúng kỳ, dòng chưa gán mã được ưu tiên hiển thị. | Nguồn mSMI thật và màn hình Railway đều trả 266; tải lại trên bản sao không trùng. |
+| 8. Hóa đơn đầu ra | Cấu hình tài khoản chính thức, chọn đúng kỳ, tải M-Invoice; khi báo còn dữ liệu, tải tiếp. Chỉ xác nhận xuất kho khi hóa đơn đủ điều kiện. | Phân trang, trạng thái và chống trùng đạt trên dữ liệu thử. **Chưa xác nhận nguồn nghiệp vụ: Railway đang trỏ máy chủ kiểm thử của nhà cung cấp.** |
+| 9. Tồn hóa đơn | Với bộ thử thiếu hàng: phân bổ phần có, giữ phần thiếu cho vòng sau, kiểm tra không âm tồn. | Lượt 1 và các bài kiểm thử kho/phân bổ. |
+| 10. Chốt tháng | Chốt, kiểm tra tồn chuyển kỳ sau; mở lại rồi chốt lại. Không sinh bản chuyển tồn trùng. | Lượt 1; kiểm thử chốt/mở/chốt và khóa kỳ. |
+| 11. Báo cáo tháng | Lọc tháng, nhà thầu, bếp; thêm bếp ở dữ liệu thử rồi đối chiếu tổng và cột động. | Lượt 3 và kiểm thử báo cáo. |
+| 12. Phải trả NCC | Kiểm tra bảng 14 cột, xuất file, ghi trả một phần/đủ, hoàn tác; kiểm tra số dư và lịch sử. | Lượt 3; các bài kiểm thử sổ phải trả và phân bổ thanh toán. |
+| 13. Phải thu | Lọc nhà thầu/bếp/tháng, kiểm tra tổng, ghi nhận thu và lịch sử trên bộ thử. | Lượt 3; kiểm thử sổ phải thu và chống ghi trùng. |
+| 14. Lưu và sao lưu | Lưu thay đổi, tải lại trang, kiểm tra trạng thái sao lưu; tải bản sao lưu và kiểm tra khả năng đọc. | Lượt 5; sao lưu SQLite thật trước/sau triển khai đều kiểm tra toàn vẹn đạt. |
+
+## Lập hồ sơ thanh toán từ hóa đơn VAT
+
+1. Vào **Chứng từ**, chọn nhà thầu, từ ngày và đến ngày độc lập với đơn đang mở.
+2. Mở **Hồ sơ người mua**, nhập đúng tên pháp lý, MST và địa chỉ; lưu. Không cần tạo dự thảo hóa đơn để khai báo hồ sơ.
+3. Kiểm tra thông tin công ty, người đề nghị và tài khoản nhận tiền trong cấu hình chứng từ.
+4. Tải hóa đơn đầu ra đúng kỳ ở màn hình hóa đơn. Các lượt tải còn dữ liệu được tiếp tục từ vị trí đã lưu.
+5. Bấm **Xem và tải bảng kê**. Hệ thống đối chiếu số/ký hiệu/ngày, MST, trạng thái nguồn, chi tiết và tổng tiền trước khi cho xuất.
+6. Với hóa đơn chưa liên kết ngày giao/bếp, file là **bảng kê hóa đơn VAT**. Chứng từ không tự tạo lịch sử giao nhận. Hóa đơn bị hủy, thay thế, điều chỉnh hoặc sai tổng phải được đối chiếu trước.
+
+## Dữ liệu cần người phụ trách xác nhận
+
+- **M-Invoice đang dùng `0106026495-999.minvoice.site`, môi trường kiểm thử của nhà cung cấp.** Cần cấu hình URL, tài khoản và mã đơn vị chính thức trong `MINVOICE_*`. Đã chặn tải dữ liệu thử vào DB vận hành; kết nối thành công với máy chủ thử không có nghĩa hóa đơn đầu ra của khách đã sẵn sàng.
+- File `Đơn hàng  03.09.2026.xlsx`: dòng đặt hàng **157** (dưa hấu) và **158** (nhãn) có lượng **−1**; dòng 158 còn thiếu mã. Cần xác nhận đó là hàng trả hay nhập nhầm và cung cấp dữ liệu đúng. Phần mềm giữ chặn các dòng này.
+- 266 hóa đơn đầu vào tháng 8 hiện gồm **264 cần gán mã** và **2 không nhập tồn**. Tải hóa đơn không đồng nghĩa đã xác nhận nhập kho. Người phụ trách cần đối chiếu mã hàng trước khi ghi kho.
+- Bản production tại lúc kiểm tra chưa có hồ sơ MST bên mua và chưa có hóa đơn đầu ra đã đồng bộ. Form hồ sơ độc lập đã được bổ sung; không tự đoán MST hoặc liên kết hóa đơn với nhà thầu.
+- Không thực hiện ký/phát hành hóa đơn thật hoặc ghi thanh toán thật trong lượt kiểm thử này.
+
+## Bằng chứng và tái kiểm tra
+
+Chi tiết sửa và kết quả mới nhất ở mục **13.15 của README-new-2.md**. Bằng chứng riêng nằm trong `D:\TDP_RAILWAY_PRIVATE\evidence`; không đưa dữ liệu hóa đơn, bản sao DB hoặc thông tin đăng nhập vào Git.
+
+```powershell
+python -m tdp_system.qa_railway_acceptance --output THU_MUC_MOI
+python -m tdp_system.qa_browser_rounds --output THU_MUC_MOI
+```
+
+Khách đánh dấu kết quả thực tế ở checklist sau khi thử từng mục. Các điểm phụ thuộc dữ liệu phía trên cần được giải quyết trước khi xác nhận nghiệm thu toàn bộ.

@@ -2499,17 +2499,31 @@
       }).join('') + '</select></label>' +
       '<label>Từ ngày<input name="from" type="date" value="' + esc(filters.from) + '" required></label>' +
       '<label>Đến ngày<input name="to" type="date" value="' + esc(filters.to) + '" required></label>' +
-      '<button class="btn btn-primary" type="submit">Xem và tải bảng kê</button></form>';
+      '<button class="btn btn-primary" type="submit">Xem và tải bảng kê</button></form>' + buyerProfileFormHtml();
+  }
+
+  function buyerProfileFormHtml() {
+    var contractor = state.paymentFilters && state.paymentFilters.contractor;
+    if (!contractor) return '<p class="muted">Chọn nhà thầu để kiểm tra hồ sơ người mua và mã số thuế liên kết hóa đơn VAT.</p>';
+    var draft = (state.buyerEdits || {})[contractor];
+    var buyer = draft || (state.buyerProfiles || {})[contractor] || {};
+    return '<details' + (draft ? ' open' : '') + '><summary>Hồ sơ người mua · ' + esc(contractor) + '</summary>' +
+      '<form id="buyerProfileForm" class="document-contractor-form" data-contractor="' + esc(contractor) + '">' +
+      [['legal_name', 'Tên pháp lý'], ['tax_code', 'Mã số thuế'], ['address', 'Địa chỉ'],
+       ['display_name', 'Tên người mua'], ['email', 'Email']].map(function (field) {
+        return '<label>' + field[1] + '<input name="' + field[0] + '" value="' + esc(buyer[field[0]] || '') + '"' +
+          (field[0] === 'address' ? ' required' : '') + '></label>';
+      }).join('') + '<button type="submit" class="btn btn-outline">Lưu hồ sơ người mua</button></form></details>';
   }
 
   function renderDocuments() {
     var d = state.data;
+    if (state.outgoingInvoices === null) setTimeout(fetchOutgoingInvoices, 0);
     if (!d.batch) {
       content.innerHTML = '<section class="card"><div class="card-body"><h3>Hồ sơ thanh toán từ hóa đơn VAT</h3>' +
         paymentRequestFormHtml() + '</div></section>' + invoicePaymentScopeHtml() + '<div id="paymentDocumentPreview"></div>';
       return;
     }
-    if (state.outgoingInvoices === null) setTimeout(fetchOutgoingInvoices, 0);
     if (state.outgoingReadiness === null && !state.outgoingReadinessLoading) setTimeout(fetchOutgoingReadiness, 0);
     if (state.documentDetailsOpen && state.outgoingSubstitutionActions === null && !state.outgoingSubstitutionLoading) {
       setTimeout(fetchOutgoingSubstitutions, 0);
@@ -3162,9 +3176,11 @@
     var synced = d.master.settings.master_synced_at || "Chưa đồng bộ";
     var m = state.minvoiceStatus;
     var minvoiceTitle = m && m.connected ? "Đã kết nối M-Invoice" : "Kiểm tra kết nối M-Invoice";
+    if (m && m.test_environment) minvoiceTitle = 'M-Invoice · máy chủ kiểm thử';
     var minvoiceText = m && m.connected
       ? "M-Invoice đang hoạt động · " + num(m.outgoing.series_count) + " ký hiệu. Có thể lưu nháp chờ ký; không tự ký/phát hành."
       : "Kiểm tra kết nối an toàn; lưu nháp cần xác nhận riêng và không bao giờ tự ký/phát hành.";
+    if (m && m.warning) minvoiceText = m.warning;
     var minvoiceCard = '<div class="card fade-in" style="margin-bottom:18px"><div class="card-head"><div><h3>' +
       esc(minvoiceTitle) + '</h3><p>' + esc(minvoiceText) + '</p></div><button class="btn btn-primary" data-action="check-minvoice">' +
       (m && m.connected ? "Kiểm tra lại" : "Kiểm tra ngay") + '</button></div></div>';
@@ -4280,11 +4296,15 @@
   }
 
   async function fetchOutgoingInvoices() {
+    if (state.outgoingInvoicesLoading) return;
+    state.outgoingInvoicesLoading = true;
     try {
       var payload = await api("/api/outgoing-invoices");
       state.outgoingInvoices = payload.items || [];
+      state.buyerProfiles = payload.buyer_profiles || {};
       if (state.view === "documents") renderDocuments();
     } catch (error) { showToast(error.message, true); }
+    finally { state.outgoingInvoicesLoading = false; }
   }
 
   async function fetchOutgoingReadiness() {
@@ -4362,7 +4382,7 @@
       button.textContent = "Đang kiểm tra…";
       state.minvoiceStatus = await api("/api/minvoice/status");
       renderSettings();
-      showToast("M-Invoice đã kết nối · có thể lưu nháp chờ ký · " + num(state.minvoiceStatus.outgoing.series_count) + " ký hiệu");
+      showToast(state.minvoiceStatus.warning || "M-Invoice đã kết nối · có thể lưu nháp chờ ký · " + num(state.minvoiceStatus.outgoing.series_count) + " ký hiệu", !!state.minvoiceStatus.warning);
     } catch (error) {
       button.disabled = false;
       button.textContent = "Kiểm tra lại";
@@ -5228,6 +5248,20 @@
       printSettings.copies = n(printSettings.copies);
       jsonWrite("/api/print/settings", "PUT", printSettings, "Đã lưu cấu hình in");
     }
+    if (event.target.id === "buyerProfileForm") {
+      event.preventDefault();
+      var buyerContractor = event.target.dataset.contractor;
+      var buyerBody = Object.fromEntries(new FormData(event.target).entries());
+      try {
+        await api('/api/outgoing-buyers/' + encodeURIComponent(buyerContractor), {
+          method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(buyerBody)
+        });
+        state.invoicePaymentScope = null;
+        if (state.buyerEdits) delete state.buyerEdits[buyerContractor];
+        await fetchOutgoingInvoices();
+        showToast('Đã lưu hồ sơ người mua');
+      } catch (error) { showToast(error.message, true); }
+    }
     if (event.target.id === "paymentRequestForm") {
       event.preventDefault();
       var paymentRequest = Object.fromEntries(new FormData(event.target).entries());
@@ -5286,6 +5320,14 @@
   });
 
   content.addEventListener("input", function (event) {
+    if (event.target.form && event.target.form.id === 'buyerProfileForm') {
+      state.buyerEdits = state.buyerEdits || {};
+      state.buyerEdits[event.target.form.dataset.contractor] = Object.fromEntries(new FormData(event.target.form).entries());
+      return;
+    }
+    if (event.target.form && event.target.form.id === 'paymentRequestForm') {
+      state.paymentFilters = Object.fromEntries(new FormData(event.target.form).entries());
+    }
     if (event.target.closest && event.target.closest("#outgoingSubstitutionForm")) {
       state.outgoingSubstitutionDraft = outgoingSubstitutionFormBody(event.target.form);
       if (state.outgoingSubstitutionPreview && !sameOutgoingSubstitutionRequest(
@@ -5321,6 +5363,17 @@
   });
 
   content.addEventListener("change", function (event) {
+    if (event.target.form && event.target.form.id === 'buyerProfileForm') {
+      state.buyerEdits = state.buyerEdits || {};
+      state.buyerEdits[event.target.form.dataset.contractor] = Object.fromEntries(new FormData(event.target.form).entries());
+      return;
+    }
+    if (event.target.form && event.target.form.id === 'paymentRequestForm') {
+      state.paymentFilters = Object.fromEntries(new FormData(event.target.form).entries());
+      state.invoicePaymentScope = null;
+      renderDocuments();
+      return;
+    }
     if (event.target.id === 'orderIssueFilter') { state.orderIssueFilter = event.target.value; applyOrderFilter(); }
     if (event.target.id === "homeFrom" || event.target.id === "homeTo") {
       if (event.target.id === "homeFrom") state.homeFrom = event.target.value;

@@ -98,6 +98,15 @@ class MinvoiceDraftTests(unittest.TestCase):
     def setUp(self):
         self.client = RecordingMinvoiceClient()
 
+    def test_test_server_is_reported_and_cannot_receive_business_drafts(self):
+        self.client.config = MinvoiceConfig('https://0106026495-999.minvoice.site', 'user', 'password')
+        self.client._token = 'fixture'
+        self.assertTrue(self.client.profile_status()['test_environment'])
+        with self.assertRaisesRegex(MinvoiceError, 'kiểm thử'):
+            self.client.create_draft(valid_draft(), dry_run=False, confirm_remote_write=True)
+        self.assertEqual(self.client.calls, [])
+        self.assertTrue(self.client.create_draft(valid_draft())['dry_run'])
+
     def test_outgoing_range_is_sent_to_minvoice_with_inclusive_page_contract(self):
         self.client.responses["InvoiceApi78/GetInvoices"] = {
             "ok": True,

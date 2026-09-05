@@ -42,7 +42,7 @@ try {
   await wait('document.querySelector("#nav") && !document.querySelector(".loading-panel")');
   report.checks.push('browser_login_success');
   const boot=await api('/api/bootstrap');assert.equal(boot.status,200);
-  for(const [index,view] of ['home','orders','purchases','physical','quotes','reports','debts','documents','inventory','msmi','settings'].entries()){
+  for(const [index,view] of ['home','orders','purchases','physical','quotes','reports','debts','documents','inventory','msmi','printing','settings'].entries()){
     await click(`[data-view="${view}"]`);await sleep(1100);await wait('!document.querySelector(".loading-panel")');
     if(view==='msmi')await wait('document.querySelector("#invoice-list-count")');
     await shot(String(index+2).padStart(2,'0')+'-'+view);
@@ -53,7 +53,7 @@ try {
   report.input_totals=invoices.data.totals;report.input_counts=invoices.data.counts;
   report.checks.push('august_266_input_invoices');
   for(const [name,route] of Object.entries({output:'/api/invoice-workbench/invoices?invoice_type=output&from=2026-08-01&to=2026-08-31',backup:'/api/backup/status',inventory:'/api/invoice-valuation?from=2026-08-01&to=2026-08-31',msmi:'/api/msmi/status',minvoice:'/api/minvoice/status'})){
-    const r=await api(route);report[name]={status:r.status,ok:r.data.ok,totals:r.data.totals,counts:r.data.counts,item_count:r.data.items?.length};
+    const r=await api(route);report[name]={status:r.status,ok:r.data.ok,error:r.data.error,totals:r.data.totals,counts:r.data.counts,item_count:r.data.items?.length};
     if(name==='backup')report.backup={status:r.status,...r.data};
     assert.equal(r.status,200,route);
   }
@@ -70,6 +70,24 @@ try {
       assert.equal(file.status,200,ext+' download');
     }
   }
+  for(const width of [1024,390]) {
+    await call('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width<600});
+    await sleep(300);
+    assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+2'), 'Page overflows at '+width);
+    if(width===1024) assert.ok(await evaluate('document.querySelector(".sidebar").getBoundingClientRect().width>=document.documentElement.clientWidth-2'), 'Desktop menu must span the page');
+    await shot('responsive-'+width);
+  }
+  await call('Emulation.setDeviceMetricsOverride',{width:1680,height:1050,deviceScaleFactor:1,mobile:false});
+  await click('[data-view="documents"]');
+  assert.ok(await evaluate('document.querySelector("#paymentRequestForm input[name=from]") && document.querySelector("#paymentRequestForm input[name=to]")'));
+  await evaluate(`(()=>{const select=document.querySelector('#paymentRequestForm select[name=contractor]');select.selectedIndex=1;select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await wait('document.querySelector("#buyerProfileForm input[name=tax_code]")');
+  report.checks.push('buyer_profile_editor_without_creating_invoice');
+  report.checks.push('independent_payment_period','desktop_horizontal_menu','responsive_1024_390');
+  const logout=await evaluate('fetch("/logout",{method:"POST"}).then(r=>({status:r.status,url:r.url}))');
+  assert.equal(logout.status,200); assert.ok(logout.url.endsWith('/login'));
+  assert.equal((await api('/api/bootstrap')).status,401);
+  report.checks.push('logout_blocks_data_again');
   assert.deepEqual(report.errors,[]);
   report.ok=true;
 }catch(error){report.ok=false;report.failure=error.message;process.exitCode=1;}

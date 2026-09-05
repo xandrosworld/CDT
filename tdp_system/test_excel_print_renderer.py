@@ -1,9 +1,10 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from pypdf import PdfReader
 from reportlab.lib.pagesizes import A4, landscape, letter
 from reportlab.pdfgen.canvas import Canvas
@@ -13,6 +14,7 @@ try:
         ExcelPrintError,
         build_excel_pdf_bundle,
         verify_excel_pdf,
+        _export_libreoffice_sheets,
     )
 except ImportError:  # pragma: no cover - direct file invocation
     from excel_print_renderer import ExcelPrintError, build_excel_pdf_bundle, verify_excel_pdf
@@ -25,6 +27,42 @@ def _small_pdf(path: Path, pagesize) -> None:
 
 
 class ExcelPrintRendererTests(unittest.TestCase):
+    def test_calc_copies_remove_other_print_ranges_but_keep_formula_dependencies(self):
+        with tempfile.TemporaryDirectory(prefix='tdp_calc_copy_') as folder:
+            root = Path(folder)
+            source = root / 'source.xlsx'
+            book = Workbook()
+            first = book.active; first.title = 'First'
+            first['A1'] = '=Internal!A1'; first.print_area = 'A1:D10'
+            second = book.create_sheet('Second'); second['A1'] = 'Second'; second.print_area = 'A1:D10'
+            hidden = book.create_sheet('Internal'); hidden['A1'] = 42
+            hidden.sheet_state = 'hidden'; hidden.print_area = 'A1:D10'; hidden.print_title_rows = '1:2'
+            book.save(source); book.close()
+            before = source.read_bytes()
+            exported = []
+            def convert(command, **kwargs):
+                path = Path(command[-1]); copy = load_workbook(path)
+                try:
+                    selected = copy.active
+                    exported.append(selected.title)
+                    self.assertTrue(selected.print_area)
+                    self.assertEqual(copy['First']['A1'].value, '=Internal!A1')
+                    self.assertEqual(copy['Internal']['A1'].value, 42)
+                    for sheet in copy:
+                        if sheet != selected:
+                            self.assertEqual(sheet.sheet_state, 'hidden')
+                            self.assertFalse(sheet.print_area)
+                finally: copy.close()
+                _small_pdf(path.with_suffix('.pdf'), A4)
+                return type('Result', (), {'returncode': 0})()
+            with patch(_export_libreoffice_sheets.__module__ + '.shutil.which', return_value='soffice'), \
+                 patch(_export_libreoffice_sheets.__module__ + '.subprocess.run', side_effect=convert):
+                result = _export_libreoffice_sheets([{'path':source,'title':'Fixture','document_type':'test'}],
+                                                   paper='A4',render_dir=root)
+            self.assertEqual(exported, ['First', 'Second'])
+            self.assertEqual(len(result), 2)
+            self.assertEqual(source.read_bytes(), before)
+
     def test_pdf_verifier_accepts_portrait_and_landscape_a4(self):
         with tempfile.TemporaryDirectory(prefix="tdp_excel_pdf_verify_") as temp_name:
             root = Path(temp_name)
@@ -80,7 +118,7 @@ class ExcelPrintRendererTests(unittest.TestCase):
                     self.skipTest(str(exc))
                 raise
             self.assertTrue(target.is_file())
-            self.assertEqual(manifest["format_version"], "tdp-excel-artwork-pdf-v1")
+            self.assertEqual(manifest["format_version"], "tdp-excel-artwork-pdf-v2")
             self.assertEqual(manifest["section_count"], 1)
             self.assertEqual(manifest["sections"][0]["sheet"], "Phiếu in")
             self.assertEqual(len(PdfReader(str(target)).pages), manifest["pages"])

@@ -369,7 +369,7 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         source_id = self.add_source(conn, **kwargs)
         conn.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,tax_code,address,updated_at) VALUES('NT-A','0200000001','Current address','now')")
         conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',
-                     (json.dumps({'inv_buyerAddress': 'Địa chỉ mua'}), source_id))
+                     (json.dumps({'inv_buyerAddressLine': 'Địa chỉ mua'}), source_id))
         conn.execute("INSERT INTO outgoing_source_invoice_items(invoice_id,line_index,source_item_name,source_unit,qty,unit_price,amount,tax_rate) VALUES(?,1,'Hàng VAT','kg',2,100,200,'8%')", (source_id,))
         for key, value in {'company': 'CÔNG TY TĐP', 'company_tax_code': '0202265016',
                            'company_address': 'Địa chỉ TĐP', 'payment_requester': 'VŨ THỊ THỤY',
@@ -411,6 +411,30 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.json)
         self.assertEqual(len(result.json['invoices']), 2)
         self.assertEqual(result.json['totals']['total_amount'], 432)
+
+    def test_buyer_profile_can_be_configured_before_any_local_draft(self):
+        body = {'legal_name': 'Công ty A', 'tax_code': '0209999999', 'address': 'Địa chỉ mua'}
+        response = self.client.put('/api/outgoing-buyers/NT-A', json=body)
+        self.assertEqual(response.status_code, 200)
+        listing = self.client.get('/api/outgoing-invoices').get_json()
+        self.assertEqual(listing['items'], [])
+        self.assertEqual(listing['buyer_profiles']['NT-A']['tax_code'], body['tax_code'])
+        self.assertEqual(listing['buyer_profiles']['NT-A']['address'], body['address'])
+        with server.db() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM outgoing_source_invoices').fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
+
+    def test_unissued_source_draft_does_not_inflate_or_block_issued_payment(self):
+        with server.db() as conn:
+            self.add_direct_source(conn)
+            self.add_direct_source(conn, invoice_number='0000002', status_class='draft',
+                                   sync_status='review_required', stock_status='blocked')
+        response = self.scope()
+        self.assertEqual(response.status_code, 200)
+        scope = response.get_json()
+        self.assertEqual(len(scope['invoices']), 1)
+        self.assertEqual(scope['totals']['total_amount'], 216)
+        self.assertEqual(scope['excluded_draft_count'], 1)
 
     def test_source_scope_blocks_uncertain_status_buyer_and_changed_totals(self):
         with server.db() as conn:

@@ -9,7 +9,7 @@ from http.client import HTTPException
 from pathlib import Path
 import re
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -128,7 +128,17 @@ class MinvoiceClient:
 
     def profile_status(self) -> dict:
         self._ensure_login()
-        return {"authenticated": True, "credential_verified": True, "official_api": True}
+        return {"authenticated": True, "credential_verified": True, "official_api": True,
+                "test_environment": self.is_test_environment}
+
+    @property
+    def is_test_environment(self) -> bool:
+        return (urlsplit(self.config.api_base_url).hostname or '').lower() == '0106026495-999.minvoice.site'
+
+    def assert_business_environment(self) -> None:
+        if self.is_test_environment:
+            raise MinvoiceError('M-Invoice đang dùng máy chủ kiểm thử. Cần cấu hình URL và tài khoản chính thức '
+                                'của Thành Đạt Phát trước khi tải hóa đơn đầu ra hoặc lưu nháp nghiệp vụ.')
 
     def get_invoice_series(self) -> list[dict]:
         result = self._json("GET", "Invoice68/GetTypeInvoiceSeries", authenticated=True)
@@ -600,6 +610,7 @@ class MinvoiceClient:
             }
         if not confirm_remote_write:
             raise MinvoiceError("Cần xác nhận rõ trước khi lưu dự thảo lên M-Invoice")
+        self.assert_business_environment()
         self._assert_series_available(invoice["inv_invoiceSeries"], invoice["inv_invoiceIssuedDate"])
         try:
             result = self._json("POST", self.DRAFT_SAVE_PATH, payload, authenticated=True)

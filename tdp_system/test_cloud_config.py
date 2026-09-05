@@ -56,6 +56,18 @@ class ConnectorEnvironmentTests(unittest.TestCase):
             self.assertEqual(server.MASTER_SOURCE, template)
             stop.set.assert_called_once()
 
+    def test_test_server_status_does_not_advertise_business_draft_saving(self):
+        from . import server
+        client = Mock()
+        client.profile_status.return_value = {'authenticated': True, 'test_environment': True}
+        client.outgoing_summary.return_value = {'series_count': 1}
+        with patch.object(server, 'create_minvoice_client', return_value=client):
+            payload = server.app.test_client().get('/api/minvoice/status').get_json()
+        self.assertTrue(payload['connected'])
+        self.assertTrue(payload['test_environment'])
+        self.assertFalse(payload['draft_save_available'])
+        self.assertIn('kiểm thử', payload['warning'])
+
 
 if __name__ == '__main__':
     unittest.main()

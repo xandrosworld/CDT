@@ -361,6 +361,10 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
     )] if tax_code and _table_exists(conn, 'outgoing_source_invoices') else []
     matched_ids = {i['source_invoice_id'] for i in local['invoices'] if i.get('source_invoice_id')} if local else set()
     sources = [r for r in sources if r['id'] not in matched_ids]
+    # Unissued source drafts do not create a payment obligation. A local invoice
+    # claiming issued against a source draft was already rejected above.
+    excluded_drafts = sum(r['source_status_class'] == 'draft' for r in sources)
+    sources = [r for r in sources if r['source_status_class'] != 'draft']
     if not sources:
         if local:
             return local
@@ -393,7 +397,7 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
                                            code='invoice_source_identity_conflict')
         identities.add(identity)
         raw = json.loads(source['raw_json'])
-        address = _plain(raw.get('inv_buyerAddress') or raw.get('buyerAddress') or raw.get('nmdchi'))
+        address = _plain(raw.get('inv_buyerAddressLine') or raw.get('inv_buyerAddress') or raw.get('buyerAddress') or raw.get('nmdchi'))
         if not address or not _plain(source['buyer_name']):
             raise InvoicePaymentScopeError('Hóa đơn nguồn thiếu tên hoặc địa chỉ người mua; tải lại chi tiết hóa đơn.',
                                            code='invoice_source_buyer_incomplete')
@@ -435,9 +439,11 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
         'totals': {k: sum(i[k] for i in invoices) for k in ('subtotal', 'tax_amount', 'total_amount')},
         'snapshot': snapshot, 'drafts': local['drafts'] if local else [], 'lines': local['lines'] if local else [],
         'source_lines': source_lines, 'statement_kind': 'invoices',
+        'excluded_draft_count': excluded_drafts,
         'template_status': 'official_customer_xlsx', 'official_template_ready': True,
         'warning': 'Số tiền lấy từ hóa đơn VAT đã phát hành. Thông tin nhận tiền là cấu hình tại lúc lập đề nghị. '
-                   'Có hóa đơn chưa liên kết bếp/ngày giao: bảng kê theo ngày hóa đơn, không xác nhận lịch sử giao nhận.',
+                   'Có hóa đơn chưa liên kết bếp/ngày giao: bảng kê theo ngày hóa đơn, không xác nhận lịch sử giao nhận.' +
+                   (f' Đã loại {excluded_drafts} dự thảo chưa phát hành khỏi số tiền đề nghị.' if excluded_drafts else ''),
     }
     result['scope_id'] = hashlib.sha256(json.dumps(result, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest().upper()
     return result
