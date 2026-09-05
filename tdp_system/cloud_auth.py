@@ -91,6 +91,11 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
 
     @app.after_request
     def cloud_headers(response):
+        if request.path == '/' and response.status_code == 200 and response.mimetype == 'text/html':
+            html = response.get_data(as_text=True)
+            old = '<button class="user-chip" title="Hai người có thể cùng sử dụng">VT</button>'
+            response.set_data(html.replace(old,
+                '<form action="/logout" method="post"><button class="user-chip" type="submit">Đăng xuất</button></form>'))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'SAMEORIGIN'
         response.headers['Referrer-Policy'] = 'same-origin'

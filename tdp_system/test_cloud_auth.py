@@ -1,4 +1,5 @@
 import re
+import gzip
 import unittest
 
 from flask import Flask
@@ -46,3 +47,11 @@ class CloudAuthTests(unittest.TestCase):
     def test_missing_cloud_credentials_fail_closed(self):
         with self.assertRaises(RuntimeError):
             install_cloud_auth(Flask('unsafe'), username='', password_hash='', secret_key='')
+
+    def test_text_compression_preserves_payload(self):
+        self.app.add_url_rule('/large', endpoint='large', view_func=lambda: {'items': ['fixture-value']*500})
+        self.login()
+        response = self.client.get('/large', headers={'Accept-Encoding': 'gzip'})
+        self.assertEqual(response.headers['Content-Encoding'], 'gzip')
+        self.assertIn(b'fixture-value', gzip.decompress(response.data))
+        self.assertIn('Accept-Encoding', response.headers['Vary'])
