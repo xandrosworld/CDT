@@ -36,6 +36,7 @@ class InvoicePaymentScopeTests(unittest.TestCase):
 
     def setUp(self):
         with server.db() as conn:
+            conn.execute('DELETE FROM outgoing_buyer_profiles')
             conn.execute("DELETE FROM outgoing_substitution_actions")
             conn.execute("DELETE FROM invoice_inventory_ledger")
             conn.execute("DELETE FROM invoice_inventory_confirmations")
@@ -362,6 +363,68 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         self.assertIn("--hidden-import invoice_delivery_statement", build)
         self.assertIn("invoice_payment_documents.py", build)
         self.assertIn("--hidden-import invoice_payment_documents", build)
+
+
+    def add_direct_source(self, conn, **kwargs):
+        source_id = self.add_source(conn, **kwargs)
+        conn.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,tax_code,address,updated_at) VALUES('NT-A','0200000001','Current address','now')")
+        conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',
+                     (json.dumps({'inv_buyerAddress': 'Địa chỉ mua'}), source_id))
+        conn.execute("INSERT INTO outgoing_source_invoice_items(invoice_id,line_index,source_item_name,source_unit,qty,unit_price,amount,tax_rate) VALUES(?,1,'Hàng VAT','kg',2,100,200,'8%')", (source_id,))
+        for key, value in {'company': 'CÔNG TY TĐP', 'company_tax_code': '0202265016',
+                           'company_address': 'Địa chỉ TĐP', 'payment_requester': 'VŨ THỊ THỤY',
+                           'payment_bank_name': 'Vietcombank', 'payment_bank_account': '1052787580'}.items():
+            server.setting_set(conn, key, value)
+        return source_id
+
+    def test_synced_vat_without_local_draft_has_payment_pack_without_invented_delivery(self):
+        with server.db() as conn:
+            self.add_direct_source(conn)
+        response = self.scope()
+        self.assertEqual(response.status_code, 200, response.json)
+        scope = response.json
+        self.assertEqual(scope['totals']['total_amount'], 216)
+        self.assertEqual(scope['statement_kind'], 'invoices')
+        self.assertIsNone(scope['invoices'][0]['draft_id'])
+        bundle = self.client.get('/api/export/invoice-payment-bundle/NT-A?from=2026-09-01&to=2026-09-30&scope_id=' + scope['scope_id'])
+        self.assertEqual(bundle.status_code, 200, bundle.get_data()[:200])
+        with zipfile.ZipFile(io.BytesIO(bundle.data)) as archive:
+            statement = next(n for n in archive.namelist() if n.startswith('Bang_ke_hoa_don_VAT'))
+            book = load_workbook(io.BytesIO(archive.read(statement)))
+            self.assertEqual(book.worksheets[0]['G4'].value, 216)
+            self.assertEqual(book.worksheets[0]['G5'].value, 216)
+            self.assertEqual(book.worksheets[1]['G4'].value, 200)
+            self.assertNotIn('Bảng kê giao hàng', book.sheetnames)
+            book.close()
+        with server.db() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM outgoing_invoice_drafts').fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
+            conn.execute('UPDATE outgoing_source_invoice_items SET amount=201')
+        self.assertEqual(self.client.get('/api/export/invoice-payment-bundle/NT-A?from=2026-09-01&to=2026-09-30&scope_id=' + scope['scope_id']).status_code, 409)
+
+    def test_local_and_synced_duplicate_count_once_and_source_only_added(self):
+        with server.db() as conn:
+            self.add_invoice(conn)
+            self.add_direct_source(conn)
+            self.add_direct_source(conn, invoice_number='0000002')
+        result = self.scope()
+        self.assertEqual(result.status_code, 200, result.json)
+        self.assertEqual(len(result.json['invoices']), 2)
+        self.assertEqual(result.json['totals']['total_amount'], 432)
+
+    def test_source_scope_blocks_uncertain_status_buyer_and_changed_totals(self):
+        with server.db() as conn:
+            source_id = self.add_direct_source(conn)
+        for assignment, code in [
+            ("source_status_class='cancelled'", 'invoice_source_not_payable'),
+            ("source_status_class='issued', total_amount=999", 'invoice_source_total_mismatch'),
+            ("total_amount=216, raw_json='{}'", 'invoice_source_buyer_incomplete'),
+        ]:
+            with server.db() as conn:
+                conn.execute('UPDATE outgoing_source_invoices SET ' + assignment + ' WHERE id=?', (source_id,))
+            result = self.scope()
+            self.assertEqual(result.status_code, 409)
+            self.assertEqual(result.json['code'], code)
 
 
 if __name__ == "__main__":

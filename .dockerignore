@@ -6,6 +6,7 @@
 tdp_system/test_*.py
 tdp_system/browser_*.py
 tdp_system/qc_*.py
+tdp_system/qa_*.py
 !tdp_system/static/
 !tdp_system/static/**
 !tdp_system/templates/

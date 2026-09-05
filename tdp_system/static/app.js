@@ -122,6 +122,7 @@
     outgoingSubstitutionRequest: null,
     outgoingSubstitutionDraft: null,
     invoicePaymentScope: null,
+    paymentFilters: null,
     documentDetailsOpen: false,
     outgoingPeriodShortages: null,
     outgoingShortageFrom: todayIso.slice(0, 7) + "-01",
@@ -2476,17 +2477,36 @@
       money(scope.totals && scope.totals.tax_amount), '</strong></div><div class="ready"><span>Tổng kiểm soát</span><strong>',
       money(scope.totals && scope.totals.total_amount), '</strong></div></div>',
       '<div class="form-actions" style="margin-top:14px"><button class="btn btn-primary" data-action="download-invoice-delivery-statement" data-url="',
-      esc(statementUrl), '">Tải Bảng tổng hợp giao nhận</button><button class="btn btn-outline" data-action="download-invoice-payment-control" data-url="',
+      esc(statementUrl), '">', scope.statement_kind === 'invoices' ? 'Tải bảng kê hóa đơn VAT' : 'Tải Bảng tổng hợp giao nhận', '</button><button class="btn btn-outline" data-action="download-invoice-payment-control" data-url="',
       esc(downloadUrl), '">Tải Đề nghị thanh toán + bảng kê</button><button class="btn btn-outline" data-action="preview-payment-documents">Xem chứng từ / In</button></div></div>',
       '<div class="table-wrap"><table><thead><tr><th>Ngày HĐ</th><th>Ký hiệu / số HĐ</th><th>Trước thuế</th><th>Thuế</th><th>Tổng</th><th>Nguồn xác minh</th></tr></thead><tbody>',
       invoices, '</tbody></table></div></div>'
     ]);
   }
 
+  function paymentRequestFormHtml() {
+    var d = state.data;
+    if (!state.paymentFilters) {
+      var day = (d.batch && d.batch.work_date) || new Date().toLocaleDateString('sv-SE');
+      state.paymentFilters = {from: day.slice(0, 7) + '-01', to: day, contractor: ''};
+    }
+    var filters = state.paymentFilters;
+    var contractors = (d.master.contractors || []);
+    return '<form id="paymentRequestForm" class="document-contractor-form">' +
+      '<label>Nhà thầu<select name="contractor" class="select" required>' +
+      '<option value="">Chọn nhà thầu</option>' + contractors.map(function (item) {
+        return '<option value="' + esc(item.code) + '"' + (item.code === filters.contractor ? ' selected' : '') + '>' + esc(item.code + ' · ' + item.name) + '</option>';
+      }).join('') + '</select></label>' +
+      '<label>Từ ngày<input name="from" type="date" value="' + esc(filters.from) + '" required></label>' +
+      '<label>Đến ngày<input name="to" type="date" value="' + esc(filters.to) + '" required></label>' +
+      '<button class="btn btn-primary" type="submit">Xem và tải bảng kê</button></form>';
+  }
+
   function renderDocuments() {
     var d = state.data;
     if (!d.batch) {
-      content.innerHTML = emptyBatch("Chưa có dữ liệu chứng từ", "Nạp và hoàn thiện đơn trước khi tạo bảng kê, biên nhận và file hóa đơn.");
+      content.innerHTML = '<section class="card"><div class="card-body"><h3>Hồ sơ thanh toán từ hóa đơn VAT</h3>' +
+        paymentRequestFormHtml() + '</div></section>' + invoicePaymentScopeHtml() + '<div id="paymentDocumentPreview"></div>';
       return;
     }
     if (state.outgoingInvoices === null) setTimeout(fetchOutgoingInvoices, 0);
@@ -2494,17 +2514,6 @@
     if (state.documentDetailsOpen && state.outgoingSubstitutionActions === null && !state.outgoingSubstitutionLoading) {
       setTimeout(fetchOutgoingSubstitutions, 0);
     }
-    var paymentPeriodFrom = d.batch.work_date.slice(0, 7) + "-01";
-    var issuedContractors = Array.from(new Set((state.outgoingInvoices || []).filter(function (item) {
-      var issuedDate = item.issued_invoice_date || "";
-      return item.status === "issued" && issuedDate >= paymentPeriodFrom && issuedDate <= d.batch.work_date;
-    }).map(function (item) { return item.contractor; }))).sort();
-    var contractorOptions = issuedContractors.length
-      ? issuedContractors.map(function (code) {
-        return '<option value="' + esc(code) + '">' + esc(code) + '</option>';
-      }).join("")
-      : '<option value="">' + (state.outgoingInvoices === null
-        ? 'Đang kiểm tra hóa đơn…' : 'Chưa có hóa đơn đã phát hành trong kỳ') + '</option>';
     var shortageContractors = Array.from(new Set(d.orders.map(function (item) {
       return (item.contractor || "").trim();
     }).filter(Boolean))).sort();
@@ -2592,9 +2601,7 @@
       invoiceFileAction, '</div></section>',
       '<section class="document-primary-card"><div class="document-primary-icon">KÊ</div><div><h3>Bảng kê từ hóa đơn đỏ</h3>',
       '<p>Chọn nhà thầu để lấy đúng các hóa đơn Thành Đạt Phát đã phát hành.</p>',
-      '<form id="paymentRequestForm" class="document-contractor-form"><select name="contractor" class="select">', contractorOptions,
-      '</select><button class="btn btn-primary" type="submit" ', issuedContractors.length ? '' : 'disabled',
-      '>Xem và tải bảng kê</button></form></div></section></div>',
+      paymentRequestFormHtml(), '</div></section></div>',
       invoicePaymentScopeHtml(),
       '<div id="paymentDocumentPreview"></div>',
       '<div class="card"><div class="card-head"><div><h3>Bảng kê mua hàng và biên nhận</h3><p>Xem đúng hồ sơ người bán; thiếu hoặc trùng CCCD vẫn bị chặn.</p></div><button class="btn btn-outline" data-action="preview-purchase-documents">Xem bảng kê / biên nhận</button></div><div id="purchaseDocumentPreview"></div></div>',
@@ -5224,7 +5231,8 @@
     if (event.target.id === "paymentRequestForm") {
       event.preventDefault();
       var paymentRequest = Object.fromEntries(new FormData(event.target).entries());
-      var from = state.data.batch.work_date.slice(0, 7) + "-01";
+      state.paymentFilters = paymentRequest;
+      var from = paymentRequest.from;
       var paymentButton = event.submitter || event.target.querySelector('button[type="submit"]');
       var paymentLabel = paymentButton ? paymentButton.textContent : "";
       try {
@@ -5235,7 +5243,7 @@
         }
         state.invoicePaymentScope = await api(
           "/api/outgoing-invoices/payment-scope/" + encodeURIComponent(paymentRequest.contractor) +
-          "?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(state.data.batch.work_date)
+          "?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(paymentRequest.to)
         );
         renderDocuments();
         showToast("Đã đối chiếu phạm vi hóa đơn đỏ · sẵn sàng tải hồ sơ chính thức");

@@ -3752,6 +3752,10 @@ PURCHASE_CANONICAL_ALIASES = {
 
 
 def purchase_canonical_header_fields(row) -> dict:
+    try:
+        from .customer_purchase_layout import customer_purchase_fields
+    except ImportError:
+        from customer_purchase_layout import customer_purchase_fields
     found = {}
     normalized_aliases = {
         field: {mapping_key(alias) for alias in aliases}
@@ -3771,6 +3775,7 @@ def purchase_canonical_header_fields(row) -> dict:
         inferred = found["kitchen"] + 1
         if inferred + 1 == found["product_name"]:
             found["work_date"] = inferred
+    found.update(customer_purchase_fields(row))
     return found
 
 
@@ -4181,7 +4186,13 @@ def parse_canonical_purchase_workbook(
             if formula_worksheet is not None else cell("actual_qty")
         )
         actual_formula_key = purchase_formula_key(formula_actual)
-        if actual_formula_key and actual_formula_key != expected_actual_formula:
+        # Subtracting missing before reduced is the same verified formula used
+        # by the customer's workbook. Compare signed cell terms, never eval Excel.
+        def signed_terms(formula):
+            if not re.fullmatch(r'=[A-Z]+[0-9]+(?:[+-][A-Z]+[0-9]+)*', formula):
+                return formula
+            return sorted(re.findall(r'[+-][A-Z]+[0-9]+', '+' + formula[1:]))
+        if actual_formula_key and signed_terms(actual_formula_key) != signed_terms(expected_actual_formula):
             errors.append(
                 "Công thức Số lượng thực tế phải là Số lượng + Thêm - Hỏng - Giảm - Thiếu"
             )
@@ -9650,10 +9661,11 @@ def register_contract_routes(app, ctx):
                     "scope_id": scope["scope_id"],
                 },
             )
+            statement_prefix = 'Bang_ke_hoa_don_VAT' if scope.get('statement_kind') == 'invoices' else 'Bang_tong_hop_giao_nhan'
             response = send_file(
                 stream, as_attachment=True,
                 download_name=(
-                    f"Bang_tong_hop_giao_nhan_{safe_code}_"
+                    f"{statement_prefix}_{safe_code}_"
                     f"{scope['date_from']}_{scope['date_to']}.xlsx"
                 ),
                 mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -9706,13 +9718,14 @@ def register_contract_routes(app, ctx):
             statement.close()
             safe_code = re.sub(r"[^A-Z0-9_-]+", "_", contractor)[:40] or "KHACH_HANG"
             bundle = io.BytesIO()
+            statement_prefix = 'Bang_ke_hoa_don_VAT' if scope.get('statement_kind') == 'invoices' else 'Bang_tong_hop_giao_nhan'
             with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr(
                     f"De_nghi_thanh_toan_{safe_code}_{period_from}_{period_to}.xlsx",
                     payment_stream.getvalue(),
                 )
                 archive.writestr(
-                    f"Bang_tong_hop_giao_nhan_{safe_code}_{period_from}_{period_to}.xlsx",
+                    f"{statement_prefix}_{safe_code}_{period_from}_{period_to}.xlsx",
                     xlsx_stream.getvalue(),
                 )
                 invoice_sources = "\n".join(
@@ -9723,8 +9736,8 @@ def register_contract_routes(app, ctx):
                 archive.writestr(
                     "THONG_TIN_DOI_CHIEU.txt",
                     ("HỒ SƠ HÓA ĐƠN ĐÃ ĐỐI CHIẾU\n"
-                     "Trạng thái: Đề nghị thanh toán và Bảng tổng hợp giao nhận là biểu mẫu chính thức "
-                     "theo file khách hàng cung cấp ngày 03/09/2026.\n"
+                     "Đề nghị thanh toán dùng biểu mẫu chính thức theo mẫu khách hàng.\n"
+                     f"{scope['warning']}\n"
                      f"Mã phạm vi: {scope['scope_id']}\n"
                      f"Nhà thầu: {contractor}\nTừ ngày: {period_from}\nĐến ngày: {period_to}\n"
                      f"Số hóa đơn: {len(details)}\nTổng đề nghị: {payment_total:,.0f} VNĐ\n"
@@ -11231,6 +11244,12 @@ def invoice_delivery_statement_workbook(
 
 def invoice_delivery_statement_scope_workbook(scope: dict):
     """Render a verified scope while retaining each invoice's provenance."""
+    if scope.get('statement_kind') == 'invoices':
+        try:
+            from .invoice_payment_documents import synced_invoice_statement_workbook
+        except ImportError:
+            from invoice_payment_documents import synced_invoice_statement_workbook
+        return synced_invoice_statement_workbook(scope)
     provenance = {int(item["draft_id"]): item for item in scope["invoices"]}
     drafts = []
     for source_draft in scope["drafts"]:

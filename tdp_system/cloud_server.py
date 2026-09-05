@@ -73,8 +73,8 @@ def main():
     os.environ['TDP_TRUSTED_HOSTS'] = ','.join(sorted(hosts))
     # The imported DB already owns its master catalog. File mtime changes on upload
     # must not re-import the original workbook over later catalog edits.
-    server.MASTER_SOURCE = data / '.no_automatic_master_import.xlsx'
-    server.init_database()
+    # Exporters still need MASTER_SOURCE as their verified print template.
+    server.init_database(sync_master=False)
     stop, worker = server.start_backup_worker(server.auto_backup)
     print('TDP hosted application ready; persistent database initialized', flush=True)
     try:

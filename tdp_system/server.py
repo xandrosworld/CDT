@@ -847,7 +847,7 @@ def pre_migration_backup():
     return target
 
 
-def init_database():
+def init_database(*, sync_master=True):
     pre_migration_backup()
     with db() as conn:
         conn.executescript(SCHEMA)
@@ -882,7 +882,8 @@ def init_database():
                 setting_set(conn, key, value)
         sync_payable_ledger(conn, timestamp=now_iso())
         sync_receivable_ledger(conn, timestamp=now_iso())
-    sync_master_if_needed()
+    if sync_master:
+        sync_master_if_needed()
     auto_backup()
 
 
@@ -1088,7 +1089,10 @@ def detect_header(ws):
         mapping = {}
         for col in range(1, min(ws.max_column, 40) + 1):
             field = canonical_header(ws.cell(row, col).value)
-            if field and field not in mapping:
+            if field and (field not in mapping or (
+                field == 'supplier' and slug(ws.cell(row, mapping[field]).value) == 'chonncc'
+                and slug(ws.cell(row, col).value) in {'ncc', 'nhacungcap'}
+            )):
                 mapping[field] = col
         score = sum(key in mapping for key in ("product_name", "qty", "kitchen", "product_code"))
         score += min(len(mapping), 8) / 10

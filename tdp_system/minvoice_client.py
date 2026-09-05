@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -48,6 +49,7 @@ class MinvoiceConfig:
         values: dict[str, str] = {}
         for path in paths:
             values.update(_read_env_file(path))
+        values.update({key: value for key, value in os.environ.items() if key.startswith('MINVOICE_')})
         required = {
             "MINVOICE_API_BASE_URL": values.get("MINVOICE_API_BASE_URL", ""),
             "MINVOICE_USERNAME": values.get("MINVOICE_USERNAME", ""),
@@ -55,7 +57,7 @@ class MinvoiceConfig:
         }
         missing = [key for key, value in required.items() if not value]
         if missing:
-            raise MinvoiceError("Thiếu cấu hình M-Invoice trong .env: " + ", ".join(missing))
+            raise MinvoiceError("Thiếu cấu hình kết nối M-Invoice: " + ", ".join(missing))
         return cls(
             api_base_url=required["MINVOICE_API_BASE_URL"].rstrip("/"),
             username=required["MINVOICE_USERNAME"],

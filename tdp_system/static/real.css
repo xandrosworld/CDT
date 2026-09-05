@@ -1,4 +1,28 @@
 :root { color-scheme: light; }
+/* Desktop navigation across the top leaves the full width for working tables. */
+@media (min-width: 981px) {
+  .app-shell { display:block; }
+  .sidebar { position:relative; top:auto; left:auto; width:100%; height:auto; padding:10px 24px;
+    display:grid; grid-template-columns:1fr auto; gap:8px 20px; box-shadow:none; }
+  .sidebar .brand { padding:0; border:0; }
+  .sidebar .brand-mark { width:36px; height:36px; border-radius:8px; }
+  .sidebar .brand span { display:none; }
+  .sidebar .sidebar-foot { grid-column:2; grid-row:1; margin:0; padding:0; border:0; }
+  .sidebar nav { grid-column:1 / -1; display:grid; grid-template-columns:repeat(auto-fit,minmax(205px,1fr));
+    gap:4px; padding:0; overflow:visible; }
+  .sidebar .nav-item { min-height:46px; padding:7px 10px; gap:6px; border-radius:6px; font-size:14px; }
+  .sidebar .nav-item span { width:22px; flex:none; }
+  .menu-button { display:none; }
+  .content { max-width:none; padding:20px 24px 40px; }
+  .topbar { min-height:76px; padding:12px 24px; }
+}
+.top-actions form { margin:0; }
+.top-actions form .user-chip { width:auto; min-width:90px; height:40px; padding:8px 12px;
+  border-radius:8px; white-space:nowrap; font-size:14px; }
+.document-contractor-form { flex-wrap:wrap; align-items:flex-end; }
+.document-contractor-form label { display:flex; flex-direction:column; gap:6px; min-width:140px; }
+.document-contractor-form label:first-child { flex:1 1 240px; }
+.document-contractor-form input { min-height:40px; padding:8px; border:1px solid #b8c8ce; border-radius:6px; }
 body { min-width: 320px; }
 .batch-select { min-width: 230px; max-width: 310px; font-weight: 700; }
 .loading-panel { min-height: 420px; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; color:#5e7083; }

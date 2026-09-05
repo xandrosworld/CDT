@@ -20,6 +20,72 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
 
 
+def synced_invoice_statement_workbook(scope):
+    """VAT statement without fabricated kitchens, deliveries or inventory entries."""
+    book = Workbook()
+    sheet = book.active
+    sheet.title = 'Bảng kê hóa đơn'
+    sheet.append(['BẢNG KÊ HÓA ĐƠN VAT ĐÃ PHÁT HÀNH'])
+    sheet.merge_cells('A1:G1')
+    sheet.append([scope['warning']]); sheet.merge_cells('A2:G2')
+    sheet.append(['STT', 'Ngày hóa đơn', 'Ký hiệu', 'Số hóa đơn', 'Trước thuế', 'Thuế', 'Thanh toán'])
+    for i, invoice in enumerate(scope['invoices'], 1):
+        sheet.append([i, _strict_date(invoice['invoice_date'], 'Ngày hóa đơn'),
+                      _excel_text(invoice['invoice_series']), _excel_text(invoice['invoice_number']),
+                      invoice['subtotal'], invoice['tax_amount'], invoice['total_amount']])
+    sheet.append(['TỔNG', None, None, None, scope['totals']['subtotal'], scope['totals']['tax_amount'], scope['totals']['total_amount']])
+    details = book.create_sheet('Chi tiết hóa đơn')
+    details.append(['CHI TIẾT THEO HÓA ĐƠN VAT']); details.merge_cells('A1:I1')
+    details.append(['Ngày dưới đây là ngày hóa đơn; không suy ra bếp hoặc ngày giao hàng.']); details.merge_cells('A2:I2')
+    details.append(['Ngày hóa đơn', 'Ký hiệu / số', 'Tên hàng', 'ĐVT', 'Số lượng', 'Đơn giá', 'Thành tiền', 'Thuế suất', 'Ghi chú'])
+    for item in scope.get('source_lines', []):
+        details.append([_strict_date(item['invoice_date'], 'Ngày hóa đơn'),
+                        _excel_text(item['invoice_series'] + ' / ' + item['invoice_number']),
+                        _excel_text(item['source_item_name']), _excel_text(item['source_unit']),
+                        item['qty'], item['unit_price'], item['amount'], _excel_text(item['tax_rate']),
+                        _excel_text(item['validation_note'])])
+    for item in scope.get('lines', []):
+        details.append([_strict_date(item['issued_invoice_date'], 'Ngày hóa đơn'),
+                        _excel_text(item['issued_invoice_series'] + ' / ' + item['issued_invoice_number']),
+                        _excel_text(item['product_name']), _excel_text(item['unit']), item['qty'],
+                        item['unit_price'], item['amount'], _excel_text(item['tax']), ''])
+    from collections import defaultdict
+    try:
+        from .document_totals import quantity_text
+    except ImportError:
+        from document_totals import quantity_text
+    quantities = defaultdict(float)
+    for row in details.iter_rows(min_row=4, values_only=True):
+        quantities[str(row[3] or '')] += float(row[4] or 0)
+    details.append(['TỔNG', None, None, None,
+                    quantity_text([{'unit': u, 'quantity': q} for u, q in quantities.items()]),
+                    None, scope['totals']['subtotal']])
+    for ws in book:
+        ws.freeze_panes = 'A4'
+        ws.sheet_view.showGridLines = False
+        ws.row_dimensions[1].height = 30
+        ws.row_dimensions[2].height = 66
+        ws.row_dimensions[3].height = 32
+        for row in ws:
+            for cell in row:
+                cell.font = Font(name='Times New Roman', size=12, bold=cell.row <= 3 or cell.row == ws.max_row)
+                cell.alignment = Alignment(vertical='center', wrap_text=True)
+                if cell.row >= 3: cell.border = TABLE_BORDER
+                if isinstance(cell.value, (date, datetime)): cell.number_format = 'dd/mm/yyyy'
+                elif isinstance(cell.value, (int, float)):
+                    cell.number_format = '#,##0.######' if ws == details and cell.column == 5 else '#,##0'
+                    cell.alignment = Alignment(horizontal='right', vertical='center')
+        for col, width in enumerate((12, 24, 36, 16, 22, 22, 24, 14, 34), 1):
+            ws.column_dimensions[get_column_letter(col)].width = width
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_setup.orientation = 'landscape'
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.fitToWidth = 1; ws.page_setup.fitToHeight = 0
+        ws.print_title_rows = '1:3'
+        ws.print_area = f'A1:{get_column_letter(ws.max_column)}{ws.max_row}'
+    return book
+
+
 class InvoicePaymentDocumentError(ValueError):
     def __init__(self, message: str, *, code: str = "invalid_invoice_payment_document", status: int = 409):
         super().__init__(message)
@@ -249,6 +315,9 @@ def invoice_payment_request_workbook(
         f"chúng tôi đã cung cấp hàng hóa cho {snapshot['buyer_name_snapshot']}, dựa theo số lượng "
         "bàn giao chúng tôi đã xuất hóa đơn như sau:"
     )
+    if scope.get('statement_kind') == 'invoices':
+        narrative = (f"Đề nghị thanh toán các hóa đơn VAT đã phát hành trong thời gian "
+                     f"{period_from.strftime('%d/%m/%Y')} – {period_to.strftime('%d/%m/%Y')} như sau:")
     _merge_write(ws, "A11:F12", narrative, size=12, horizontal="left", vertical="top")
     ws.row_dimensions[11].height = 24
     ws.row_dimensions[12].height = 24

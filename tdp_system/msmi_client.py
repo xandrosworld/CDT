@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -38,6 +39,9 @@ class MsmiConfig:
         values: dict[str, str] = {}
         for path in paths:
             values.update(_read_env_file(path))
+        # Hosted deployments supply secrets through the process environment.
+        # An explicitly empty value also overrides an obsolete file credential.
+        values.update({key: value for key, value in os.environ.items() if key.startswith('MSMI_')})
         base = values.get("MSMI_API_BASE_URL", "").rstrip("/")
         token = values.get("MSMI_API_TOKEN", "")
         missing = []
@@ -47,8 +51,7 @@ class MsmiConfig:
             missing.append("MSMI_API_TOKEN")
         if missing:
             raise MsmiError(
-                "mSMI chưa được cài đặt trên máy này. "
-                "Cần đặt file cấu hình .env hợp lệ cạnh TDP_Server.exe rồi mở lại hệ thống"
+                "Thiếu cấu hình kết nối mSMI: " + ", ".join(missing)
             )
         return cls(api_base_url=base, api_token=token)
 

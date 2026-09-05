@@ -199,7 +199,7 @@ def _verify_lines(drafts: list[dict[str, Any]], lines: list[dict[str, Any]]) -> 
         )
 
 
-def issued_invoice_payment_scope(
+def _local_issued_payment_scope(
     conn,
     contractor: Any,
     date_from: Any,
@@ -338,11 +338,116 @@ def issued_invoice_payment_scope(
     }
 
 
+def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
+    """Union local issued invoices and verified source invoices, once per identity.
+
+    Source invoices have no invented delivery date, order or kitchen. Their
+    payment pack uses an invoice statement and says why it is not delivery proof.
+    """
+    try:
+        local = _local_issued_payment_scope(conn, contractor, date_from, date_to)
+    except InvoicePaymentScopeError as exc:
+        if exc.code != 'issued_invoice_scope_empty':
+            raise
+        local = None
+    party = _plain(contractor).upper()
+    safe_from, safe_to = _strict_date(date_from, 'Từ ngày'), _strict_date(date_to, 'Đến ngày')
+    profile = conn.execute('SELECT * FROM outgoing_buyer_profiles WHERE UPPER(TRIM(contractor))=?', (party,)).fetchone()
+    tax_code = _plain(dict(profile).get('tax_code')) if profile else ''
+    sources = [dict(r) for r in conn.execute(
+        "SELECT * FROM outgoing_source_invoices WHERE source='minvoice' "
+        "AND UPPER(TRIM(buyer_tax_code))=? AND invoice_date BETWEEN ? AND ? ORDER BY invoice_date,id",
+        (tax_code.upper(), safe_from, safe_to),
+    )] if tax_code and _table_exists(conn, 'outgoing_source_invoices') else []
+    matched_ids = {i['source_invoice_id'] for i in local['invoices'] if i.get('source_invoice_id')} if local else set()
+    sources = [r for r in sources if r['id'] not in matched_ids]
+    if not sources:
+        if local:
+            return local
+        raise InvoicePaymentScopeError(
+            'Không có hóa đơn VAT đã phát hành trong kỳ của nhà thầu. Hãy tải hóa đơn đầu ra '
+            'và kiểm tra mã số thuế trong hồ sơ người mua.', code='issued_invoice_scope_empty', status=404)
+    profiles = conn.execute('SELECT contractor FROM outgoing_buyer_profiles WHERE UPPER(TRIM(tax_code))=?',
+                            (tax_code.upper(),)).fetchall()
+    if len(profiles) != 1:
+        raise InvoicePaymentScopeError('Mã số thuế thuộc nhiều nhà thầu; cần đối chiếu liên kết hóa đơn trước khi lập hồ sơ.',
+                                       code='invoice_source_buyer_ambiguous')
+    settings = {r['key']: r['value'] for r in conn.execute('SELECT key,value FROM settings')}
+    invoices = list(local['invoices']) if local else []
+    source_lines = []
+    snapshot = dict(local['snapshot']) if local else None
+    identities = {(i['invoice_series'].upper(), i['invoice_number'].lstrip('0') or '0', i['invoice_date'])
+                  for i in invoices}
+    for source in sources:
+        # Do not silently drop an in-period cancellation/replacement/uncertain invoice.
+        if source['source_status_class'] != 'issued' or source['sync_status'] != 'synced' or source['stock_status'] in {
+            'blocked', 'reversal_required', 'reversed'
+        } or source['relation_reference']:
+            raise InvoicePaymentScopeError('Có hóa đơn nguồn bị hủy/thay thế/điều chỉnh hoặc cần đối chiếu trong kỳ; '
+                                           'hãy kiểm tra trạng thái trước khi lập hồ sơ.', code='invoice_source_not_payable')
+        if not _plain(source['invoice_number']) or not _plain(source['invoice_series']):
+            raise InvoicePaymentScopeError('Hóa đơn nguồn thiếu số hoặc ký hiệu.', code='issued_invoice_identity_incomplete')
+        identity = (source['invoice_series'].strip().upper(), source['invoice_number'].strip().lstrip('0') or '0', source['invoice_date'])
+        if identity in identities:
+            raise InvoicePaymentScopeError('Định danh hóa đơn bị trùng giữa các nguồn; cần đối chiếu.',
+                                           code='invoice_source_identity_conflict')
+        identities.add(identity)
+        raw = json.loads(source['raw_json'])
+        address = _plain(raw.get('inv_buyerAddress') or raw.get('buyerAddress') or raw.get('nmdchi'))
+        if not address or not _plain(source['buyer_name']):
+            raise InvoicePaymentScopeError('Hóa đơn nguồn thiếu tên hoặc địa chỉ người mua; tải lại chi tiết hóa đơn.',
+                                           code='invoice_source_buyer_incomplete')
+        source_snapshot = {
+            'buyer_name_snapshot': _plain(source['buyer_name']), 'buyer_tax_code_snapshot': tax_code,
+            'buyer_address_snapshot': address,
+            **{field + '_snapshot': _plain(settings.get(field)) for field in (
+                'company_tax_code', 'company_address', 'payment_requester', 'payment_bank_name', 'payment_bank_account')},
+            'company_name_snapshot': _plain(settings.get('company')),
+        }
+        if any(not source_snapshot[field] for field in SNAPSHOT_FIELDS):
+            raise InvoicePaymentScopeError('Cần điền đủ hồ sơ công ty và thông tin thanh toán trước khi lập đề nghị.',
+                                           code='invoice_payment_settings_incomplete')
+        if snapshot is not None and any(_plain(snapshot[f]) != source_snapshot[f] for f in SNAPSHOT_FIELDS):
+            raise InvoicePaymentScopeError('Các hóa đơn có hồ sơ người mua hoặc thanh toán khác nhau; cần xuất tách kỳ.',
+                                           code='issued_invoice_snapshot_conflict')
+        snapshot = source_snapshot
+        items = [dict(r) for r in conn.execute(
+            'SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index', (source['id'],))]
+        if not items or abs(sum(_number(r['amount'], 'Tiền dòng hóa đơn') for r in items) - source['subtotal']) > 1:
+            raise InvoicePaymentScopeError('Thiếu chi tiết hoặc tiền chi tiết lệch tổng hóa đơn nguồn; tải lại và đối chiếu.',
+                                           code='invoice_source_total_mismatch')
+        if abs(_number(source['subtotal'], 'Trước thuế') + _number(source['tax_amount'], 'Thuế')
+               - _number(source['total_amount'], 'Thanh toán')) > 1 or source['total_amount'] <= 0:
+            raise InvoicePaymentScopeError('Tổng tiền hóa đơn nguồn không khớp trước thuế cộng thuế.',
+                                           code='invoice_source_total_mismatch')
+        invoices.append({
+            'draft_id': None, 'invoice_date': source['invoice_date'], 'invoice_series': source['invoice_series'],
+            'invoice_number': source['invoice_number'],
+            **{k: _vnd(source[k]) for k in ('subtotal', 'tax_amount', 'total_amount')},
+            'verification_source': 'synced_issued_source', 'source_invoice_id': source['id'],
+            'source_status_class': source['source_status_class'], 'source_stock_status': source['stock_status'],
+        })
+        source_lines.extend({**item, 'invoice_date': source['invoice_date'], 'invoice_series': source['invoice_series'],
+                             'invoice_number': source['invoice_number']} for item in items)
+    invoices.sort(key=lambda i: (i['invoice_date'], i['invoice_series'], i['invoice_number']))
+    result = {
+        'contractor': party, 'date_from': safe_from, 'date_to': safe_to, 'invoices': invoices,
+        'totals': {k: sum(i[k] for i in invoices) for k in ('subtotal', 'tax_amount', 'total_amount')},
+        'snapshot': snapshot, 'drafts': local['drafts'] if local else [], 'lines': local['lines'] if local else [],
+        'source_lines': source_lines, 'statement_kind': 'invoices',
+        'template_status': 'official_customer_xlsx', 'official_template_ready': True,
+        'warning': 'Số tiền lấy từ hóa đơn VAT đã phát hành. Thông tin nhận tiền là cấu hình tại lúc lập đề nghị. '
+                   'Có hóa đơn chưa liên kết bếp/ngày giao: bảng kê theo ngày hóa đơn, không xác nhận lịch sử giao nhận.',
+    }
+    result['scope_id'] = hashlib.sha256(json.dumps(result, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest().upper()
+    return result
+
+
 def public_payment_scope(scope: dict[str, Any]) -> dict[str, Any]:
     """Remove internal rendering rows while keeping the full proof summary."""
     return {
         key: value for key, value in scope.items()
-        if key not in {"drafts", "lines", "snapshot", "line_fingerprint"}
+        if key not in {"drafts", "lines", "snapshot", "line_fingerprint", "source_lines"}
     }
 
 

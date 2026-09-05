@@ -4,7 +4,7 @@
 > chuyển sang web Railway cho khách, không tiếp tục bàn giao EXE như trước.
 > Mốc Git này chưa phải bản đã triển khai/nghiệm thu Railway. Xem **13.12**.
 
-> **Đang triển khai Railway qua GitHub theo chỉ đạo tiếp theo:** xem **13.13**.
+> **Đợt sửa để nghiệm thu Railway đang thực hiện:** xem **13.15**. Các mục bên dưới có mốc ngày là lịch sử kiểm tra, không thay thế kết quả mới nhất.
 
 > **Lỗi 1 (BUG-0509-04): đã sửa và kiểm chứng bằng EXE ứng viên `2026.09.05.2`.**
 > Chạy chính EXE trên bản sao DB cũ đạt **257 → 266**, mở lại lần hai vẫn đúng;
@@ -800,3 +800,29 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Thêm chuyển Excel→PDF bằng LibreOffice cho Linux; giữ workbook/mẫu và render từng sheet hiển thị. Cần kiểm tra bố cục PDF thực tế trên Railway; không coi tương đương Microsoft Excel 100% khi chưa có ảnh đối chiếu.
 - Kiểm tra ban đầu: **7 test đạt** về đăng nhập, CSRF, chống thử mật khẩu và bộ render PDF hiện có. Đang kiểm tra deploy, chuyển dữ liệu, khởi động lại, xuất file và trình duyệt; chưa ghi thành công trước kết quả.
 - Đã đọc lại Google Sheet `1c1C4Imexri4VRolrNSSmWmSnpmM0hgj0TCCbm9if3D8`, tab `Khách hàng kiểm tra`, A1:I22: 14 mục vẫn `Chưa chốt` / `Đã sửa sau cuộc gọi` / `Chưa kiểm tra`. Không sửa cột nghiệm thu của khách; dùng cùng README để đối chiếu sau deploy.
+
+### 13.14. Kiểm tra trực tiếp Railway — tối 05/09/2026
+
+**Kết luận: đã deploy và đăng nhập được; chưa đạt kiểm thử sử dụng đầy đủ. Hai lỗi cloud dưới đây còn mở, chưa sửa trong lượt kiểm tra này.**
+
+- Railway CLI xác nhận service `tdp-web`, environment `production`, deployment `683aad5d-c71d-435f-80f6-7636ab8e943f` có trạng thái `SUCCESS`, instance `RUNNING`. Nguồn `xandrosworld/CDT`, nhánh `main`, commit `c79774d8c748031c26827846300564d345fb8c1b`, khớp HEAD local lúc kiểm tra.
+- Truy cập HTTPS `/login` đạt 200; `/health` đạt 200, `database_ready=true`, `schema_ready=true`, `integrity=ok`. Chưa đăng nhập gọi `/api/bootstrap` bị chặn 401. Đăng nhập bằng Chrome thật thành công; mở được 11 màn hình chính, chụp 12 ảnh gồm trang đăng nhập, không ghi nhận JavaScript exception trong lượt chạy.
+- Danh sách đầu vào tháng 8 trên API và màn hình đủ **266 hóa đơn**, **1.107 dòng**, tổng thanh toán **919.234.874 đồng**. Trạng thái: **264 cần ghép mã, 2 không nhập kho, 0 đã ghi kho**; có 1.104 dòng cần xử lý. Đầu ra tháng 8 trong DB hiện tại là 0. Đây là dữ liệu đã chuyển từ local, không phải xác nhận dữ liệu mới nhất trên máy khách hoặc kết quả đồng bộ mới từ nhà cung cấp.
+- Volume gắn `/data`; DB `/data/tdp.sqlite3`, exports `/data/exports`, `TDP_BOOTSTRAP=0`. Kiểm tra container thấy 75 file tài nguyên và marker bootstrap. API backup báo thành công gần nhất `2026-09-05T21:43:42`, chu kỳ 30 phút, giữ 14 ngày. Lượt này không restart/redeploy hoặc kiểm thử khôi phục backup.
+- **Lỗi kết nối hóa đơn:** `/api/msmi/status` và `/api/minvoice/status` đều trả **502**, thông báo thiếu cấu hình `.env`. Các biến Railway cần thiết đã có nhưng `MsmiConfig.from_env_files()` và `MinvoiceConfig.from_env_files()` chỉ đọc file, không đọc `os.environ`. Vì thế chưa kiểm chứng được kết nối nguồn thật; cần sửa cách nạp cấu hình cloud rồi kiểm tra lại, không kết luận sai mật khẩu hay nhà cung cấp bị sập.
+- **Lỗi phiếu giao:** gọi `/api/documents/preview` với phiếu đang có trả **500**, báo `Không thể dùng mẫu phiếu giao đã khóa: Không tìm thấy workbook golden`. `cloud_server.py` gán `server.MASTER_SOURCE` thành `/data/.no_automatic_master_import.xlsx` để ngăn nhập lại danh mục, nhưng các hàm xuất chứng từ trong `server.py` cũng dùng chính biến này làm `template_path`. Container thực tế có `/app/Em Thành.xlsx`; cần tách điều kiện tự nhập danh mục khỏi đường dẫn mẫu. Luồng phiếu giao bị chặn trước bước tải Excel/PDF, chưa thể ghi hai định dạng này đạt.
+- Bằng chứng riêng ngoài Git: `D:\TDP_RAILWAY_PRIVATE\evidence\recheck-20260905\browser-result.json` và 12 ảnh; lượt chẩn đoán tiếp `D:\TDP_RAILWAY_PRIVATE\evidence\diagnostic-20260905\browser-result.json`. Script chuẩn `tdp_system/qc_cloud_browser.mjs` dừng thất bại ở mSMI; bản chẩn đoán riêng tiếp tục qua hai lỗi connector để phát hiện lỗi phiếu giao. Không thay tiêu chí đạt của script chuẩn.
+- Phạm vi lượt này: kiểm tra cấu hình, log, dữ liệu hiển thị, đăng nhập và xem chứng từ; không sửa source sản phẩm, biến Railway, dữ liệu nghiệp vụ hoặc phát hành hóa đơn thật. Các lỗi nghiệp vụ còn mở ở mục 13 vẫn cần xử lý riêng.
+
+### 13.15. Sửa theo 14 mục checklist và phản ánh bổ sung — 05/09/2026
+
+- Chủ dự án yêu cầu sửa triệt để để khách kiểm tra các chức năng trên Railway. Đã đọc lại Google Sheet `Khách hàng kiểm tra`, A1:I22: 14 mục vẫn `Chưa chốt` / `Đã sửa sau cuộc gọi` / `Chưa kiểm tra`. Sheet là nguồn yêu cầu; không thay phần khách xác nhận bằng kết quả test kỹ thuật.
+- Đã sửa cấu hình mSMI/M-Invoice: biến môi trường được ưu tiên hơn file `.env`, kể cả giá trị trống để không dùng lại bí mật cũ. Đã tách tùy chọn nhập lại danh mục khỏi đường dẫn mẫu in, giữ `Em Thành.xlsx` cho các hàm xuất.
+- Đã sửa ưu tiên cột NCC nghiệp vụ so với cột cảnh báo `Chọn NCC`. Bổ sung nhận diện cấu trúc B:P của sheet đặt hàng 03/09, gồm `Đơn giá`, tiêu đề tiền là tổng SUBTOTAL và thứ tự trừ các cột điều chỉnh tương đương. Không suy ra cột tiền chỉ từ một ô số bất kỳ.
+- Kiểm tra trên bản sao DB local và đúng file khách `Đơn hàng  03.09.2026.xlsx`: đọc 352 dòng đơn, không có lỗi chặn ở các dòng đơn; dòng 342 giữ `kho`, mã `L000004`, lượng `0,54` qua đọc → lưu bản sao → kế hoạch đặt hàng. Nhận 273 dòng đặt hàng, dòng 103 giữ `kho`, `0,54`, **14.040 đồng**. DB nguồn không thay đổi.
+- Hai dòng nguồn vẫn cần khách xác nhận: dòng 157 `quả dưa hấu` và 158 `quả nhãn` có lượng **−1**; dòng 158 thiếu mã hàng. Giữ chặn để không ghi âm/sai công nợ. Đã hỏi chủ dự án đó là hàng trả hay nhập nhầm; không tự sửa Excel hoặc diễn giải thành nghiệp vụ trả hàng.
+- Hồ sơ VAT: bổ sung lấy trực tiếp hóa đơn đầu ra đã đồng bộ theo MST hồ sơ nhà thầu, không cần draft cục bộ; ghép với nguồn cục bộ không đếm trùng, kiểm tra trạng thái, danh tính người mua và ba tổng. Hóa đơn chưa liên kết bếp/ngày giao xuất **bảng kê hóa đơn VAT** kèm cảnh báo, không bịa lịch sử giao nhận. Thông tin nhận tiền được khóa trong phạm vi xem trước theo cấu hình lúc lập đề nghị. Luồng cục bộ giữ kiểm tra snapshot lịch sử. Bộ lọc nhà thầu/kỳ độc lập với đơn đang mở và giới hạn 200 draft.
+- Menu máy tính đã chuyển ngang; nội dung dùng toàn bộ chiều rộng. Giữ đường vào các chức năng còn dùng và điều hướng thu gọn trên điện thoại; nút đăng xuất hiển thị đủ chữ.
+- Hồi quy: **73 module / 539 test đều đạt, không bỏ qua bài nào**, dùng DB/thư mục riêng và connector offline. Log `D:\TDP_RAILWAY_PRIVATE\evidence\acceptance-regression-01\summary.json`; tái chạy bằng `python -m tdp_system.qa_railway_acceptance --output THU_MUC_RIENG`.
+- Trình duyệt: cả 5 lượt hóa đơn/kho, đơn/NCC/kho thực tế, báo cáo/công nợ, chọn/xem/in chứng từ và menu/sao lưu đều đạt trên fixture riêng. Có thao tác ghi/hoàn tác, giữ phần thiếu, chốt/mở/chốt lại, kiểm tra 1440/1024px. Lượt 4 được chạy lại sau sửa đường dẫn trong công cụ chạy test; không thay tiêu chí đạt của sản phẩm. Bằng chứng ở `browser-acceptance-01` và `browser-acceptance-02` dưới thư mục evidence; tái chạy bằng `python -m tdp_system.qa_browser_rounds --output THU_MUC_RIENG`.
+- Đang đưa bản sửa lên GitHub/Railway và kiểm tra lại kết nối nguồn, xuất Excel/PDF Linux, bảo toàn DB và màn hình thực. Chưa ghi nghiệm thu 100% trước khi có kết quả; không ký/phát hành hóa đơn thật khi kiểm thử.

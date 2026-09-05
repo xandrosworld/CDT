@@ -76,7 +76,8 @@ def selected_workbooks(conn, body, ctx):
             scope = issued_invoice_payment_scope(conn, body.get('contractor'), body.get('from'), body.get('to'))
             if body.get('scope_id') and body['scope_id'] != scope['scope_id']:
                 raise ValueError('Phạm vi hóa đơn đã đổi; hãy kiểm tra lại danh sách hóa đơn')
-            result.append(('Bang_tong_hop_giao_nhan.xlsx', invoice_delivery_statement_scope_workbook(scope)))
+            statement_name = 'Bang_ke_hoa_don_VAT.xlsx' if scope.get('statement_kind') == 'invoices' else 'Bang_tong_hop_giao_nhan.xlsx'
+            result.append((statement_name, invoice_delivery_statement_scope_workbook(scope)))
             result.append(('De_nghi_thanh_toan.xlsx', invoice_payment_request_workbook(scope,
                 issue_date=body.get('issue_date') or scope['date_to'],
                 request_number=body.get('request_number') or '……/CV/ĐNTT',

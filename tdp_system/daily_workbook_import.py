@@ -19,6 +19,11 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+try:
+    from .customer_purchase_layout import customer_purchase_fields
+except ImportError:
+    from customer_purchase_layout import customer_purchase_fields
+
 
 REFERENCE_ROLES = {
     "cccd": "identity_reference",
@@ -107,8 +112,17 @@ def _header_map(ws) -> tuple[int, dict[str, int]]:
         mapping: dict[str, int] = {}
         for column in range(1, min(ws.max_column, 50) + 1):
             field = reverse.get(_slug(ws.cell(row_index, column).value))
-            if field and field not in mapping:
+            if field and (field not in mapping or (
+                field == 'supplier' and _slug(ws.cell(row_index, mapping[field]).value) == 'chonncc'
+                and _slug(ws.cell(row_index, column).value) in {'ncc', 'nhacungcap'}
+            )):
                 mapping[field] = column
+        if _slug(ws.title) == 'dathang':
+            purchase = customer_purchase_fields([ws.cell(row_index, c).value for c in range(1, 17)])
+            if purchase:
+                mapping.update({{'base_qty': 'qty', 'work_date': 'date'}.get(k, k): v
+                                for k, v in purchase.items()})
+                mapping.pop('sell_price', None)
         score = len(mapping)
         candidate = (score, row_index, mapping)
         if best is None or candidate[0] > best[0]:
