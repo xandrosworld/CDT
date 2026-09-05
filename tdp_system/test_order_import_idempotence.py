@@ -173,7 +173,12 @@ class OrderImportIdempotenceTests(unittest.TestCase):
             response.get_json()["importKey"]
             for response in (first, other_sheet, other_date, other_bytes)
         }), 4)
-        self.assertEqual(self.database_counts(), (4, 4, 4))
+        # New bytes in the same date/sheet scope replace the prior import.
+        self.assertEqual(self.database_counts(), (3, 3, 3))
+        self.assertEqual(first.get_json()["batch"]["id"], other_bytes.get_json()["batch"]["id"])
+        self.assertEqual(other_bytes.get_json()["replacement"]["replaced_rows"], 1)
+        with server.db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM order_reimport_history").fetchone()[0], 1)
 
     def test_deleted_batch_receipt_cascades_and_allows_deliberate_reimport(self):
         payload = self.workbook_bytes()

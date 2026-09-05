@@ -1,5 +1,13 @@
 # CDT – Hệ thống vận hành Thành Đạt Phát
 
+> Mốc source trước khi chuyển sang Railway, ngày 05/09/2026: xem
+> [README-new-2.md](README-new-2.md), đặc biệt mục 13.11–13.12, để biết kết quả
+> kiểm chứng và các lỗi còn mở. Lỗi ngày hóa đơn lịch sử 257/266 đã được sửa và
+> kiểm tra bằng EXE trên bản sao DB thật. Chưa nghiệm thu toàn bộ đầu vào–đầu ra.
+> Chủ dự án đã chọn chuyển sang web Railway thay cho bàn giao EXE; repo hiện
+> chưa được xác nhận sẵn sàng triển khai Railway. Mô tả module desktop bên dưới
+> là lịch sử; phạm vi mới ở README-new-2.md được ưu tiên.
+
 Ứng dụng Flask/SQLite chạy tại Windows hoặc trong mạng LAN, gồm nhập đơn Excel, đặt NCC sau khi trừ tồn, phiếu giao, kho sổ sách, công nợ, mSMI, dự thảo hóa đơn đầu ra, xưởng cơm/PO, chấm công/lương và luồng duyệt-in.
 
 Danh mục tên xuất hóa đơn và bếp → XCOM (xưởng cơm) hỗ trợ nạp Excel theo hai bước xem trước/xác nhận, ghép theo mã hoặc tên duy nhất, chặn toàn bộ file khi còn lỗi và nhập lại không tạo bản ghi trùng.
@@ -28,6 +36,6 @@ python tdp_system\qc_system.py
 
 ## Dữ liệu và bí mật
 
-Repo chỉ chứa source. `.env`, SQLite, file Excel/Word/PDF khách hàng, bản build và log đều bị loại khỏi Git. Máy triển khai cần được cấp riêng file danh mục, dữ liệu và cấu hình API.
+Repo lưu source, tài liệu, kiểm thử và bốn mẫu trình bày đã bỏ dữ liệu giao dịch. `.env`, SQLite, danh mục CCCD, file Excel/Word/PDF khách hàng, bản build và log đều bị loại khỏi Git. Máy triển khai cần được cấp riêng file danh mục, dữ liệu và cấu hình API. Mốc Git là bản khôi phục mã nguồn, không thay thế sao lưu DB vận hành.
 
 Các thao tác mSMI là chỉ đọc; đồng bộ dùng tối đa 199 hóa đơn/trang theo giới hạn production và tạo phiếu nhập có chống trùng. Hóa đơn đầu ra chỉ tạo dự thảo và giữ tồn; người dùng vẫn phải kiểm tra, ký và phát hành bên ngoài rồi mới xác nhận trong hệ thống để ghi xuất kho. Dự thảo hủy sẽ nhả tồn. In hàng loạt luôn có bước duyệt.

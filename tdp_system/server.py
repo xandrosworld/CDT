@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import io
 import hashlib
 import ipaddress
@@ -7,6 +8,7 @@ import json
 import math
 import os
 import re
+import shutil
 import socket
 import sqlite3
 import sys
@@ -16,12 +18,15 @@ import unicodedata
 import uuid
 import webbrowser
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from difflib import SequenceMatcher
 from pathlib import Path
+from urllib.error import URLError
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 from openpyxl import Workbook, load_workbook
@@ -32,27 +37,300 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 try:
+    from automatic_backup import automatic_backup, backup_status, sqlite_snapshot, start_backup_worker
+except ImportError:
+    from .automatic_backup import automatic_backup, backup_status, sqlite_snapshot, start_backup_worker
+
+try:
+    from invoice_date_migration import repair_legacy_input_dates
+except ImportError:
+    from .invoice_date_migration import repair_legacy_input_dates
+
+try:
+    from seller_identity_catalog import CATALOG_FILENAME, sync_catalog, EXCLUDED_SELLERS, is_excluded_seller
+except ImportError:
+    from .seller_identity_catalog import CATALOG_FILENAME, sync_catalog, EXCLUDED_SELLERS, is_excluded_seller
+
+try:
     from minvoice_client import MinvoiceClient, MinvoiceConfig, MinvoiceError
 except ImportError:  # Allows importing as tdp_system.server in tests/tools.
     from .minvoice_client import MinvoiceClient, MinvoiceConfig, MinvoiceError
 
 try:
+    from msmi_client import MsmiClient, MsmiConfig
+except ImportError:  # Allows importing as tdp_system.server in tests/tools.
+    from .msmi_client import MsmiClient, MsmiConfig
+
+try:
     from contract_modules import (
+        PurchaseOrderApplyError,
+        apply_purchase_order_preview,
+        debt_period_payload,
         init_contract_schema,
         inventory_lookup,
         net_delivered,
         net_received,
+        parse_purchase_order_workbook,
+        purchase_business_row_key,
+        purchase_line_changed,
         post_purchase_list_inventory,
+        purchase_order_payload,
         register_contract_routes,
     )
 except ImportError:
     from .contract_modules import (
+        PurchaseOrderApplyError,
+        apply_purchase_order_preview,
+        debt_period_payload,
         init_contract_schema,
         inventory_lookup,
         net_delivered,
         net_received,
+        parse_purchase_order_workbook,
+        purchase_business_row_key,
+        purchase_line_changed,
         post_purchase_list_inventory,
+        purchase_order_payload,
         register_contract_routes,
+    )
+
+try:
+    from invoice_workbench import init_invoice_workbench_schema, register_invoice_workbench_routes
+except ImportError:
+    from .invoice_workbench import init_invoice_workbench_schema, register_invoice_workbench_routes
+
+try:
+    from invoice_input_export import register_invoice_input_export_routes
+except ImportError:
+    from .invoice_input_export import register_invoice_input_export_routes
+
+try:
+    from invoice_mapping import register_invoice_mapping_routes
+except ImportError:
+    from .invoice_mapping import register_invoice_mapping_routes
+
+try:
+    from invoice_inventory import register_invoice_inventory_routes
+except ImportError:
+    from .invoice_inventory import register_invoice_inventory_routes
+
+try:
+    from invoice_valuation import register_invoice_valuation_routes
+except ImportError:
+    from .invoice_valuation import register_invoice_valuation_routes
+
+try:
+    from inventory_export import register_inventory_export_routes
+except ImportError:
+    from .inventory_export import register_inventory_export_routes
+
+try:
+    from inventory_period_close import (
+        init_inventory_period_close_schema,
+        register_inventory_period_close_routes,
+    )
+except ImportError:
+    from .inventory_period_close import (
+        init_inventory_period_close_schema,
+        register_inventory_period_close_routes,
+    )
+
+try:
+    from invoice_tax_export import InvoiceTaxExportError, export_invoice_drafts_zip
+except ImportError:
+    from .invoice_tax_export import InvoiceTaxExportError, export_invoice_drafts_zip
+
+try:
+    from bk_import import init_bk_import_schema, register_bk_import_routes
+except ImportError:
+    from .bk_import import init_bk_import_schema, register_bk_import_routes
+
+try:
+    from payable_ledger import (
+        init_payable_ledger_schema,
+        register_payable_ledger_routes,
+        sync_payable_ledger,
+    )
+except ImportError:
+    from .payable_ledger import (
+        init_payable_ledger_schema,
+        register_payable_ledger_routes,
+        sync_payable_ledger,
+    )
+
+try:
+    from payable_payments import (
+        PayablePaymentError,
+        create_payable_payment,
+        init_payable_payment_schema,
+        register_payable_payment_routes,
+    )
+except ImportError:
+    from .payable_payments import (
+        PayablePaymentError,
+        create_payable_payment,
+        init_payable_payment_schema,
+        register_payable_payment_routes,
+    )
+
+try:
+    from payable_export import register_payable_export_routes
+except ImportError:
+    from .payable_export import register_payable_export_routes
+
+try:
+    from receivable_ledger import (
+        init_receivable_ledger_schema,
+        register_receivable_ledger_routes,
+        sync_receivable_ledger,
+    )
+except ImportError:
+    from .receivable_ledger import (
+        init_receivable_ledger_schema,
+        register_receivable_ledger_routes,
+        sync_receivable_ledger,
+    )
+
+try:
+    from receivable_export import register_receivable_export_routes
+except ImportError:
+    from .receivable_export import register_receivable_export_routes
+
+try:
+    from daily_import_lifecycle import (
+        DailyImportError,
+        canonical_day_sheet,
+        confirm_daily_import_scope,
+        daily_payload_hash,
+        daily_row_key,
+        finalize_daily_workday,
+        init_daily_import_schema,
+        prepare_daily_import_version,
+    )
+except ImportError:
+    from .daily_import_lifecycle import (
+        DailyImportError,
+        canonical_day_sheet,
+        confirm_daily_import_scope,
+        daily_payload_hash,
+        daily_row_key,
+        finalize_daily_workday,
+        init_daily_import_schema,
+        prepare_daily_import_version,
+    )
+
+try:
+    from daily_workbook_import import analysis_state_hash, analyze_daily_workbook
+except ImportError:
+    from .daily_workbook_import import analysis_state_hash, analyze_daily_workbook
+
+try:
+    from daily_reference_import import init_daily_reference_schema, register_daily_reference_routes
+except ImportError:
+    from .daily_reference_import import init_daily_reference_schema, register_daily_reference_routes
+
+try:
+    from order_price_override import (
+        direct_price_change_ids,
+        init_order_price_override_schema,
+        register_order_price_override_routes,
+    )
+except ImportError:
+    from .order_price_override import (
+        direct_price_change_ids,
+        init_order_price_override_schema,
+        register_order_price_override_routes,
+    )
+
+try:
+    from quote_import import (
+        init_quote_import_schema,
+        quote_buy_price,
+        quote_rows_for_contractor,
+        quote_sell_price,
+        register_quote_import_routes,
+    )
+except ImportError:
+    from .quote_import import (
+        init_quote_import_schema,
+        quote_buy_price,
+        quote_rows_for_contractor,
+        quote_sell_price,
+        register_quote_import_routes,
+    )
+
+try:
+    from outgoing_substitution import (
+        init_outgoing_substitution_schema,
+        register_outgoing_substitution_routes,
+    )
+except ImportError:
+    from .outgoing_substitution import (
+        init_outgoing_substitution_schema,
+        register_outgoing_substitution_routes,
+    )
+
+try:
+    from quote_export import (
+        QuoteExportError,
+        build_contractor_quote_workbook,
+        contractor_quote_filename,
+        quote_recipient,
+    )
+except ImportError:
+    from .quote_export import (
+        QuoteExportError,
+        build_contractor_quote_workbook,
+        contractor_quote_filename,
+        quote_recipient,
+    )
+
+try:
+    from delivery_export import (
+        DeliveryExportError,
+        build_delivery_workbook,
+        delivery_prices_visible,
+    )
+except ImportError:
+    from .delivery_export import (
+        DeliveryExportError,
+        build_delivery_workbook,
+        delivery_prices_visible,
+    )
+
+try:
+    from purchase_summary_export import (
+        PurchaseSummaryError,
+        collect_purchase_summary_rows,
+    )
+except ImportError:
+    from .purchase_summary_export import (
+        PurchaseSummaryError,
+        collect_purchase_summary_rows,
+    )
+
+try:
+    from receipt_export import (
+        build_purchase_documents_workbook,
+        enrich_receipt_identity_rows,
+    )
+except ImportError:
+    from .receipt_export import (
+        build_purchase_documents_workbook,
+        enrich_receipt_identity_rows,
+    )
+
+try:
+    from report_export import (
+        ReportExportError,
+        build_monthly_report_workbook,
+        collect_monthly_report_rows,
+    )
+except ImportError:
+    from .report_export import (
+        ReportExportError,
+        build_monthly_report_workbook,
+        collect_monthly_report_rows,
     )
 
 
@@ -64,12 +342,23 @@ if FROZEN:
     STATIC_DIR = BUNDLE_DIR / "static"
     SHARED_DIR = BUNDLE_DIR / "shared"
     MASTER_SOURCE = BUNDLE_DIR / "Em Thành.xlsx"
+    OPENING_TEMPLATE_SOURCE = BUNDLE_DIR / "TĐK T8-2026.xlsx thụy.xlsx"
+    TAX_TEMPLATE_DIR = BUNDLE_DIR / "tax_templates"
+    PRINT_TEMPLATE_DIR = BUNDLE_DIR / "templates"
+    BUNDLED_CONNECTOR_CONFIG = BUNDLE_DIR / "config" / "connector.env"
+    SEED_DATABASE_SOURCE = BUNDLE_DIR / "seed" / "tdp_seed.sqlite3"
 else:
     APP_DIR = Path(__file__).resolve().parent
     ROOT = APP_DIR.parent
     STATIC_DIR = APP_DIR / "static"
     SHARED_DIR = ROOT / "demo_tdp"
     MASTER_SOURCE = ROOT / "Em Thành.xlsx"
+    OPENING_TEMPLATE_SOURCE = ROOT / "_HANDOFF" / "EXTERNAL_INPUTS" / "TĐK T8-2026.xlsx thụy.xlsx"
+    TAX_TEMPLATE_DIR = ROOT / "bosung.30.8.26"
+    PRINT_TEMPLATE_DIR = APP_DIR / "templates"
+    BUNDLED_CONNECTOR_CONFIG = APP_DIR / "connector.env"
+    SEED_DATABASE_SOURCE = APP_DIR / "tdp_seed.sqlite3"
+DAILY_ORDER_TEMPLATE_SOURCE = PRINT_TEMPLATE_DIR / "daily_order_template.xlsx"
 DATA_DIR = Path(os.environ.get("TDP_DATA_DIR", str(APP_DIR / "data"))).resolve()
 EXPORT_DIR = Path(os.environ.get("TDP_EXPORT_DIR", str(APP_DIR / "exports"))).resolve()
 DB_PATH = Path(os.environ.get("TDP_DB_PATH", str(DATA_DIR / "tdp.sqlite3")))
@@ -90,6 +379,53 @@ def ensure_writable_directory(path: Path, label: str):
 
 ensure_writable_directory(DATA_DIR, "Thư mục dữ liệu")
 ensure_writable_directory(EXPORT_DIR, "Thư mục xuất file")
+
+
+def install_seed_database_if_missing(
+    seed_path: Path = SEED_DATABASE_SOURCE,
+    target_path: Path = DB_PATH,
+) -> bool:
+    """Install the bundled customer snapshot once without overwriting user data."""
+
+    if target_path.exists() or not seed_path.is_file():
+        return False
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target_path.with_name(
+        f".{target_path.name}.installing-{uuid.uuid4().hex}.tmp"
+    )
+    connection = None
+    try:
+        shutil.copy2(seed_path, temporary)
+        connection = sqlite3.connect(temporary)
+        integrity = str(connection.execute("PRAGMA quick_check(1)").fetchone()[0])
+        connection.close()
+        connection = None
+        if integrity.lower() != "ok":
+            raise sqlite3.DatabaseError("Dữ liệu khởi tạo không vượt qua kiểm tra toàn vẹn")
+        # An existing customer database always wins, including one created while
+        # the bundled snapshot was being checked. Both paths are on the same disk.
+        try:
+            os.link(temporary, target_path)
+        except FileExistsError:
+            return False
+    except Exception:
+        if connection is not None:
+            connection.close()
+        temporary.unlink(missing_ok=True)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
+
+
+def connector_config_paths() -> list[Path]:
+    """Use the bundled configuration as fallback and an adjacent file as override."""
+
+    paths = [BUNDLED_CONNECTOR_CONFIG] if FROZEN else []
+    for candidate in (ROOT / ".env", APP_DIR / ".env"):
+        if candidate not in paths:
+            paths.append(candidate)
+    return paths
 
 NAVY = "17324D"
 TEAL = "087F73"
@@ -113,6 +449,16 @@ ORDER_IMPORT_MAX_BYTES = 20 * 1024 * 1024
 ORDER_IMPORT_MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 ORDER_IMPORT_MAX_ENTRIES = 5_000
 ORDER_IMPORT_MAX_ROWS = 100_000
+
+
+@app.after_request
+def prevent_stale_application_assets(response):
+    """A replaced EXE/source must never leave the browser running old UI code."""
+    if request.path == "/" or request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 @app.before_request
@@ -316,6 +662,12 @@ def safe_sheet_name(value: str) -> str:
     return re.sub(r"[\\/*?:\[\]]", "-", clean_text(value) or "Sheet")[:31]
 
 
+try:
+    from physical_inventory import init_physical_inventory_schema, register_physical_inventory_routes, physical_order_revision
+except ImportError:
+    from .physical_inventory import init_physical_inventory_schema, register_physical_inventory_routes, physical_order_revision
+
+
 @contextmanager
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=20)
@@ -438,7 +790,16 @@ CREATE TABLE IF NOT EXISTS payments (
     party_code TEXT NOT NULL,
     amount REAL NOT NULL,
     note TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    method TEXT NOT NULL DEFAULT '',
+    reference_code TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'posted',
+    request_key TEXT NOT NULL DEFAULT '',
+    request_hash TEXT NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL DEFAULT '',
+    reversed_at TEXT,
+    reversal_reason TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -466,31 +827,23 @@ def pre_migration_backup():
     target = backup_dir / (
         f"tdp_pre_migration_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:10]}.sqlite3"
     )
-    source = destination = None
     try:
-        source = sqlite3.connect(DB_PATH, timeout=20)
-        destination = sqlite3.connect(target)
-        source.backup(destination)
-        if str(destination.execute("PRAGMA quick_check(1)").fetchone()[0]).lower() != "ok":
-            raise sqlite3.DatabaseError("backup integrity check failed")
-    except (OSError, sqlite3.Error) as exc:
-        try:
-            target.unlink(missing_ok=True)
-        except OSError:
-            pass
+        sqlite_snapshot(DB_PATH, target)
+    except (OSError, sqlite3.Error, TimeoutError) as exc:
         raise RuntimeError("Không tạo được bản sao an toàn trước khi nâng cấp dữ liệu") from exc
-    finally:
-        if destination is not None:
-            destination.close()
-        if source is not None:
-            source.close()
     backups = sorted(
-        backup_dir.glob("tdp_pre_migration_*.sqlite3"),
+        (path for path in backup_dir.glob("tdp_pre_migration_*.sqlite3")
+         if re.fullmatch(r"tdp_pre_migration_\d{8}_\d{6}_[a-f0-9]{10}\.sqlite3", path.name)
+         and not path.is_symlink() and path.resolve().parent == backup_dir.resolve()),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
     for old in backups[5:]:
-        old.unlink(missing_ok=True)
+        if not old.is_symlink() and old.resolve().parent == backup_dir.resolve():
+            try:
+                old.unlink(missing_ok=True)
+            except OSError:
+                pass  # A verified new backup exists; failed pruning is not data loss.
     return target
 
 
@@ -498,12 +851,27 @@ def init_database():
     pre_migration_backup()
     with db() as conn:
         conn.executescript(SCHEMA)
-        init_contract_schema(conn)
+        init_contract_schema(conn, opening_template_path=OPENING_TEMPLATE_SOURCE)
+        init_daily_import_schema(conn)
+        init_daily_reference_schema(conn)
+        init_order_price_override_schema(conn)
+        init_quote_import_schema(conn)
+        init_outgoing_substitution_schema(conn)
+        init_invoice_workbench_schema(conn)
+        init_inventory_period_close_schema(conn)
+        init_bk_import_schema(conn)
+        init_payable_ledger_schema(conn)
+        init_payable_payment_schema(conn)
+        init_receivable_ledger_schema(conn)
         order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
         if "warnings" not in order_columns:
             conn.execute("ALTER TABLE orders ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]'")
         if "invoice_nature" not in order_columns:
             conn.execute("ALTER TABLE orders ADD COLUMN invoice_nature TEXT NOT NULL DEFAULT '1'")
+        init_physical_inventory_schema(conn)
+        # The pre-migration backup above precedes all historical date repairs.
+        # Posted inventory remains unchanged and is listed for reconciliation.
+        repair_legacy_input_dates(conn, timestamp=now_iso())
         defaults = {
             "company": "CÔNG TY TNHH THỰC PHẨM THÀNH ĐẠT PHÁT",
             "purchase_rate": "0.95",
@@ -512,30 +880,22 @@ def init_database():
         for key, value in defaults.items():
             if setting_get(conn, key) is None:
                 setting_set(conn, key, value)
+        sync_payable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso())
     sync_master_if_needed()
     auto_backup()
 
 
 def auto_backup():
-    backup_dir = DATA_DIR / "auto_backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    today = date.today().isoformat()
-    target = backup_dir / f"tdp_{today}.sqlite3"
-    if target.exists() or not DB_PATH.exists():
-        return
-    source = sqlite3.connect(DB_PATH)
-    destination = sqlite3.connect(target)
-    try:
-        source.backup(destination)
-    finally:
-        destination.close()
-        source.close()
-    backups = sorted(backup_dir.glob("tdp_*.sqlite3"), key=lambda path: path.name, reverse=True)
-    for old in backups[14:]:
-        old.unlink()
+    return automatic_backup(DB_PATH, DATA_DIR)
 
 
 def sync_master_if_needed(force=False):
+    identity_catalog = PRINT_TEMPLATE_DIR / CATALOG_FILENAME
+    if identity_catalog.exists():
+        # Independent of master_version: existing installations also need this correction.
+        with db() as conn:
+            sync_catalog(conn, identity_catalog)
     if not MASTER_SOURCE.exists():
         return
     version = f"{MASTER_FORMAT_VERSION}-{int(MASTER_SOURCE.stat().st_mtime)}"
@@ -546,7 +906,7 @@ def sync_master_if_needed(force=False):
     wb = load_workbook(MASTER_SOURCE, data_only=True, read_only=False)
     with db() as conn:
         # People / CCCD
-        if "CCCD" in wb.sheetnames:
+        if "CCCD" in wb.sheetnames and not identity_catalog.exists():
             ws = wb["CCCD"]
             for row in range(2, ws.max_row + 1):
                 name = clean_text(ws.cell(row, 2).value)
@@ -559,7 +919,7 @@ def sync_master_if_needed(force=False):
                     "ON CONFLICT(name) DO UPDATE SET cccd=excluded.cccd,issue_date=excluded.issue_date,"
                     "issue_place=excluded.issue_place",
                     (name, clean_text(ws.cell(row, 3).value), issue_date,
-                     clean_text(ws.cell(row, 5).value), "Hải Phòng"),
+                     clean_text(ws.cell(row, 5).value), ""),
                 )
 
         # Contractor and kitchen mapping.
@@ -655,12 +1015,17 @@ def product_lookup(conn):
     return by_code, by_name
 
 
-def get_sell_price(conn, product_code: str, contractor: str):
+def get_sell_price(conn, product_code: str, contractor: str, work_date: str = ""):
     contractor_row = conn.execute(
         "SELECT price_group,pricing_mode FROM contractors WHERE code=?", (contractor,)
     ).fetchone()
     if not contractor_row or contractor_row["pricing_mode"] == "daily":
         return 0.0, "Giá theo ngày: cần nhập giá bán"
+    quote = quote_sell_price(conn, product_code, contractor, work_date)
+    if quote["has_version"]:
+        if quote["value"] is not None:
+            return float(quote["value"]), ""
+        return 0.0, quote["message"]
     row = conn.execute(
         "SELECT price_text,price_value FROM product_prices WHERE product_code=? AND price_group=?",
         (product_code, contractor_row["price_group"] or contractor),
@@ -752,6 +1117,18 @@ def display_date(value, fallback: str):
     return fallback
 
 
+def display_date_vn(value) -> str:
+    """Format an operational ISO date for people-facing exports."""
+
+    text = clean_text(value)
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            pass
+    return text
+
+
 def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
     errors = []
     warnings = []
@@ -810,9 +1187,26 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
     supplier_return_qty = order_number(raw.get("supplier_return_qty"), "Số lượng trả NCC")
     customer_return_qty = order_number(raw.get("customer_return_qty"), "Số lượng khách trả")
     unit = clean_text(raw.get("unit")) or (clean_text(product["unit"]) if product else "")
-    buy_price = order_number(raw.get("buy_price"), "Giá mua")
-    if buy_price <= 0 and product:
-        buy_price = order_number(product["buy_price"], "Giá mua trong danh mục")
+    requested_buy_price = order_number(raw.get("buy_price"), "Giá mua")
+    period_buy_price = quote_buy_price(conn, code, batch_date, contractor) if code else {
+        "has_version": False, "value": None, "allow_actual_fallback": True,
+    }
+    if period_buy_price["has_version"]:
+        if period_buy_price["value"] is not None:
+            # A non-blank price in the confirmed quotation is authoritative for
+            # this period, even when the daily workbook carries a stale value.
+            buy_price = float(period_buy_price["value"])
+        elif period_buy_price["allow_actual_fallback"]:
+            # A blank quotation price may be supplemented only by the actual
+            # purchase value supplied on the operational row.  Do not revive a
+            # previous-period catalogue value here.
+            buy_price = requested_buy_price
+        else:
+            buy_price = 0.0
+    else:
+        buy_price = requested_buy_price
+        if buy_price <= 0 and product:
+            buy_price = order_number(product["buy_price"], "Giá mua trong danh mục")
     raw_invoice_nature = clean_text(raw.get("invoice_nature")) or "1"
     requested_sell_price = order_number(raw.get("sell_price"), "Giá bán")
     promotion_marker = "khuyenmai" in slug(
@@ -820,10 +1214,21 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
     )
     is_promotion = raw_invoice_nature == "2" or (promotion_marker and requested_sell_price <= 0)
     invoice_nature = "2" if is_promotion else "1"
-    sell_price = requested_sell_price
     price_message = ""
-    if sell_price <= 0 and code and contractor and not is_promotion:
-        sell_price, price_message = get_sell_price(conn, code, contractor)
+    period_sell_price = (
+        quote_sell_price(conn, code, contractor, batch_date)
+        if code and contractor and not is_promotion
+        else {"has_version": False, "applicable": False, "value": None, "message": ""}
+    )
+    if period_sell_price["has_version"] and period_sell_price["applicable"]:
+        # Once a quotation exists for the order's period, group-priced orders
+        # must use that version rather than a possibly different embedded value.
+        sell_price = float(period_sell_price["value"] or 0)
+        price_message = period_sell_price["message"]
+    else:
+        sell_price = requested_sell_price
+    if sell_price <= 0 and code and contractor and not is_promotion and not period_sell_price["has_version"]:
+        sell_price, price_message = get_sell_price(conn, code, contractor, batch_date)
         if not math.isfinite(sell_price):
             errors.append("Giá bán trong bảng giá phải là số hữu hạn")
             sell_price = 0
@@ -879,7 +1284,7 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
     if sell_price > 0 and buy_price > sell_price and not is_promotion:
         warnings.append("Giá bán thấp hơn giá mua – cần xác nhận bán lỗ")
     if purchase_list and not cccd:
-        errors.append("Hàng bảng kê thiếu CCCD")
+        warnings.append("Hàng bảng kê chưa có CCCD – người dùng bổ sung sau khi cần lập bảng kê")
     if damaged_qty + supplier_return_qty > actual_received:
         errors.append("Hàng hỏng + trả NCC không được vượt số thực nhận")
     if customer_return_qty > actual_delivered:
@@ -1008,12 +1413,8 @@ def analyze_workbook(path: Path):
     return candidates
 
 
-def save_imported_batch(conn, orders, work_date, source_name):
-    cur = conn.execute(
-        "INSERT INTO batches(work_date,source_name,status,created_at) VALUES(?,?,?,?)",
-        (work_date, source_name, "draft", now_iso()),
-    )
-    batch_id = cur.lastrowid
+def save_imported_orders(conn, batch_id, orders):
+    """Insert parsed rows into an existing batch owned by the caller transaction."""
     for item in orders:
         conn.execute(
             """INSERT INTO orders(
@@ -1035,6 +1436,15 @@ def save_imported_batch(conn, orders, work_date, source_name):
                 json.dumps(item["warnings"], ensure_ascii=False), now_iso(),
             ),
         )
+
+
+def save_imported_batch(conn, orders, work_date, source_name):
+    cur = conn.execute(
+        "INSERT INTO batches(work_date,source_name,status,created_at) VALUES(?,?,?,?)",
+        (work_date, source_name, "draft", now_iso()),
+    )
+    batch_id = cur.lastrowid
+    save_imported_orders(conn, batch_id, orders)
     return batch_id
 
 
@@ -1070,6 +1480,635 @@ def valid_order_import_batch(conn, import_key: str):
            LIMIT 1""",
         (import_key,),
     ).fetchone()
+
+
+def workbook_date_token(value) -> tuple[int, int] | None:
+    match = re.search(r"(?:^|\D)(\d{1,2})[.\-_/](\d{1,2})(?:\D|$)", str(value or ""))
+    if not match:
+        return None
+    day, month = int(match.group(1)), int(match.group(2))
+    try:
+        date(2000, month, day)
+    except ValueError:
+        return None
+    return day, month
+
+
+def strict_daily_preview(path: Path, source_name: str = "") -> dict | None:
+    """Return a safe structure-first preview, or None for legacy workbooks."""
+    analysis = analyze_daily_workbook(path)
+    if not analysis["strictCustomerWorkbook"]:
+        return None
+    # Customer workbooks retain older daily sheets.  When the uploaded
+    # filename names one exact day, scope the strict preview to that matching
+    # sheet just as the operator UI does; otherwise a valid workbook with many
+    # historical sheets has no single detected date and can never be confirmed.
+    # Non-matching day sheets remain visible only as safe name-level references
+    # and are never parsed or written in this upload.
+    source_token = workbook_date_token(source_name)
+    if source_token:
+        matching_days = [
+            sheet for sheet in analysis["daySheets"]
+            if workbook_date_token(sheet.get("name")) == source_token
+        ]
+        if len(matching_days) == 1:
+            selected_name = matching_days[0]["name"]
+            analysis["ignoredSheets"].extend({
+                "name": sheet["name"], "role": "historical_daily_sheet",
+            } for sheet in analysis["daySheets"] if sheet["name"] != selected_name)
+            analysis["daySheets"] = matching_days
+            selected_dates = matching_days[0].get("workDates") or []
+            analysis["detectedWorkDate"] = selected_dates[0] if len(selected_dates) == 1 else ""
+    customer_orders_by_sheet = {}
+    for sheet in analysis["daySheets"]:
+        dates = sheet.get("workDates") or []
+        fallback_date = dates[0] if len(dates) == 1 else date.today().isoformat()
+        orders, skipped = parse_workbook(path, fallback_date, [sheet["name"]])
+        customer_orders_by_sheet[sheet["name"]] = orders
+        sheet["parsedRows"] = len(orders)
+        sheet["errorRows"] = sum(bool(item.get("errors")) for item in orders)
+        sheet["warningRows"] = sum(bool(item.get("warnings")) for item in orders)
+        sheet["writeScope"] = "customer_orders"
+        if skipped or len(orders) != int(sheet.get("rows") or 0):
+            sheet["confirmAvailable"] = False
+            sheet["previewIssue"] = "row_count_mismatch"
+    for sheet in analysis["purchaseSheets"]:
+        sheet["errorRows"] = 0
+        sheet["warningRows"] = 0
+        sheet["writeScope"] = "purchase_orders_locked_until_round_trip"
+        sheet["previewIssue"] = "customer_scope_must_be_loaded_first"
+    analysis["phase"] = "first_load"
+    analysis["batchId"] = None
+    analysis["scopeSelectionRequired"] = False
+    analysis["_customerOrders"] = customer_orders_by_sheet
+
+    confirmable_days = [
+        sheet for sheet in analysis["daySheets"] if sheet.get("confirmAvailable")
+    ]
+    detected_date = analysis.get("detectedWorkDate") or ""
+    if len(confirmable_days) == 1 and detected_date:
+        day_sheet = confirmable_days[0]
+        with db() as conn:
+            workday = conn.execute(
+                """SELECT * FROM daily_workdays
+                   WHERE work_date=? AND day_sheet_key=?""",
+                (detected_date, canonical_day_sheet(day_sheet["name"])),
+            ).fetchone()
+            if workday:
+                batch_id = int(workday["batch_id"])
+                latest = conn.execute(
+                    """SELECT source_hash,phase FROM daily_import_versions
+                       WHERE daily_workday_id=? ORDER BY version_no DESC LIMIT 1""",
+                    (int(workday["id"]),),
+                ).fetchone()
+                first_load_replay = bool(
+                    latest and latest["phase"] == "first_load"
+                    and latest["source_hash"] == analysis["sourceHash"]
+                )
+                if not first_load_replay:
+                    analysis["phase"] = "finalization"
+                    analysis["batchId"] = batch_id
+                    analysis["scopeSelectionRequired"] = True
+                    customer_diff = strict_customer_scope_diff(
+                        conn, batch_id, customer_orders_by_sheet[day_sheet["name"]],
+                    )
+                    day_sheet["diff"] = customer_diff
+                    if customer_diff["conflicts"]:
+                        day_sheet["confirmAvailable"] = False
+                        day_sheet["previewIssue"] = "customer_scope_conflict"
+                    purchase_preview = None
+                    if len(analysis["purchaseSheets"]) == 1:
+                        purchase_sheet = analysis["purchaseSheets"][0]
+                        try:
+                            purchase_preview = strict_purchase_preview_from_path(
+                                conn, path, batch_id,
+                            )
+                            purchase_diff = strict_purchase_scope_diff(
+                                conn, batch_id, purchase_preview["items"],
+                                purchase_preview["error_rows"],
+                            )
+                            purchase_sheet.update(
+                                parsedRows=purchase_preview["count"],
+                                errorRows=purchase_preview["error_rows"],
+                                warningRows=purchase_preview["warning_rows"],
+                                writeScope="purchase_orders",
+                                confirmAvailable=bool(purchase_preview["can_confirm"]),
+                                diff=purchase_diff,
+                            )
+                            purchase_sheet.pop("previewIssue", None)
+                            if not purchase_preview["can_confirm"]:
+                                purchase_sheet["previewIssue"] = "purchase_scope_has_errors"
+                        except ValueError:
+                            purchase_sheet.update(
+                                confirmAvailable=False,
+                                errorRows=max(int(purchase_sheet.get("rows") or 0), 1),
+                                writeScope="purchase_orders",
+                                previewIssue="purchase_scope_parse_failed",
+                                diff={
+                                    "added": 0, "updated": 0, "unchanged": 0,
+                                    "removed": 0, "conflicts": 1,
+                                    "total": int(purchase_sheet.get("rows") or 0),
+                                },
+                            )
+                    analysis["_purchasePreview"] = purchase_preview
+                    if workday["lifecycle_status"] == "finalized":
+                        for scope_sheet in analysis["daySheets"] + analysis["purchaseSheets"]:
+                            diff = scope_sheet.get("diff") or {}
+                            has_changes = any(int(diff.get(key) or 0) for key in (
+                                "added", "updated", "removed", "conflicts",
+                            ))
+                            if (
+                                not latest or latest["source_hash"] != analysis["sourceHash"]
+                                or has_changes
+                            ):
+                                scope_sheet["confirmAvailable"] = False
+                                scope_sheet["previewIssue"] = "workday_finalized"
+                analysis["databaseStateHash"] = strict_daily_database_state_hash(
+                    conn, batch_id, detected_date, day_sheet["name"],
+                )
+            else:
+                analysis["databaseStateHash"] = strict_daily_database_state_hash(
+                    conn, 0, detected_date, day_sheet["name"],
+                )
+    analysis["stateHash"] = analysis_state_hash(analysis)
+    return analysis
+
+
+def strict_daily_contract_rows(orders):
+    """Build hash-only lifecycle descriptors; omit note/seller/CCCD from hashes."""
+    occurrences = defaultdict(int)
+    rows = []
+    payload_fields = (
+        "work_date", "contractor", "kitchen", "product_code", "product_name", "qty",
+        "actual_received", "actual_delivered", "damaged_qty", "supplier_return_qty",
+        "customer_return_qty", "unit", "supplier", "buy_price", "sell_price", "tax",
+        "invoice_nature", "purchase_list",
+    )
+    for order in sorted(orders, key=lambda item: int(item.get("source_row") or 0)):
+        identity = {
+            "contractor": clean_text(order.get("contractor")),
+            "kitchen": clean_text(order.get("kitchen")) or "__MISSING_KITCHEN__",
+            "product_code": clean_text(order.get("product_code")),
+            "product_name": clean_text(order.get("product_name")),
+            "unit": clean_text(order.get("unit")),
+        }
+        if not identity["product_code"] and not identity["product_name"]:
+            identity["product_name"] = "__MISSING_PRODUCT__"
+        occurrence_key = tuple(identity[field].casefold() for field in (
+            "contractor", "kitchen", "product_code", "product_name", "unit",
+        ))
+        occurrences[occurrence_key] += 1
+        identity["occurrence"] = occurrences[occurrence_key]
+        rows.append({
+            "identity": identity,
+            "payload": {field: order.get(field) for field in payload_fields},
+            "source_row": int(order.get("source_row") or 1),
+        })
+    return rows
+
+
+def strict_final_sales_contract_rows(orders):
+    """Describe only fields owned by the sales/delivery finalization scope."""
+    allowed = (
+        "work_date", "contractor", "kitchen", "product_code", "product_name",
+        "qty", "actual_delivered", "customer_return_qty", "unit", "sell_price",
+        "tax", "invoice_nature", "note",
+    )
+    rows = strict_daily_contract_rows(orders)
+    for row in rows:
+        row["payload"] = {field: row["payload"].get(field) for field in allowed}
+    return rows
+
+
+def strict_purchase_contract_rows(items):
+    """Build lifecycle descriptors from validated canonical purchase rows."""
+    fields = (
+        "product_code", "kitchen", "work_date", "product_name", "base_qty",
+        "unit", "supplier", "buy_price", "price_source", "damaged_qty",
+        "added_qty", "reduced_qty", "missing_qty", "actual_qty", "amount",
+    )
+    return [{
+        "row_key": item["row_key"],
+        "payload_hash": daily_payload_hash({field: item.get(field) for field in fields}),
+        "source_row": int(item.get("source_row") or 1),
+    } for item in items]
+
+
+def strict_order_index(orders, *, finalization=False):
+    ordered = sorted(orders, key=lambda item: int(item.get("source_row") or 0))
+    descriptors = (
+        strict_final_sales_contract_rows(ordered)
+        if finalization else strict_daily_contract_rows(ordered)
+    )
+    output = {}
+    for item, descriptor in zip(ordered, descriptors):
+        key = daily_row_key(
+            work_date=item["work_date"],
+            scope="customer_orders",
+            identity=descriptor["identity"],
+        )
+        output[key] = {
+            "order": item,
+            "payload_hash": daily_payload_hash(descriptor["payload"]),
+            "source_row": descriptor["source_row"],
+        }
+    return output
+
+
+def strict_order_removal_conflicts(conn, order_ids):
+    conflicts = set()
+    for order_id in order_ids:
+        if conn.execute(
+            "SELECT 1 FROM purchase_order_lines WHERE order_id=? LIMIT 1", (order_id,),
+        ).fetchone() or conn.execute(
+            "SELECT 1 FROM purchase_workbook_lines WHERE order_id=? LIMIT 1", (order_id,),
+        ).fetchone() or conn.execute(
+            "SELECT 1 FROM outgoing_invoice_lines WHERE order_id=? LIMIT 1", (order_id,),
+        ).fetchone():
+            conflicts.add(int(order_id))
+    return conflicts
+
+
+def strict_customer_scope_diff(conn, batch_id: int, incoming_orders):
+    current_orders = rows_dict(conn.execute(
+        "SELECT * FROM orders WHERE batch_id=? ORDER BY source_row,id", (batch_id,),
+    )) if batch_id else []
+    incoming = strict_order_index(incoming_orders, finalization=True)
+    current = strict_order_index(current_orders, finalization=True)
+    incoming_keys = set(incoming)
+    current_keys = set(current)
+    removed_keys = current_keys - incoming_keys
+    conflict_ids = strict_order_removal_conflicts(
+        conn, [current[key]["order"]["id"] for key in removed_keys],
+    ) if removed_keys else set()
+    return {
+        "added": len(incoming_keys - current_keys),
+        "updated": sum(
+            incoming[key]["payload_hash"] != current[key]["payload_hash"]
+            for key in incoming_keys & current_keys
+        ),
+        "unchanged": sum(
+            incoming[key]["payload_hash"] == current[key]["payload_hash"]
+            for key in incoming_keys & current_keys
+        ),
+        "removed": len(removed_keys - {
+            key for key in removed_keys if int(current[key]["order"]["id"]) in conflict_ids
+        }),
+        "conflicts": len(conflict_ids),
+        "total": len(incoming),
+    }
+
+
+def strict_purchase_scope_diff(conn, batch_id: int, items, error_rows=0):
+    previous = {
+        row["row_key"]: dict(row) for row in conn.execute(
+            "SELECT * FROM purchase_workbook_lines WHERE batch_id=?", (batch_id,),
+        )
+    }
+    incoming = {item["row_key"]: item for item in items}
+    shared = set(previous) & set(incoming)
+    removed = set(previous) - set(incoming)
+    return {
+        "added": len(set(incoming) - set(previous)),
+        "updated": sum(purchase_line_changed(previous[key], incoming[key]) for key in shared),
+        "unchanged": sum(not purchase_line_changed(previous[key], incoming[key]) for key in shared),
+        "removed": len(removed),
+        "conflicts": int(error_rows or 0),
+        "total": len(incoming),
+    }
+
+
+def strict_daily_database_state_hash(conn, batch_id: int, work_date: str, day_sheet: str):
+    """Hash all data that can change parsing/applying either finalization scope."""
+    queries = [
+        ("workday", "SELECT work_date,day_sheet_key,batch_id,lifecycle_status,revision "
+         "FROM daily_workdays WHERE work_date=? AND day_sheet_key=?", (work_date, canonical_day_sheet(day_sheet))),
+        ("contractors", "SELECT code,name,price_group,pricing_mode FROM contractors ORDER BY code", ()),
+        ("kitchens", "SELECT code,contractor,name,address,show_price FROM kitchens ORDER BY code", ()),
+        ("suppliers", "SELECT code,name FROM suppliers ORDER BY code", ()),
+        ("products", "SELECT code,name,unit,tax,supplier,buy_price,purchase_list FROM products ORDER BY code", ()),
+        ("prices", "SELECT product_code,price_group,price_text,price_value FROM product_prices "
+         "ORDER BY product_code,price_group", ()),
+        ("settings", "SELECT key,value FROM settings WHERE key IN ('purchase_rate') ORDER BY key", ()),
+    ]
+    if batch_id:
+        queries.extend([
+            ("batch", "SELECT id,work_date,source_name,status,created_at,approved_at "
+             "FROM batches WHERE id=?", (batch_id,)),
+            ("orders", "SELECT * FROM orders WHERE batch_id=? ORDER BY id", (batch_id,)),
+            ("purchase_lines", "SELECT * FROM purchase_workbook_lines WHERE batch_id=? "
+             "ORDER BY row_key", (batch_id,)),
+            ("legacy_purchase", "SELECT * FROM purchase_order_lines WHERE batch_id=? "
+             "ORDER BY order_id", (batch_id,)),
+        ])
+    digest = hashlib.sha256()
+    for label, sql, params in queries:
+        digest.update(label.encode("ascii"))
+        digest.update(b"\0")
+        rows = [tuple(row) for row in conn.execute(sql, params)]
+        digest.update(json.dumps(rows, ensure_ascii=False, default=str).encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest().upper()
+
+
+def strict_purchase_preview_from_path(conn, path: Path, batch_id: int):
+    workbook = load_workbook(path, read_only=True, data_only=True, keep_links=False)
+    formula_workbook = load_workbook(path, read_only=True, data_only=False, keep_links=False)
+    try:
+        return parse_purchase_order_workbook(
+            conn, workbook, batch_id, formula_workbook=formula_workbook,
+        )
+    finally:
+        workbook.close()
+        formula_workbook.close()
+
+
+def apply_strict_customer_scope(conn, batch_id: int, incoming_orders):
+    diff = strict_customer_scope_diff(conn, batch_id, incoming_orders)
+    if diff["conflicts"]:
+        raise DailyImportError(
+            "Có dòng cũ đã đi vào đặt NCC hoặc hóa đơn; không thể tự xóa khi chốt lại",
+            code="customer_scope_conflict",
+        )
+    current_rows = rows_dict(conn.execute(
+        "SELECT * FROM orders WHERE batch_id=? ORDER BY source_row,id", (batch_id,),
+    ))
+    current = strict_order_index(current_rows, finalization=True)
+    incoming = strict_order_index(incoming_orders, finalization=True)
+    removed_keys = set(current) - set(incoming)
+    for key in removed_keys:
+        conn.execute("DELETE FROM orders WHERE id=?", (int(current[key]["order"]["id"]),))
+    if removed_keys:
+        # Persist removal tombstones before inserting any new rows. SQLite may
+        # reuse a deleted orders.id inside this same transaction; the later
+        # sync must then mint a new source generation, not overwrite history.
+        sync_receivable_ledger(conn, timestamp=now_iso())
+    update_fields = (
+        "work_date", "contractor", "kitchen", "product_code", "product_name", "qty",
+        "actual_delivered", "customer_return_qty", "unit", "sell_price", "tax",
+        "invoice_nature", "note", "source_sheet", "source_row",
+    )
+    for key, value in incoming.items():
+        item = value["order"]
+        existing = current.get(key)
+        if existing is None:
+            # A row introduced by the sales/delivery capability must not
+            # manufacture a purchase or supplier payable.  The separate
+            # purchase capability owns these fields and can link its row after
+            # this order exists.
+            sales_item = dict(item)
+            sales_item.update(
+                actual_received=0,
+                damaged_qty=0,
+                supplier_return_qty=0,
+                supplier="",
+                buy_price=0,
+                purchase_list=0,
+            )
+            save_imported_orders(conn, batch_id, [sales_item])
+            continue
+        if value["payload_hash"] == existing["payload_hash"]:
+            continue
+        assignments = ",".join(f"{field}=?" for field in update_fields)
+        conn.execute(
+            f"UPDATE orders SET {assignments},errors=?,warnings=?,updated_at=? WHERE id=?",
+            (
+                *(item[field] for field in update_fields),
+                json.dumps(item["errors"], ensure_ascii=False),
+                json.dumps(item["warnings"], ensure_ascii=False),
+                now_iso(), int(existing["order"]["id"]),
+            ),
+        )
+    sync_receivable_ledger(conn, timestamp=now_iso())
+    # The explicit second sales/delivery confirmation settles the existing
+    # order claim; it does not post another physical issue.
+    conn.execute("UPDATE orders SET physical_stage='delivered' WHERE batch_id=?", (batch_id,))
+    return diff
+
+
+def confirm_strict_daily_finalization(pending, body, sheets):
+    analysis = pending["strict_analysis"]
+    detected_date = analysis.get("detectedWorkDate") or ""
+    work_date = valid_iso_date(body.get("work_date") or detected_date, "Ngày phiên đơn")
+    if not detected_date or work_date != detected_date:
+        raise DailyImportError(
+            "Ngày phiên đơn phải trùng ngày đã nhận diện trong workbook",
+            code="work_date_mismatch", status=400,
+        )
+    day_by_name = {item["name"]: item for item in analysis["daySheets"]}
+    purchase_by_name = {item["name"]: item for item in analysis["purchaseSheets"]}
+    if not sheets:
+        raise DailyImportError(
+            "Cần chọn rõ ít nhất một phạm vi bán/giao hoặc mua/phải trả",
+            code="scope_selection_required", status=400,
+        )
+    selected_scopes = []
+    for sheet_name in sheets:
+        sheet = day_by_name.get(sheet_name) or purchase_by_name.get(sheet_name)
+        if not sheet or not sheet.get("confirmAvailable"):
+            raise DailyImportError(
+                "Chỉ được xác nhận phạm vi đã qua preview và không có xung đột",
+                code="scope_not_confirmable", status=400,
+            )
+        scope = sheet["scope"]
+        if scope not in selected_scopes:
+            selected_scopes.append(scope)
+    selected_scopes.sort(key=lambda scope: 0 if scope == "customer_orders" else 1)
+    if len(day_by_name) != 1:
+        raise DailyImportError(
+            "Chốt lần hai cần đúng một sheet ngày đã nhận diện",
+            code="ambiguous_daily_sheet", status=400,
+        )
+    day_sheet_name = next(iter(day_by_name))
+    source_hash = hashlib.sha256(pending["path"].read_bytes()).hexdigest().upper()
+    if source_hash != analysis["sourceHash"]:
+        raise DailyImportError(
+            "Nội dung workbook đã thay đổi sau preview", code="source_changed",
+        )
+    batch_id = int(analysis.get("batchId") or 0)
+    customer_orders = analysis["_customerOrders"][day_sheet_name]
+    purchase_preview = analysis.get("_purchasePreview")
+
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current_hash = strict_daily_database_state_hash(
+            conn, batch_id, work_date, day_sheet_name,
+        )
+        if current_hash != analysis.get("databaseStateHash"):
+            raise DailyImportError(
+                "Dữ liệu đã đổi sau preview; hãy tải lại file trước khi chốt",
+                code="stale_database_state",
+            )
+        rows_by_scope = {
+            "customer_orders": strict_final_sales_contract_rows(customer_orders),
+        }
+        if analysis["purchaseSheets"]:
+            if purchase_preview is not None:
+                rows_by_scope["purchase_orders"] = strict_purchase_contract_rows(
+                    purchase_preview["items"],
+                )
+            else:
+                fallback_key = hashlib.sha256(
+                    f"{source_hash}\0purchase_orders".encode("utf-8")
+                ).hexdigest().upper()
+                rows_by_scope["purchase_orders"] = [{
+                    "row_key": fallback_key,
+                    "payload_hash": source_hash,
+                    "source_row": int(analysis["purchaseSheets"][0].get("headerRow") or 1) + 1,
+                }]
+        contract = prepare_daily_import_version(
+            conn,
+            source_hash=source_hash,
+            work_date=work_date,
+            day_sheet=day_sheet_name,
+            phase="finalization",
+            rows_by_scope=rows_by_scope,
+            now_iso=now_iso,
+        )
+        if int(contract["batch_id"]) != batch_id:
+            raise DailyImportError(
+                "Preview không còn trỏ tới đúng phiên ngày", code="stale_daily_batch",
+            )
+        latest_version = int(conn.execute(
+            "SELECT MAX(version_no) n FROM daily_import_versions WHERE daily_workday_id=?",
+            (int(contract["daily_workday_id"]),),
+        ).fetchone()["n"])
+        if contract["idempotent"] and int(contract["version_no"]) != latest_version:
+            raise DailyImportError(
+                "Phiên bản này đã bị bản chốt mới hơn thay thế",
+                code="superseded_version",
+            )
+        scopes = {item["scope"]: item for item in contract["scopes"]}
+        scope_results = {}
+        for scope in selected_scopes:
+            grant = scopes[scope]
+            if scope == "customer_orders":
+                diff = apply_strict_customer_scope(conn, batch_id, customer_orders)
+                applied = {
+                    "processed": diff["added"] + diff["updated"] + diff["removed"],
+                    "diff": diff,
+                }
+            else:
+                if purchase_preview is None or not purchase_preview["can_confirm"]:
+                    raise DailyImportError(
+                        "Phạm vi mua/phải trả còn lỗi; chưa được ghi",
+                        code="purchase_scope_has_errors", status=400,
+                    )
+                if "customer_orders" in selected_scopes:
+                    refreshed_purchase = strict_purchase_preview_from_path(
+                        conn, pending["path"], batch_id,
+                    )
+                    if (
+                        not refreshed_purchase["can_confirm"]
+                        or refreshed_purchase["content_hash"] != purchase_preview["content_hash"]
+                    ):
+                        raise DailyImportError(
+                            "Phạm vi mua thay đổi sau khi áp dụng bán/giao; hãy xem trước lại",
+                            code="purchase_scope_changed", status=409,
+                        )
+                    purchase_preview = refreshed_purchase
+                try:
+                    applied = apply_purchase_order_preview(
+                        conn,
+                        batch_id=batch_id,
+                        items=purchase_preview["items"],
+                        source_hash=purchase_preview["content_hash"],
+                        source_name=pending["name"],
+                        format_name=purchase_preview["format"],
+                        now_iso=now_iso,
+                    )
+                except PurchaseOrderApplyError as error:
+                    raise DailyImportError(
+                        str(error), code=error.code, status=error.status,
+                    ) from error
+            confirmed = confirm_daily_import_scope(
+                conn,
+                version_id=int(contract["version_id"]),
+                scope=scope,
+                expected_state_hash=grant["state_hash"],
+                now_iso=now_iso,
+            )
+            scope_results[scope] = {**applied, "confirmation": confirmed}
+
+        remaining = int(conn.execute(
+            """SELECT COUNT(*) n FROM daily_import_scopes
+               WHERE version_id=? AND state!='confirmed'""",
+            (int(contract["version_id"]),),
+        ).fetchone()["n"])
+        finalized = None
+        if remaining == 0:
+            finalized = finalize_daily_workday(
+                conn, version_id=int(contract["version_id"]), now_iso=now_iso,
+            )
+        import_key, _, _ = order_import_fingerprint(pending["path"], work_date, sheets)
+        conn.execute(
+            "DELETE FROM order_import_receipts WHERE batch_id=? AND import_key<>?",
+            (batch_id, import_key),
+        )
+        conn.execute(
+            """INSERT INTO order_import_receipts(
+                   import_key,source_hash,source_name,work_date,selected_sheets_json,batch_id,created_at
+               ) VALUES(?,?,?,?,?,?,?) ON CONFLICT(import_key) DO NOTHING""",
+            (
+                import_key, source_hash, pending["name"], work_date,
+                json.dumps(sheets, ensure_ascii=False), batch_id, now_iso(),
+            ),
+        )
+        sync_receivable_ledger(conn, timestamp=now_iso())
+        daily_import = strict_daily_version_payload(
+            conn, batch_id, source_hash, day_sheet_name,
+        )
+        payload = batch_payload(conn, batch_id)
+        payload.update(
+            ok=True,
+            selectedSheets=sheets,
+            selectedScopes=selected_scopes,
+            sourceHash=source_hash,
+            importKey=import_key,
+            idempotent=all(
+                result["confirmation"]["idempotent"]
+                and (scope != "purchase_orders" or result.get("idempotent", False))
+                for scope, result in scope_results.items()
+            ),
+            scopeResults=scope_results,
+            dailyImport=daily_import,
+            finalized=finalized,
+        )
+        return jsonify(payload)
+
+
+def strict_daily_version_payload(conn, batch_id: int, source_hash: str, sheet_name: str):
+    version = conn.execute(
+        """SELECT v.id,v.version_no,v.version_key,v.source_hash,v.phase,v.exact_day_sheet,
+                  v.confirmed_at,w.id daily_workday_id,w.work_date,w.lifecycle_status,w.revision
+           FROM daily_import_versions v
+           JOIN daily_workdays w ON w.id=v.daily_workday_id
+           WHERE w.batch_id=? AND v.source_hash=? AND v.exact_day_sheet=?
+           ORDER BY v.version_no DESC LIMIT 1""",
+        (int(batch_id), source_hash, sheet_name),
+    ).fetchone()
+    if not version:
+        return None
+    scopes = rows_dict(conn.execute(
+        """SELECT scope,write_capability,state,state_hash,row_count,confirmed_at
+           FROM daily_import_scopes WHERE version_id=? ORDER BY scope""",
+        (int(version["id"]),),
+    ))
+    return {
+        "daily_workday_id": int(version["daily_workday_id"]),
+        "batch_id": int(batch_id),
+        "work_date": version["work_date"],
+        "lifecycle_status": version["lifecycle_status"],
+        "lifecycle_revision": int(version["revision"]),
+        "version_id": int(version["id"]),
+        "version_no": int(version["version_no"]),
+        "version_key": version["version_key"],
+        "source_hash": version["source_hash"],
+        "phase": version["phase"],
+        "day_sheet": version["exact_day_sheet"],
+        "scopes": scopes,
+        "idempotent": True,
+    }
 
 
 def validate_existing_order(conn, item: dict):
@@ -1109,6 +2148,7 @@ def batch_payload(conn, batch_id=None):
         item["warnings"] = json.loads(item["warnings"] or "[]")
         revenue, cost, profit, total = order_totals(item)
         item.update(revenue=revenue, cost=cost, profit=profit, total=total)
+        item["physical_revision"] = physical_order_revision(item)
     return {"batch": dict(batch), "orders": orders, "summary": calculate_summary(conn, orders)}
 
 
@@ -1129,9 +2169,18 @@ def calculate_summary(conn, orders):
     suppliers = defaultdict(lambda: {
         "cost": 0, "opening": 0, "paid": 0, "balance": 0, "lines": 0,
     })
-    totals = {"revenue": 0, "cost": 0, "profit": 0, "total": 0, "errors": 0, "warnings": 0}
+    totals = {
+        "ordered_qty": 0, "received_qty": 0, "delivered_qty": 0,
+        "revenue": 0, "cost": 0, "profit": 0, "total": 0,
+        "errors": 0, "warnings": 0,
+    }
     for item in orders:
         revenue, cost, profit, total = order_totals(item)
+        totals["ordered_qty"] += number_value(
+            item.get("qty", 0) if isinstance(item, dict) else item["qty"]
+        )
+        totals["received_qty"] += net_received(item)
+        totals["delivered_qty"] += net_delivered(item)
         totals["revenue"] += revenue
         totals["cost"] += cost
         totals["profit"] += profit
@@ -1200,6 +2249,14 @@ def health():
         "settings", "batches", "orders", "order_import_receipts",
         "audit_log", "inventory_transactions",
     }
+    daily_tables = {
+        "daily_workdays", "daily_import_versions", "daily_import_scopes", "daily_import_rows",
+    }
+    payable_tables = {"payable_ledger_lines", "payable_ledger_revisions"}
+    receivable_tables = {"receivable_ledger_lines", "receivable_ledger_revisions"}
+    payable_payment_tables = {
+        "payable_payment_allocations", "payable_payment_revisions",
+    }
     if not DB_PATH.is_file():
         return jsonify({
             "ok": False, "time": now_iso(), "database_ready": False,
@@ -1227,8 +2284,18 @@ def health():
                 "SELECT 1 FROM settings WHERE key='schema_warning_duplicate_payable_source_ids' "
                 "AND TRIM(value) NOT IN ('','[]')"
             ).fetchone() is not None
+        daily_schema_ready = not (tables & daily_tables) or daily_tables.issubset(tables)
+        payable_schema_ready = not (tables & payable_tables) or payable_tables.issubset(tables)
+        receivable_schema_ready = (
+            not (tables & receivable_tables) or receivable_tables.issubset(tables)
+        )
+        payable_payment_schema_ready = (
+            not (tables & payable_payment_tables)
+            or payable_payment_tables.issubset(tables)
+        )
         schema_ready = (
-            required_tables.issubset(tables)
+            required_tables.issubset(tables) and daily_schema_ready and payable_schema_ready
+            and payable_payment_schema_ready and receivable_schema_ready
             and not duplicate_invoice_warning
             and not duplicate_payable_warning
         )
@@ -1253,11 +2320,19 @@ def health():
 
 
 def create_minvoice_client():
-    config = MinvoiceConfig.from_env_files([
-        ROOT / ".env",
-        APP_DIR / ".env",
-    ])
+    test_factory = app.config.get("MINVOICE_CLIENT_FACTORY")
+    if test_factory is not None:
+        return test_factory()
+    config = MinvoiceConfig.from_env_files(connector_config_paths())
     return MinvoiceClient(config)
+
+
+def create_msmi_client():
+    test_factory = app.config.get("MSMI_CLIENT_FACTORY")
+    if test_factory is not None:
+        return test_factory()
+    config = MsmiConfig.from_env_files(connector_config_paths())
+    return MsmiClient(config)
 
 
 @app.get("/api/minvoice/status")
@@ -1309,8 +2384,44 @@ def api_minvoice_series():
 def api_bootstrap():
     with db() as conn:
         payload = batch_payload(conn, request.args.get("batch_id", type=int))
-        payload["batches"] = rows_dict(conn.execute("SELECT * FROM batches ORDER BY id DESC LIMIT 100"))
+        payload["batches"] = rows_dict(conn.execute(
+            """SELECT b.*,
+                      (SELECT COUNT(*) FROM orders o WHERE o.batch_id=b.id) AS line_count,
+                      (SELECT COUNT(DISTINCT UPPER(TRIM(o.kitchen)))
+                         FROM orders o WHERE o.batch_id=b.id AND TRIM(o.kitchen)!='') AS order_count,
+                      (SELECT COUNT(*) FROM orders o
+                         WHERE o.batch_id=b.id AND COALESCE(o.errors,'[]')!='[]') AS error_count
+                 FROM batches b ORDER BY b.id DESC LIMIT 100"""
+        ))
+        batch_kitchens = defaultdict(list)
+        batch_ids = [int(item["id"]) for item in payload["batches"]]
+        if batch_ids:
+            placeholders = ",".join("?" for _ in batch_ids)
+            for row in conn.execute(
+                f"""SELECT o.batch_id,UPPER(TRIM(o.kitchen)) code,
+                           COALESCE(NULLIF(TRIM(k.name),''),UPPER(TRIM(o.kitchen))) name,
+                           COUNT(*) line_count
+                      FROM orders o
+                      LEFT JOIN kitchens k ON UPPER(TRIM(k.code))=UPPER(TRIM(o.kitchen))
+                     WHERE o.batch_id IN ({placeholders})
+                       AND TRIM(o.kitchen)!=''
+                       AND MAX(COALESCE(o.actual_delivered,0)-COALESCE(o.customer_return_qty,0),0)>0
+                     GROUP BY o.batch_id,UPPER(TRIM(o.kitchen)),
+                              COALESCE(NULLIF(TRIM(k.name),''),UPPER(TRIM(o.kitchen)))
+                     ORDER BY o.batch_id,UPPER(TRIM(o.kitchen))""",
+                batch_ids,
+            ):
+                batch_kitchens[int(row["batch_id"])].append({
+                    "code": row["code"],
+                    "name": row["name"],
+                    "line_count": int(row["line_count"] or 0),
+                })
+        for item in payload["batches"]:
+            item["delivery_notes"] = batch_kitchens[int(item["id"])]
         payload["master"] = {
+            "eligible_sellers": [row["name"] for row in conn.execute("SELECT name FROM people ORDER BY name")
+                                 if not is_excluded_seller(row["name"])],
+            "excluded_sellers": list(EXCLUDED_SELLERS),
             "contractors": rows_dict(conn.execute("SELECT * FROM contractors ORDER BY code")),
             "kitchens": rows_dict(conn.execute("SELECT * FROM kitchens ORDER BY code")),
             "suppliers": rows_dict(conn.execute("SELECT * FROM suppliers ORDER BY code")),
@@ -1323,7 +2434,10 @@ def api_bootstrap():
             )),
             "settings": {row["key"]: row["value"] for row in conn.execute("SELECT * FROM settings")},
         }
-        payload["payments"] = rows_dict(conn.execute("SELECT * FROM payments ORDER BY payment_date DESC,id DESC LIMIT 100"))
+        payload["payments"] = rows_dict(conn.execute(
+            "SELECT * FROM payments WHERE COALESCE(status,'posted')='posted' "
+            "ORDER BY payment_date DESC,id DESC LIMIT 100"
+        ))
         payload["ok"] = True
         return jsonify(payload)
 
@@ -1382,7 +2496,11 @@ def api_import_analyze():
             expanded_size = sum(item.file_size for item in entries)
             if len(entries) > ORDER_IMPORT_MAX_ENTRIES or expanded_size > ORDER_IMPORT_MAX_UNCOMPRESSED_BYTES:
                 raise ValueError("File Excel có cấu trúc quá lớn để đọc an toàn")
-        sheets = analyze_workbook(temp)
+        strict_analysis = strict_daily_preview(temp, upload.filename)
+        sheets = (
+            strict_analysis["daySheets"] + strict_analysis["purchaseSheets"]
+            if strict_analysis else analyze_workbook(temp)
+        )
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         try:
             temp.unlink()
@@ -1410,7 +2528,20 @@ def api_import_analyze():
         }), 400
     with PENDING_IMPORT_LOCK:
         PENDING_IMPORTS[token]["state"] = "ready"
-    return jsonify({"ok": True, "token": token, "filename": upload.filename, "sheets": sheets})
+        if strict_analysis:
+            PENDING_IMPORTS[token]["strict_analysis"] = strict_analysis
+    payload = {"ok": True, "token": token, "filename": upload.filename, "sheets": sheets}
+    if strict_analysis:
+        payload.update(
+            strictDaily=True,
+            stateHash=strict_analysis["stateHash"],
+            detectedWorkDate=strict_analysis["detectedWorkDate"],
+            phase=strict_analysis.get("phase", "first_load"),
+            batchId=strict_analysis.get("batchId"),
+            scopeSelectionRequired=bool(strict_analysis.get("scopeSelectionRequired")),
+            ignoredSheets=strict_analysis["ignoredSheets"],
+        )
+    return jsonify(payload)
 
 
 @app.post("/api/import/cancel")
@@ -1427,6 +2558,167 @@ def api_import_cancel():
     return jsonify({"ok": True, "idempotent": pending is None})
 
 
+def confirm_strict_daily_import(pending, body):
+    """Consume one strict preview token and atomically apply its customer-order scope."""
+    analysis = pending["strict_analysis"]
+    try:
+        raw_sheets = body.get("sheets") or []
+        if not isinstance(raw_sheets, list):
+            raise DailyImportError(
+                "Danh sách sheet không hợp lệ", code="invalid_sheet_list", status=400,
+            )
+        sheets = sorted({
+            str(value) for value in raw_sheets if value is not None and str(value) != ""
+        })
+        supplied_state_hash = clean_text(body.get("state_hash") or body.get("stateHash")).upper()
+        if not supplied_state_hash or supplied_state_hash != analysis["stateHash"]:
+            raise DailyImportError(
+                "Preview đã cũ hoặc không đúng phiên; vui lòng chọn lại file",
+                code="stale_preview",
+            )
+        if analysis.get("phase") == "finalization":
+            return confirm_strict_daily_finalization(pending, body, sheets)
+        allowed = {
+            item["name"] for item in analysis["daySheets"] if item.get("confirmAvailable")
+        }
+        if len(sheets) != 1 or sheets[0] not in allowed:
+            raise DailyImportError(
+                "Chỉ được xác nhận đúng một sheet ngày đã qua preview; sheet đặt hàng và tham chiếu đang bị khóa",
+                code="scope_not_confirmable",
+                status=400,
+            )
+        detected_date = analysis.get("detectedWorkDate") or ""
+        work_date = valid_iso_date(body.get("work_date") or detected_date, "Ngày phiên đơn")
+        if not detected_date or work_date != detected_date:
+            raise DailyImportError(
+                "Ngày phiên đơn phải trùng ngày đã nhận diện trong workbook",
+                code="work_date_mismatch",
+                status=400,
+            )
+        import_key, source_hash, sheets = order_import_fingerprint(
+            pending["path"], work_date, sheets,
+        )
+        if source_hash != analysis["sourceHash"]:
+            raise DailyImportError(
+                "Nội dung workbook đã thay đổi sau preview",
+                code="source_changed",
+            )
+        orders, skipped = parse_workbook(pending["path"], work_date, sheets)
+        if not orders:
+            raise DailyImportError(
+                "Sheet ngày đã chọn không có dòng đơn để nhập",
+                code="empty_daily_sheet",
+                status=400,
+            )
+        contract_rows = strict_daily_contract_rows(orders)
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = valid_order_import_batch(conn, import_key)
+            if existing:
+                batch_id = int(existing["id"])
+                payload = batch_payload(conn, batch_id)
+                payload.update(
+                    ok=True,
+                    skippedSheets=skipped,
+                    selectedSheets=sheets,
+                    sourceHash=source_hash,
+                    importKey=import_key,
+                    idempotent=True,
+                    dailyImport=strict_daily_version_payload(
+                        conn, batch_id, source_hash, sheets[0],
+                    ),
+                )
+                return jsonify(payload)
+
+            conn.execute("DELETE FROM order_import_receipts WHERE import_key=?", (import_key,))
+            contract = prepare_daily_import_version(
+                conn,
+                source_hash=source_hash,
+                work_date=work_date,
+                day_sheet=sheets[0],
+                phase="first_load",
+                rows_by_scope={"customer_orders": contract_rows},
+                now_iso=now_iso,
+            )
+            batch_id = int(contract["batch_id"])
+            latest_version = int(conn.execute(
+                "SELECT MAX(version_no) n FROM daily_import_versions WHERE daily_workday_id=?",
+                (int(contract["daily_workday_id"]),),
+            ).fetchone()["n"])
+            if contract["idempotent"] and int(contract["version_no"]) != latest_version:
+                raise DailyImportError(
+                    "Bản workbook này đã bị một phiên bản mới hơn thay thế; không thể âm thầm khôi phục dữ liệu cũ",
+                    code="superseded_version",
+                )
+            current_order_count = int(conn.execute(
+                "SELECT COUNT(*) n FROM orders WHERE batch_id=?", (batch_id,)
+            ).fetchone()["n"])
+            is_existing_current = bool(contract["idempotent"] and current_order_count)
+            if not is_existing_current:
+                if current_order_count:
+                    old_ids = [r["id"] for r in conn.execute("SELECT id FROM orders WHERE batch_id=?", (batch_id,))]
+                    blocked = batch_mutation_blocker(conn, batch_id)
+                    if blocked or strict_order_removal_conflicts(conn, old_ids):
+                        raise DailyImportError(blocked or "Bản cũ đã liên kết đặt NCC/hóa đơn; không thể tự thay toàn bộ đơn", code="linked_order_replacement")
+                    if any(item["errors"] for item in orders):
+                        raise DailyImportError("File mới còn lỗi; giữ nguyên đơn cũ, sửa file rồi nạp lại", code="invalid_replacement", status=400)
+                # A changed workbook for the same workday replaces only the
+                # lifecycle-owned batch contents. Historical version hashes remain.
+                conn.execute("DELETE FROM order_import_receipts WHERE batch_id=?", (batch_id,))
+                conn.execute("DELETE FROM orders WHERE batch_id=?", (batch_id,))
+                sync_receivable_ledger(conn, timestamp=now_iso())
+                conn.execute(
+                    "UPDATE batches SET work_date=?,source_name=? WHERE id=?",
+                    (work_date, pending["name"], batch_id),
+                )
+                save_imported_orders(conn, batch_id, orders)
+            scope = next(
+                item for item in contract["scopes"] if item["scope"] == "customer_orders"
+            )
+            confirm_daily_import_scope(
+                conn,
+                version_id=int(contract["version_id"]),
+                scope="customer_orders",
+                expected_state_hash=scope["state_hash"],
+                now_iso=now_iso,
+            )
+            conn.execute(
+                """INSERT INTO order_import_receipts(
+                       import_key,source_hash,source_name,work_date,selected_sheets_json,batch_id,created_at
+                   ) VALUES(?,?,?,?,?,?,?)""",
+                (
+                    import_key, source_hash, pending["name"], work_date,
+                    json.dumps(sheets, ensure_ascii=False), batch_id, now_iso(),
+                ),
+            )
+            sync_receivable_ledger(conn, timestamp=now_iso())
+            daily_import = strict_daily_version_payload(
+                conn, batch_id, source_hash, sheets[0],
+            )
+            if daily_import:
+                daily_import["idempotent"] = is_existing_current
+            payload = batch_payload(conn, batch_id)
+            payload.update(
+                ok=True,
+                skippedSheets=skipped,
+                selectedSheets=sheets,
+                sourceHash=source_hash,
+                importKey=import_key,
+                idempotent=is_existing_current,
+                dailyImport=daily_import,
+            )
+            return jsonify(payload)
+    except DailyImportError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    finally:
+        try:
+            pending["path"].unlink()
+        except OSError:
+            pass
+
+
 @app.post("/api/import/confirm")
 def api_import_confirm():
     body = request.get_json(force=True) or {}
@@ -1435,6 +2727,8 @@ def api_import_confirm():
         pending = PENDING_IMPORTS.pop(token, None)
     if not pending or not pending["path"].exists():
         return jsonify({"ok": False, "error": "Phiên chọn sheet đã hết hạn. Vui lòng chọn lại file."}), 400
+    if pending.get("strict_analysis"):
+        return confirm_strict_daily_import(pending, body)
     raw_sheets = body.get("sheets") or []
     if not isinstance(raw_sheets, list):
         with PENDING_IMPORT_LOCK:
@@ -1484,8 +2778,43 @@ def api_import_confirm():
                 idempotent=True,
             )
             return jsonify(payload)
+        if conn.execute("SELECT 1 FROM order_reimport_history h, json_each(h.previous_keys_json) j WHERE j.value=? LIMIT 1", (import_key,)).fetchone():
+            return jsonify(ok=False, error="File này đã được bản mới hơn thay thế; không tự khôi phục đơn cũ. Chọn file hiện hành để tiếp tục"), 409
         conn.execute("DELETE FROM order_import_receipts WHERE import_key=?", (import_key,))
-        batch_id = save_imported_batch(conn, orders, work_date, pending["name"])
+        # A later valid file of the same workday/sheet scope replaces the
+        # previous import, not an additional sale. Independent manual batches
+        # and other sheet scopes are retained. Never discard linked documents.
+        candidates = rows_dict(conn.execute(
+            """SELECT DISTINCT b.* FROM batches b JOIN order_import_receipts r ON r.batch_id=b.id
+               WHERE r.work_date=? AND r.selected_sheets_json=?
+                 AND NOT EXISTS(SELECT 1 FROM daily_workdays d WHERE d.batch_id=b.id)""",
+            (work_date, json.dumps(sheets, ensure_ascii=False)),
+        ))
+        replacement = None
+        if len(candidates) > 1:
+            return jsonify(ok=False, error="Ngày này có nhiều bản nhập cũ cùng phạm vi; cần đối chiếu trước khi thay, không tự cộng thêm đơn"), 409
+        if candidates:
+            previous = candidates[0]
+            batch_id = previous["id"]
+            old_orders = rows_dict(conn.execute("SELECT * FROM orders WHERE batch_id=?", (batch_id,)))
+            blocker = batch_mutation_blocker(conn, batch_id)
+            if blocker or strict_order_removal_conflicts(conn, [r["id"] for r in old_orders]):
+                return jsonify(ok=False, error=blocker or "Bản cũ đã gắn với đặt NCC/hóa đơn; cần đối chiếu các chứng từ trước khi thay"), 409
+            if any(item["errors"] for item in orders):
+                return jsonify(ok=False, error="File mới còn dòng lỗi; bản cũ được giữ nguyên. Sửa file rồi nạp lại"), 400
+            previous_keys = [r['import_key'] for r in conn.execute('SELECT import_key FROM order_import_receipts WHERE batch_id=?', (batch_id,))]
+            conn.execute("""INSERT INTO order_reimport_history(batch_id,previous_source,next_source,rows_json,previous_keys_json,created_at)
+                VALUES(?,?,?,?,?,?)""", (batch_id, previous["source_name"], pending["name"], json.dumps(old_orders, ensure_ascii=False), json.dumps(previous_keys), now_iso()))
+            conn.execute("DELETE FROM order_import_receipts WHERE batch_id=?", (batch_id,))
+            conn.execute("DELETE FROM orders WHERE batch_id=?", (batch_id,))
+            sync_receivable_ledger(conn, timestamp=now_iso())
+            sync_payable_ledger(conn, timestamp=now_iso())
+            save_imported_orders(conn, batch_id, orders)
+            conn.execute("UPDATE batches SET source_name=?,status='draft',approved_at=NULL WHERE id=?", (pending["name"], batch_id))
+            replacement = {"replaced_rows": len(old_orders), "new_rows": len(orders),
+                           "message": "Đã thay các dòng thuộc cùng ngày và sheet đã chọn; giữ ngày/sheet khác, danh mục và lịch sử bản cũ."}
+        else:
+            batch_id = save_imported_batch(conn, orders, work_date, pending["name"])
         conn.execute(
             """INSERT INTO order_import_receipts(
                    import_key,source_hash,source_name,work_date,selected_sheets_json,batch_id,created_at
@@ -1495,6 +2824,7 @@ def api_import_confirm():
                 json.dumps(sheets, ensure_ascii=False), batch_id, now_iso(),
             ),
         )
+        sync_receivable_ledger(conn, timestamp=now_iso())
         payload = batch_payload(conn, batch_id)
         payload.update(
             ok=True,
@@ -1503,6 +2833,7 @@ def api_import_confirm():
             sourceHash=source_hash,
             importKey=import_key,
             idempotent=False,
+            replacement=replacement,
         )
         return jsonify(payload)
 
@@ -1557,7 +2888,13 @@ def api_approve_batch(batch_id):
             (now_iso(), batch_id),
         )
         post_purchase_list_inventory(conn, batch_id, now_iso)
-        return jsonify({"ok": True, **batch_payload(conn, batch_id)})
+        payable_ledger = sync_payable_ledger(conn, timestamp=now_iso())
+        receivable_ledger = sync_receivable_ledger(conn, timestamp=now_iso())
+        return jsonify({
+            "ok": True, **batch_payload(conn, batch_id),
+            "payable_ledger": payable_ledger,
+            "receivable_ledger": receivable_ledger,
+        })
 
 
 @app.post("/api/orders")
@@ -1594,6 +2931,8 @@ def api_add_order():
             ),
         )
         conn.execute("UPDATE batches SET status='draft',approved_at=NULL WHERE id=?", (batch_id,))
+        sync_payable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso())
         return jsonify({"ok": True, "id": cur.lastrowid, **batch_payload(conn, batch_id)})
 
 
@@ -1666,6 +3005,8 @@ def api_add_orders_bulk():
         if inserted == 0:
             return jsonify({"ok": False, "error": "Không có dòng hợp lệ để thêm"}), 400
         conn.execute("UPDATE batches SET status='draft',approved_at=NULL WHERE id=?", (batch_id,))
+        sync_payable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso())
         payload = batch_payload(conn, batch_id)
         payload.update(ok=True, inserted=inserted)
         return jsonify(payload)
@@ -1713,6 +3054,14 @@ def api_update_orders_bulk():
                 "error": "Một số dòng không còn thuộc phiên đang mở; hãy tải lại trước khi lưu",
                 "missing_ids": missing[:20],
             }), 409
+        direct_price_ids = direct_price_change_ids(current_rows, patches)
+        if direct_price_ids:
+            return jsonify({
+                "ok": False,
+                "error": "Giá bán chỉ được đổi qua lưới override có lý do, người thực hiện và revision",
+                "code": "sell_price_override_required",
+                "order_ids": direct_price_ids[:50],
+            }), 409
 
         lookup = product_lookup(conn)
         prepared = []
@@ -1746,6 +3095,8 @@ def api_update_orders_bulk():
                 ),
             )
         conn.execute("UPDATE batches SET status='draft',approved_at=NULL WHERE id=?", (batch_id,))
+        sync_payable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso())
         payload = batch_payload(conn, batch_id)
         payload.update(
             ok=True,
@@ -1764,6 +3115,15 @@ def api_update_order(order_id):
         current = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
         if not current:
             return jsonify({"ok": False, "error": "Không tìm thấy dòng đơn"}), 404
+        direct_price_ids = direct_price_change_ids(
+            {order_id: dict(current)}, [{**body, "id": order_id}],
+        )
+        if direct_price_ids:
+            return jsonify({
+                "ok": False,
+                "error": "Giá bán chỉ được đổi qua lưới override có lý do, người thực hiện và revision",
+                "code": "sell_price_override_required",
+            }), 409
         blocked = batch_mutation_blocker(conn, current["batch_id"])
         if blocked:
             return jsonify({"ok": False, "error": blocked}), 409
@@ -1797,6 +3157,8 @@ def api_update_order(order_id):
             ),
         )
         conn.execute("UPDATE batches SET status='draft',approved_at=NULL WHERE id=?", (current["batch_id"],))
+        sync_payable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso())
         return jsonify({"ok": True, **batch_payload(conn, current["batch_id"])})
 
 
@@ -1813,6 +3175,8 @@ def api_delete_order(order_id):
         clear_batch_derived_inventory(conn, current["batch_id"])
         conn.execute("DELETE FROM orders WHERE id=?", (order_id,))
         conn.execute("UPDATE batches SET status='draft',approved_at=NULL WHERE id=?", (current["batch_id"],))
+        sync_payable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso())
         return jsonify({"ok": True, **batch_payload(conn, current["batch_id"])})
 
 
@@ -1836,40 +3200,39 @@ def api_payment():
         return jsonify({"ok": False, "error": str(exc)}), 400
     if amount <= 0:
         return jsonify({"ok": False, "error": "Số tiền thanh toán phải lớn hơn 0"}), 400
-    with db() as conn:
+    if kind == "payment":
         try:
-            party_code = canonical_party_code(conn, party_type, party_code_input)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        cur = conn.execute(
-            "INSERT INTO payments(payment_date,kind,party_type,party_code,amount,note,created_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (payment_date, kind, party_type, party_code, amount,
-             clean_text(body.get("note")), now_iso()),
-        )
-        audit_event(
-            conn, "payment.create", entity_type=party_type, entity_id=party_code,
-            metadata={"payment_id": cur.lastrowid, "payment_date": payment_date,
-                      "kind": kind, "amount": amount},
-        )
-        return jsonify({"ok": True, "id": cur.lastrowid})
+            with db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                result = create_payable_payment(
+                    conn, body, timestamp=now_iso(),
+                    canonical_party_code=canonical_party_code,
+                    audit_event=audit_event,
+                )
+            return jsonify({"ok": True, **result}), 200 if result["idempotent"] else 201
+        except PayablePaymentError as exc:
+            return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+    try:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = customer_receipt(conn, body, round3_context())
+        return jsonify({"ok": True, **result}), 200 if result["idempotent"] else 201
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @app.delete("/api/payments/<int:payment_id>")
 def api_delete_payment(payment_id):
     with db() as conn:
-        current = conn.execute("SELECT * FROM payments WHERE id=?", (payment_id,)).fetchone()
+        current = conn.execute("SELECT kind,party_type FROM payments WHERE id=?", (payment_id,)).fetchone()
         if not current:
             return jsonify({"ok": False, "error": "Không tìm thấy giao dịch thanh toán"}), 404
-        conn.execute("DELETE FROM payments WHERE id=?", (payment_id,))
-        audit_event(
-            conn, "payment.delete", entity_type=current["party_type"],
-            entity_id=current["party_code"], metadata={
-                "payment_id": payment_id, "payment_date": current["payment_date"],
-                "kind": current["kind"], "amount": current["amount"],
-            },
-        )
-    return jsonify({"ok": True})
+        supplier = current["kind"] == "payment" and current["party_type"] == "supplier"
+        return jsonify({
+            "ok": False, "error": "Giao dịch phải được hoàn tác có lý do, không được xóa",
+            "code": "payable_reversal_required" if supplier else "receipt_reversal_required",
+            "reversal_endpoint": f"/api/debts/{'payables/payments' if supplier else 'receipts'}/{payment_id}/reverse",
+        }), 409
 
 
 @app.post("/api/balances")
@@ -1916,14 +3279,34 @@ def api_master_sync():
 def api_product_search():
     term = request.args.get("q", "").strip()
     with db() as conn:
+        candidates = rows_dict(conn.execute(
+            """SELECT p.*,COALESCE(o.invoice_name,'') invoice_name
+               FROM products p
+               LEFT JOIN outgoing_product_names o ON o.product_code=p.code
+               ORDER BY p.name,p.code"""
+        ))
         if not term:
-            rows = rows_dict(conn.execute("SELECT * FROM products ORDER BY name LIMIT 30"))
+            rows = candidates[:30]
         else:
-            like = f"%{term}%"
-            rows = rows_dict(conn.execute(
-                "SELECT * FROM products WHERE code LIKE ? OR name LIKE ? ORDER BY name LIMIT 30",
-                (like, like),
-            ))
+            needle = slug(term)
+            ranked = []
+            for row in candidates:
+                code_key = slug(row.get("code"))
+                name_keys = [slug(row.get("name")), slug(row.get("invoice_name"))]
+                searchable = [code_key, *[key for key in name_keys if key]]
+                contains = any(needle and needle in value for value in searchable)
+                ratio = max(
+                    (SequenceMatcher(None, needle, value).ratio() for value in searchable if value),
+                    default=0,
+                )
+                if contains or ratio >= 0.42:
+                    ranked.append((
+                        0 if code_key == needle else 1 if contains else 2,
+                        -ratio,
+                        row["name"],
+                        row,
+                    ))
+            rows = [item[3] for item in sorted(ranked, key=lambda item: item[:3])[:30]]
         return jsonify({"ok": True, "items": rows})
 
 
@@ -1937,41 +3320,49 @@ def workbook_bytes(wb: Workbook):
 def set_title(ws, text, subtitle="", end_col=8):
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_col)
     cell = ws.cell(1, 1, text)
-    cell.font = Font(name="Arial", size=17, bold=True, color=WHITE)
-    cell.fill = PatternFill("solid", fgColor=NAVY)
-    cell.alignment = Alignment(horizontal="center", vertical="center")
+    cell.font = Font(name="Times New Roman", size=16, bold=True)
+    cell.alignment = Alignment(
+        horizontal="center", vertical="center", wrap_text=True,
+        shrink_to_fit=True,
+    )
     ws.row_dimensions[1].height = 30
     if subtitle:
         ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=end_col)
         ws.cell(2, 1, subtitle)
-        ws.cell(2, 1).font = Font(name="Arial", italic=True, color=GRAY)
-        ws.cell(2, 1).alignment = Alignment(horizontal="center")
+        ws.cell(2, 1).font = Font(name="Times New Roman", size=11, italic=True)
+        ws.cell(2, 1).alignment = Alignment(
+            horizontal="center", vertical="center", wrap_text=True,
+            shrink_to_fit=True,
+        )
 
 
 def style_table(ws, header_row, end_col, last_row=None):
     last_row = last_row or ws.max_row
-    thin = Side(style="thin", color="D8E1EA")
+    thin = Side(style="thin", color="000000")
     for cell in ws[header_row][:end_col]:
-        cell.font = Font(name="Arial", bold=True, color=WHITE)
-        cell.fill = PatternFill("solid", fgColor=TEAL)
+        cell.font = Font(name="Times New Roman", size=11, bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
     for row in ws.iter_rows(min_row=header_row + 1, max_row=last_row, min_col=1, max_col=end_col):
         for cell in row:
-            cell.font = Font(name="Arial", size=10)
+            cell.font = Font(name="Times New Roman", size=11)
             cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
             cell.alignment = Alignment(vertical="center", wrap_text=True)
-            if cell.row % 2 == 0:
-                cell.fill = PatternFill("solid", fgColor=PALE)
     if last_row >= header_row:
         ws.auto_filter.ref = f"A{header_row}:{get_column_letter(end_col)}{last_row}"
     ws.freeze_panes = f"A{header_row + 1}"
 
 
-def autosize(ws, max_width=48):
+def autosize(ws, max_width=48, min_row=1):
+    """Size columns from tabular rows, optionally ignoring merged page titles.
+
+    A merged title is stored in the first cell of the merged range.  Counting
+    that text as column-A data makes narrow columns such as ``STT`` several
+    times wider than the actual item-name column when the workbook is printed.
+    """
     for col in range(1, ws.max_column + 1):
         width = 8
-        for row in range(1, min(ws.max_row, 180) + 1):
+        for row in range(max(1, min_row), min(ws.max_row, 180) + 1):
             value = ws.cell(row, col).value
             if value is not None:
                 lines = str(value).splitlines() or [""]
@@ -2030,7 +3421,7 @@ def batch_mutation_blocker(conn, batch_id: int) -> str:
 
 
 def clear_batch_derived_inventory(conn, batch_id: int) -> None:
-    """Remove reproducible BK stock lines before reverting a batch to draft."""
+    """Purge retired auto-generated BK rows while a batch is being edited."""
     conn.execute(
         "DELETE FROM inventory_transactions WHERE source_type='BK_INPUT' AND source_id=?",
         (str(batch_id),),
@@ -2047,203 +3438,348 @@ def send_xlsx(wb, filename):
 
 
 def export_supplier_orders(conn, batch, orders):
-    wb = Workbook()
-    wb.remove(wb.active)
-    groups = defaultdict(list)
-    stock = inventory_lookup(conn, batch["work_date"])
-    available = {code: max(item["available_qty"], 0) for code, item in stock.items()}
-    for item in orders:
-        qty = max(number_value(item["qty"]), 0)
-        used = min(qty, available.get(item["product_code"], 0))
-        available[item["product_code"]] = max(available.get(item["product_code"], 0) - used, 0)
-        required = max(qty - used, 0)
-        if required <= 0:
-            continue
-        rule = conn.execute(
-            "SELECT combine_kitchens FROM supplier_rules WHERE supplier_code=?", (item["supplier"],)
-        ).fetchone()
-        combined = bool(rule and rule["combine_kitchens"])
-        key = (item["supplier"] or "CHƯA XÁC ĐỊNH", "ALL" if combined else item["kitchen"])
-        output = dict(item)
-        output["required_qty"] = required
-        output["stock_used"] = used
-        groups[key].append(output)
-    for (supplier, kitchen_key), rows in sorted(groups.items()):
-        sheet_label = supplier if kitchen_key == "ALL" else f"{supplier}-{kitchen_key}"
-        ws = wb.create_sheet(safe_sheet_name(sheet_label.upper()))
-        set_title(ws, f"ĐƠN ĐẶT HÀNG – NCC {supplier.upper()}",
-                  f"Ngày giao: {batch['work_date']}", 7)
-        ws.append([])
-        ws.append(["STT", "Mã hàng", "Tên hàng", "SL cần mua", "ĐVT", "Bếp", "Ghi chú"])
-        for idx, item in enumerate(rows, 1):
-            note = item["note"] or ""
-            if item["stock_used"]:
-                note = (note + f" · Đã trừ tồn {item['stock_used']:g}").strip(" ·")
-            ws.append([idx, item["product_code"], item["product_name"], item["required_qty"],
-                       item["unit"], item["kitchen"], note])
-        style_table(ws, 4, 7)
-        autosize(ws)
-        ws.sheet_properties.pageSetUpPr.fitToPage = True
-        ws.page_setup.fitToWidth = 1
-    if not wb.sheetnames:
-        ws = wb.create_sheet("KHÔNG CẦN MUA")
-        set_title(ws, "KHÔNG PHÁT SINH NHU CẦU MUA", "Tồn khả dụng đã đáp ứng toàn bộ lượng khách đặt", 4)
-        ws.append([])
-        ws.append(["Ngày", "Trạng thái", "Công thức", "Ghi chú"])
-        ws.append([batch["work_date"], "Không cần đặt NCC", "max(lượng khách đặt - tồn khả dụng, 0)", ""])
-        style_table(ws, 4, 4)
-        autosize(ws)
+    """Build the customer's canonical, editable ``đặt hàng`` worksheet.
+
+    Columns A/B/Q are hidden compatibility/identity columns. The visible
+    business layout remains the customer's C:P sheet and never exposes or
+    accepts a sales price.
+    """
+    if not DAILY_ORDER_TEMPLATE_SOURCE.is_file():
+        raise FileNotFoundError(
+            "Thiếu mẫu đơn đặt hàng đã chốt; không tạo file bằng mẫu tự đoán"
+        )
+    wb = load_workbook(DAILY_ORDER_TEMPLATE_SOURCE, data_only=False, read_only=False)
+    try:
+        from document_preview import white_print_style
+        from document_totals import quantity_cell
+    except ImportError:
+        from .document_preview import white_print_style
+        from .document_totals import quantity_cell
+    ws = wb.active
+    payload = purchase_order_payload(conn, int(batch["id"]))
+    headers = [
+        "Mã hàngNCC", "Mã hàng", "Mã bếp", "", "Tên hàng ", "Số lượng",
+        "ĐVT", "NCC", "ghi chú", "giá mua", "hỏng", "thêm", "Giảm",
+        "thiếu", "SL \nthực té", "Thành tiền", "Mã dòng hệ thống",
+    ]
+    prototype_styles = [copy.copy(ws.cell(3, column)._style) for column in range(1, 18)]
+    if ws.max_row > 3:
+        ws.delete_rows(4, ws.max_row - 3)
+    for column, label in enumerate(headers, 1):
+        ws.cell(2, column, label)
+    occurrences = Counter()
+    for output_index, item in enumerate(payload["rows"], start=3):
+        identity = (
+            clean_text(item.get("product_code")).casefold(),
+            clean_text(item.get("kitchen")).casefold(),
+        )
+        occurrences[identity] += 1
+        row_key = item.get("row_key") or purchase_business_row_key(
+            item.get("work_date") or batch["work_date"], item.get("product_code"),
+            item.get("kitchen"), item.get("product_name"), item.get("unit"),
+            occurrences[identity],
+        )
+        row_number = output_index
+        base_qty = item.get("demand_qty", item.get("order_qty", 0))
+        damaged = item.get("damaged_qty", 0)
+        added = item.get("added_qty", 0)
+        reduced = item.get("reduced_qty", 0)
+        missing = item.get("missing_qty", 0)
+        values = [
+            f"=B{row_number}&H{row_number}", item.get("product_code"), item.get("kitchen"),
+            datetime.strptime(
+                item.get("work_date") or batch["work_date"], "%Y-%m-%d"
+            ).strftime("%d.%m.%Y"), item.get("product_name"), base_qty,
+            item.get("unit"), item.get("supplier"), item.get("note"), item.get("buy_price"),
+            damaged, added, reduced, missing,
+            f"=F{row_number}+L{row_number}-K{row_number}-M{row_number}-N{row_number}",
+            f"=IFERROR(O{row_number}*J{row_number},0)", row_key,
+        ]
+        for column, value in enumerate(values, 1):
+            cell = ws.cell(row_number, column, value)
+            cell._style = copy.copy(prototype_styles[column - 1])
+            if isinstance(value, str) and column not in (1, 15, 16):
+                cell.data_type = 's'
+    last_row = max(ws.max_row, 2)
+    ws["A1"] = "=B1&H1"
+    ws["F1"] = f"=SUBTOTAL(9,F3:F{last_row})"
+    ws["P1"] = f"=SUBTOTAL(9,P3:P{last_row})"
+    qty_total = quantity_cell([{'quantity':row.get('demand_qty',row.get('order_qty',0)),
+        'unit':row.get('unit','')} for row in payload['rows']], 'quantity')
+    if isinstance(qty_total,str):
+        ws['F1'] = qty_total
+        ws['F1'].alignment = Alignment(horizontal='right',vertical='center',wrap_text=True)
+        ws.row_dimensions[1].height = max(26, 18 * math.ceil(len(qty_total)/12))
+    for row_index in range(3, ws.max_row + 1):
+        for column_index in (6, 11, 12, 13, 14, 15):
+            # Preserve the customer's accounting formats and only make the
+            # quantity precision explicit where the source row has no format.
+            ws.cell(row_index, column_index).number_format = "#,##0.######"
+        for column_index in (10, 16):
+            ws.cell(row_index, column_index).number_format = "#,##0"
+        ws.row_dimensions[row_index].height = max(24,18*math.ceil(len(str(ws.cell(row_index,5).value or ''))/32))
+        ws.cell(row_index,5).alignment=Alignment(horizontal='left',vertical='center',wrap_text=True)
+    for column in ("A", "B", "Q"):
+        ws.column_dimensions[column].hidden = True
+    ws.auto_filter.ref = f"A2:Q{last_row}"
+    ws.freeze_panes = "C3"
+    ws.print_area = f"A1:Q{last_row}"
+    ws.print_title_rows = "$2:$2"
+    ws.sheet_view.showGridLines = True
+    try:
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+        wb.calculation.calcMode = "auto"
+    except AttributeError:
+        pass
+    white_print_style(wb)
     return wb
 
 
-def export_deliveries(conn, batch, orders):
-    wb = Workbook()
-    wb.remove(wb.active)
+def export_deliveries(conn, batch, orders, kitchen_codes=None):
+    selected_kitchens = {
+        clean_text(value).upper() for value in (kitchen_codes or []) if clean_text(value)
+    }
     groups = defaultdict(list)
     for item in orders:
-        groups[item["kitchen"] or "CHƯA XÁC ĐỊNH"].append(item)
+        delivered = net_delivered(item)
+        kitchen = clean_text(item["kitchen"]).upper() or "CHƯA XÁC ĐỊNH"
+        if delivered > 0 and (not selected_kitchens or kitchen in selected_kitchens):
+            groups[kitchen].append(
+                (item, delivered)
+            )
+    deliveries = []
     for kitchen, rows in sorted(groups.items()):
-        meta = conn.execute("SELECT * FROM kitchens WHERE code=?", (kitchen,)).fetchone()
-        meta = dict(meta) if meta else {"name": kitchen, "address": "", "show_price": 0}
-        show_price = bool(meta.get("show_price"))
-        end_col = 8 if show_price else 6
-        ws = wb.create_sheet(safe_sheet_name(kitchen))
-        set_title(ws, "PHIẾU GIAO HÀNG",
-                  f"{meta.get('name') or kitchen} – Ngày {batch['work_date']}", end_col)
-        ws.cell(3, 1, "Địa chỉ giao hàng:").font = Font(bold=True, color=NAVY)
-        ws.merge_cells(start_row=3, start_column=2, end_row=3, end_column=end_col)
-        ws.cell(3, 2, meta.get("address") or "")
-        headers = ["STT", "Mã hàng", "Tên hàng", "SL thực giao", "ĐVT", "Ghi chú"]
-        if show_price:
-            headers += ["Đơn giá", "Thành tiền"]
-        ws.append(headers)
-        for idx, item in enumerate(rows, 1):
-            delivered = net_delivered(item)
-            values = [idx, item["product_code"], item["product_name"], delivered,
-                      item["unit"], item["note"]]
+        meta_row = conn.execute(
+            "SELECT code,contractor,name,address FROM kitchens WHERE code=?", (kitchen,)
+        ).fetchone()
+        meta = dict(meta_row) if meta_row else {
+            "code": kitchen, "contractor": "", "name": kitchen, "address": "",
+        }
+        row_contractors = {
+            clean_text(item["contractor"]).upper() for item, _ in rows
+            if clean_text(item["contractor"])
+        }
+        contractor = clean_text(meta.get("contractor")).upper()
+        if not contractor and len(row_contractors) == 1:
+            contractor = next(iter(row_contractors))
+        recipient = clean_text(
+            setting_get(conn, f"delivery_recipient_{kitchen}", "")
+        ) or clean_text(meta.get("name")) or kitchen
+        address = clean_text(
+            setting_get(conn, f"delivery_address_{kitchen}", "")
+        ) or clean_text(meta.get("address"))
+        show_price = delivery_prices_visible(kitchen, contractor)
+        items = []
+        for item, delivered in rows:
+            record = {
+                "product_code": clean_text(item["product_code"]).upper(),
+                "product_name": clean_text(item["product_name"]),
+                "quantity": delivered,
+                "unit": clean_text(item["unit"]),
+                "note": clean_text(item["note"]),
+            }
             if show_price:
-                values += [item["sell_price"], delivered * item["sell_price"]]
-            ws.append(values)
-        style_table(ws, 4, end_col)
-        autosize(ws)
-        ws.sheet_properties.pageSetUpPr.fitToPage = True
-        ws.page_setup.fitToWidth = 1
-    return wb
+                record["sell_price"] = item["sell_price"]
+            items.append(record)
+        deliveries.append({
+            "kitchen": kitchen,
+            "contractor": contractor,
+            "recipient": recipient,
+            "address": address,
+            "items": items,
+        })
+    return build_delivery_workbook(
+        deliveries,
+        work_date=batch["work_date"],
+        template_path=MASTER_SOURCE,
+    )
 
 
 def export_report(conn, batch, orders):
-    summary = calculate_summary(conn, orders)
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Tổng hợp phiên"
-    set_title(
-        ws, "DOANH THU – GIÁ VỐN – LỢI NHUẬN CỦA PHIÊN",
-        f"Ngày {batch['work_date']} · Chỉ gồm phiên đơn này; không trừ số dư hoặc thu/chi của kỳ khác",
-        5,
+    period, report_rows = collect_monthly_report_rows(
+        conn, batch, orders, totals_fn=order_totals,
     )
-    ws.append([])
-    ws.append(["Nhà thầu", "Doanh thu chưa VAT", "Giá vốn", "Lợi nhuận",
-               "Phát sinh phải thu của phiên"])
-    for contractor, values in sorted(summary["contractors"].items()):
-        ws.append([contractor, values["revenue"], values["cost"], values["profit"],
-                   values["total"]])
-    style_table(ws, 4, 5)
-    autosize(ws)
-
-    ws = wb.create_sheet("Phát sinh phải thu")
-    set_title(
-        ws, "PHÁT SINH PHẢI THU CỦA PHIÊN",
-        "Muốn xem số dư đầu kỳ, thu tiền, điều chỉnh và cuối kỳ: dùng báo cáo Công nợ theo kỳ",
-        4,
+    present = {clean_text(row["kitchen"]).casefold() for row in report_rows}
+    for kitchen in conn.execute("SELECT code,contractor FROM kitchens ORDER BY contractor,code"):
+        if clean_text(kitchen["code"]).casefold() not in present and clean_text(kitchen["contractor"]):
+            report_rows.append({"kitchen": kitchen["code"], "contractor": kitchen["contractor"],
+                                "revenue": 0, "cost": 0, "profit": 0, "total": 0})
+    configured_groups = {
+        clean_text(row["key"])[len("report_group_"):].upper(): clean_text(row["value"])
+        for row in conn.execute(
+            "SELECT key,value FROM settings WHERE key LIKE 'report_group_%' ORDER BY key"
+        )
+        if clean_text(row["value"])
+    }
+    return build_monthly_report_workbook(
+        report_rows,
+        period=period,
+        template_path=MASTER_SOURCE,
+        configured_groups=configured_groups,
     )
-    ws.append([])
-    ws.append(["Nhà thầu", "Phát sinh phải thu", "Ngày dữ liệu", "Phạm vi"])
-    for contractor, values in sorted(summary["contractors"].items()):
-        ws.append([contractor, values["total"], batch["work_date"], "Riêng phiên đơn"])
-    style_table(ws, 4, 4)
-    autosize(ws)
-
-    ws = wb.create_sheet("Phát sinh phải trả")
-    set_title(
-        ws, "PHÁT SINH PHẢI TRẢ NHÀ CUNG CẤP CỦA PHIÊN",
-        "Giá vốn theo số thực nhận ròng · Không cộng số dư hoặc thanh toán kỳ khác",
-        5,
-    )
-    ws.append([])
-    ws.append(["NCC", "Phát sinh phải trả", "Ngày dữ liệu", "Số dòng", "Phạm vi"])
-    for supplier, values in sorted(summary["suppliers"].items()):
-        ws.append([supplier, values["cost"], batch["work_date"], values["lines"], "Riêng phiên đơn"])
-    style_table(ws, 4, 5)
-    autosize(ws)
-
-    ws = wb.create_sheet("Thu chi cùng ngày")
-    set_title(
-        ws, "THU – CHI CÙNG NGÀY (THAM KHẢO)",
-        "Giao dịch theo đối tượng, chưa phân bổ tự động vào riêng phiên đơn này",
-        7,
-    )
-    ws.append([])
-    ws.append(["Ngày", "Loại", "Nhóm", "Đối tượng", "Số tiền", "Nội dung", "Ngày tạo"])
-    for row in conn.execute(
-        "SELECT * FROM payments WHERE payment_date=? ORDER BY id", (batch["work_date"],)
-    ):
-        ws.append([row["payment_date"], "Thu khách" if row["kind"] == "receipt" else "Trả NCC",
-                   row["party_type"], row["party_code"], row["amount"], row["note"], row["created_at"]])
-    style_table(ws, 4, 7)
-    autosize(ws)
-    money_format(wb)
-    return wb
 
 
 def export_purchase_documents(conn, batch, orders):
-    rate = number_value(setting_get(conn, "purchase_rate", "0.95"), 0.95)
-    rows = [item for item in orders if item["purchase_list"]]
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Bảng kê"
-    set_title(ws, "BẢNG KÊ THU MUA HÀNG HÓA MUA VÀO KHÔNG CÓ HÓA ĐƠN",
-              f"Ngày {batch['work_date']} · Đơn giá bảng kê = {rate:.0%} giá bán", 9)
-    ws.append([])
-    ws.append(["Ngày", "Người bán", "Địa chỉ", "CCCD", "Tên hàng", "ĐVT",
-               "Số lượng thực nhận", "Đơn giá", "Thành tiền"])
-    grouped = defaultdict(list)
-    for item in rows:
-        person = conn.execute("SELECT * FROM people WHERE name=?", (item["seller"],)).fetchone()
-        address = person["address"] if person else "Hải Phòng"
-        unit_price = round(item["sell_price"] * rate)
-        received = net_received(item)
-        amount = received * unit_price
-        ws.append([batch["work_date"], item["seller"], address, item["cccd"],
-                   item["product_name"], item["unit"], received, unit_price, amount])
-        grouped[item["seller"] or "CHƯA XÁC ĐỊNH"].append((item, unit_price, amount))
-    style_table(ws, 4, 9)
-    autosize(ws)
+    """Create the golden purchase summary and one receipt per seller/day."""
 
-    for seller, seller_rows in sorted(grouped.items()):
-        person = conn.execute("SELECT * FROM people WHERE name=?", (seller,)).fetchone()
-        person = dict(person) if person else {}
-        ws = wb.create_sheet(safe_sheet_name(f"BN {seller}"))
-        set_title(ws, "GIẤY BIÊN NHẬN", f"Ngày {batch['work_date']}", 5)
-        labels = [
-            ("Đơn vị mua", setting_get(conn, "company", "")),
-            ("Người bán", seller),
-            ("Số CCCD", person.get("cccd") or seller_rows[0][0]["cccd"]),
-            ("Ngày cấp", person.get("issue_date") or ""),
-            ("Nơi cấp", person.get("issue_place") or ""),
-        ]
-        for idx, (label, value) in enumerate(labels, 4):
-            ws.cell(idx, 1, label).font = Font(bold=True, color=NAVY)
-            ws.cell(idx, 2, value)
+    excluded = []
+    rows = collect_purchase_summary_rows(conn, batch, orders, excluded_rows=excluded)
+    receipt_rows = enrich_receipt_identity_rows(conn, rows)
+    workbook = build_purchase_documents_workbook(
+        receipt_rows,
+        template_path=MASTER_SOURCE,
+        date_from=batch["work_date"],
+        date_to=batch["work_date"],
+        buyer_name=setting_get(conn, "purchase_receipt_buyer_name", ""),
+        buyer_title=setting_get(conn, "purchase_receipt_buyer_title", ""),
+        company_name=setting_get(conn, "company", ""),
+        company_address=setting_get(conn, "company_address", ""),
+        location=setting_get(conn, "purchase_receipt_location", "Hải Phòng"),
+    )
+    if excluded:
+        from openpyxl.comments import Comment
+        names = ", ".join(sorted({row["seller"] for row in excluded}))
+        warning = (f"Không lập bảng kê/biên nhận cho {len(excluded)} dòng của {names}. "
+                   "Tổng trên chứng từ chỉ gồm các dòng hợp lệ; dữ liệu gốc, kho và công nợ không bị thay đổi.")
+        workbook._tdp_warnings = [warning]
+        workbook.worksheets[0]["A1"].comment = Comment(warning, "TĐP")
+    return workbook
+
+
+def export_optional_purchase_documents(conn, batch, orders):
+    """Return no workbook only when this batch has no eligible BK rows.
+
+    A mixed print bundle may legitimately contain only sale-side documents.
+    Invalid BK data remains a hard error so missing prices or seller identity
+    cannot be hidden by silently omitting the purchase summary.
+    """
+
+    try:
+        return export_purchase_documents(conn, batch, orders)
+    except PurchaseSummaryError as error:
+        if error.code == "no_purchase_summary_rows":
+            return None
+        raise
+
+
+def export_outgoing_statement(conn, batch, orders):
+    """Create the human-readable outgoing-goods statement for one order batch.
+
+    This is deliberately a review document, so it can be downloaded before an
+    invoice draft is created.  Official invoice files remain protected by the
+    approval and inventory-reservation guards in ``api_export``.
+    """
+    invoice_names = {
+        row["product_code"]: row["invoice_name"]
+        for row in conn.execute("SELECT product_code,invoice_name FROM outgoing_product_names")
+    }
+    groups = defaultdict(list)
+    for item in orders:
+        if net_delivered(item) > 1e-9:
+            groups[item["contractor"] or "KHÁC"].append(item)
+
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "Tổng hợp"
+    status_text = "Đã duyệt" if batch["status"] == "approved" else "Bản nháp để kiểm tra"
+    set_title(
+        summary,
+        "BẢNG KÊ HÀNG HÓA ĐẦU RA",
+        f"Ngày {display_date_vn(batch['work_date'])} · {status_text} · Theo số thực giao ròng",
+        6,
+    )
+    summary.append([])
+    summary.append([
+        "Nhà thầu", "Số dòng", "Tiền trước thuế", "Tiền thuế",
+        "Tổng thanh toán", "Trạng thái phiên",
+    ])
+
+    for contractor, rows in sorted(groups.items()):
+        subtotal = 0
+        tax_amount = 0
+        for item in rows:
+            amount = vnd_product(net_delivered(item), vnd_round(number_value(item["sell_price"])))
+            vat_percent = invoice_vat_percent(item["tax"])
+            subtotal += amount
+            if vat_percent > 0:
+                tax_amount += vnd_product(amount, vat_percent / 100)
+        summary.append([
+            contractor, len(rows), subtotal, tax_amount, subtotal + tax_amount, status_text,
+        ])
+
+        ws = wb.create_sheet(safe_sheet_name(contractor))
+        set_title(
+            ws,
+            "BẢNG KÊ HÀNG HÓA ĐẦU RA",
+            f"Nhà thầu {contractor} · Ngày {display_date_vn(batch['work_date'])} · Theo số thực giao ròng",
+            11,
+        )
         ws.append([])
-        ws.append(["STT", "Tên hàng", "ĐVT", "Số lượng", "Thành tiền"])
-        total = 0
-        for idx, (item, _, amount) in enumerate(seller_rows, 1):
-            total += amount
-            ws.append([idx, item["product_name"], item["unit"], net_received(item), amount])
-        ws.append(["", "TỔNG CỘNG", "", "", total])
-        style_table(ws, 10, 5)
-        autosize(ws)
-    money_format(wb)
+        ws.append([
+            "STT", "Bếp", "Mã hàng", "Tên hàng xuất hóa đơn", "ĐVT",
+            "Số lượng thực giao", "Đơn giá", "Tiền trước thuế", "Thuế suất",
+            "Tiền thuế", "Tổng thanh toán",
+        ])
+        contractor_subtotal = 0
+        contractor_tax = 0
+        for index, item in enumerate(rows, 1):
+            qty = net_delivered(item)
+            unit_price = vnd_round(number_value(item["sell_price"]))
+            amount = vnd_product(qty, unit_price)
+            vat_percent = invoice_vat_percent(item["tax"])
+            line_tax = 0 if vat_percent <= 0 else vnd_product(amount, vat_percent / 100)
+            tax_label = {-2: "KKKNT", -1: "KCT"}.get(vat_percent, f"{vat_percent:g}%")
+            contractor_subtotal += amount
+            contractor_tax += line_tax
+            ws.append([
+                index, item["kitchen"], item["product_code"],
+                invoice_names.get(item["product_code"], item["product_name"]),
+                item["unit"], qty, unit_price, amount, tax_label, line_tax, amount + line_tax,
+            ])
+        ws.append([
+            "", "", "", "TỔNG CỘNG", "", "", "", contractor_subtotal, "",
+            contractor_tax, contractor_subtotal + contractor_tax,
+        ])
+        style_table(ws, 4, 11)
+        for col in (6, 7, 8, 10, 11):
+            for row in range(5, ws.max_row + 1):
+                ws.cell(row, col).number_format = "#,##0.##" if col == 6 else "#,##0"
+        autosize(ws, min_row=4)
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+        ws.page_setup.scale = None
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.print_title_rows = "$4:$4"
+        ws.print_area = f"A1:K{ws.max_row}"
+        ws.page_margins.left = 0.25
+        ws.page_margins.right = 0.25
+        ws.page_margins.top = 0.45
+        ws.page_margins.bottom = 0.45
+        ws.sheet_view.showGridLines = False
+
+    if not groups:
+        summary.append(["Không có số thực giao dương", 0, 0, 0, 0, status_text])
+    style_table(summary, 4, 6)
+    for col in (3, 4, 5):
+        for row in range(5, summary.max_row + 1):
+            summary.cell(row, col).number_format = "#,##0"
+    autosize(summary, min_row=4)
+    summary.sheet_properties.pageSetUpPr.fitToPage = True
+    summary.page_setup.paperSize = summary.PAPERSIZE_A4
+    summary.page_setup.orientation = summary.ORIENTATION_LANDSCAPE
+    summary.page_setup.scale = None
+    summary.page_setup.fitToWidth = 1
+    summary.page_setup.fitToHeight = 0
+    summary.print_title_rows = "$4:$4"
+    summary.print_area = f"A1:F{summary.max_row}"
+    summary.page_margins.left = 0.25
+    summary.page_margins.right = 0.25
+    summary.page_margins.top = 0.45
+    summary.page_margins.bottom = 0.45
+    summary.sheet_view.showGridLines = False
     return wb
 
 
@@ -2325,57 +3861,171 @@ def invoice_workbook(rows, invoice_names=None):
 
 
 def export_invoices_zip(conn, batch, orders):
-    invoice_names = {
-        row["product_code"]: row["invoice_name"]
-        for row in conn.execute("SELECT product_code,invoice_name FROM outgoing_product_names")
-    }
-    groups = defaultdict(list)
-    for item in orders:
-        vat_percent = invoice_vat_percent(item["tax"])
-        tax_key = {-2: "KKKNT", -1: "KCT"}.get(vat_percent, f"{vat_percent:g}%")
-        groups[(item["contractor"] or "KHAC", tax_key)].append(item)
-    stream = io.BytesIO()
-    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
-        manifest = ["FILE TẢI PHẦN MỀM TRUNG GIAN", "",
-                    "Các file đúng 13 cột theo mẫu thuế khách cung cấp.",
-                    "Dữ liệu đã qua bước kiểm tồn và giữ tồn khi tạo dự thảo đầu ra.", ""]
-        for (contractor, tax_key), rows in sorted(groups.items()):
-            wb_stream = workbook_bytes(invoice_workbook(rows, invoice_names))
-            has_promotion = any(
-                clean_text(item.get("invoice_nature")) == "2" or (
-                    "khuyenmai" in slug(
-                        f"{item['product_name']} {invoice_names.get(item['product_code'], item['product_name'])} {item.get('note', '')}"
-                    ) and number_value(item["sell_price"]) <= 0
-                )
-                for item in rows
-            )
-            suffix = "_co_khuyen_mai" if has_promotion else ""
-            filename = f"Hoa_don_{safe_sheet_name(contractor)}_{tax_key}{suffix}_{batch['work_date']}.xlsx"
-            archive.writestr(filename, wb_stream.getvalue())
-            manifest.append(f"- {filename}: {len(rows)} dòng")
-        archive.writestr("HUONG_DAN.txt", "\r\n".join(manifest).encode("utf-8-sig"))
-    stream.seek(0)
-    return stream
+    try:
+        from outgoing_readiness import OutgoingReadinessError, validate_draft_export_stock
+    except ImportError:
+        from .outgoing_readiness import OutgoingReadinessError, validate_draft_export_stock
+    # Export only quantities in the current, locally editable draft rounds.
+    # Earlier issued/saved rounds and the unallocated remainder must never be
+    # copied back from the full customer order into a new upload file.
+    lines = [dict(row) for row in conn.execute(
+        """SELECT l.id line_id,l.product_code,l.product_name,l.qty,l.unit,
+                  l.unit_price,l.tax,l.invoice_nature,l.amount,
+                  d.id draft_id,d.contractor,d.round_no,d.invoice_date,d.minvoice_status
+             FROM outgoing_invoice_lines l
+             JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
+            WHERE d.batch_id=? AND d.status='draft'
+              AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown')
+            ORDER BY d.contractor,d.round_no,l.id""",
+        (batch["id"],),
+    )]
+    try:
+        for draft_id, invoice_date in {(line["draft_id"], line["invoice_date"]) for line in lines}:
+            # Tax upload templates contain no issue date. Validate today's
+            # allocation here; the actual issue date is checked at confirmation.
+            validate_draft_export_stock(conn, draft_id)
+    except OutgoingReadinessError as error:
+        raise InvoiceTaxExportError(str(error), code=error.code, status=error.status) from None
+    for line in lines:
+        line["vat_percent"] = invoice_vat_percent(line["tax"])
+    return export_invoice_drafts_zip(
+        lines,
+        work_date=batch["work_date"],
+        template_dir=TAX_TEMPLATE_DIR,
+    )
 
 
-def get_quote_rows(conn, contractor: str, batch_id=None):
+def get_quote_rows(conn, contractor: str, batch_id=None, period="", version_id=None):
     row = conn.execute("SELECT * FROM contractors WHERE code=?", (contractor,)).fetchone()
-    group = row["price_group"] if row else contractor
-    mode = row["pricing_mode"] if row else "group"
+    if not row:
+        raise QuoteExportError(
+            f"Không tìm thấy nhà thầu {contractor or '(trống)'}",
+            code="contractor_not_found",
+            status=404,
+        )
+    group = row["price_group"] or contractor
+    mode = row["pricing_mode"]
     rows = []
-    if mode == "daily" and batch_id:
-        seen = set()
-        for item in conn.execute(
-            "SELECT product_code,product_name,unit,tax,sell_price FROM orders "
-            "WHERE batch_id=? AND contractor=? ORDER BY product_name", (batch_id, contractor)
-        ):
-            if item["product_code"] in seen:
+    resolved_period = clean_text(period)
+    if not resolved_period and batch_id:
+        batch = conn.execute("SELECT work_date FROM batches WHERE id=?", (batch_id,)).fetchone()
+        resolved_period = clean_text(batch["work_date"])[:7] if batch else ""
+    if not resolved_period:
+        resolved_period = date.today().strftime("%Y-%m")
+    if mode == "daily":
+        if version_id is not None:
+            raise QuoteExportError(
+                "Báo giá theo ngày không dùng phiên bản báo giá tháng",
+                code="daily_quote_has_no_period_version",
+                status=400,
+            )
+        if not batch_id:
+            return mode, rows, {
+                "period": resolved_period, "price_group": group, "version": None,
+                "daily_source": None, "contractor_name": row["name"],
+                "conflicts": [], "excluded_count": 0,
+                "output_count": 0, "status_count": 0,
+            }
+        batch = conn.execute(
+            "SELECT id,work_date,source_name FROM batches WHERE id=?", (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise QuoteExportError(
+                "Không tìm thấy phiên đơn nguồn cho báo giá theo ngày",
+                code="daily_batch_not_found",
+                status=404,
+            )
+        resolved_period = clean_text(batch["work_date"])[:7]
+        candidates = conn.execute(
+            """SELECT id,product_code,product_name,unit,tax,sell_price,
+                      source_sheet,source_row
+               FROM orders
+               WHERE batch_id=? AND contractor=?
+               ORDER BY UPPER(product_code),id""",
+            (batch_id, contractor),
+        ).fetchall()
+        by_code = defaultdict(list)
+        conflicts = []
+        for item in candidates:
+            code = clean_text(item["product_code"]).upper()
+            if not code:
+                conflicts.append({
+                    "product_code": "",
+                    "source_rows": [int(item["source_row"])] if item["source_row"] is not None else [],
+                    "order_ids": [int(item["id"])],
+                    "reasons": ["thiếu mã hàng"],
+                })
                 continue
-            seen.add(item["product_code"])
-            data = dict(item)
-            data["status"] = "Giá theo ngày"
-            rows.append(data)
+            by_code[code].append(item)
+        for code, code_rows in by_code.items():
+            def text_key(value):
+                return re.sub(r"\s+", " ", clean_text(value)).casefold()
+
+            dimensions = {
+                "tên hàng khác nhau": {text_key(item["product_name"]) for item in code_rows},
+                "ĐVT khác nhau": {text_key(item["unit"]) for item in code_rows},
+                "thuế khác nhau": {text_key(item["tax"]) for item in code_rows},
+                "giá bán theo ngày khác nhau": {number_value(item["sell_price"]) for item in code_rows},
+            }
+            reasons = [label for label, values in dimensions.items() if len(values) > 1]
+            source_rows = sorted({
+                int(item["source_row"]) for item in code_rows if item["source_row"] is not None
+            })
+            order_ids = [int(item["id"]) for item in code_rows]
+            if reasons:
+                conflicts.append({
+                    "product_code": code,
+                    "source_rows": source_rows,
+                    "order_ids": order_ids,
+                    "reasons": reasons,
+                })
+                continue
+            selected = code_rows[0]
+            sell_price = number_value(selected["sell_price"])
+            if math.isfinite(float(sell_price)) and float(sell_price).is_integer():
+                sell_price = int(sell_price)
+            state = "zero" if sell_price == 0 else "numeric"
+            rows.append({
+                "product_code": code,
+                "product_name": selected["product_name"],
+                "unit": selected["unit"],
+                "tax": selected["tax"],
+                "sell_price": sell_price,
+                "status": "Giá 0 theo ngày – giữ để xác nhận" if state == "zero" else "Giá theo ngày",
+                "price_state": state,
+                "exportable": True,
+                "source_row": selected["source_row"],
+                "source_rows": source_rows,
+                "order_ids": order_ids,
+                "duplicate_count": max(0, len(code_rows) - 1),
+            })
+        rows.sort(key=lambda item: (clean_text(item["product_name"]).casefold(), item["product_code"]))
+        return mode, rows, {
+            "period": resolved_period, "price_group": group, "version": None,
+            "daily_source": {
+                "batch_id": int(batch["id"]),
+                "work_date": clean_text(batch["work_date"]),
+                "source_name": clean_text(batch["source_name"]),
+            },
+            "contractor_name": row["name"],
+            "conflicts": conflicts, "excluded_count": 0,
+            "output_count": len(rows), "status_count": 0,
+        }
     else:
+        versioned = quote_rows_for_contractor(
+            conn, contractor, resolved_period, version_id=version_id,
+        )
+        if versioned is not None:
+            versioned["daily_source"] = None
+            versioned["contractor_name"] = row["name"]
+            return mode, versioned["items"], versioned
+        if version_id is not None:
+            raise QuoteExportError(
+                "Không tìm thấy phiên bản báo giá đã xác nhận trong kỳ đã chọn",
+                code="quote_version_not_found",
+                status=404,
+            )
+        excluded_count = 0
         for item in conn.execute(
             """SELECT p.code product_code,p.name product_name,p.unit,p.tax,
                       pp.price_value sell_price,pp.price_text
@@ -2384,18 +4034,88 @@ def get_quote_rows(conn, contractor: str, batch_id=None):
         ):
             data = dict(item)
             text = clean_text(data.pop("price_text", ""))
-            data["status"] = text if not data["sell_price"] else ""
+            if data["sell_price"] is not None:
+                data["price_state"] = "zero" if number_value(data["sell_price"]) == 0 else "numeric"
+                data["status"] = "Giá 0 – giữ để xác nhận" if data["price_state"] == "zero" else ""
+                data["exportable"] = True
+            elif text.lower() == "x" or not text:
+                excluded_count += 1
+                continue
+            else:
+                data["price_state"] = "text"
+                data["status"] = text
+                data["exportable"] = False
             rows.append(data)
-    return mode, rows
+        return mode, rows, {
+            "period": resolved_period, "price_group": group, "version": None,
+            "daily_source": None, "contractor_name": row["name"],
+            "conflicts": [], "excluded_count": excluded_count,
+            "output_count": sum(bool(item["exportable"]) for item in rows),
+            "status_count": sum(not item["exportable"] for item in rows),
+        }
+
+
+def quote_period_arg(raw_value):
+    period = clean_text(raw_value)
+    if not period:
+        return ""
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}", period):
+            raise ValueError
+        datetime.strptime(period + "-01", "%Y-%m-%d")
+    except ValueError:
+        raise QuoteExportError(
+            "Kỳ báo giá phải có dạng YYYY-MM",
+            code="quote_period_invalid",
+            status=400,
+        ) from None
+    return period
+
+
+def quote_version_arg(raw_value):
+    value = clean_text(raw_value)
+    if not value:
+        return None
+    try:
+        version_id = int(value)
+    except (TypeError, ValueError):
+        version_id = 0
+    if version_id <= 0:
+        raise QuoteExportError(
+            "Phiên bản báo giá không hợp lệ",
+            code="quote_version_invalid",
+            status=400,
+        )
+    return version_id
 
 
 @app.get("/api/quotes")
 def api_quotes():
     contractor = clean_text(request.args.get("contractor")).upper()
     batch_id = request.args.get("batch_id", type=int)
-    with db() as conn:
-        mode, rows = get_quote_rows(conn, contractor, batch_id)
-        return jsonify({"ok": True, "contractor": contractor, "mode": mode, "items": rows})
+    try:
+        period = quote_period_arg(request.args.get("period"))
+        version_id = quote_version_arg(request.args.get("version_id"))
+        with db() as conn:
+            mode, rows, context = get_quote_rows(
+                conn, contractor, batch_id, period, version_id=version_id,
+            )
+            recipient = quote_recipient(
+                contractor,
+                configured=setting_get(conn, f"quote_recipient_{contractor}", ""),
+                fallback_name=context["contractor_name"],
+            )
+            return jsonify({
+                "ok": True, "contractor": contractor, "mode": mode, "items": rows,
+                "recipient": recipient,
+                "period": context["period"], "price_group": context["price_group"],
+                "version": context["version"], "dailySource": context["daily_source"],
+                "conflicts": context["conflicts"],
+                "excludedCount": context["excluded_count"],
+                "outputCount": context["output_count"], "statusCount": context["status_count"],
+            })
+    except QuoteExportError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
 
 
 @app.get("/api/export/<kind>/<int:batch_id>")
@@ -2406,67 +4126,357 @@ def api_export(kind, batch_id):
         if kind == "suppliers":
             return send_xlsx(export_supplier_orders(conn, batch, orders), f"Don_dat_hang_NCC_{stamp}.xlsx")
         if kind == "deliveries":
-            return send_xlsx(export_deliveries(conn, batch, orders), f"Phieu_giao_hang_{stamp}.xlsx")
+            try:
+                workbook = export_deliveries(conn, batch, orders)
+            except DeliveryExportError as error:
+                return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
+            return send_xlsx(workbook, f"Phieu_giao_hang_{stamp}.xlsx")
         if kind == "report":
-            return send_xlsx(export_report(conn, batch, orders), f"Bao_cao_phien_{stamp}.xlsx")
+            try:
+                workbook = export_report(conn, batch, orders)
+            except ReportExportError as error:
+                return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
+            return send_xlsx(workbook, f"Bao_cao_tong_hop_{batch['work_date'][:7]}.xlsx")
         if kind == "purchases":
-            return send_xlsx(export_purchase_documents(conn, batch, orders), f"Bang_ke_bien_nhan_{stamp}.xlsx")
+            try:
+                workbook = export_purchase_documents(conn, batch, orders)
+            except PurchaseSummaryError as error:
+                return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
+            return send_xlsx(workbook, f"Bang_ke_bien_nhan_{stamp}.xlsx")
+        if kind == "outgoing-statement":
+            return send_xlsx(
+                export_outgoing_statement(conn, batch, orders),
+                f"Bang_ke_hang_hoa_dau_ra_{stamp}.xlsx",
+            )
         if kind == "invoices":
             if batch["status"] != "approved":
                 return jsonify({"ok": False, "error": "Phải duyệt phiên đơn trước khi tạo file hóa đơn"}), 409
-            active_drafts = [dict(row) for row in conn.execute(
-                """SELECT contractor,status FROM outgoing_invoice_drafts
-                   WHERE batch_id=? AND status!='cancelled'""",
-                (batch_id,),
-            )]
-            if not active_drafts:
-                return jsonify({
-                    "ok": False,
-                    "error": "Cần bấm Kiểm tra tồn & tạo dự thảo đầu ra trước khi tải ZIP hóa đơn",
-                }), 409
-            if any(item["status"] == "issued" for item in active_drafts):
-                return jsonify({
-                    "ok": False,
-                    "error": "Phiên đã có hóa đơn phát hành; không tạo lại ZIP để tránh xuất trùng",
-                }), 409
-            required_contractors = {
-                item["contractor"] or "KHAC" for item in orders if net_delivered(item) > 0
-            }
-            draft_contractors = {item["contractor"] or "KHAC" for item in active_drafts}
-            missing = sorted(required_contractors - draft_contractors)
-            if missing:
-                return jsonify({
-                    "ok": False,
-                    "error": "Dự thảo chưa giữ tồn đủ cho: " + ", ".join(missing),
-                }), 409
+            try:
+                payload = export_invoices_zip(conn, batch, orders)
+            except InvoiceTaxExportError as error:
+                return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
             return send_file(
-                export_invoices_zip(conn, batch, orders), as_attachment=True,
+                payload, as_attachment=True,
                 download_name=f"File_tai_phan_mem_trung_gian_{stamp}.zip",
                 mimetype="application/zip",
             )
-    return jsonify({"ok": False, "error": "Loại file không hợp lệ"}), 404
+        return jsonify({"ok": False, "error": "Loại file không hợp lệ"}), 404
+
+
+@app.post("/api/export/selected-documents")
+def api_export_selected_documents():
+    """Create one clear ZIP for the dates and document types chosen by the user.
+
+    The UI uses this route for historical reprints.  Selection is explicit: it
+    never guesses a date range from the current batch and never mutates source
+    data while producing printable Excel files.
+    """
+
+    body = request.get_json(silent=True) or {}
+    raw_batch_ids = body.get("batch_ids") or []
+    raw_documents = body.get("documents") or []
+    raw_delivery_selections = body.get("delivery_selections") or []
+    if not isinstance(raw_batch_ids, list) or not isinstance(raw_documents, list):
+        return jsonify({"ok": False, "error": "Danh sách đơn hoặc giấy tờ không hợp lệ"}), 400
+    if not isinstance(raw_delivery_selections, list):
+        return jsonify({"ok": False, "error": "Danh sách phiếu giao không hợp lệ"}), 400
+
+    batch_ids = []
+    for value in raw_batch_ids:
+        try:
+            batch_id = int(value)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Có mã đơn không hợp lệ"}), 400
+        if batch_id > 0 and batch_id not in batch_ids:
+            batch_ids.append(batch_id)
+    if not batch_ids:
+        return jsonify({"ok": False, "error": "Hãy chọn ít nhất một đơn cần in"}), 400
+    if len(batch_ids) > 100:
+        return jsonify({"ok": False, "error": "Mỗi lần chỉ chọn tối đa 100 đơn"}), 400
+
+    allowed_documents = {
+        "suppliers": ("Don_hang", export_supplier_orders),
+        "deliveries": ("Phieu_giao_hang", export_deliveries),
+        "purchases": ("Bang_ke_bien_nhan", export_purchase_documents),
+        "report": ("Bao_cao_tong_hop", export_report),
+    }
+    documents = []
+    for value in raw_documents:
+        key = clean_text(value).lower()
+        if key in allowed_documents and key not in documents:
+            documents.append(key)
+    if not documents:
+        return jsonify({"ok": False, "error": "Hãy chọn ít nhất một loại giấy tờ"}), 400
+
+    delivery_selections = defaultdict(set)
+    for item in raw_delivery_selections:
+        if not isinstance(item, dict):
+            return jsonify({"ok": False, "error": "Có phiếu giao được chọn không hợp lệ"}), 400
+        try:
+            selected_batch_id = int(item.get("batch_id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Có mã đơn trong phiếu giao không hợp lệ"}), 400
+        selected_kitchen = clean_text(item.get("kitchen")).upper()
+        if selected_batch_id not in batch_ids or not selected_kitchen:
+            return jsonify({"ok": False, "error": "Có phiếu giao không thuộc danh sách đã chọn"}), 400
+        delivery_selections[selected_batch_id].add(selected_kitchen)
+
+    try:
+        archive_stream = io.BytesIO()
+        written = 0
+        written_report_periods = set()
+        with db() as conn, zipfile.ZipFile(
+            archive_stream, mode="w", compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            batches = []
+            for batch_id in batch_ids:
+                batch, orders = require_batch(conn, batch_id)
+                batches.append((batch, orders))
+            batches.sort(key=lambda item: (item[0]["work_date"], item[0]["id"]))
+
+            for batch, orders in batches:
+                stamp = clean_text(batch["work_date"])
+                for document in documents:
+                    if document == "report":
+                        period = stamp[:7]
+                        if period in written_report_periods:
+                            continue
+                        written_report_periods.add(period)
+                    label, builder = allowed_documents[document]
+                    try:
+                        if document == "deliveries" and raw_delivery_selections:
+                            selected_codes = delivery_selections.get(int(batch["id"]), set())
+                            if not selected_codes:
+                                continue
+                            workbook = export_deliveries(conn, batch, orders, selected_codes)
+                        else:
+                            workbook = builder(conn, batch, orders)
+                    except PurchaseSummaryError as error:
+                        if document == "purchases" and error.code == "no_purchase_summary_rows":
+                            continue
+                        raise
+                    try:
+                        stream = workbook_bytes(workbook)
+                        try:
+                            payload = stream.getvalue()
+                        finally:
+                            stream.close()
+                    finally:
+                        workbook.close()
+                    suffix = stamp[:7] if document == "report" else f"{stamp}_don-{int(batch['id'])}"
+                    archive.writestr(f"{label}_{suffix}.xlsx", payload)
+                    written += 1
+
+        if not written:
+            archive_stream.close()
+            return jsonify({"ok": False, "error": "Các đơn đã chọn chưa có giấy tờ phù hợp để tải"}), 409
+        archive_stream.seek(0)
+        return send_file(
+            archive_stream,
+            as_attachment=True,
+            download_name=f"GIAY_TO_DA_CHON_{date.today().strftime('%Y%m%d')}.zip",
+            mimetype="application/zip",
+        )
+    except (ValueError, DeliveryExportError, PurchaseSummaryError, ReportExportError) as error:
+        return jsonify({
+            "ok": False,
+            "error": str(error),
+            "code": getattr(error, "code", "selected_document_export_failed"),
+        }), int(getattr(error, "status", 422))
 
 
 @app.get("/api/export/quote/<contractor>")
 def api_export_quote(contractor):
     contractor = clean_text(contractor).upper()
     batch_id = request.args.get("batch_id", type=int)
-    with db() as conn:
-        mode, rows = get_quote_rows(conn, contractor, batch_id)
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "BÁO GIÁ"
-        subtitle = "Giá theo ngày từ phiên đơn đang chọn" if mode == "daily" else "Theo nhóm giá đã cấu hình"
-        set_title(ws, f"BẢNG BÁO GIÁ – {contractor}", subtitle, 6)
-        ws.append([])
-        ws.append(["STT", "Mã hàng", "Tên hàng", "ĐVT", "Thuế", "Đơn giá"])
-        output = [item for item in rows if number_value(item.get("sell_price")) > 0]
-        for idx, item in enumerate(output, 1):
-            ws.append([idx, item["product_code"], item["product_name"], item["unit"],
-                       item["tax"], item["sell_price"]])
-        style_table(ws, 4, 6)
-        autosize(ws)
-        return send_xlsx(wb, f"Bao_gia_{contractor}.xlsx")
+    try:
+        period = quote_period_arg(request.args.get("period"))
+        version_id = quote_version_arg(request.args.get("version_id"))
+        with db() as conn:
+            mode, rows, context = get_quote_rows(
+                conn, contractor, batch_id, period, version_id=version_id,
+            )
+            if context["conflicts"]:
+                return jsonify({
+                    "ok": False,
+                    "error": "Báo giá còn mã trùng xung đột; không tự chọn dòng để xuất",
+                    "code": "quote_duplicate_conflict",
+                    "conflicts": context["conflicts"],
+                }), 409
+            if mode == "daily" and context["daily_source"] is None:
+                raise QuoteExportError(
+                    "Phải chọn phiên đơn nguồn trước khi xuất báo giá theo ngày",
+                    code="daily_batch_required",
+                )
+            recipient = quote_recipient(
+                contractor,
+                configured=setting_get(conn, f"quote_recipient_{contractor}", ""),
+                fallback_name=context["contractor_name"],
+            )
+            workbook = build_contractor_quote_workbook(
+                rows,
+                contractor=contractor,
+                recipient=recipient,
+                period=context["period"],
+                version=context["version"],
+                daily_source=context["daily_source"] if mode == "daily" else None,
+            )
+            filename = contractor_quote_filename(
+                contractor,
+                period=context["period"],
+                version_no=(context["version"] or {}).get("version_no"),
+                daily_source=context["daily_source"] if mode == "daily" else None,
+            )
+            return send_xlsx(workbook, filename)
+    except QuoteExportError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+
+
+def quote_workbook_payload(conn, contractor, rows, context, mode):
+    recipient = quote_recipient(
+        contractor,
+        configured=setting_get(conn, f"quote_recipient_{contractor}", ""),
+        fallback_name=context["contractor_name"],
+    )
+    workbook = build_contractor_quote_workbook(
+        rows,
+        contractor=contractor,
+        recipient=recipient,
+        period=context["period"],
+        version=context["version"],
+        daily_source=context["daily_source"] if mode == "daily" else None,
+    )
+    try:
+        stream = workbook_bytes(workbook)
+        try:
+            payload = stream.getvalue()
+        finally:
+            stream.close()
+    finally:
+        workbook.close()
+    filename = contractor_quote_filename(
+        contractor,
+        period=context["period"],
+        version_no=(context["version"] or {}).get("version_no"),
+        daily_source=context["daily_source"] if mode == "daily" else None,
+    )
+    return filename, payload
+
+
+@app.get("/api/export/quotes/all")
+def api_export_all_quotes():
+    """Download one isolated XLSX per contractor in a single ZIP archive."""
+    try:
+        period = quote_period_arg(request.args.get("period"))
+        if not period:
+            raise QuoteExportError(
+                "Phải chọn kỳ báo giá trước khi tải toàn bộ",
+                code="quote_period_required",
+                status=400,
+            )
+        requested_version_id = quote_version_arg(request.args.get("version_id"))
+        batch_id = request.args.get("batch_id", type=int)
+        with db() as conn:
+            if requested_version_id is None:
+                version = conn.execute(
+                    """SELECT id,version_no FROM quote_versions
+                       WHERE effective_period=? AND status='confirmed'
+                       ORDER BY version_no DESC LIMIT 1""",
+                    (period,),
+                ).fetchone()
+                missing_code = "quote_period_not_confirmed"
+                missing_status = 409
+                missing_message = "Kỳ báo giá này chưa có phiên bản đã xác nhận"
+            else:
+                version = conn.execute(
+                    """SELECT id,version_no FROM quote_versions
+                       WHERE id=? AND effective_period=? AND status='confirmed'""",
+                    (requested_version_id, period),
+                ).fetchone()
+                missing_code = "quote_version_not_found"
+                missing_status = 404
+                missing_message = "Không tìm thấy phiên bản báo giá đã xác nhận trong kỳ đã chọn"
+            if not version:
+                raise QuoteExportError(
+                    missing_message, code=missing_code, status=missing_status,
+                )
+
+            selected_version_id = int(version["id"])
+            contractors = conn.execute(
+                """SELECT code,pricing_mode FROM contractors
+                   ORDER BY CASE WHEN pricing_mode='daily' THEN 1 ELSE 0 END,code"""
+            ).fetchall()
+            daily_batch_allowed = False
+            if batch_id:
+                batch = conn.execute(
+                    "SELECT work_date FROM batches WHERE id=?", (batch_id,),
+                ).fetchone()
+                if not batch:
+                    raise QuoteExportError(
+                        "Không tìm thấy đơn hàng dùng cho báo giá theo ngày",
+                        code="daily_batch_not_found",
+                        status=404,
+                    )
+                daily_batch_allowed = clean_text(batch["work_date"])[:7] == period
+                if not daily_batch_allowed:
+                    raise QuoteExportError(
+                        "Đơn hàng theo ngày không thuộc kỳ báo giá đã chọn",
+                        code="daily_batch_period_mismatch",
+                    )
+
+            archive_stream = io.BytesIO()
+            written = 0
+            with zipfile.ZipFile(
+                archive_stream, mode="w", compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                for contractor_row in contractors:
+                    contractor = clean_text(contractor_row["code"]).upper()
+                    is_daily = contractor_row["pricing_mode"] == "daily"
+                    if is_daily and not daily_batch_allowed:
+                        continue
+                    mode, rows, context = get_quote_rows(
+                        conn,
+                        contractor,
+                        batch_id if is_daily else None,
+                        period,
+                        version_id=None if is_daily else selected_version_id,
+                    )
+                    if context["conflicts"]:
+                        raise QuoteExportError(
+                            f"Báo giá {contractor} còn mã trùng xung đột; chưa thể tải toàn bộ",
+                            code="quote_duplicate_conflict",
+                        )
+                    exportable = [item for item in rows if item.get("exportable")]
+                    if not exportable:
+                        continue
+                    filename, payload = quote_workbook_payload(
+                        conn, contractor, rows, context, mode,
+                    )
+                    archive.writestr(filename, payload)
+                    written += 1
+
+            if not written:
+                raise QuoteExportError(
+                    "Phiên bản này chưa có báo giá nào đủ điều kiện để tải",
+                    code="quote_bundle_empty",
+                )
+            archive_stream.seek(0)
+            month = int(period[5:7])
+            year = int(period[:4])
+            filename = f"BAO_GIA_TAT_CA_T{month:02d}-{year}_V{int(version['version_no'])}.zip"
+            return send_file(
+                archive_stream,
+                as_attachment=True,
+                download_name=filename,
+                mimetype="application/zip",
+            )
+    except QuoteExportError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+
+
+@app.get("/api/backup/status")
+def api_backup_status():
+    return jsonify(backup_status(DATA_DIR))
 
 
 @app.get("/api/backup")
@@ -2525,9 +4535,115 @@ def local_ip():
         return "127.0.0.1"
 
 
-def open_browser():
-    time.sleep(1.2)
-    webbrowser.open("http://127.0.0.1:8765")
+def application_url(runtime_port: int) -> str:
+    return f"http://127.0.0.1:{runtime_port}"
+
+
+def tdp_health_available(runtime_port: int, timeout: float = 0.8) -> bool:
+    try:
+        with urlopen(f"{application_url(runtime_port)}/health", timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return bool(
+            response.status == 200
+            and payload.get("ok") is True
+            and payload.get("database_ready") is True
+            and payload.get("schema_ready") is True
+        )
+    except (OSError, URLError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def open_browser(runtime_port: int = 8765, wait_seconds: float = 30.0) -> bool:
+    deadline = time.monotonic() + max(wait_seconds, 0)
+    while time.monotonic() < deadline:
+        if tdp_health_available(runtime_port):
+            webbrowser.open(application_url(runtime_port))
+            return True
+        time.sleep(0.25)
+    return False
+
+
+_SINGLE_INSTANCE_HANDLE = None
+
+
+def single_instance_mutex_name() -> str:
+    """Keep production single-instance while allowing an isolated packaged smoke run."""
+
+    production_name = "Local\\ThanhDatPhatDesktopApplication"
+    if "--smoke-test-instance" not in sys.argv:
+        return production_name
+
+    smoke_id = clean_text(os.environ.get("TDP_SMOKE_INSTANCE_ID", ""))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", smoke_id):
+        raise RuntimeError("TDP_SMOKE_INSTANCE_ID không hợp lệ")
+    required_names = ("TDP_DATA_DIR", "TDP_DB_PATH", "TDP_EXPORT_DIR", "TDP_PORT")
+    missing = [name for name in required_names if not clean_text(os.environ.get(name, ""))]
+    if missing:
+        raise RuntimeError("Chế độ smoke thiếu cấu hình cô lập: " + ", ".join(missing))
+    try:
+        smoke_port = int(os.environ["TDP_PORT"])
+    except ValueError as exc:
+        raise RuntimeError("Cổng smoke không hợp lệ") from exc
+    if smoke_port == 8765 or smoke_port < 1024 or smoke_port > 65535:
+        raise RuntimeError("Chế độ smoke phải dùng cổng riêng từ 1024 đến 65535, khác 8765")
+
+    raw_temp_root = clean_text(os.environ.get("TEMP") or os.environ.get("TMP") or "")
+    if not raw_temp_root:
+        raise RuntimeError("Không xác định được thư mục tạm Windows cho chế độ smoke")
+    temp_root = Path(raw_temp_root).resolve()
+    isolated_paths = [
+        Path(os.environ["TDP_DATA_DIR"]).resolve(),
+        Path(os.environ["TDP_DB_PATH"]).resolve(),
+        Path(os.environ["TDP_EXPORT_DIR"]).resolve(),
+    ]
+    for isolated_path in isolated_paths:
+        try:
+            inside_temp = os.path.commonpath((str(temp_root), str(isolated_path))) == str(temp_root)
+        except ValueError:
+            inside_temp = False
+        if not inside_temp or isolated_path == temp_root:
+            raise RuntimeError("Chế độ smoke chỉ được dùng đường dẫn con trong thư mục tạm Windows")
+
+    fingerprint = hashlib.sha256(
+        f"{smoke_id}|{isolated_paths[0]}|{smoke_port}".encode("utf-8")
+    ).hexdigest()[:16]
+    return production_name + "Smoke_" + fingerprint
+
+
+def acquire_single_instance() -> bool:
+    """Return False for a second frozen Windows launch and retain the mutex otherwise."""
+
+    global _SINGLE_INSTANCE_HANDLE
+    if not FROZEN or os.name != "nt":
+        return True
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    handle = kernel32.CreateMutexW(None, False, single_instance_mutex_name())
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        return False
+    _SINGLE_INSTANCE_HANDLE = handle
+    return True
+
+
+def show_startup_error(message: str):
+    if FROZEN and os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                message,
+                "Thành Đạt Phát – Không thể khởi động",
+                0x10,
+            )
+        except (AttributeError, OSError):
+            pass
 
 
 def api_debt_adjustment_guarded():
@@ -2633,13 +4749,138 @@ register_contract_routes(app, {
     "setting_get": setting_get,
     "setting_set": setting_set,
     "create_minvoice_client": create_minvoice_client,
+    "create_msmi_client": create_msmi_client,
     "root": ROOT,
     "data_dir": DATA_DIR,
     "require_batch": require_batch,
     "export_supplier_orders": export_supplier_orders,
     "export_deliveries": export_deliveries,
     "export_purchase_documents": export_purchase_documents,
+    "export_optional_purchase_documents": export_optional_purchase_documents,
     "export_report": export_report,
+})
+
+register_invoice_workbench_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+    "setting_get": setting_get,
+    "audit_event": audit_event,
+    "create_msmi_client": create_msmi_client,
+    "create_minvoice_client": create_minvoice_client,
+})
+
+register_invoice_input_export_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+})
+
+register_invoice_mapping_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+})
+
+register_invoice_inventory_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+})
+
+register_invoice_valuation_routes(app, {
+    "db": db,
+})
+
+register_inventory_export_routes(app, {
+    "db": db,
+    "opening_template_path": OPENING_TEMPLATE_SOURCE,
+})
+
+register_inventory_period_close_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+})
+
+register_bk_import_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+    "audit_event": audit_event,
+})
+
+register_payable_ledger_routes(app, {
+    "db": db,
+})
+
+register_payable_payment_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+    "canonical_party_code": canonical_party_code,
+    "audit_event": audit_event,
+})
+
+register_payable_export_routes(app, {
+    "db": db,
+    "canonical_party_code": canonical_party_code,
+})
+
+register_receivable_ledger_routes(app, {
+    "db": db,
+})
+
+register_receivable_export_routes(app, {
+    "db": db,
+    "debt_period_payload": debt_period_payload,
+    "tax_factor": tax_factor,
+})
+
+register_daily_reference_routes(app, db, now_iso, clean_text)
+
+register_quote_import_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+    "audit_event": audit_event,
+})
+
+register_outgoing_substitution_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+    "audit_event": audit_event,
+})
+
+try:
+    from round3_documents import register_round3_routes, customer_receipt
+except ImportError:
+    from .round3_documents import register_round3_routes, customer_receipt
+
+
+def round3_context():
+    return dict(db=db, clean_text=clean_text, now_iso=now_iso, valid_iso_date=valid_iso_date,
+                canonical_party_code=canonical_party_code, audit_event=audit_event,
+                export_report=export_report, send_xlsx=send_xlsx)
+
+
+register_round3_routes(app, round3_context())
+
+try:
+    from round4_documents import register_document_routes
+except ImportError:
+    from .round4_documents import register_document_routes
+register_document_routes(app, lambda: globals())
+
+register_physical_inventory_routes(app, {
+    "db": db, "now_iso": now_iso, "batch_payload": batch_payload,
+})
+
+register_order_price_override_routes(app, {
+    "db": db,
+    "now_iso": now_iso,
+    "clean_text": clean_text,
+    "finite_number": finite_number,
+    "batch_mutation_blocker": batch_mutation_blocker,
+    "product_lookup": product_lookup,
+    "resolve_order": resolve_order,
+    "clear_batch_derived_inventory": clear_batch_derived_inventory,
+    "batch_payload": batch_payload,
+    "audit_event": audit_event,
+    "sync_payable_ledger": sync_payable_ledger,
+    "sync_receivable_ledger": sync_receivable_ledger,
 })
 
 # Keep the route topology in the contract module while enforcing financial and
@@ -2648,24 +4889,61 @@ app.view_functions["api_debt_adjustment"] = api_debt_adjustment_guarded
 app.view_functions["api_save_attendance"] = api_attendance_guarded
 
 
-if __name__ == "__main__":
+def run_application():
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
         pass
-    init_database()
     allow_lan = clean_text(os.environ.get("TDP_ALLOW_LAN", "")).lower() in {
         "1", "true", "yes", "co", "có",
     }
+    try:
+        runtime_port = int(clean_text(os.environ.get("TDP_PORT", "8765")))
+    except ValueError as error:
+        raise RuntimeError("TDP_PORT phải là số nguyên từ 1 đến 65535") from error
+    if runtime_port < 1 or runtime_port > 65535:
+        raise RuntimeError("TDP_PORT phải là số nguyên từ 1 đến 65535")
     bind_host = "0.0.0.0" if allow_lan else "127.0.0.1"
-    print("\nTHÀNH ĐẠT PHÁT – HỆ THỐNG VẬN HÀNH")
-    print("Máy này: http://127.0.0.1:8765")
-    if allow_lan:
-        print(f"Đã bật LAN: http://{local_ip()}:8765")
-    else:
-        print("LAN đang tắt an toàn. Chỉ bật TDP_ALLOW_LAN=1 khi mạng nội bộ đã được kiểm soát.")
-    print("Giữ cửa sổ này mở trong lúc sử dụng. Nhấn Ctrl+C để dừng.\n")
+
+    if not acquire_single_instance():
+        if "--no-browser" not in sys.argv:
+            open_browser(runtime_port, wait_seconds=45)
+        return
+    if tdp_health_available(runtime_port):
+        if "--no-browser" not in sys.argv:
+            webbrowser.open(application_url(runtime_port))
+        return
+
+    install_seed_database_if_missing()
+    init_database()
+    if sys.stdout is not None:
+        print("\nTHÀNH ĐẠT PHÁT – HỆ THỐNG QUẢN LÝ")
+        print(f"Đang chạy tại: {application_url(runtime_port)}")
+        if allow_lan:
+            print(f"Dùng trong mạng văn phòng: http://{local_ip()}:{runtime_port}")
+        else:
+            print("Chế độ an toàn: chỉ dùng trên máy này.")
+        print("Giữ cửa sổ này mở trong lúc sử dụng. Nhấn Ctrl+C để dừng.\n")
     if "--no-browser" not in sys.argv:
-        threading.Thread(target=open_browser, daemon=True).start()
-    serve(app, host=bind_host, port=8765, threads=8)
+        threading.Thread(target=open_browser, args=(runtime_port,), daemon=True).start()
+    backup_stop, backup_worker = start_backup_worker(auto_backup)
+    try:
+        serve(app, host=bind_host, port=runtime_port, threads=8)
+    finally:
+        backup_stop.set()
+        backup_worker.join(timeout=2)
+
+
+if __name__ == "__main__":
+    try:
+        run_application()
+    except KeyboardInterrupt:
+        pass
+    except Exception as error:
+        show_startup_error(
+            "Không khởi động được phần mềm.\n\n"
+            f"Chi tiết: {error}\n\n"
+            "Hãy chụp thông báo này và gửi người hỗ trợ."
+        )
+        raise

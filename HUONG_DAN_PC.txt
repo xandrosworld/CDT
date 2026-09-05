@@ -1,0 +1,41 @@
+BẢN WINDOWS PORTABLE – THÀNH ĐẠT PHÁT
+
+CÁCH CHẠY
+1. Giải nén và giữ nguyên toàn bộ thư mục bàn giao trên máy Windows 10/11 64-bit.
+2. Người có thẩm quyền đặt file .env thật cạnh TDP_Server.exe bằng kênh nội bộ an toàn. Không gửi .env qua chat/email công khai.
+3. Nhấp đúp MO_HE_THONG_TDP.bat và giữ cửa sổ chương trình đang mở.
+4. Mở http://127.0.0.1:8765; kiểm tra http://127.0.0.1:8765/health trước khi làm việc.
+
+LUỒNG VẬN HÀNH CHÍNH
+- Nạp workbook đơn hằng ngày, xem preview rồi duyệt. Với file nhiều sheet ngày, tên file phải chứa đúng ngày cần nạp; hệ thống chỉ lấy sheet ngày khớp và không nhập nhầm sheet lịch sử/tham chiếu.
+- Đơn NCC, phiếu giao, phải thu và phải trả dùng đúng số đặt/thực nhận/thực giao theo hướng dẫn trong hệ thống. Xưởng cơm/PO và Chấm công/lương vẫn được giữ đầy đủ.
+- TĐK–NXT: chọn Từ ngày–Đến ngày để tải riêng hoặc tải ZIP đúng bốn file TĐK, Nhập, Xuất, NXT. Luôn đối chiếu Tồn đầu + Nhập − Xuất = Tồn cuối.
+
+HÓA ĐƠN ĐẦU VÀO mSMI
+1. Vào Bàn làm việc hóa đơn → Đầu vào; chọn Từ ngày–Đến ngày và tải/tiếp tục phiên.
+2. Có thể bấm Xuất Excel ngay sau khi kéo; thao tác này chỉ đọc, chưa ghi kho.
+3. Ghép mã TĐP, nhập quy đổi ĐVT nếu cần, rồi mới tạo phiếu nhập. Đồng bộ lại không được nhân đôi.
+
+HÓA ĐƠN ĐẦU RA M-INVOICE
+1. Vào Bàn làm việc hóa đơn → Đầu ra; chọn Từ ngày–Đến ngày và tải/tiếp tục phiên.
+2. Chỉ hóa đơn gốc đã phát hành hợp lệ mới được đi tiếp. Nháp/chưa rõ/hủy/thay thế/điều chỉnh bị chặn hoặc đưa vào đối chiếu.
+3. Ghép mã/quy đổi đầy đủ rồi bấm Xác nhận xuất kho hóa đơn. Đây mới là bước ghi giảm sổ TĐK–NXT.
+4. Nút Ghi nhận hóa đơn đã phát hành ở vùng dự thảo chỉ khóa hồ sơ cục bộ và tiếp tục giữ tồn chờ đối soát; nút đó chưa ghi sổ TĐK–NXT.
+5. Nếu trạng thái nguồn thay đổi sau khi đã post, dùng luồng hoàn tác có audit; không xóa bút toán cũ.
+6. Tồn chờ chỉ được thay thế/nhả khi bản M-Invoice khớp đúng ký hiệu, số, ngày và toàn bộ mã hàng–ĐVT–số lượng; lệch chi tiết nào thì vẫn giữ tồn chờ để đối chiếu.
+
+BK MUA VÀO KHÔNG HÓA ĐƠN
+1. Tải mẫu BK trắng hoặc mẫu theo phiên đã duyệt.
+2. Giá BK mặc định bằng 95% giá bán của chính dòng; kiểm tra số lượng, giá, thành tiền và mã hàng trước khi nạp lại.
+3. Preview chưa ghi kho. Chỉ bấm Xác nhận nhập BK vào kho khi mọi dòng hợp lệ.
+4. Nạp lại cùng nội dung không cộng lặp. Khi cần sửa nghiệp vụ đã chốt, dùng Hoàn tác BK, nhập ngày/lý do và kiểm tra không âm kho.
+
+HỒ SƠ THANH TOÁN VÀ IN
+- Chỉ lập Đề nghị thanh toán/Bảng tổng hợp giao nhận từ hóa đơn đỏ hợp lệ của đúng nhà thầu và khoảng ngày; lệch tổng thì dừng đối chiếu.
+- Máy in/khay đã được cấu hình theo môi trường vận hành. Trước lô in quan trọng vẫn xem preview, đúng khổ A4/A5 và đúng số bản.
+
+DỮ LIỆU VÀ AN TOÀN
+- Dữ liệu nằm trong thư mục data cạnh TDP_Server.exe; không xóa, đổi tên hoặc mở chung file SQLite qua Google Drive.
+- Trước khi cập nhật/chuyển máy, vào Danh mục & sao lưu để tải bản sao SQLite; khi chuyển phải chép cả thư mục data.
+- Không sửa file Excel gốc của khách. Không đưa .env, tài khoản, mật khẩu hoặc file dữ liệu thật vào kênh công khai.
+- Nếu Windows SmartScreen chặn lần đầu: chọn More info/Xem thêm → Run anyway/Vẫn chạy.

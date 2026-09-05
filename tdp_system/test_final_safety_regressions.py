@@ -126,6 +126,18 @@ class NumericMutationRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.get_data(as_text=True))
         self.assertEqual(self._rows(query, params), before)
 
+    def test_application_shell_and_static_assets_are_never_served_stale(self):
+        for url in ("/", "/static/app.js", "/static/real.css"):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                try:
+                    self.assertEqual(response.status_code, 200)
+                    cache_control = response.headers.get("Cache-Control", "")
+                    self.assertIn("no-store", cache_control)
+                    self.assertIn("no-cache", cache_control)
+                finally:
+                    response.close()
+
     def test_core_financial_and_inventory_routes_reject_non_finite_atomically(self):
         route_cases = (
             (
@@ -241,6 +253,19 @@ class NumericMutationRouteTests(unittest.TestCase):
                        "norm_qty": 0.1, "source_norm_per_1000": 100,
                        "applicable_meal_count": 100}],
         }
+        for invalid_items in (
+            [],
+            [{"product_code": "SAFE-P1", "norm_qty": 0}],
+            [{"product_code": "UNKNOWN", "norm_qty": 0.1}],
+        ):
+            with self.subTest(invalid_items=invalid_items):
+                before = self._rows("SELECT id FROM meal_plans ORDER BY id")
+                rejected = self.client.post(
+                    "/api/kitchen/plans", json={**valid, "items": invalid_items}
+                )
+                self.assertEqual(rejected.status_code, 400, rejected.get_data(as_text=True))
+                self.assertEqual(self._rows("SELECT id FROM meal_plans ORDER BY id"), before)
+
         created = self.client.post("/api/kitchen/plans", json=valid)
         self.assertEqual(created.status_code, 200, created.get_data(as_text=True))
         plan_id = created.get_json()["id"]
@@ -267,7 +292,7 @@ class NumericMutationRouteTests(unittest.TestCase):
                 self.assertEqual(len(self._rows("SELECT id FROM meal_plans")), before_count)
 
     def test_order_draft_grid_quarantines_bad_numbers_and_blocks_approval(self):
-        """Editable draft rows may be saved, but only with finite fallbacks and errors."""
+        """Draft quantities may quarantine; audited price overrides reject bad numbers."""
         order_query = (
             "SELECT id,qty,actual_received,actual_delivered,buy_price,sell_price,errors "
             "FROM orders ORDER BY id"
@@ -302,20 +327,15 @@ class NumericMutationRouteTests(unittest.TestCase):
 
         for invalid in INVALID_NUMBERS:
             with self.subTest(operation="single-update", invalid=repr(invalid)):
+                before = self._rows(order_query)
                 response = self.client.put(
                     f"/api/orders/{order_id}", json={"qty": 8, "sell_price": invalid}
                 )
-                self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+                self.assertEqual(response.status_code, 409, response.get_data(as_text=True))
+                self.assertEqual(response.get_json()["code"], "sell_price_override_required")
                 rows = self._rows(order_query)
                 assert_all_numeric_finite(rows)
-                self.assertTrue(json.loads(rows[0][-1]))
-                assert_approval_blocked()
-                with server.db() as conn:
-                    conn.execute(
-                        """UPDATE orders SET qty=2,actual_received=2,actual_delivered=2,
-                                  buy_price=10,sell_price=20,errors='[]' WHERE id=?""",
-                        (order_id,),
-                    )
+                self.assertEqual(rows, before)
 
         second = self.client.post("/api/orders", json=self._order_payload(qty=3))
         self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
@@ -413,6 +433,20 @@ class MinvoiceFrozenSnapshotTests(unittest.TestCase):
     def setUp(self):
         self.fake.payloads.clear()
         with server.db() as conn:
+            conn.execute("DELETE FROM inventory_transactions")
+            conn.execute("INSERT OR REPLACE INTO products(code,name,unit) VALUES('SAFE-P1','Meal','Suất')")
+            # A savable invoice must have canonical stock and an equal local hold.
+            for source_type, qty_in, qty_out, source_id, status in (
+                ("OPENING", 1, 0, "SNAPSHOT-TEST", "posted"),
+                ("OUTGOING_DRAFT", 0, 1, "1", "reserved"),
+            ):
+                conn.execute(
+                    """INSERT INTO inventory_transactions(
+                       txn_date,product_code,qty_in,qty_out,unit_cost,source_type,
+                       source_id,source_line,status,created_at,updated_at
+                       ) VALUES('2026-08-01','SAFE-P1',?,?,0,? ,?,'1',?,?,?)""",
+                    (qty_in, qty_out, source_type, source_id, status, server.now_iso(), server.now_iso()),
+                )
             conn.execute("DELETE FROM outgoing_invoice_lines")
             conn.execute("DELETE FROM outgoing_invoice_drafts")
             conn.execute("DELETE FROM outgoing_buyer_profiles")
@@ -447,6 +481,16 @@ class MinvoiceFrozenSnapshotTests(unittest.TestCase):
             }
             for key, value in settings.items():
                 server.setting_set(conn, key, value)
+
+    def test_remote_save_refuses_changed_stock_without_sending(self):
+        with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=0 WHERE source_type='OPENING'")
+        response = self.client.post("/api/minvoice/drafts/1", json={
+            "dry_run": False, "confirm_remote_write": True, "series": "1C26TDP",
+        })
+        self.assertEqual(response.status_code, 409, response.get_data(as_text=True))
+        self.assertEqual(response.get_json()["code"], "canonical_stock_overcommitted")
+        self.assertEqual(self.fake.payloads, [])
 
     def test_remote_save_freezes_profile_before_later_edit_and_issue(self):
         saved = self.client.post("/api/minvoice/drafts/1", json={
@@ -626,8 +670,7 @@ class PrintPrepareGenerationRaceTests(unittest.TestCase):
             }
             with (
                 patch.object(contract_modules, "windows_printer_state", return_value=printer_state),
-                patch.object(contract_modules, "workbooks_to_sections", return_value={}),
-                patch.object(contract_modules, "build_pdf_bundle", side_effect=fake_build),
+                patch.object(contract_modules, "build_excel_pdf_bundle", side_effect=fake_build),
                 patch.object(contract_modules, "write_manifest", side_effect=fake_manifest),
             ):
                 first = threading.Thread(target=prepare, args=("A",), name="prepare-A")
@@ -636,10 +679,10 @@ class PrintPrepareGenerationRaceTests(unittest.TestCase):
 
                 with app.test_client() as client:
                     changed = client.put("/api/print/settings", json={
-                        "paper": "A4", "copies": 3, "printer_name": "Printer B",
+                        "other_paper": "A5", "copies": 3, "printer_name": "Printer B",
                     })
                 self.assertEqual(changed.status_code, 200, changed.get_data(as_text=True))
-                self.assertEqual(changed.get_json()["invalidated_jobs"], 1)
+                self.assertEqual(changed.get_json()["invalidated_jobs"], 2)
 
                 second = threading.Thread(target=prepare, args=("B",), name="prepare-B")
                 second.start()
@@ -657,17 +700,20 @@ class PrintPrepareGenerationRaceTests(unittest.TestCase):
             self.assertEqual(responses["B"].status_code, 200, responses["B"].get_data(as_text=True))
             self.assertEqual(responses["A"].status_code, 409, responses["A"].get_data(as_text=True))
             with db_factory() as conn:
-                row = dict(conn.execute(
-                    "SELECT * FROM print_jobs WHERE batch_id=1 AND document_type='pdf_bundle'"
-                ).fetchone())
-            self.assertEqual(row["status"], "prepared")
-            self.assertEqual(row["copies"], 3)
-            self.assertEqual(row["printer_name"], "Printer B")
-            self.assertIn("attempts", Path(row["file_path"]).parts)
-            self.assertEqual(Path(row["file_path"]).read_bytes(), b"pdf:prepare-B")
-            self.assertEqual(
-                row["file_sha256"], hashlib.sha256(b"pdf:prepare-B").hexdigest()
-            )
+                rows = [dict(row) for row in conn.execute(
+                    "SELECT * FROM print_jobs WHERE batch_id=1 ORDER BY document_type"
+                )]
+            self.assertEqual([row["document_type"] for row in rows], ["delivery_pdf", "other_pdf"])
+            self.assertEqual([row["paper"] for row in rows], ["A4", "A5"])
+            for row in rows:
+                self.assertEqual(row["status"], "prepared")
+                self.assertEqual(row["copies"], 3)
+                self.assertEqual(row["printer_name"], "Printer B")
+                self.assertIn("attempts", Path(row["file_path"]).parts)
+                self.assertEqual(Path(row["file_path"]).read_bytes(), b"pdf:prepare-B")
+                self.assertEqual(
+                    row["file_sha256"], hashlib.sha256(b"pdf:prepare-B").hexdigest()
+                )
 
 
 if __name__ == "__main__":

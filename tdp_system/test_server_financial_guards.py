@@ -118,8 +118,8 @@ class ServerFinancialGuardTests(unittest.TestCase):
         )
         return batch_id
 
-    def test_future_reservation_blocks_a_later_backdated_draft(self):
-        """A future-dated reservation is still a global claim on available stock."""
+    def test_future_reservation_limits_a_later_backdated_draft_to_available_stock(self):
+        """A future reservation stays global while the available part may be drafted."""
         with server.db() as conn:
             timestamp = server.now_iso()
             conn.execute(
@@ -142,22 +142,23 @@ class ServerFinancialGuardTests(unittest.TestCase):
             self.assertEqual(stock["available_qty"], 3)
 
         backdated = self.client.post(f"/api/outgoing-invoices/draft/{backdated_batch}")
-        self.assertEqual(backdated.status_code, 409, backdated.get_data(as_text=True))
-        shortage = backdated.get_json()["shortages"]
-        self.assertEqual(len(shortage), 1)
-        self.assertEqual(shortage[0]["product_code"], "RES-P1")
-        self.assertEqual(shortage[0]["required"], 1)
-        self.assertEqual(shortage[0]["available"], 3)
+        self.assertEqual(backdated.status_code, 200, backdated.get_data(as_text=True))
+        self.assertTrue(backdated.get_json()["partial"])
+        self.assertEqual(backdated.get_json()["pending_qty"], 1)
         with server.db() as conn:
-            self.assertFalse(conn.execute(
-                "SELECT 1 FROM outgoing_invoice_drafts WHERE batch_id=?", (backdated_batch,),
-            ).fetchone())
+            draft = conn.execute(
+                "SELECT id FROM outgoing_invoice_drafts WHERE batch_id=?", (backdated_batch,),
+            ).fetchone()
+            self.assertIsNotNone(draft)
+            self.assertEqual(conn.execute(
+                "SELECT SUM(qty) qty FROM outgoing_invoice_lines WHERE draft_id=?", (draft["id"],),
+            ).fetchone()["qty"], 3)
             reservation = conn.execute(
                 """SELECT COUNT(*) lines,COALESCE(SUM(qty_out),0) qty
                    FROM inventory_transactions
                    WHERE source_type='OUTGOING_DRAFT' AND status='reserved'"""
             ).fetchone()
-            self.assertEqual((reservation["lines"], reservation["qty"]), (1, 7))
+            self.assertEqual((reservation["lines"], reservation["qty"]), (2, 10))
 
     @staticmethod
     def payable_workbook_with_two_tables():
@@ -243,16 +244,16 @@ class ServerFinancialGuardTests(unittest.TestCase):
                 conn, {"work_date": "2026-08-30"}, [self.order_row()]
             )
         try:
-            self.assertEqual(workbook.sheetnames, [
-                "Tổng hợp phiên", "Phát sinh phải thu",
-                "Phát sinh phải trả", "Thu chi cùng ngày",
-            ])
-            self.assertIn("Chỉ gồm phiên đơn này", workbook["Tổng hợp phiên"]["A2"].value)
-            self.assertEqual(workbook["Thu chi cùng ngày"].max_row, 4)
+            self.assertEqual(workbook.sheetnames, ["báo cáo tổng hợp"])
+            sheet = workbook["báo cáo tổng hợp"]
+            self.assertEqual(sheet["B2"].value, "Khách hàng")
+            pot = next(row for row in sheet.iter_rows(values_only=True) if row[2] == "POT")
+            self.assertEqual(pot[3:7], (200_000, 120_000, 80_000, 220_000))
+            self.assertEqual(sheet.cell(sheet.max_row, 1).value, "TỔNG THÁNG")
         finally:
             workbook.close()
 
-    def test_payment_validation_and_create_delete_audit(self):
+    def test_payment_validation_and_create_reverse_audit(self):
         invalid_payloads = [
             {"payment_date": "2026-02-30", "kind": "receipt", "party_type": "contractor", "party_code": "HATRAN", "amount": 1},
             {"payment_date": "2026-08-30", "kind": "refund", "party_type": "contractor", "party_code": "HATRAN", "amount": 1},
@@ -269,8 +270,9 @@ class ServerFinancialGuardTests(unittest.TestCase):
             "payment_date": "2026-08-30", "kind": "receipt",
             "party_type": "contractor", "party_code": "hatran",
             "amount": 125_000, "note": "Thu chuyển khoản",
+            "actor": "Người thử", "request_id": "GUARD-RECEIPT-0001",
         })
-        self.assertEqual(created.status_code, 200, created.get_data(as_text=True))
+        self.assertEqual(created.status_code, 201, created.get_data(as_text=True))
         payment_id = created.get_json()["id"]
         with server.db() as conn:
             self.assertEqual(
@@ -283,8 +285,12 @@ class ServerFinancialGuardTests(unittest.TestCase):
         }).status_code, 400)
         self.assertEqual(self.audit_count("payment.create"), 1)
         self.assertEqual(self.client.delete("/api/payments/999999").status_code, 404)
-        self.assertEqual(self.client.delete(f"/api/payments/{payment_id}").status_code, 200)
-        self.assertEqual(self.audit_count("payment.delete"), 1)
+        self.assertEqual(self.client.delete(f"/api/payments/{payment_id}").status_code, 409)
+        self.assertEqual(self.client.post(f"/api/debts/receipts/{payment_id}/reverse", json={
+            "actor": "Người thử", "reason": "Nhập nhầm", "expected_revision": 1,
+        }).status_code, 200)
+        self.assertEqual(self.audit_count("payment.delete"), 0)
+        self.assertEqual(self.audit_count("payment.reverse"), 1)
 
     def test_balance_and_debt_adjustment_validation_and_audit(self):
         self.assertEqual(self.client.post("/api/balances", json={
@@ -373,6 +379,29 @@ class ServerFinancialGuardTests(unittest.TestCase):
             self.assertFalse(unhealthy.get_json()["schema_ready"])
         finally:
             server.DB_PATH = original
+
+    def test_missing_purchase_list_cccd_warns_without_blocking_import(self):
+        with server.db() as conn:
+            by_code, by_name = server.product_lookup(conn)
+            resolved = server.resolve_order(conn, {
+                "work_date": "2026-08-29",
+                "contractor": "HATRAN",
+                "kitchen": "POT",
+                "product_code": "RES-P1",
+                "product_name": "Hàng bảng kê chưa có CCCD",
+                "qty": 1,
+                "supplier": "NCC-A",
+                "buy_price": 10_000,
+                "sell_price": 12_000,
+                "tax": "0%",
+                "purchase_list": "BK",
+                "seller": "Người bán chưa bổ sung CCCD",
+                "cccd": "",
+            }, "2026-08-29", by_code, by_name)
+
+        self.assertFalse(any("CCCD" in error for error in resolved["errors"]))
+        self.assertTrue(any("bổ sung sau" in warning for warning in resolved["warnings"]))
+        self.assertEqual(resolved["cccd"], "")
 
     def test_order_quantities_and_tax_codes_are_strict(self):
         self.assertEqual(server.normalize_tax(-2), "KKKNT")

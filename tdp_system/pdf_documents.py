@@ -45,7 +45,7 @@ try:
     from pypdf import PdfReader
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, A5
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.pdfbase import pdfmetrics
@@ -70,6 +70,7 @@ except ImportError as exc:  # pragma: no cover - exercised by deployment checks.
 PDF_FORMAT_VERSION = "1"
 PAPER_NAME = "A4"
 PAPER_SIZE = A4
+PAPER_SIZES = {"A4": A4, "A5": A5}
 MAX_SECTIONS = 100
 MAX_ROWS_PER_SECTION = 50_000
 
@@ -190,11 +191,12 @@ def _as_number(value: Any) -> float:
 
 
 def _format_number(value: Any, decimals: int | None = None) -> str:
+    from decimal import Decimal, ROUND_HALF_UP
     number = _as_number(value)
     if decimals is None:
-        decimals = 0 if number.is_integer() else min(3, max(1, len(f"{number:.3f}".rstrip("0").split(".")[-1])))
-    rendered = f"{number:,.{decimals}f}"
-    return rendered.replace(",", "_").replace(".", ",").replace("_", ".")
+        decimals = 0 if number.is_integer() else min(6, max(1, len(f"{number:.6f}".rstrip("0").split(".")[-1])))
+    rounded = Decimal(str(number)).quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
+    return f"{rounded:,.{decimals}f}"
 
 
 def _format_value(value: Any, column: Mapping[str, Any]) -> str:
@@ -264,6 +266,7 @@ class _NumberedCanvas(Canvas):
         company: str,
         font_name: str,
         bold_font_name: str,
+        paper_size,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -271,6 +274,7 @@ class _NumberedCanvas(Canvas):
         self._company = company
         self._font_name = font_name
         self._bold_font_name = bold_font_name
+        self._paper_size = paper_size
 
     def showPage(self) -> None:  # noqa: N802 - ReportLab public API name.
         self._saved_page_states.append(dict(self.__dict__))
@@ -285,7 +289,7 @@ class _NumberedCanvas(Canvas):
         super().save()
 
     def _draw_header_footer(self, page_count: int) -> None:
-        width, height = PAPER_SIZE
+        width, height = self._paper_size
         self.saveState()
         self.setStrokeColor(NAVY)
         self.setLineWidth(0.5)
@@ -555,8 +559,13 @@ def verify_pdf(
     *,
     required_texts: Iterable[str] = (),
     minimum_pages: int = 1,
+    paper: str = PAPER_NAME,
 ) -> dict[str, Any]:
-    """Perform structural, A4, Unicode-text and completeness checks."""
+    """Perform structural, paper-size, Unicode-text and completeness checks."""
+
+    paper_name = str(paper or "").strip().upper()
+    if paper_name not in PAPER_SIZES:
+        raise PdfDocumentError("Khổ PDF chỉ hỗ trợ A4 hoặc A5")
 
     pdf_path = Path(path)
     if not pdf_path.is_file():
@@ -576,7 +585,7 @@ def verify_pdf(
     page_count = len(reader.pages)
     if page_count < minimum_pages:
         errors.append(f"PDF chỉ có {page_count} trang, tối thiểu cần {minimum_pages}")
-    expected_width, expected_height = PAPER_SIZE
+    expected_width, expected_height = PAPER_SIZES[paper_name]
     page_sizes = []
     extracted = []
     for index, page in enumerate(reader.pages, start=1):
@@ -584,7 +593,7 @@ def verify_pdf(
         height = float(page.mediabox.height)
         page_sizes.append([round(width, 2), round(height, 2)])
         if abs(width - expected_width) > 1 or abs(height - expected_height) > 1:
-            errors.append(f"Trang {index} không đúng khổ A4 dọc")
+            errors.append(f"Trang {index} không đúng khổ {paper_name} dọc")
         extracted.append(page.extract_text() or "")
     full_text = _text_key("\n".join(extracted))
     missing_texts = [text for text in required_texts if _text_key(text) not in full_text]
@@ -595,7 +604,7 @@ def verify_pdf(
         "sha256": hashlib.sha256(data).hexdigest(),
         "bytes": len(data),
         "pages": page_count,
-        "paper": PAPER_NAME,
+        "paper": paper_name,
         "page_sizes_points": page_sizes,
         "missing_required_texts": missing_texts,
         "errors": errors,
@@ -616,32 +625,38 @@ def build_pdf_bundle(
     generated_at: str | None = None,
     regular_font_path: str | os.PathLike[str] | None = None,
     bold_font_path: str | os.PathLike[str] | None = None,
+    paper: str = PAPER_NAME,
 ) -> dict[str, Any]:
-    """Build and verify one print-ready A4 PDF containing all ``sections``.
+    """Build and verify one print-ready A4/A5 PDF containing all ``sections``.
 
     The output is written atomically: a failed build/verification never replaces an
     existing valid target.  The returned manifest is safe to persist in audit logs.
     """
 
     _validate_sections(sections)
+    paper_name = str(paper or "").strip().upper()
+    if paper_name not in PAPER_SIZES:
+        raise PdfDocumentError("Khổ PDF chỉ hỗ trợ A4 hoặc A5")
+    paper_size = PAPER_SIZES[paper_name]
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     fonts = register_unicode_fonts(regular_font_path, bold_font_path)
     styles = _styles(fonts)
-    left_margin = 16 * mm
-    right_margin = 16 * mm
+    horizontal_margin = 16 * mm if paper_name == "A4" else 12 * mm
+    left_margin = horizontal_margin
+    right_margin = horizontal_margin
     # Leave a dedicated band for the repeated company header.  LongTable starts
     # directly at the frame top on continuation pages, so 22 mm prevents it from
     # colliding with the 10-12 mm header line/text.
     top_margin = 22 * mm
     bottom_margin = 18 * mm
-    available_width = PAPER_SIZE[0] - left_margin - right_margin
+    available_width = paper_size[0] - left_margin - right_margin
     generated_at = generated_at or datetime.now().replace(microsecond=0).isoformat(sep=" ")
 
     document = SimpleDocTemplate(
         str(temp),
-        pagesize=PAPER_SIZE,
+        pagesize=paper_size,
         rightMargin=right_margin,
         leftMargin=left_margin,
         topMargin=top_margin,
@@ -664,11 +679,17 @@ def build_pdf_bundle(
         company=company,
         font_name=fonts["regular_name"],
         bold_font_name=fonts["bold_name"],
+        paper_size=paper_size,
     )
     try:
         document.build(story, canvasmaker=canvas_factory)
         required = [str(section["title"]).strip() for section in sections]
-        verification = verify_pdf(temp, required_texts=required, minimum_pages=len(sections))
+        verification = verify_pdf(
+            temp,
+            required_texts=required,
+            minimum_pages=len(sections),
+            paper=paper_name,
+        )
         os.replace(temp, target)
     except Exception:
         try:
@@ -692,7 +713,7 @@ def build_pdf_bundle(
         "sha256": verification["sha256"],
         "bytes": verification["bytes"],
         "pages": verification["pages"],
-        "paper": PAPER_NAME,
+        "paper": paper_name,
         "orientation": "portrait",
         "generated_at": generated_at,
         "input_sha256": _source_hash(sections),
@@ -722,6 +743,7 @@ def write_manifest(manifest: Mapping[str, Any], path: str | os.PathLike[str]) ->
 __all__ = [
     "PDF_FORMAT_VERSION",
     "PAPER_NAME",
+    "PAPER_SIZES",
     "PdfDocumentError",
     "build_pdf_bundle",
     "register_unicode_fonts",

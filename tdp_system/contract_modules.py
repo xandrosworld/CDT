@@ -11,19 +11,24 @@ import threading
 import time
 import unicodedata
 import uuid
+import warnings
 import zipfile
 from collections import Counter, defaultdict
 from copy import deepcopy
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from statistics import median
 
 from flask import jsonify, request, send_file
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
+
+
+PRINT_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+PAYROLL_TEMPLATE_SOURCE = PRINT_TEMPLATE_DIR / "payroll_template.xlsx"
 
 try:
     from docx import Document
@@ -45,11 +50,74 @@ except ImportError:
     from .minvoice_client import MinvoiceError, MinvoiceOutcomeUnknown
 
 try:
-    from pdf_documents import PdfDocumentError, build_pdf_bundle, verify_pdf, write_manifest
-    from print_bundle import workbooks_to_sections
+    from outgoing_readiness import (
+        OutgoingReadinessError,
+        batch_readiness_payload,
+        canonical_available_stock,
+        validate_issued_draft_stock,
+        validate_draft_export_stock,
+        period_shortage_payload,
+        shortage_workbook_bytes,
+        validate_demand_orders,
+    )
 except ImportError:
-    from .pdf_documents import PdfDocumentError, build_pdf_bundle, verify_pdf, write_manifest
-    from .print_bundle import workbooks_to_sections
+    from .outgoing_readiness import (
+        OutgoingReadinessError,
+        batch_readiness_payload,
+        canonical_available_stock,
+        validate_issued_draft_stock,
+        validate_draft_export_stock,
+        period_shortage_payload,
+        shortage_workbook_bytes,
+        validate_demand_orders,
+    )
+
+try:
+    from outgoing_substitution import mark_substitution_actions_reversed_for_draft
+except ImportError:
+    from .outgoing_substitution import mark_substitution_actions_reversed_for_draft
+
+try:
+    from invoice_payment_scope import (
+        InvoicePaymentScopeError,
+        issued_invoice_payment_scope,
+        public_payment_scope,
+    )
+except ImportError:
+    from .invoice_payment_scope import (
+        InvoicePaymentScopeError,
+        issued_invoice_payment_scope,
+        public_payment_scope,
+    )
+
+try:
+    from invoice_delivery_statement import (
+        InvoiceDeliveryStatementError,
+        invoice_delivery_statement_workbook as _invoice_delivery_statement_workbook,
+    )
+except ImportError:
+    from .invoice_delivery_statement import (
+        InvoiceDeliveryStatementError,
+        invoice_delivery_statement_workbook as _invoice_delivery_statement_workbook,
+    )
+
+try:
+    from invoice_payment_documents import (
+        InvoicePaymentDocumentError,
+        invoice_payment_request_workbook,
+    )
+except ImportError:
+    from .invoice_payment_documents import (
+        InvoicePaymentDocumentError,
+        invoice_payment_request_workbook,
+    )
+
+try:
+    from excel_print_renderer import ExcelPrintError, build_excel_pdf_bundle, verify_excel_pdf
+    from pdf_documents import write_manifest
+except ImportError:
+    from .excel_print_renderer import ExcelPrintError, build_excel_pdf_bundle, verify_excel_pdf
+    from .pdf_documents import write_manifest
 
 try:
     from xcom_payment_documents import (
@@ -100,10 +168,27 @@ CREATE TABLE IF NOT EXISTS supplier_rules (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS supplier_order_statuses (
+    batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    supplier_key TEXT NOT NULL,
+    supplier_label TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    revision INTEGER NOT NULL DEFAULT 1,
+    ordered_at TEXT,
+    reopened_at TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(batch_id,supplier_key),
+    CHECK(status IN ('pending','ordered','reopened')),
+    CHECK(revision >= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_order_statuses_batch_status
+    ON supplier_order_statuses(batch_id,status,supplier_key);
+
 CREATE TABLE IF NOT EXISTS inventory_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     txn_date TEXT NOT NULL,
     product_code TEXT NOT NULL,
+    warehouse_codes_json TEXT NOT NULL DEFAULT '[]',
     qty_in REAL NOT NULL DEFAULT 0,
     qty_out REAL NOT NULL DEFAULT 0,
     unit_cost REAL NOT NULL DEFAULT 0,
@@ -197,7 +282,9 @@ CREATE TABLE IF NOT EXISTS outgoing_invoice_drafts (
     total_amount REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     issued_at TEXT,
-    UNIQUE(batch_id,contractor)
+    round_no INTEGER NOT NULL DEFAULT 1,
+    draft_kind TEXT NOT NULL DEFAULT 'standard',
+    UNIQUE(batch_id,contractor,round_no)
 );
 CREATE TABLE IF NOT EXISTS outgoing_invoice_lines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,6 +316,98 @@ CREATE TABLE IF NOT EXISTS outgoing_buyer_profiles (
     email TEXT,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS purchase_order_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    order_id INTEGER NOT NULL UNIQUE,
+    demand_qty REAL NOT NULL DEFAULT 0,
+    physical_stock_used REAL NOT NULL DEFAULT 0,
+    order_qty REAL NOT NULL DEFAULT 0,
+    supplier TEXT NOT NULL,
+    buy_price REAL NOT NULL DEFAULT 0,
+    price_source TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'confirmed',
+    source_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_order_lines_batch
+    ON purchase_order_lines(batch_id,order_id);
+
+CREATE TABLE IF NOT EXISTS purchase_order_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    source_hash TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    line_count INTEGER NOT NULL DEFAULT 0,
+    total_amount REAL NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL,
+    UNIQUE(batch_id,source_hash)
+);
+
+CREATE TABLE IF NOT EXISTS purchase_workbook_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    row_key TEXT NOT NULL,
+    order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+    source_sheet TEXT NOT NULL DEFAULT '',
+    source_row INTEGER NOT NULL DEFAULT 0,
+    product_code TEXT NOT NULL DEFAULT '',
+    kitchen TEXT NOT NULL DEFAULT '',
+    work_date TEXT NOT NULL,
+    product_name TEXT NOT NULL DEFAULT '',
+    base_qty REAL NOT NULL DEFAULT 0,
+    unit TEXT NOT NULL DEFAULT '',
+    supplier TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    buy_price REAL NOT NULL DEFAULT 0,
+    price_source TEXT NOT NULL DEFAULT '',
+    damaged_qty REAL NOT NULL DEFAULT 0,
+    added_qty REAL NOT NULL DEFAULT 0,
+    reduced_qty REAL NOT NULL DEFAULT 0,
+    missing_qty REAL NOT NULL DEFAULT 0,
+    actual_qty REAL NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'confirmed',
+    source_hash TEXT NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(batch_id,row_key),
+    CHECK(source_row >= 0),
+    CHECK(revision >= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_workbook_lines_batch
+    ON purchase_workbook_lines(batch_id,source_row,id);
+CREATE INDEX IF NOT EXISTS idx_purchase_workbook_lines_supplier_date
+    ON purchase_workbook_lines(supplier,work_date,batch_id);
+
+CREATE TABLE IF NOT EXISTS purchase_workbook_line_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    row_key TEXT NOT NULL,
+    order_id INTEGER,
+    revision INTEGER NOT NULL,
+    change_kind TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    source_row INTEGER NOT NULL DEFAULT 0,
+    base_qty REAL NOT NULL DEFAULT 0,
+    damaged_qty REAL NOT NULL DEFAULT 0,
+    added_qty REAL NOT NULL DEFAULT 0,
+    reduced_qty REAL NOT NULL DEFAULT 0,
+    missing_qty REAL NOT NULL DEFAULT 0,
+    actual_qty REAL NOT NULL DEFAULT 0,
+    buy_price REAL NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(batch_id,row_key,revision),
+    CHECK(revision >= 1),
+    CHECK(change_kind IN ('insert','update'))
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_workbook_line_revisions_batch
+    ON purchase_workbook_line_revisions(batch_id,row_key,revision);
 
 CREATE TABLE IF NOT EXISTS debt_adjustments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -410,6 +589,8 @@ PENDING_LEGACY_ATTENDANCE_IMPORTS = {}
 LEGACY_ATTENDANCE_IMPORT_LOCK = threading.Lock()
 PENDING_PAYABLE_IMPORTS = {}
 PAYABLE_IMPORT_LOCK = threading.Lock()
+PENDING_PURCHASE_ORDER_IMPORTS = {}
+PURCHASE_ORDER_IMPORT_LOCK = threading.Lock()
 PRINT_SUBMISSION_LOCK = threading.Lock()
 
 MAPPING_ALIASES = {
@@ -480,8 +661,91 @@ def ensure_column(conn, table: str, name: str, definition: str):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
-def init_contract_schema(conn):
+def migrate_outgoing_invoice_rounds(conn):
+    """Allow several partial invoice rounds for one contractor and batch."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(outgoing_invoice_drafts)")}
+    if "round_no" in columns:
+        return
+    conn.execute("ALTER TABLE outgoing_invoice_lines RENAME TO outgoing_invoice_lines_legacy")
+    conn.execute("ALTER TABLE outgoing_invoice_drafts RENAME TO outgoing_invoice_drafts_legacy")
+    conn.executescript(
+        """
+        CREATE TABLE outgoing_invoice_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id INTEGER NOT NULL,
+            contractor TEXT NOT NULL,
+            invoice_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            subtotal REAL NOT NULL DEFAULT 0,
+            tax_amount REAL NOT NULL DEFAULT 0,
+            total_amount REAL NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            issued_at TEXT,
+            round_no INTEGER NOT NULL DEFAULT 1,
+            draft_kind TEXT NOT NULL DEFAULT 'standard',
+            minvoice_status TEXT NOT NULL DEFAULT 'not_sent',
+            minvoice_series TEXT,
+            minvoice_remote_id TEXT,
+            minvoice_saved_at TEXT,
+            minvoice_error TEXT,
+            minvoice_key_api TEXT,
+            minvoice_started_at TEXT,
+            minvoice_reconciled_at TEXT,
+            external_key_uuid TEXT,
+            issued_invoice_number TEXT,
+            issued_invoice_series TEXT,
+            issued_invoice_date TEXT,
+            buyer_name_snapshot TEXT,
+            buyer_tax_code_snapshot TEXT,
+            buyer_address_snapshot TEXT,
+            buyer_email_snapshot TEXT,
+            company_name_snapshot TEXT,
+            company_tax_code_snapshot TEXT,
+            company_address_snapshot TEXT,
+            payment_requester_snapshot TEXT,
+            payment_bank_name_snapshot TEXT,
+            payment_bank_account_snapshot TEXT,
+            UNIQUE(batch_id,contractor,round_no)
+        );
+        CREATE TABLE outgoing_invoice_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            draft_id INTEGER NOT NULL REFERENCES outgoing_invoice_drafts(id) ON DELETE CASCADE,
+            order_id INTEGER NOT NULL,
+            product_code TEXT NOT NULL,
+            product_name TEXT,
+            qty REAL NOT NULL,
+            unit TEXT,
+            unit_price REAL NOT NULL,
+            tax TEXT,
+            invoice_nature TEXT NOT NULL DEFAULT '1',
+            amount REAL NOT NULL,
+            UNIQUE(draft_id,order_id)
+        );
+        """
+    )
+    new_draft_columns = [row["name"] for row in conn.execute("PRAGMA table_info(outgoing_invoice_drafts)")]
+    old_draft_columns = {row["name"] for row in conn.execute("PRAGMA table_info(outgoing_invoice_drafts_legacy)")}
+    copied = [name for name in new_draft_columns if name in old_draft_columns]
+    column_sql = ",".join(f'"{name}"' for name in copied)
+    conn.execute(
+        f"INSERT INTO outgoing_invoice_drafts({column_sql}) "
+        f"SELECT {column_sql} FROM outgoing_invoice_drafts_legacy"
+    )
+    new_line_columns = [row["name"] for row in conn.execute("PRAGMA table_info(outgoing_invoice_lines)")]
+    old_line_columns = {row["name"] for row in conn.execute("PRAGMA table_info(outgoing_invoice_lines_legacy)")}
+    copied_lines = [name for name in new_line_columns if name in old_line_columns]
+    line_sql = ",".join(f'"{name}"' for name in copied_lines)
+    conn.execute(
+        f"INSERT INTO outgoing_invoice_lines({line_sql}) "
+        f"SELECT {line_sql} FROM outgoing_invoice_lines_legacy"
+    )
+    conn.execute("DROP TABLE outgoing_invoice_lines_legacy")
+    conn.execute("DROP TABLE outgoing_invoice_drafts_legacy")
+
+
+def init_contract_schema(conn, opening_template_path=None):
     conn.executescript(ADVANCED_SCHEMA)
+    migrate_outgoing_invoice_rounds(conn)
     conn.execute(
         "INSERT OR IGNORE INTO settings(key,value) VALUES('installation_uuid',?)",
         (uuid.uuid4().hex.upper(),),
@@ -491,6 +755,11 @@ def init_contract_schema(conn):
     init_xcom_payment_schema(conn)
     ensure_column(conn, "products", "product_group", "TEXT")
     ensure_column(conn, "products", "catalog_updated_at", "TEXT")
+    # Preserve the customer's distinct `MÃ KHO` values from each opening
+    # snapshot.  They are presentation/source identity, not interchangeable
+    # with the TĐP product code.
+    ensure_column(conn, "inventory_transactions", "warehouse_codes_json", "TEXT NOT NULL DEFAULT '[]'")
+    backfill_opening_warehouse_codes(conn, opening_template_path)
     ensure_column(conn, "balances", "as_of_date", "TEXT NOT NULL DEFAULT '1900-01-01'")
     # Older builds only remembered the newest mSMI invoice.  That was not enough
     # to continue an initial history import after max_pages was reached: the next
@@ -507,6 +776,7 @@ def init_contract_schema(conn):
     ensure_column(conn, "orders", "damaged_qty", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "orders", "supplier_return_qty", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "orders", "customer_return_qty", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "outgoing_invoice_drafts", "draft_kind", "TEXT NOT NULL DEFAULT 'standard'")
     ensure_column(conn, "outgoing_invoice_drafts", "minvoice_status", "TEXT NOT NULL DEFAULT 'not_sent'")
     ensure_column(conn, "outgoing_invoice_drafts", "minvoice_series", "TEXT")
     ensure_column(conn, "outgoing_invoice_drafts", "minvoice_remote_id", "TEXT")
@@ -542,6 +812,8 @@ def init_contract_schema(conn):
     ensure_column(conn, "outgoing_invoice_drafts", "payment_bank_name_snapshot", "TEXT")
     ensure_column(conn, "outgoing_invoice_drafts", "payment_bank_account_snapshot", "TEXT")
     ensure_column(conn, "outgoing_invoice_lines", "invoice_nature", "TEXT NOT NULL DEFAULT '1'")
+    ensure_column(conn, "purchase_order_lines", "price_source", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "purchase_workbook_lines", "price_source", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "historical_payable_lines", "source_amount", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "historical_payable_lines", "calculated_amount", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "historical_payable_lines", "source_hash", "TEXT NOT NULL DEFAULT ''")
@@ -638,6 +910,7 @@ def init_contract_schema(conn):
         "printer_name": "",
         "print_copies": "1",
         "print_paper": "A4",
+        "print_other_paper": "A5",
         # Từ mẫu "Đề nghị Thanh toán TĐP (T04.26).xlsx" khách đã cung cấp.
         "payment_requester": "VŨ THỊ THỤY",
         "payment_bank_name": "Ngân hàng TMCP Ngoại Thương Việt Nam",
@@ -736,6 +1009,7 @@ def vnd_product(*values):
 
 
 MINVOICE_SAVING_STALE_SECONDS = 120
+VIETNAM_TIMEZONE = timezone(timedelta(hours=7))
 
 
 def minvoice_remote_id(data) -> str:
@@ -774,9 +1048,24 @@ def as_date(value) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%dT%H:%M:%S"):
+    # mSMI represents local midnight in Vietnam as 17:00:00Z on the
+    # preceding UTC day.  Taking the first ten characters would therefore
+    # move every invoice back one business day and corrupt month boundaries.
+    # Convert timezone-aware ISO values to the application's Vietnam business
+    # timezone before taking the calendar date.  Plain dates and naive local
+    # timestamps intentionally keep their existing calendar date.
+    iso_text = text[:-1] + "+00:00" if text.upper().endswith("Z") else text
+    try:
+        parsed_iso = datetime.fromisoformat(iso_text)
+    except ValueError:
+        parsed_iso = None
+    if parsed_iso is not None:
+        if parsed_iso.tzinfo is not None:
+            parsed_iso = parsed_iso.astimezone(VIETNAM_TIMEZONE)
+        return parsed_iso.date().isoformat()
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"):
         try:
-            return datetime.strptime(text[:19], fmt).date().isoformat()
+            return datetime.strptime(text, fmt).date().isoformat()
         except ValueError:
             continue
     return ""
@@ -979,7 +1268,7 @@ def opening_import_database_state_hash(conn, period: str) -> str:
         ),
         (
             "opening",
-            "SELECT product_code,qty_in,qty_out,unit_cost,source_line,status,note "
+            "SELECT product_code,warehouse_codes_json,qty_in,qty_out,unit_cost,source_line,status,note "
             "FROM inventory_transactions WHERE source_type='OPENING' AND source_id=? "
             "ORDER BY source_line",
             (period,),
@@ -1384,6 +1673,15 @@ OPENING_ALIASES = {
     "amount": {"thanhtien", "giatriton", "giatritonkho"},
 }
 
+# The only legacy snapshot eligible for automatic MÃ KHO recovery is the
+# customer-approved August 2026 golden. The file is bundled into the portable
+# executable and its digest is also used by the official TĐK–NXT exporter.
+OPENING_WAREHOUSE_BACKFILL_PERIOD = "2026-08"
+OPENING_WAREHOUSE_GOLDEN_SHA256 = (
+    "36DF2BA86D13307F96BB5944FCECB19A4A81C093B4AC6A98EA71330D68204DA6"
+)
+OPENING_WAREHOUSE_BACKFILL_SETTING = "opening_warehouse_codes_backfill_2026_08"
+
 
 def opening_header_fields(*header_rows) -> dict:
     width = max((len(row) for row in header_rows), default=0)
@@ -1418,6 +1716,176 @@ def find_opening_sheet(workbook):
         return None
     _, _, _, worksheet, header_end, fields = max(candidates, key=lambda item: item[:3])
     return worksheet, header_end, fields
+
+
+def _warehouse_codes_from_golden(workbook) -> dict[str, list[str]]:
+    """Read only the product/MÃ KHO identity columns from a trusted workbook."""
+
+    found = find_opening_sheet(workbook)
+    if not found:
+        raise ValueError("Golden TĐK không có dòng tiêu đề Mã TĐP")
+    worksheet, header_end, fields = found
+    if "warehouse_code" not in fields:
+        raise ValueError("Golden TĐK thiếu cột MÃ KHO")
+    code_column = fields["product_code"]
+    warehouse_column = fields["warehouse_code"]
+    mapping: dict[str, list[str]] = {}
+    for row in worksheet.iter_rows(
+        min_row=header_end + 1,
+        max_row=header_end + MAPPING_IMPORT_MAX_ROWS + 1,
+        max_col=max(code_column, warehouse_column),
+        values_only=True,
+    ):
+        code = mapping_cell_text(row[code_column - 1]).upper()
+        warehouse_code = mapping_cell_text(row[warehouse_column - 1]).upper()
+        if not code and not warehouse_code:
+            continue
+        if mapping_key(code) in OPENING_ALIASES["product_code"]:
+            continue
+        if not code or not warehouse_code:
+            raise ValueError("Golden TĐK có dòng thiếu Mã TĐP hoặc MÃ KHO")
+        codes = mapping.setdefault(code, [])
+        if warehouse_code not in codes:
+            codes.append(warehouse_code)
+    if not mapping:
+        raise ValueError("Golden TĐK không có dữ liệu MÃ KHO")
+    return mapping
+
+
+def backfill_opening_warehouse_codes(
+    conn,
+    template_path=None,
+    *,
+    expected_sha256: str = OPENING_WAREHOUSE_GOLDEN_SHA256,
+    period: str = OPENING_WAREHOUSE_BACKFILL_PERIOD,
+) -> dict:
+    """Recover MÃ KHO lost by the pre-column August 2026 importer.
+
+    This migration is intentionally narrow and idempotent. It never guesses
+    from Mã TĐP: a legacy snapshot is changed only when its complete product
+    set matches the hash-pinned customer golden. Source/dev installations that
+    do not carry the optional golden keep starting normally; a present but
+    altered golden fails closed before any row is updated.
+    """
+
+    target_rows = conn.execute(
+        """SELECT id,product_code,warehouse_codes_json
+             FROM inventory_transactions
+            WHERE source_type='OPENING' AND source_id=?
+            ORDER BY product_code,id""",
+        (period,),
+    ).fetchall()
+    if not target_rows:
+        return {"status": "snapshot_absent", "updated": 0, "period": period}
+
+    parsed_existing: dict[int, list[str]] = {}
+    missing = 0
+    for row in target_rows:
+        try:
+            raw_codes = json.loads(str(row["warehouse_codes_json"] or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_codes = []
+        if not isinstance(raw_codes, list):
+            raw_codes = []
+        codes = list(dict.fromkeys(
+            mapping_cell_text(value).upper() for value in raw_codes
+            if mapping_cell_text(value)
+        ))
+        parsed_existing[int(row["id"])] = codes
+        missing += int(not codes)
+    if not missing:
+        return {"status": "already_complete", "updated": 0, "period": period}
+
+    if template_path in (None, ""):
+        return {"status": "asset_absent", "updated": 0, "period": period}
+    path = Path(template_path)
+    if not path.is_file():
+        return {"status": "asset_absent", "updated": 0, "period": period}
+
+    payload = path.read_bytes()
+    actual_sha256 = hashlib.sha256(payload).hexdigest().upper()
+    trusted_sha256 = str(expected_sha256 or "").strip().upper()
+    if actual_sha256 != trusted_sha256:
+        raise ValueError("Golden TĐK không đúng SHA-256 đã khóa; không backfill MÃ KHO")
+
+    # The approved workbook carries a harmless x14 conditional-formatting
+    # extension that openpyxl cannot render. We only read two value columns;
+    # suppress that known warning so first startup does not look like a failed
+    # migration to the operator.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Conditional Formatting extension is not supported.*",
+            category=UserWarning,
+            module="openpyxl",
+        )
+        workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
+        try:
+            golden = _warehouse_codes_from_golden(workbook)
+        finally:
+            workbook.close()
+
+    target_codes = {mapping_cell_text(row["product_code"]).upper() for row in target_rows}
+    if target_codes != set(golden):
+        raise ValueError(
+            "Snapshot tồn 08/2026 không khớp trọn bộ Mã TĐP trong golden; "
+            "không backfill MÃ KHO"
+        )
+
+    updates: list[tuple[str, int]] = []
+    for row in target_rows:
+        row_id = int(row["id"])
+        code = mapping_cell_text(row["product_code"]).upper()
+        expected_codes = golden[code]
+        existing_codes = parsed_existing[row_id]
+        if existing_codes and existing_codes != expected_codes:
+            raise ValueError(
+                "Snapshot tồn 08/2026 đã có MÃ KHO khác golden; không ghi đè"
+            )
+        if not existing_codes:
+            updates.append((
+                json.dumps(expected_codes, ensure_ascii=False, separators=(",", ":")),
+                row_id,
+            ))
+
+    if updates:
+        evidence = {
+            "sha256": actual_sha256,
+            "period": period,
+            "updated": len(updates),
+            "products": len(golden),
+            "different_from_tdp": sum(
+                any(warehouse != code for warehouse in codes)
+                for code, codes in golden.items()
+            ),
+            "multiple_warehouse_codes": sum(len(codes) > 1 for codes in golden.values()),
+        }
+        savepoint = "opening_warehouse_codes_backfill"
+        conn.execute(f"SAVEPOINT {savepoint}")
+        try:
+            conn.executemany(
+                "UPDATE inventory_transactions SET warehouse_codes_json=? WHERE id=?",
+                updates,
+            )
+            conn.execute(
+                """INSERT INTO settings(key,value) VALUES(?,?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (
+                    OPENING_WAREHOUSE_BACKFILL_SETTING,
+                    json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            raise
+    return {
+        "status": "backfilled" if updates else "already_complete",
+        "updated": len(updates),
+        "period": period,
+        "products": len(golden),
+    }
 
 
 def opening_number(value):
@@ -2946,7 +3414,8 @@ def inventory_rows(conn, as_of="", include_zero=False):
                                      THEN t.qty_in*t.unit_cost ELSE 0 END),0) input_value,
                    COALESCE(SUM(CASE WHEN t.status='posted' AND t.txn_date<=:as_of
                                      THEN t.qty_out*t.unit_cost ELSE 0 END),0) output_value
-            FROM products p LEFT JOIN inventory_transactions t ON t.product_code=p.code
+            FROM products p LEFT JOIN inventory_transactions t
+                 ON t.product_code=p.code AND t.source_type!='BK_INPUT'
             GROUP BY p.code,p.name,p.unit
             ORDER BY p.name
         """
@@ -2958,7 +3427,8 @@ def inventory_rows(conn, as_of="", include_zero=False):
                COALESCE(SUM(CASE WHEN t.status IN ('posted','reserved') THEN t.qty_in-t.qty_out ELSE 0 END),0) available_qty,
                COALESCE(SUM(CASE WHEN t.status='posted' THEN t.qty_in*t.unit_cost ELSE 0 END),0) input_value,
                COALESCE(SUM(CASE WHEN t.status='posted' THEN t.qty_out*t.unit_cost ELSE 0 END),0) output_value
-        FROM products p LEFT JOIN inventory_transactions t ON t.product_code=p.code
+        FROM products p LEFT JOIN inventory_transactions t
+             ON t.product_code=p.code AND t.source_type!='BK_INPUT'
         GROUP BY p.code,p.name,p.unit
         ORDER BY p.name
         """
@@ -2972,40 +3442,1224 @@ def inventory_lookup(conn, as_of=""):
     return {row["product_code"]: row for row in inventory_rows(conn, as_of, include_zero=True)}
 
 
-def post_purchase_list_inventory(conn, batch_id: int, now_iso):
+SUPPLIER_MERGE_ALL = {"dung", "thu", "tan", "phuong", "ky", "kho"}
+SUPPLIER_POLICY_MANAGED = SUPPLIER_MERGE_ALL | {"hoai"}
+SUPPLIER_ORDER_IMAGE_COLUMNS = (
+    {"key": "kitchen", "label": "Mã bếp"},
+    {"key": "work_date", "label": "Ngày"},
+    {"key": "product_name", "label": "Tên hàng"},
+    {"key": "order_qty", "label": "Số lượng"},
+    {"key": "unit", "label": "ĐVT"},
+    {"key": "supplier", "label": "NCC"},
+    {"key": "note", "label": "Ghi chú"},
+)
+SUPPLIER_ORDER_IMAGE_FORBIDDEN_TEXT = (
+    "Tồn tủ", "Giá mua", "Thành tiền", "Tổng cần mua sau trừ tồn",
+    "Mã dòng hệ thống", "Số lượng thực tế", "Hỏng", "Thêm", "Giảm", "Thiếu",
+)
+
+
+def supplier_merge_key(supplier: str) -> str:
+    """Normalize a supplier identity for the customer's confirmed merge rules."""
+    supplier_key = mapping_key(supplier)
+    if supplier_key.startswith("nha") and len(supplier_key) > 3:
+        supplier_key = supplier_key[3:]
+    return supplier_key
+
+
+def supplier_merge_policy(supplier: str, product_name: str) -> tuple[bool, bool]:
+    """Return (combine kitchens, merge identical lines) for confirmed NCC rules."""
+    supplier_key = supplier_merge_key(supplier)
+    if supplier_key in SUPPLIER_MERGE_ALL:
+        return True, True
+    if supplier_key == "hoai":
+        is_carrot = mapping_key(product_name) == "carot"
+        return is_carrot, is_carrot
+    return False, False
+
+
+def is_internal_stock_supplier(supplier: str) -> bool:
+    return supplier_merge_key(supplier) == "kho"
+
+
+def supplier_order_status_map(conn, batch_id: int) -> dict[str, dict]:
+    return {
+        row["supplier_key"]: dict(row)
+        for row in conn.execute(
+            """SELECT supplier_key,supplier_label,status,revision,ordered_at,reopened_at,updated_at
+               FROM supplier_order_statuses WHERE batch_id=? ORDER BY supplier_key""",
+            (batch_id,),
+        )
+    }
+
+
+def purchase_order_payload(conn, batch_id: int) -> dict:
+    """Return the editable NCC-order plan without touching invoice inventory.
+
+    Physical leftovers in the freezer/cabinet are an operational purchasing
+    decision entered by the user.  They are intentionally separate from the
+    accounting/invoice inventory used to gate outgoing invoices.
+    """
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
-        return 0
-    # These lines are a projection of the approved order rows. Rebuild the
-    # whole projection so removed/toggled rows cannot remain in stock.
+        raise ValueError("Không tìm thấy phiên đơn")
+    rows = []
+    ordered_total = 0.0
+    required_total = 0.0
+    physical_total = 0.0
+    amount_total = 0
+    canonical_sources = [dict(row) for row in conn.execute(
+        "SELECT * FROM purchase_workbook_lines WHERE batch_id=? ORDER BY source_row,id",
+        (batch_id,),
+    )]
+    if canonical_sources:
+        for item in canonical_sources:
+            base_qty = max(as_number(item["base_qty"]), 0)
+            actual_qty = max(as_number(item["actual_qty"]), 0)
+            row = {
+                "row_key": item["row_key"], "order_id": item["order_id"],
+                "source_row": item["source_row"],
+                "product_code": item["product_code"], "product_name": item["product_name"],
+                "kitchen": item["kitchen"], "work_date": item["work_date"],
+                "unit": item["unit"], "demand_qty": base_qty, "customer_qty": base_qty,
+                "physical_stock_used": 0, "order_qty": actual_qty, "required_qty": actual_qty,
+                "supplier": item["supplier"], "buy_price": max(as_number(item["buy_price"]), 0),
+                "price_source": item["price_source"] or "Sheet đặt hàng chuẩn",
+                "amount": as_number(item["amount"]),
+                "note": item["note"], "damaged_qty": as_number(item["damaged_qty"]),
+                "added_qty": as_number(item["added_qty"]),
+                "reduced_qty": as_number(item["reduced_qty"]),
+                "missing_qty": as_number(item["missing_qty"]),
+                "confirmed": item["status"] == "confirmed",
+            }
+            rows.append(row)
+            ordered_total += base_qty
+            required_total += actual_qty
+            amount_total += row["amount"]
+    else:
+        for source in conn.execute(
+            """SELECT o.*,p.physical_stock_used,p.order_qty,p.supplier plan_supplier,
+                      p.buy_price plan_buy_price,p.price_source plan_price_source,
+                      p.note plan_note,p.status plan_status
+               FROM orders o LEFT JOIN purchase_order_lines p ON p.order_id=o.id
+               WHERE o.batch_id=? ORDER BY o.id""",
+            (batch_id,),
+        ):
+            item = dict(source)
+            demand_qty = max(as_number(item["qty"]), 0)
+            has_plan = item["order_qty"] is not None
+            order_qty = max(as_number(item["order_qty"] if has_plan else demand_qty), 0)
+            physical_stock_used = max(as_number(item["physical_stock_used"] if has_plan else 0), 0)
+            supplier = mapping_cell_text(item["plan_supplier"] if has_plan else item["supplier"])
+            buy_price = max(as_number(item["plan_buy_price"] if has_plan else item["buy_price"]), 0)
+            note = mapping_cell_text(item["plan_note"] if has_plan else item["note"])
+            row = {
+                "order_id": item["id"], "product_code": item["product_code"],
+                "product_name": item["product_name"], "kitchen": item["kitchen"],
+                "work_date": item["work_date"], "unit": item["unit"],
+                "demand_qty": demand_qty, "customer_qty": demand_qty,
+                "physical_stock_used": physical_stock_used,
+                "order_qty": order_qty, "required_qty": order_qty,
+                "supplier": supplier, "buy_price": buy_price,
+                "price_source": mapping_cell_text(item["plan_price_source"]) if has_plan else "Bảng báo giá",
+                "amount": vnd_product(order_qty, buy_price), "note": note,
+                "confirmed": has_plan and item["plan_status"] == "confirmed",
+            }
+            rows.append(row)
+            ordered_total += demand_qty
+            required_total += order_qty
+            physical_total += physical_stock_used
+            amount_total += row["amount"]
+
+    manual_rules = {}
+    for rule in conn.execute(
+        "SELECT supplier_code,combine_kitchens FROM supplier_rules ORDER BY updated_at,supplier_code"
+    ):
+        manual_rules[supplier_merge_key(rule["supplier_code"])] = bool(rule["combine_kitchens"])
+
+    order_statuses = supplier_order_status_map(conn, batch_id)
+    groups = {}
+    for item in rows:
+        if item["order_qty"] <= 1e-9:
+            continue
+        supplier_key = supplier_merge_key(item["supplier"])
+        forced_combined, merge_identical = supplier_merge_policy(
+            item["supplier"], item["product_name"]
+        )
+        policy_managed = supplier_key in SUPPLIER_POLICY_MANAGED
+        manual_combined = bool(manual_rules.get(supplier_key)) if not policy_managed else False
+        combined = forced_combined or manual_combined
+        key = f"{supplier_key}|{'ALL' if combined else item['kitchen']}"
+        if supplier_key == "hoai":
+            policy_label = "Tự dồn Cà rốt" if forced_combined else "Giữ riêng theo rule Hoài"
+        elif supplier_key in SUPPLIER_MERGE_ALL:
+            policy_label = "Tự dồn tên hàng giống nhau"
+        else:
+            policy_label = ""
+        group = groups.setdefault(key, {
+            "supplier": item["supplier"],
+            "kitchen": "GỘP NHIỀU BẾP" if combined else item["kitchen"],
+            "combine_kitchens": combined, "items": [], "total_qty": 0,
+            "total_amount": 0, "raw_line_count": 0,
+            "policy_managed": policy_managed,
+            "automatic_merge": forced_combined,
+            "manual_combine": manual_combined,
+            "policy_label": policy_label,
+        })
+        group["raw_line_count"] += 1
+        merge_key = (
+            mapping_key(item["product_name"]), mapping_key(item["unit"])
+        ) if merge_identical else ("order", item.get("row_key") or item["order_id"])
+        merged = next(
+            (line for line in group["items"] if line.get("_merge_key") == merge_key), None
+        )
+        if merged is None:
+            merged = {
+                **item, "_merge_key": merge_key,
+                "order_ids": [item["order_id"]] if item.get("order_id") is not None else [],
+                "source_refs": [{
+                    "row_key": item.get("row_key"), "order_id": item.get("order_id"),
+                    "source_row": item.get("source_row"),
+                }],
+                "_kitchens": [item["kitchen"]],
+            }
+            group["items"].append(merged)
+        else:
+            if abs(merged["buy_price"] - item["buy_price"]) > 1e-9:
+                merged["mixed_buy_prices"] = True
+            for field in (
+                "customer_qty", "demand_qty", "physical_stock_used",
+                "order_qty", "required_qty", "amount",
+            ):
+                merged[field] += item[field]
+            if item.get("order_id") is not None:
+                merged["order_ids"].append(item["order_id"])
+            merged["source_refs"].append({
+                "row_key": item.get("row_key"), "order_id": item.get("order_id"),
+                "source_row": item.get("source_row"),
+            })
+            if item["kitchen"] not in merged["_kitchens"]:
+                merged["_kitchens"].append(item["kitchen"])
+            if item["note"] and item["note"] not in merged["note"]:
+                merged["note"] = " | ".join(filter(None, (merged["note"], item["note"])))
+        group["total_qty"] += item["order_qty"]
+        group["total_amount"] += item["amount"]
+    for group in groups.values():
+        group["presented_line_count"] = len(group["items"])
+        status_row = order_statuses.get(supplier_merge_key(group["supplier"]))
+        group["supplier_key"] = supplier_merge_key(group["supplier"])
+        group["order_status"] = status_row["status"] if status_row else "pending"
+        group["order_status_revision"] = int(status_row["revision"]) if status_row else 0
+        group["order_status_updated_at"] = status_row["updated_at"] if status_row else ""
+        group["ordered_at"] = status_row["ordered_at"] if status_row else None
+        group["reopened_at"] = status_row["reopened_at"] if status_row else None
+        for item in group["items"]:
+            item.pop("_merge_key", None)
+            item["kitchen"] = ", ".join(item.pop("_kitchens"))
+    group_list = list(groups.values())
+    status_priority = {"reopened": 0, "pending": 1, "ordered": 2}
+    group_list.sort(key=lambda group: (
+        status_priority[group["order_status"]],
+        supplier_merge_key(group["supplier"]),
+        mapping_key(group["kitchen"]),
+    ))
+    checklist_by_supplier = {}
+    for group in group_list:
+        item = checklist_by_supplier.setdefault(group["supplier_key"], {
+            "supplier_key": group["supplier_key"],
+            "supplier": group["supplier"],
+            "status": group["order_status"],
+            "revision": group["order_status_revision"],
+            "updated_at": group["order_status_updated_at"],
+            "ordered_at": group["ordered_at"],
+            "reopened_at": group["reopened_at"],
+            "group_count": 0, "raw_line_count": 0, "presented_line_count": 0,
+            "total_qty": 0,
+        })
+        item["group_count"] += 1
+        item["raw_line_count"] += group["raw_line_count"]
+        item["presented_line_count"] += group["presented_line_count"]
+        item["total_qty"] += group["total_qty"]
+    checklist = list(checklist_by_supplier.values())
+    checklist.sort(key=lambda item: (
+        status_priority[item["status"]], mapping_key(item["supplier"]),
+    ))
+    checklist_counts = {
+        status: sum(item["status"] == status for item in checklist)
+        for status in ("pending", "reopened", "ordered")
+    }
+    return {
+        "batch_id": batch_id, "work_date": batch["work_date"],
+        "format": "customer_canonical" if canonical_sources else "legacy_or_customer_orders",
+        "formula": "Số đặt NCC do người dùng chốt sau khi trừ tồn tủ thực tế",
+        "ordered_qty": ordered_total, "required_qty": required_total,
+        "physical_stock_used": physical_total, "total_amount": amount_total,
+        "confirmed_lines": sum(1 for item in rows if item["confirmed"]),
+        "image_contract": {
+            "columns": list(SUPPLIER_ORDER_IMAGE_COLUMNS),
+            "forbidden_text": list(SUPPLIER_ORDER_IMAGE_FORBIDDEN_TEXT),
+        },
+        "raw_line_count": len(rows),
+        "presented_line_count": sum(len(group["items"]) for group in group_list),
+        "checklist": checklist, "checklist_counts": checklist_counts,
+        "rows": rows, "groups": group_list,
+        "plan_hash": purchase_order_database_state_hash(conn, batch_id),
+    }
+
+
+def purchase_order_database_state_hash(conn, batch_id: int) -> str:
+    return query_database_state_hash(conn, (
+        (
+            "orders",
+            "SELECT id,batch_id,work_date,kitchen,product_code,product_name,qty,unit,supplier,buy_price,note "
+            "FROM orders WHERE batch_id=? ORDER BY id",
+            (batch_id,),
+        ),
+        (
+            "purchase_order_lines",
+            "SELECT order_id,demand_qty,physical_stock_used,order_qty,supplier,buy_price,price_source,note,status "
+            "FROM purchase_order_lines WHERE batch_id=? ORDER BY order_id",
+            (batch_id,),
+        ),
+        (
+            "purchase_workbook_lines",
+            "SELECT row_key,order_id,product_code,kitchen,work_date,product_name,base_qty,unit,"
+            "supplier,note,buy_price,price_source,damaged_qty,added_qty,reduced_qty,missing_qty,actual_qty,"
+            "amount,status,revision FROM purchase_workbook_lines WHERE batch_id=? ORDER BY row_key",
+            (batch_id,),
+        ),
+    ))
+
+
+PURCHASE_CANONICAL_ALIASES = {
+    "product_code": {"mahang", "mahanghoa", "mavattu"},
+    "kitchen": {"mabep", "bep"},
+    "work_date": {"ngay", "ngaythang", "ngaydat"},
+    "product_name": {"tenhang", "tenhanghoa"},
+    "base_qty": {"soluong"},
+    "unit": {"dvt", "donvitinh"},
+    "supplier": {"ncc", "nhacungcap"},
+    "note": {"ghichu", "ghichudathang"},
+    "buy_price": {"giamua", "dongiamua"},
+    "damaged_qty": {"hong", "hanghong"},
+    "added_qty": {"them", "hangthem"},
+    "reduced_qty": {"giam", "hanggiam"},
+    "missing_qty": {"thieu", "hangthieu"},
+    "actual_qty": {"slthucte", "soluongthucte", "slthucte"},
+    "amount": {"thanhtien"},
+    "row_key": {"madonghethong", "rowkey", "khoadong"},
+}
+
+
+def purchase_canonical_header_fields(row) -> dict:
+    found = {}
+    normalized_aliases = {
+        field: {mapping_key(alias) for alias in aliases}
+        for field, aliases in PURCHASE_CANONICAL_ALIASES.items()
+    }
+    for column_index, value in enumerate(row, 1):
+        key = mapping_key(value)
+        for field, aliases in normalized_aliases.items():
+            if field not in found and key in aliases:
+                found[field] = column_index
+                break
+    # The customer's canonical sheet intentionally leaves the visible date
+    # header blank. It is the column between Mã bếp and Tên hàng.
+    if "work_date" not in found and {
+        "product_code", "kitchen", "product_name",
+    }.issubset(found):
+        inferred = found["kitchen"] + 1
+        if inferred + 1 == found["product_name"]:
+            found["work_date"] = inferred
+    return found
+
+
+def purchase_work_date(value, fallback: str) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = mapping_cell_text(value)
+    if not text:
+        return fallback
+    for pattern in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, pattern).date().isoformat()
+        except ValueError:
+            pass
+    raise ValueError("Ngày trong sheet đặt hàng không hợp lệ")
+
+
+def purchase_business_row_key(
+    work_date: str, product_code: str, kitchen: str, product_name: str,
+    unit: str, occurrence: int,
+) -> str:
+    identity = "\0".join((
+        "purchase_orders", work_date, mapping_key(product_code), mapping_key(kitchen),
+        mapping_key(product_name), mapping_key(unit), str(int(occurrence)),
+    ))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest().upper()
+
+
+def purchase_scope_hash(items) -> str:
+    digest = hashlib.sha256()
+    text_fields = (
+        "row_key", "product_code", "kitchen", "work_date", "product_name",
+        "unit", "supplier", "note", "price_source",
+    )
+    number_fields = (
+        "base_qty", "buy_price", "damaged_qty", "added_qty", "reduced_qty",
+        "missing_qty", "actual_qty", "amount",
+    )
+    for item in sorted(items, key=lambda row: row["row_key"]):
+        normalized = {field: mapping_cell_text(item.get(field)) for field in text_fields}
+        normalized.update({field: as_number(item.get(field)) for field in number_fields})
+        encoded = json.dumps(
+            normalized,
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+        ).encode("utf-8")
+        digest.update(encoded)
+        digest.update(b"\n")
+    return digest.hexdigest().upper()
+
+
+def purchase_formula_key(value) -> str:
+    if not isinstance(value, str) or not value.lstrip().startswith("="):
+        return ""
+    return re.sub(r"[\s$]+", "", value).upper()
+
+
+def expected_purchase_formulas(fields: dict, source_row: int) -> tuple[str, set[str]]:
+    ref = lambda field: f"{get_column_letter(fields[field])}{source_row}"
+    actual_ref = ref("actual_qty")
+    price_ref = ref("buy_price")
+    actual_formula = (
+        f"={ref('base_qty')}+{ref('added_qty')}-{ref('damaged_qty')}"
+        f"-{ref('reduced_qty')}-{ref('missing_qty')}"
+    )
+    amount_product = f"{actual_ref}*{price_ref}"
+    return purchase_formula_key(actual_formula), {
+        purchase_formula_key(f"={amount_product}"),
+        purchase_formula_key(f"={price_ref}*{actual_ref}"),
+        purchase_formula_key(f"=IFERROR({amount_product},0)"),
+        purchase_formula_key(f"=IFERROR({price_ref}*{actual_ref},0)"),
+    }
+
+
+def purchase_line_changed(previous: dict | None, item: dict) -> bool:
+    if previous is None:
+        return True
+    text_fields = (
+        "product_code", "kitchen", "work_date", "product_name", "unit",
+        "supplier", "note", "price_source",
+    )
+    number_fields = (
+        "base_qty", "buy_price", "damaged_qty", "added_qty", "reduced_qty",
+        "missing_qty", "actual_qty", "amount",
+    )
+    if any(mapping_cell_text(previous.get(field)) != mapping_cell_text(item.get(field))
+           for field in text_fields):
+        return True
+    if any(abs(as_number(previous.get(field)) - as_number(item.get(field))) > 1e-9
+           for field in number_fields):
+        return True
+    return int(previous.get("order_id") or 0) != int(item.get("order_id") or 0)
+
+
+def purchase_component_totals(items) -> dict:
+    fields = (
+        "base_qty", "damaged_qty", "added_qty", "reduced_qty", "missing_qty",
+        "actual_qty", "amount",
+    )
+    return {
+        field: vnd_round(sum(as_number(item.get(field)) for item in items))
+        if field == "amount" else sum(as_number(item.get(field)) for item in items)
+        for field in fields
+    }
+
+
+class PurchaseOrderApplyError(ValueError):
+    def __init__(self, message: str, *, code: str = "purchase_apply_failed", status: int = 409):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+def refresh_payable_ledger(conn, timestamp: str) -> dict:
+    """Refresh the small dedicated payable projection inside this transaction."""
+    try:
+        from payable_ledger import sync_payable_ledger
+    except ImportError:  # pragma: no cover - package invocation
+        from .payable_ledger import sync_payable_ledger
+    return sync_payable_ledger(conn, timestamp=timestamp)
+
+
+def apply_purchase_order_preview(
+    conn, *, batch_id: int, items: list[dict], source_hash: str,
+    source_name: str, format_name: str, now_iso,
+) -> dict:
+    """Apply one validated purchase preview inside the caller's transaction.
+
+    This is shared by the dedicated NCC round-trip and the second daily
+    finalization flow so both entry points keep identical revision/payable
+    semantics without ever updating customer orders.
+    """
+    already = conn.execute(
+        "SELECT 1 FROM purchase_order_imports WHERE batch_id=? AND source_hash=?",
+        (batch_id, source_hash),
+    ).fetchone()
+    if already:
+        current_items = [dict(row) for row in conn.execute(
+            "SELECT * FROM purchase_workbook_lines WHERE batch_id=?", (batch_id,),
+        )]
+        current_hash = purchase_scope_hash(current_items) if current_items else ""
+        if current_hash != source_hash:
+            raise PurchaseOrderApplyError(
+                "Bản đặt hàng này đã bị phiên bản mới hơn thay thế; hãy tải file mới nhất",
+                code="superseded_purchase_version",
+            )
+        result = purchase_order_payload(conn, batch_id)
+        audit(
+            conn, now_iso, "purchase_orders.import", "unchanged",
+            entity_type="batch", entity_id=batch_id,
+            metadata={"rows": len(items), "source_hash": source_hash[:16]},
+        )
+        payable_ledger = refresh_payable_ledger(conn, now_iso())
+        return {
+            "processed": 0, "count": len(items), "idempotent": True,
+            "purchase_order": result, "payable_ledger": payable_ledger,
+        }
+
+    timestamp = now_iso()
+    incoming_keys = {item["row_key"] for item in items}
+    existing_by_key = {
+        row["row_key"]: dict(row) for row in conn.execute(
+            "SELECT * FROM purchase_workbook_lines WHERE batch_id=?", (batch_id,),
+        )
+    }
+    changed_count = 0
+    inserted_count = 0
+    updated_count = 0
+    for item in items:
+        previous = existing_by_key.get(item["row_key"])
+        if not purchase_line_changed(previous, item):
+            continue
+        revision = int(previous["revision"] or 0) + 1 if previous else 1
+        change_kind = "update" if previous else "insert"
+        conn.execute(
+            """INSERT INTO purchase_workbook_lines(
+                   batch_id,row_key,order_id,source_sheet,source_row,product_code,kitchen,
+                   work_date,product_name,base_qty,unit,supplier,note,buy_price,price_source,damaged_qty,
+                   added_qty,reduced_qty,missing_qty,actual_qty,amount,status,source_hash,
+                   revision,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?)
+               ON CONFLICT(batch_id,row_key) DO UPDATE SET
+                   order_id=excluded.order_id,source_sheet=excluded.source_sheet,
+                   source_row=excluded.source_row,product_code=excluded.product_code,
+                   kitchen=excluded.kitchen,work_date=excluded.work_date,
+                   product_name=excluded.product_name,base_qty=excluded.base_qty,
+                   unit=excluded.unit,supplier=excluded.supplier,note=excluded.note,
+                   buy_price=excluded.buy_price,price_source=excluded.price_source,
+                   damaged_qty=excluded.damaged_qty,
+                   added_qty=excluded.added_qty,reduced_qty=excluded.reduced_qty,
+                   missing_qty=excluded.missing_qty,actual_qty=excluded.actual_qty,
+                   amount=excluded.amount,status='confirmed',source_hash=excluded.source_hash,
+                   revision=excluded.revision,updated_at=excluded.updated_at""",
+            (
+                batch_id, item["row_key"], item.get("order_id"), item["source_sheet"],
+                item["source_row"], item["product_code"], item["kitchen"], item["work_date"],
+                item["product_name"], item["base_qty"], item["unit"], item["supplier"],
+                item["note"], item["buy_price"], item["price_source"], item["damaged_qty"],
+                item["added_qty"], item["reduced_qty"], item["missing_qty"],
+                item["actual_qty"], item["amount"], source_hash, revision,
+                previous["created_at"] if previous else timestamp, timestamp,
+            ),
+        )
+        conn.execute(
+            """INSERT INTO purchase_workbook_line_revisions(
+                   batch_id,row_key,order_id,revision,change_kind,source_hash,source_row,
+                   base_qty,damaged_qty,added_qty,reduced_qty,missing_qty,actual_qty,
+                   buy_price,amount,created_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                batch_id, item["row_key"], item.get("order_id"), revision,
+                change_kind, source_hash, item["source_row"], item["base_qty"],
+                item["damaged_qty"], item["added_qty"], item["reduced_qty"],
+                item["missing_qty"], item["actual_qty"], item["buy_price"],
+                item["amount"], timestamp,
+            ),
+        )
+        changed_count += 1
+        inserted_count += int(previous is None)
+        updated_count += int(previous is not None)
+
+    stale_keys = [row["row_key"] for row in conn.execute(
+        "SELECT row_key FROM purchase_workbook_lines WHERE batch_id=?", (batch_id,),
+    ) if row["row_key"] not in incoming_keys]
+    if stale_keys:
+        placeholders = ",".join("?" for _ in stale_keys)
+        conn.execute(
+            f"DELETE FROM purchase_workbook_lines WHERE batch_id=? AND row_key IN ({placeholders})",
+            (batch_id, *stale_keys),
+        )
+    conn.execute("DELETE FROM purchase_order_lines WHERE batch_id=?", (batch_id,))
+    if format_name == "legacy_13":
+        for item in items:
+            conn.execute(
+                """INSERT INTO purchase_order_lines(
+                       batch_id,order_id,demand_qty,physical_stock_used,order_qty,
+                       supplier,buy_price,price_source,note,status,source_hash,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,'confirmed',?,?,?)""",
+                (
+                    batch_id, item["order_id"], item["demand_qty"],
+                    item["physical_stock_used"], item["order_qty"], item["supplier"],
+                    item["buy_price"], item["price_source"], item["note"],
+                    source_hash, timestamp, timestamp,
+                ),
+            )
+    total_amount = sum(item["amount"] for item in items)
     conn.execute(
+        """INSERT INTO purchase_order_imports(
+               batch_id,source_hash,source_name,line_count,total_amount,imported_at
+           ) VALUES(?,?,?,?,?,?) ON CONFLICT(batch_id,source_hash) DO NOTHING""",
+        (batch_id, source_hash, source_name, len(items), total_amount, timestamp),
+    )
+    audit(
+        conn, now_iso, "purchase_orders.import", "ok",
+        entity_type="batch", entity_id=batch_id,
+        metadata={
+            "rows": len(items), "changed": changed_count,
+            "inserted": inserted_count, "updated": updated_count,
+            "source_hash": source_hash[:16],
+            "components": purchase_component_totals(items),
+        },
+    )
+    payable_ledger = refresh_payable_ledger(conn, timestamp)
+    return {
+        "processed": changed_count, "count": len(items), "idempotent": False,
+        "purchase_order": purchase_order_payload(conn, batch_id),
+        "payable_ledger": payable_ledger,
+    }
+
+
+def parse_canonical_purchase_workbook(
+    conn, workbook, batch_id: int, expected: dict, formula_workbook=None,
+) -> dict | None:
+    batch = conn.execute("SELECT work_date FROM batches WHERE id=?", (batch_id,)).fetchone()
+    if not batch:
+        raise ValueError("Không tìm thấy phiên đơn")
+    required = {
+        "product_code", "kitchen", "product_name", "base_qty", "unit", "supplier",
+        "note", "buy_price", "damaged_qty", "added_qty", "reduced_qty",
+        "missing_qty", "actual_qty", "amount",
+    }
+    target = None
+    for worksheet in workbook.worksheets:
+        for row_index, values in enumerate(
+            worksheet.iter_rows(min_row=1, max_row=min(20, worksheet.max_row), values_only=True), 1
+        ):
+            fields = purchase_canonical_header_fields(values)
+            if required.issubset(fields):
+                if target is not None:
+                    raise ValueError("File có nhiều bảng đặt hàng chuẩn; chỉ được có một sheet đặt hàng")
+                target = (worksheet, row_index, fields)
+                break
+    if target is None:
+        return None
+
+    worksheet, header_row, fields = target
+    formula_worksheet = None
+    if formula_workbook is not None and worksheet.title in formula_workbook.sheetnames:
+        formula_worksheet = formula_workbook[worksheet.title]
+    existing_by_key = {
+        row["row_key"]: dict(row) for row in conn.execute(
+            "SELECT * FROM purchase_workbook_lines WHERE batch_id=?", (batch_id,)
+        )
+    }
+    orders_by_identity = defaultdict(list)
+    for order in expected.values():
+        identity = (mapping_key(order["product_code"]), mapping_key(order["kitchen"]))
+        orders_by_identity[identity].append(order)
+    for matches in orders_by_identity.values():
+        matches.sort(key=lambda row: int(row["id"]))
+
+    parsed = []
+    occurrences = Counter()
+    seen_row_keys = set()
+    for source_row, values in enumerate(
+        worksheet.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1
+    ):
+        def cell(field):
+            column = fields.get(field)
+            return values[column - 1] if column and column <= len(values) else None
+
+        product_code = mapping_cell_text(cell("product_code"))
+        product_name = mapping_cell_text(cell("product_name"))
+        if not product_code and not product_name:
+            continue
+        kitchen = mapping_cell_text(cell("kitchen"))
+        unit = mapping_cell_text(cell("unit"))
+        supplier = mapping_cell_text(cell("supplier"))
+        note = mapping_cell_text(cell("note"))
+        errors = []
+        warnings = []
+        try:
+            work_date = purchase_work_date(cell("work_date"), batch["work_date"])
+        except ValueError as exc:
+            work_date = batch["work_date"]
+            errors.append(str(exc))
+        if work_date != batch["work_date"]:
+            errors.append("Ngày dòng đặt hàng không khớp phiên đang chọn")
+        numbers = {}
+        for field, label in (
+            ("base_qty", "Số lượng"), ("buy_price", "Giá mua"),
+            ("damaged_qty", "Hỏng"), ("added_qty", "Thêm"),
+            ("reduced_qty", "Giảm"), ("missing_qty", "Thiếu"),
+        ):
+            try:
+                numbers[field] = import_cell_number(cell(field), label)
+            except ValueError as exc:
+                errors.append(str(exc))
+                numbers[field] = 0
+        identity = (mapping_key(product_code), mapping_key(kitchen))
+        occurrences[identity] += 1
+        occurrence = occurrences[identity]
+        computed_key = purchase_business_row_key(
+            work_date, product_code, kitchen, product_name, unit, occurrence,
+        )
+        supplied_key = mapping_cell_text(cell("row_key")).upper()
+        if supplied_key and not re.fullmatch(r"[0-9A-F]{64}", supplied_key):
+            errors.append("Mã dòng hệ thống không hợp lệ")
+            supplied_key = ""
+        row_key = supplied_key or computed_key
+        if row_key in seen_row_keys:
+            errors.append("Mã dòng hệ thống bị lặp trong file")
+        seen_row_keys.add(row_key)
+        previous = existing_by_key.get(row_key)
+        if supplied_key and previous:
+            immutable_now = tuple(mapping_key(value) for value in (
+                product_code, kitchen, product_name, unit,
+            ))
+            immutable_before = tuple(mapping_key(previous[field]) for field in (
+                "product_code", "kitchen", "product_name", "unit",
+            ))
+            if immutable_now != immutable_before:
+                errors.append("Mã hàng/bếp/tên/ĐVT đã bị sửa so với file xuất")
+        elif supplied_key and supplied_key != computed_key:
+            errors.append("Mã dòng không thuộc sheet đặt hàng đang chọn")
+        matches = orders_by_identity.get(identity) or []
+        matched_order = matches[occurrence - 1] if occurrence <= len(matches) else None
+        order_id = int(matched_order["id"]) if matched_order else None
+        sheet_buy_price = numbers["buy_price"]
+        quoted_buy_price = 0
+        if matched_order and (not previous or previous.get("price_source") == "Bảng báo giá"):
+            quoted_buy_price = max(as_number(matched_order.get("buy_price")), 0)
+        if quoted_buy_price > 0:
+            numbers["buy_price"] = quoted_buy_price
+            price_source = "Bảng báo giá"
+        else:
+            price_source = "Sheet đặt hàng chuẩn"
+        if not kitchen:
+            errors.append("Dòng đặt hàng thiếu mã bếp")
+        if not product_code:
+            errors.append("Dòng đặt hàng thiếu mã hàng")
+        if not product_name:
+            errors.append("Dòng đặt hàng thiếu tên hàng")
+        if numbers["base_qty"] < 0 or any(
+            numbers[field] < 0 for field in ("damaged_qty", "added_qty", "reduced_qty", "missing_qty")
+        ):
+            errors.append("Số lượng và các cột điều chỉnh không được âm")
+        computed_actual = (
+            numbers["base_qty"] + numbers["added_qty"] - numbers["damaged_qty"]
+            - numbers["reduced_qty"] - numbers["missing_qty"]
+        )
+        expected_actual_formula, expected_amount_formulas = expected_purchase_formulas(
+            fields, source_row,
+        )
+        formula_actual = (
+            formula_worksheet.cell(source_row, fields["actual_qty"]).value
+            if formula_worksheet is not None else cell("actual_qty")
+        )
+        actual_formula_key = purchase_formula_key(formula_actual)
+        if actual_formula_key and actual_formula_key != expected_actual_formula:
+            errors.append(
+                "Công thức Số lượng thực tế phải là Số lượng + Thêm - Hỏng - Giảm - Thiếu"
+            )
+        try:
+            cached_actual = import_cell_number(cell("actual_qty"), "Số lượng thực tế", computed_actual)
+        except ValueError as exc:
+            errors.append(str(exc))
+            cached_actual = computed_actual
+        if cell("actual_qty") not in (None, "") and abs(cached_actual - computed_actual) > 0.001:
+            errors.append("Số lượng thực tế lệch công thức chuẩn")
+        actual_qty = computed_actual
+        formula_amount = (
+            formula_worksheet.cell(source_row, fields["amount"]).value
+            if formula_worksheet is not None else cell("amount")
+        )
+        amount_formula_key = purchase_formula_key(formula_amount)
+        if amount_formula_key and amount_formula_key not in expected_amount_formulas:
+            errors.append("Công thức Thành tiền phải là Số lượng thực tế × Giá mua")
+        source_formula_amount = vnd_product(actual_qty, sheet_buy_price)
+        try:
+            cached_amount = import_cell_number(
+                cell("amount"), "Thành tiền", source_formula_amount,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            cached_amount = source_formula_amount
+        if cell("amount") not in (None, "") and vnd_round(cached_amount) != source_formula_amount:
+            errors.append("Thành tiền lệch Số lượng thực tế × Giá mua")
+        amount = vnd_product(actual_qty, numbers["buy_price"])
+        if actual_qty < -1e-9:
+            errors.append("Số lượng thực tế không được âm")
+        if numbers["buy_price"] < 0:
+            errors.append("Giá mua không được âm")
+        if actual_qty > 1e-9 and not supplier:
+            errors.append("Dòng có đặt hàng phải có NCC")
+        if actual_qty > 1e-9 and numbers["buy_price"] <= 0 and not is_internal_stock_supplier(supplier):
+            errors.append("Dòng mua ngoài có số lượng dương phải có giá mua lớn hơn 0")
+        parsed.append({
+            "source_sheet": worksheet.title, "source_row": source_row,
+            "format": "customer_canonical", "row_key": row_key, "order_id": order_id,
+            "product_code": product_code, "kitchen": kitchen, "work_date": work_date,
+            "product_name": product_name, "base_qty": numbers["base_qty"], "unit": unit,
+            "supplier": supplier, "note": note, "buy_price": numbers["buy_price"],
+            "price_source": price_source,
+            "damaged_qty": numbers["damaged_qty"], "added_qty": numbers["added_qty"],
+            "reduced_qty": numbers["reduced_qty"], "missing_qty": numbers["missing_qty"],
+            "actual_qty": actual_qty, "amount": amount, "errors": errors, "warnings": warnings,
+        })
+    if not parsed:
+        raise ValueError("Sheet đặt hàng chuẩn không có dòng dữ liệu")
+    missing_existing = set(existing_by_key) - seen_row_keys
+    if missing_existing:
+        raise ValueError(
+            f"File thiếu {len(missing_existing)} dòng mua đã có; hãy tải lại sheet đặt hàng mới nhất"
+        )
+    error_rows = sum(bool(item["errors"]) for item in parsed)
+    return {
+        "format": "customer_canonical", "sheet": worksheet.title,
+        "items": parsed, "rows": parsed[:200], "count": len(parsed),
+        "issues": [item for item in parsed if item["errors"] or item["warnings"]][:200],
+        "preview_truncated": len(parsed) > 200,
+        "error_rows": error_rows, "can_confirm": error_rows == 0,
+        "warning_rows": sum(bool(item["warnings"]) for item in parsed),
+        "total_qty": sum(item["actual_qty"] for item in parsed if not item["errors"]),
+        "total_amount": sum(item["amount"] for item in parsed if not item["errors"]),
+        "content_hash": purchase_scope_hash(parsed),
+    }
+
+
+PURCHASE_ORDER_ALIASES = {
+    "order_id": {"madonghethong", "madong", "orderid", "dong"},
+    "product_code": {"mahang", "mahanghoa", "mavattu"},
+    "kitchen": {"mabep", "bep"},
+    "work_date": {"ngay", "ngaythang", "ngaydat"},
+    "product_name": {"tenhang", "tenhanghoa"},
+    "demand_qty": {"nhucautudonkhach", "nhucau", "soluongkhachdat"},
+    "physical_stock_used": {"tontudatr u", "tontudatru", "tontu", "tonthuctedatru"},
+    "order_qty": {"soluongdatncc", "soluongdat", "soluongthucdat"},
+    "unit": {"dvt", "donvitinh"},
+    "supplier": {"ncc", "nhacungcap"},
+    "buy_price": {"giamua", "dongiamua"},
+    "note": {"ghichu", "ghichudathang"},
+}
+
+
+def purchase_order_header_fields(row) -> dict:
+    found = {}
+    for column_index, value in enumerate(row, 1):
+        key = mapping_key(value)
+        for field, aliases in PURCHASE_ORDER_ALIASES.items():
+            if field not in found and key in {mapping_key(alias) for alias in aliases}:
+                found[field] = column_index
+                break
+    return found
+
+
+def parse_purchase_order_workbook(conn, workbook, batch_id: int, formula_workbook=None) -> dict:
+    expected = {
+        row["id"]: dict(row) for row in conn.execute(
+            """SELECT o.*,p.price_source plan_price_source
+               FROM orders o LEFT JOIN purchase_order_lines p ON p.order_id=o.id
+               WHERE o.batch_id=? ORDER BY o.id""", (batch_id,)
+        )
+    }
+    if not expected:
+        raise ValueError("Phiên đơn không có dòng đặt hàng")
+    canonical = parse_canonical_purchase_workbook(
+        conn, workbook, batch_id, expected, formula_workbook=formula_workbook,
+    )
+    if canonical is not None:
+        return canonical
+    parsed = []
+    seen = set()
+    legacy_occurrences = Counter()
+    for worksheet in workbook.worksheets:
+        header_row = None
+        fields = {}
+        for row_index, values in enumerate(
+            worksheet.iter_rows(min_row=1, max_row=min(20, worksheet.max_row), values_only=True), 1
+        ):
+            candidate = purchase_order_header_fields(values)
+            if {"order_id", "order_qty", "buy_price", "supplier"}.issubset(candidate):
+                header_row, fields = row_index, candidate
+                break
+        if not header_row:
+            continue
+        for source_row, values in enumerate(
+            worksheet.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1
+        ):
+            def cell(field):
+                column = fields.get(field)
+                return values[column - 1] if column and column <= len(values) else None
+
+            raw_id = cell("order_id")
+            if raw_id in (None, ""):
+                continue
+            errors = []
+            try:
+                order_id = int(import_cell_number(raw_id, "Mã dòng hệ thống"))
+            except ValueError as exc:
+                parsed.append({"source_sheet": worksheet.title, "source_row": source_row,
+                               "order_id": 0, "errors": [str(exc)]})
+                continue
+            order = expected.get(order_id)
+            if not order:
+                errors.append("Mã dòng không thuộc phiên đơn đang chọn")
+            if order_id in seen:
+                errors.append("Mã dòng bị lặp trong file")
+            seen.add(order_id)
+            try:
+                order_qty = import_cell_number(cell("order_qty"), "Số lượng đặt NCC")
+            except ValueError as exc:
+                errors.append(str(exc)); order_qty = 0
+            try:
+                buy_price = import_cell_number(cell("buy_price"), "Giá mua")
+            except ValueError as exc:
+                errors.append(str(exc)); buy_price = 0
+            try:
+                physical = import_cell_number(cell("physical_stock_used"), "Tồn tủ đã trừ")
+            except ValueError as exc:
+                errors.append(str(exc)); physical = 0
+            supplier = mapping_cell_text(cell("supplier"))
+            prior_source = mapping_cell_text(order["plan_price_source"]) if order else ""
+            quoted_buy_price = (
+                max(as_number(order["buy_price"]), 0)
+                if order and prior_source != "File đặt hàng lần hai" else 0
+            )
+            effective_buy_price = quoted_buy_price if quoted_buy_price > 0 else max(buy_price, 0)
+            if order_qty < 0:
+                errors.append("Số lượng đặt NCC không được âm")
+            if physical < 0:
+                errors.append("Tồn tủ đã trừ không được âm")
+            if order_qty > 0 and not supplier:
+                errors.append("Dòng có đặt hàng phải có NCC")
+            if (
+                order_qty > 0
+                and effective_buy_price <= 0
+                and not is_internal_stock_supplier(supplier)
+            ):
+                errors.append("Dòng có đặt hàng phải có giá mua lớn hơn 0")
+            if order:
+                file_code = mapping_cell_text(cell("product_code")).upper()
+                file_kitchen = mapping_cell_text(cell("kitchen")).upper()
+                if file_code and file_code != mapping_cell_text(order["product_code"]).upper():
+                    errors.append("Mã hàng đã bị sửa so với file xuất")
+                if file_kitchen and file_kitchen != mapping_cell_text(order["kitchen"]).upper():
+                    errors.append("Mã bếp đã bị sửa so với file xuất")
+                demand_qty = max(as_number(order["qty"]), 0)
+                # Quantity ordered is authoritative.  Derive the amount taken
+                # from the physical cabinet, while still allowing whole-carton
+                # purchases larger than demand.
+                physical = max(demand_qty - order_qty, 0)
+            else:
+                demand_qty = 0
+            identity = (
+                mapping_key(order["product_code"] if order else ""),
+                mapping_key(order["kitchen"] if order else ""),
+            )
+            legacy_occurrences[identity] += 1
+            row_key = purchase_business_row_key(
+                order["work_date"] if order else "1900-01-01",
+                order["product_code"] if order else "",
+                order["kitchen"] if order else "",
+                order["product_name"] if order else "",
+                order["unit"] if order else "",
+                legacy_occurrences[identity],
+            )
+            parsed.append({
+                "source_sheet": worksheet.title, "source_row": source_row,
+                "format": "legacy_13", "row_key": row_key,
+                "order_id": order_id, "demand_qty": demand_qty,
+                "physical_stock_used": physical, "order_qty": max(order_qty, 0),
+                "supplier": supplier, "buy_price": effective_buy_price,
+                "price_source": "Bảng báo giá" if quoted_buy_price > 0 else "File đặt hàng lần hai",
+                "note": mapping_cell_text(cell("note")),
+                "product_code": mapping_cell_text(order["product_code"] if order else ""),
+                "kitchen": mapping_cell_text(order["kitchen"] if order else ""),
+                "work_date": mapping_cell_text(order["work_date"] if order else ""),
+                "product_name": mapping_cell_text(order["product_name"] if order else ""),
+                "base_qty": max(order_qty, 0),
+                "unit": mapping_cell_text(order["unit"] if order else ""),
+                "damaged_qty": 0, "added_qty": 0, "reduced_qty": 0, "missing_qty": 0,
+                "actual_qty": max(order_qty, 0),
+                "amount": vnd_product(max(order_qty, 0), effective_buy_price),
+                "errors": errors,
+            })
+    missing = sorted(set(expected) - seen)
+    if missing:
+        raise ValueError(
+            f"File thiếu {len(missing)} dòng của phiên đơn; hãy tải lại file đặt NCC mới nhất rồi chỉnh"
+        )
+    if not parsed:
+        raise ValueError("Không tìm thấy bảng đặt NCC đúng mẫu hệ thống")
+    error_rows = sum(bool(item["errors"]) for item in parsed)
+    return {
+        "format": "legacy_13",
+        "items": parsed, "rows": parsed[:200], "count": len(parsed),
+        "error_rows": error_rows, "can_confirm": error_rows == 0,
+        "warning_rows": 0,
+        "total_qty": sum(item["order_qty"] for item in parsed if not item["errors"]),
+        "total_amount": sum(
+            vnd_product(item["order_qty"], item["buy_price"])
+            for item in parsed if not item["errors"]
+        ),
+        "content_hash": purchase_scope_hash(parsed),
+    }
+
+
+def outgoing_invoice_readiness_payload(conn, batch_id: int) -> dict:
+    return batch_readiness_payload(conn, batch_id)
+
+
+def create_partial_outgoing_drafts(conn, batch_id: int, now_iso) -> dict:
+    """Reserve every quantity currently invoiceable and retain the remainder."""
+    batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
+    if not batch:
+        raise ValueError("Không tìm thấy phiên đơn")
+    if batch["status"] != "approved":
+        raise ValueError("Phải duyệt phiên đơn trước khi lập hóa đơn đầu ra")
+    orders = [
+        dict(row) for row in conn.execute(
+            "SELECT * FROM orders WHERE batch_id=? ORDER BY contractor,id", (batch_id,)
+        ) if net_delivered(dict(row)) > 1e-9
+    ]
+    if not orders:
+        raise ValueError("Phiên không còn lượng thực giao dương để lập hóa đơn")
+    validate_demand_orders(conn, orders)
+
+    replaceable = [dict(row) for row in conn.execute(
+        """SELECT * FROM outgoing_invoice_drafts
+           WHERE batch_id=? AND status='draft'
+             AND COALESCE(draft_kind,'standard')='standard'
+             AND COALESCE(minvoice_status,'not_sent') NOT IN ('saved','saving','unknown')
+           ORDER BY id""",
+        (batch_id,),
+    )]
+    replaceable_ids = {row["id"] for row in replaceable}
+    # Only canonical invoice inventory may unlock an outgoing draft.  Active
+    # reservations and locally issued invoices awaiting source sync are already
+    # deducted by this projection.
+    stock = canonical_available_stock(conn)
+    raw_available = {code: as_number(row["raw_available_qty"]) for code, row in stock.items()}
+    released = defaultdict(float)
+    if replaceable_ids:
+        placeholders = ",".join("?" for _ in replaceable_ids)
+        for reserved in conn.execute(
+            f"""SELECT product_code,SUM(qty_out) qty FROM inventory_transactions
+                 WHERE source_type='OUTGOING_DRAFT' AND status='reserved'
+                   AND source_id IN ({placeholders}) GROUP BY product_code""",
+            tuple(str(value) for value in sorted(replaceable_ids)),
+        ):
+            released[reserved["product_code"]] += as_number(reserved["qty"])
+    available = {
+        code: max(raw_available.get(code, 0) + released.get(code, 0), 0)
+        for code in set(raw_available) | set(released)
+    }
+    demand_codes = {item["product_code"] for item in orders}
+    unresolved_holds = {
+        code: -(raw_available.get(code, 0) + released.get(code, 0))
+        for code in demand_codes
+        if raw_available.get(code, 0) + released.get(code, 0) < -1e-9
+    }
+    if unresolved_holds:
+        details = ", ".join(
+            f"{code}: {qty:g}" for code, qty in sorted(unresolved_holds.items())[:10]
+        )
+        raise OutgoingReadinessError(
+            "Tồn hóa đơn chuẩn đang thấp hơn phần đã khóa/đã phát hành chưa đồng bộ; "
+            f"cần đối chiếu trước khi lập tiếp ({details})",
+            code="canonical_stock_overcommitted",
+        )
+
+    allocated_locked = {
+        row["order_id"]: as_number(row["qty"])
+        for row in conn.execute(
+            """SELECT l.order_id,SUM(l.qty) qty
+               FROM outgoing_invoice_lines l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
+               WHERE d.batch_id=? AND d.status!='cancelled'
+                 AND (
+                     COALESCE(d.draft_kind,'standard')='substitution'
+                     OR d.status='issued'
+                     OR COALESCE(d.minvoice_status,'not_sent') IN ('saved','saving','unknown')
+                 )
+               GROUP BY l.order_id""",
+            (batch_id,),
+        )
+    }
+    allocations = defaultdict(list)
+    pending_qty = 0.0
+    for item in orders:
+        demand = net_delivered(item)
+        locked = allocated_locked.get(item["id"], 0)
+        if locked > demand + 1e-9:
+            raise OutgoingReadinessError(
+                f"Dòng đơn {item['id']} đã phân bổ vượt số thực giao; cần đối chiếu trước khi lập tiếp",
+                code="allocated_over_demand",
+            )
+        remaining = max(demand - locked, 0)
+        have = available.get(item["product_code"], 0)
+        qty = min(remaining, have)
+        available[item["product_code"]] = max(have - qty, 0)
+        if qty > 1e-9:
+            allocations[item["contractor"]].append((item, qty))
+        pending_qty += max(remaining - qty, 0)
+
+    reusable_by_contractor = {}
+    for draft in replaceable:
+        current = reusable_by_contractor.get(draft["contractor"])
+        if current is None or draft["id"] > current["id"]:
+            reusable_by_contractor[draft["contractor"]] = draft
+    used_ids = set()
+    created = []
+    for contractor, lines in allocations.items():
+        subtotal = tax_amount = 0
+        calculated = []
+        for item, qty in lines:
+            unit_price = vnd_round(as_number(item["sell_price"]))
+            amount = vnd_product(qty, unit_price)
+            vat_percent = invoice_tax_percent(item["tax"])
+            line_tax = 0 if vat_percent <= 0 else vnd_product(amount, vat_percent / 100)
+            calculated.append((item, qty, unit_price, amount))
+            subtotal += amount
+            tax_amount += line_tax
+        total = subtotal + tax_amount
+        draft = reusable_by_contractor.get(contractor)
+        if draft:
+            draft_id = draft["id"]
+            round_no = draft.get("round_no") or 1
+            used_ids.add(draft_id)
+            conn.execute(
+                """UPDATE outgoing_invoice_drafts SET invoice_date=?,status='draft',
+                       subtotal=?,tax_amount=?,total_amount=?,minvoice_status='not_sent',
+                       minvoice_series=NULL,minvoice_remote_id=NULL,minvoice_saved_at=NULL,
+                       minvoice_error=NULL,minvoice_key_api=NULL,minvoice_started_at=NULL,
+                       minvoice_reconciled_at=NULL
+                   WHERE id=?""",
+                (batch["work_date"], subtotal, tax_amount, total, draft_id),
+            )
+        else:
+            round_no = conn.execute(
+                "SELECT COALESCE(MAX(round_no),0)+1 n FROM outgoing_invoice_drafts WHERE batch_id=? AND contractor=?",
+                (batch_id, contractor),
+            ).fetchone()["n"]
+            cursor = conn.execute(
+                """INSERT INTO outgoing_invoice_drafts(
+                       batch_id,contractor,invoice_date,status,subtotal,tax_amount,total_amount,
+                       created_at,external_key_uuid,round_no
+                   ) VALUES(?,?,?,'draft',?,?,?,?,?,?)""",
+                (
+                    batch_id, contractor, batch["work_date"], subtotal, tax_amount, total,
+                    now_iso(), uuid.uuid4().hex.upper(), round_no,
+                ),
+            )
+            draft_id = cursor.lastrowid
+            used_ids.add(draft_id)
+        conn.execute("DELETE FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,))
+        conn.execute(
+            """UPDATE inventory_transactions SET status='cancelled',updated_at=?
+               WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'""",
+            (now_iso(), str(draft_id)),
+        )
+        for item, qty, unit_price, amount in calculated:
+            invoice_name_row = conn.execute(
+                "SELECT invoice_name FROM outgoing_product_names WHERE product_code=?",
+                (item["product_code"],),
+            ).fetchone()
+            invoice_name = invoice_name_row["invoice_name"] if invoice_name_row else item["product_name"]
+            conn.execute(
+                """INSERT INTO outgoing_invoice_lines(
+                       draft_id,order_id,product_code,product_name,qty,unit,unit_price,tax,
+                       invoice_nature,amount
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    draft_id, item["id"], item["product_code"], invoice_name, qty,
+                    item["unit"], unit_price, item["tax"], item.get("invoice_nature") or "1", amount,
+                ),
+            )
+            conn.execute(
+                """INSERT INTO inventory_transactions(
+                       txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
+                       kitchen,status,note,created_at,updated_at
+                   ) VALUES(?,?,0,?,?, 'OUTGOING_DRAFT',?,?,?,'reserved',?,?,?)
+                   ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
+                       txn_date=excluded.txn_date,product_code=excluded.product_code,
+                       qty_out=excluded.qty_out,unit_cost=excluded.unit_cost,
+                       kitchen=excluded.kitchen,status='reserved',note=excluded.note,
+                       updated_at=excluded.updated_at""",
+                (
+                    batch["work_date"], item["product_code"], qty, item["buy_price"],
+                    str(draft_id), str(item["id"]), item["kitchen"],
+                    f"Dự thảo hóa đơn {contractor} lần {round_no}", now_iso(), now_iso(),
+                ),
+            )
+        created.append(dict(conn.execute(
+            "SELECT * FROM outgoing_invoice_drafts WHERE id=?", (draft_id,)
+        ).fetchone()))
+
+    for draft in replaceable:
+        if draft["id"] in used_ids:
+            continue
+        conn.execute("UPDATE outgoing_invoice_drafts SET status='cancelled' WHERE id=?", (draft["id"],))
+        conn.execute(
+            """UPDATE inventory_transactions SET status='cancelled',updated_at=?
+               WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'""",
+            (now_iso(), str(draft["id"])),
+        )
+    audit(
+        conn, now_iso, "outgoing.draft", "ok", entity_type="batch", entity_id=batch_id,
+        metadata={"drafts": len(created), "pending_qty": pending_qty, "partial": pending_qty > 1e-9},
+    )
+    return {
+        "drafts": created, "pending_qty": pending_qty,
+        "partial": pending_qty > 1e-9,
+        "requires_user_sign_and_issue": True,
+    }
+
+
+def post_purchase_list_inventory(conn, batch_id: int, now_iso):
+    """Purge the retired automatic BK projection; never create stock from a flag.
+
+    Column ``bk`` only identifies a candidate purchase-list row. Approving a
+    sales batch must not turn that marker directly into stock: the official BK
+    workbook still has to pass preview and explicit confirmation through
+    ``bk_import``. Keeping this compatibility function lets old approval paths
+    remove a stale automatic projection atomically. Historical ``BK_INPUT``
+    rows are also excluded by :func:`inventory_rows`.
+    """
+    removed = conn.execute(
         "DELETE FROM inventory_transactions WHERE source_type='BK_INPUT' AND source_id=?",
         (str(batch_id),),
-    )
-    rate_row = conn.execute("SELECT value FROM settings WHERE key='purchase_rate'").fetchone()
-    purchase_rate = as_number(rate_row["value"] if rate_row else 0.95, 0.95)
-    posted = 0
-    for row in conn.execute("SELECT * FROM orders WHERE batch_id=? AND purchase_list=1", (batch_id,)):
-        item = dict(row)
-        qty = net_received(item)
-        if qty <= 0 or not item.get("product_code"):
-            continue
-        conn.execute(
-            """INSERT INTO inventory_transactions(
-                txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
-                kitchen,status,note,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,'posted',?,?,?)
-            ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
-                txn_date=excluded.txn_date,product_code=excluded.product_code,qty_in=excluded.qty_in,
-                unit_cost=excluded.unit_cost,kitchen=excluded.kitchen,updated_at=excluded.updated_at""",
-            (batch["work_date"], item["product_code"], qty, 0, round(as_number(item["sell_price"]) * purchase_rate), "BK_INPUT",
-             str(batch_id), str(item["id"]), item["kitchen"], "Bảng kê mua vào đã duyệt", now_iso(), now_iso()),
+    ).rowcount
+    if removed:
+        audit(
+            conn, now_iso, "inventory.bk_legacy_purged", "ok",
+            entity_type="batch", entity_id=batch_id,
+            metadata={"lines": removed, "replacement_flow": "bk_import_confirm"},
         )
-        posted += 1
-    if posted:
-        audit(conn, now_iso, "inventory.post_bk", "ok", entity_type="batch", entity_id=batch_id,
-              metadata={"lines": posted})
-    return posted
+    return 0
 
 
 def invoice_details(remote: dict) -> list[dict]:
@@ -3057,15 +4711,29 @@ def normalize_invoice_item(remote_item: dict, line_index: int) -> dict:
     qty = msmi_number(first_value(remote_item, "sluong", "quantity", "qty"), f"Số lượng dòng {line_index}")
     unit_price = msmi_number(first_value(remote_item, "dgia", "unitPrice", "price"), f"Đơn giá dòng {line_index}")
     amount = msmi_number(first_value(remote_item, "thtien", "amount", "total"), f"Thành tiền dòng {line_index}")
-    if qty < 0 or unit_price < 0 or amount < 0:
+    nature = str(first_value(remote_item, "tchat", "nature", "itemNature", "type")).strip()
+    # mSMI represents invoice-level discounts/financial adjustments as a
+    # zero-quantity, zero-unit-price line with a negative amount.  That is a
+    # legitimate accounting line, not a stock movement, so it must not block
+    # the positive goods lines on the same invoice.  Negative quantity/unit
+    # price, or a negative amount attached to a physical quantity, remains
+    # unsafe and is quarantined for manual review.
+    financial_adjustment = amount < 0 and qty == 0 and unit_price == 0
+    if qty < 0 or unit_price < 0 or (amount < 0 and not financial_adjustment):
         raise MsmiError(
             f"Dòng {line_index} mSMI có số lượng, đơn giá hoặc thành tiền âm; cần đối chiếu thủ công"
         )
-    nature = str(first_value(remote_item, "tchat", "nature", "itemNature", "type")).strip()
-    inventory_eligible = qty > 0 and (unit_price > 0 or amount == 0)
-    validation_note = "" if inventory_eligible else (
-        "Không ghi kho: dòng nguồn không có số lượng/đơn giá dương; vẫn giữ nguyên để đối chiếu hóa đơn"
-    )
+    inventory_eligible = not financial_adjustment and qty > 0 and (unit_price > 0 or amount == 0)
+    if financial_adjustment:
+        validation_note = (
+            "Không ghi kho: dòng chiết khấu/điều chỉnh tài chính âm, được giữ nguyên để đối chiếu tổng hóa đơn"
+        )
+    elif inventory_eligible:
+        validation_note = ""
+    else:
+        validation_note = (
+            "Không ghi kho: dòng nguồn không có số lượng/đơn giá dương; vẫn giữ nguyên để đối chiếu hóa đơn"
+        )
     return {
         "line_index": line_index,
         "source_item_code": str(first_value(remote_item, "ma", "mhhhoa", "itemCode", "code")),
@@ -3157,6 +4825,34 @@ def saved_mapping(conn, tenant: str, seller_tax_code: str, item: dict):
            WHERE tenant=? AND seller_tax_code=? AND source_item_code=? AND source_item_name=?""",
         (tenant, seller_tax_code, item["source_item_code"], item["source_item_name"]),
     ).fetchone()
+
+
+def product_name_candidates(conn) -> dict[str, list[dict]]:
+    """Index canonical and approved invoice names without hiding ambiguous aliases."""
+    grouped = defaultdict(list)
+    for row in conn.execute(
+        """SELECT p.code,p.name,COALESCE(o.invoice_name,'') invoice_name
+           FROM products p
+           LEFT JOIN outgoing_product_names o ON o.product_code=p.code
+           WHERE p.code IS NOT NULL AND p.name IS NOT NULL
+           ORDER BY p.code"""
+    ):
+        candidate = {
+            "code": row["code"],
+            "name": row["name"],
+            "invoice_name": row["invoice_name"],
+        }
+        for value in (row["name"], row["invoice_name"]):
+            key = mapping_key(value)
+            if key and all(item["code"] != row["code"] for item in grouped[key]):
+                grouped[key].append(candidate)
+    return grouped
+
+
+def unique_product_name_suggestions(conn) -> dict[str, dict]:
+    """Return only deterministic name matches; ambiguous names are never suggested."""
+    grouped = product_name_candidates(conn)
+    return {key: rows[0] for key, rows in grouped.items() if len(rows) == 1}
 
 
 def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now: str) -> tuple[int, bool]:
@@ -3266,8 +4962,21 @@ def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now:
     return invoice_id, existing is None
 
 
-def sync_msmi(conn, client, now_iso, tenant="default", max_pages=5, page_size=199):
-    invoice_type = "INPUT_ELECTRONIC_INVOICE"
+def sync_msmi(
+    conn,
+    client,
+    now_iso,
+    tenant="default",
+    max_pages=5,
+    page_size=199,
+    invoice_type="INPUT_ELECTRONIC_INVOICE",
+    from_date="",
+    to_date="",
+):
+    if invoice_type not in {"INPUT_ELECTRONIC_INVOICE", "OUTPUT_ELECTRONIC_INVOICE"}:
+        raise MsmiError("Loại hóa đơn mSMI không hợp lệ")
+    if bool(from_date) != bool(to_date):
+        raise MsmiError("Cần truyền đủ từ ngày và đến ngày khi đồng bộ mSMI")
     new_count = 0
     seen_count = 0
     item_count = 0
@@ -3325,7 +5034,10 @@ def sync_msmi(conn, client, now_iso, tenant="default", max_pages=5, page_size=19
             )
             next_reconcile_page = reconcile_next_page
             for page in page_sequence:
-                result = client.list_invoices(invoice_type=invoice_type, page=page, size=page_size)
+                request_args = {"invoice_type": invoice_type, "page": page, "size": page_size}
+                if from_date:
+                    request_args.update({"from_date": from_date, "to_date": to_date})
+                result = client.list_invoices(**request_args)
                 pages += 1
                 remote_items = result["items"]
                 if not remote_items:
@@ -3355,7 +5067,10 @@ def sync_msmi(conn, client, now_iso, tenant="default", max_pages=5, page_size=19
             while True:
                 if page >= anchor_scan_limit:
                     raise MsmiError("Không tìm thấy mốc tiếp tục mSMI trong giới hạn an toàn")
-                result = client.list_invoices(invoice_type=invoice_type, page=page, size=page_size)
+                request_args = {"invoice_type": invoice_type, "page": page, "size": page_size}
+                if from_date:
+                    request_args.update({"from_date": from_date, "to_date": to_date})
+                result = client.list_invoices(**request_args)
                 pages += 1
                 remote_items = result["items"]
                 if not remote_items:
@@ -3587,7 +5302,7 @@ def safe_print_path(data_dir: Path, batch_id: int, value: str) -> Path:
 def claim_approved_print_jobs(conn, batch_id: int, job_ids: list[int]) -> bool:
     """Atomically claim the exact approved jobs before touching Windows.
 
-    The caller must commit this transition before invoking ``os.startfile``.
+    The caller must commit this transition before starting the PDF print tool.
     A savepoint keeps a future multi-document bundle all-or-nothing if one row
     was claimed, invalidated or submitted by another request in the meantime.
     """
@@ -3662,6 +5377,303 @@ def finish_claimed_print_jobs(
         raise
 
 
+def windows_print_job_ids(win32print_module, printer_name: str) -> set[int] | None:
+    """Return live spool job ids, or ``None`` when Windows cannot query them."""
+
+    handle = None
+    try:
+        handle = win32print_module.OpenPrinter(printer_name)
+        return {
+            int(job["JobId"])
+            for job in win32print_module.EnumJobs(handle, 0, 999, 1)
+        }
+    except Exception:
+        return None
+    finally:
+        if handle is not None:
+            try:
+                win32print_module.ClosePrinter(handle)
+            except Exception:
+                pass
+
+
+WINDOWS_PAPER_CODES = {"A4": 9, "A5": 11}
+WINDOWS_DM_PAPERSIZE = 0x00000002
+WINDOWS_DM_DEFAULTSOURCE = 0x00000200
+WINDOWS_DM_IN_BUFFER = 0x00000008
+WINDOWS_DM_OUT_BUFFER = 0x00000002
+SUMATRA_EXE_NAME = "SumatraPDF-3.6.1-64.exe"
+SUMATRA_SHA256 = "719F689B34F47BE8CA105CE8484948474DAFDE0E106BAB599E4A89326070C3D0"
+
+
+def windows_printer_paper_code(win32print_module, printer_name: str) -> int | None:
+    """Read the printer driver's current default paper code."""
+
+    handle = None
+    try:
+        handle = win32print_module.OpenPrinter(printer_name)
+        info = win32print_module.GetPrinter(handle, 2)
+        code = int(getattr(info.get("pDevMode"), "PaperSize", 0) or 0)
+        return code if code > 0 else None
+    except Exception:
+        return None
+    finally:
+        if handle is not None:
+            try:
+                win32print_module.ClosePrinter(handle)
+            except Exception:
+                pass
+
+
+def windows_printer_media_state(
+    win32print_module, printer_name: str
+) -> tuple[int, int] | None:
+    """Read the driver's paper size and input-bin codes."""
+
+    handle = None
+    try:
+        handle = win32print_module.OpenPrinter(printer_name)
+        info = win32print_module.GetPrinter(handle, 2)
+        devmode = info.get("pDevMode")
+        paper_code = int(getattr(devmode, "PaperSize", 0) or 0)
+        bin_code = int(getattr(devmode, "DefaultSource", 0) or 0)
+        if paper_code <= 0 or bin_code <= 0:
+            return None
+        return paper_code, bin_code
+    except Exception:
+        return None
+    finally:
+        if handle is not None:
+            try:
+                win32print_module.ClosePrinter(handle)
+            except Exception:
+                pass
+
+
+def windows_printer_bins(win32print_module, printer_name: str) -> list[dict]:
+    """Return the driver's input-bin codes and exact command-line names."""
+
+    handle = None
+    try:
+        handle = win32print_module.OpenPrinter(printer_name)
+        info = win32print_module.GetPrinter(handle, 2)
+        port_name = str(info.get("pPortName") or "").strip()
+        codes = tuple(win32print_module.DeviceCapabilities(printer_name, port_name, 6) or ())
+        names = tuple(win32print_module.DeviceCapabilities(printer_name, port_name, 12) or ())
+        return [
+            {"code": int(code), "name": str(name).strip()}
+            for code, name in zip(codes, names)
+            if int(code) > 0 and str(name).strip()
+        ]
+    except Exception:
+        return []
+    finally:
+        if handle is not None:
+            try:
+                win32print_module.ClosePrinter(handle)
+            except Exception:
+                pass
+
+
+def select_windows_printer_bin(bins: list[dict], paper: str) -> dict | None:
+    """Route A4 to Drawer 1 and A5 to the registered multi-purpose tray."""
+
+    paper = str(paper).strip().upper()
+    if paper not in WINDOWS_PAPER_CODES:
+        return None
+    target_code = 1 if paper == "A4" else 4
+    target_names = (
+        {"drawer 1", "cassette 1"}
+        if paper == "A4"
+        else {"multi-purpose tray", "multipurpose tray", "manual feed"}
+    )
+    return next(
+        (
+            item for item in bins
+            if item["code"] == target_code
+            or item["name"].casefold() in target_names
+        ),
+        None,
+    )
+
+
+def set_windows_printer_media(
+    win32print_module, printer_name: str, paper, bin_code: int | None = None
+) -> tuple[int, int]:
+    """Set and verify paper size plus the physical input tray."""
+
+    code = WINDOWS_PAPER_CODES.get(str(paper).strip().upper())
+    if code is None:
+        try:
+            code = int(paper)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Khổ giấy Windows không hợp lệ") from exc
+    if code <= 0:
+        raise ValueError("Khổ giấy Windows không hợp lệ")
+    handle = None
+    try:
+        access = getattr(win32print_module, "PRINTER_ALL_ACCESS", 0x000F000C)
+        handle = win32print_module.OpenPrinter(
+            printer_name, {"DesiredAccess": access}
+        )
+        info = win32print_module.GetPrinter(handle, 2)
+        devmode = info.get("pDevMode")
+        if devmode is None:
+            raise RuntimeError("printer driver has no DEVMODE")
+        devmode.Fields = int(getattr(devmode, "Fields", 0)) | WINDOWS_DM_PAPERSIZE
+        devmode.PaperSize = code
+        if bin_code is not None:
+            bin_code = int(bin_code)
+            if bin_code <= 0:
+                raise ValueError("Khay giấy Windows không hợp lệ")
+            devmode.Fields |= WINDOWS_DM_DEFAULTSOURCE
+            devmode.DefaultSource = bin_code
+        # Canon Generic Plus stores the effective paper/feed combination in
+        # its private DEVMODE area as well as the public Windows fields.  Ask
+        # the driver to merge and validate both halves before applying it;
+        # otherwise A5 can feed correctly but render as a blank page.
+        result = win32print_module.DocumentProperties(
+            0,
+            handle,
+            printer_name,
+            devmode,
+            devmode,
+            WINDOWS_DM_IN_BUFFER | WINDOWS_DM_OUT_BUFFER,
+        )
+        if int(result) < 0:
+            raise RuntimeError("printer driver rejected requested paper/bin")
+        info["pDevMode"] = devmode
+        win32print_module.SetPrinter(handle, 2, info, 0)
+        actual_mode = win32print_module.GetPrinter(handle, 2).get("pDevMode")
+        actual_paper = int(getattr(actual_mode, "PaperSize", 0) or 0)
+        actual_bin = int(getattr(actual_mode, "DefaultSource", 0) or 0)
+        if actual_paper != code or (bin_code is not None and actual_bin != bin_code):
+            raise RuntimeError("printer driver did not retain requested paper/bin")
+        return actual_paper, actual_bin
+    finally:
+        if handle is not None:
+            try:
+                win32print_module.ClosePrinter(handle)
+            except Exception:
+                pass
+
+
+def set_windows_printer_paper(win32print_module, printer_name: str, paper) -> int:
+    """Backward-compatible paper-only wrapper used by diagnostics."""
+
+    return set_windows_printer_media(win32print_module, printer_name, paper)[0]
+
+
+def pdf_print_tool_path() -> Path | None:
+    """Locate and integrity-check the bundled standalone PDF print tool."""
+
+    override = str(os.environ.get("TDP_PDF_PRINT_TOOL", "")).strip()
+    candidates = [Path(override)] if override else []
+    candidates.append(Path(__file__).resolve().parent / "print_tools" / SUMATRA_EXE_NAME)
+    for candidate in candidates:
+        try:
+            if (
+                candidate.is_file()
+                and hashlib.sha256(candidate.read_bytes()).hexdigest().upper() == SUMATRA_SHA256
+            ):
+                return candidate.resolve()
+        except OSError:
+            continue
+    return None
+
+
+def sumatra_print_settings(paper: str, bin_item: dict) -> str:
+    """Build the explicit paper/tray/sides contract for one print job."""
+
+    paper = str(paper).strip().upper()
+    if paper not in WINDOWS_PAPER_CODES:
+        raise ValueError("Khổ giấy in không hợp lệ")
+    sides = "duplexlong" if paper == "A4" else "simplex"
+    return ",".join((
+        f"paperkind={WINDOWS_PAPER_CODES[paper]}",
+        f"bin={int(bin_item['code'])}",
+        "fit", "center", sides, "monochrome", "ignore-pdf-print-settings",
+    ))
+
+
+def submit_pdf_via_sumatra(
+    tool_path: Path,
+    pdf_path: Path,
+    printer_name: str,
+    paper: str,
+    bin_item: dict,
+    win32print_module,
+    known_job_ids: set[int],
+    *,
+    appdata_dir: Path,
+    timeout_seconds: float = 60.0,
+) -> set[int]:
+    """Print without the unstable Windows/WPS PDF shell association."""
+
+    appdata_dir.mkdir(parents=True, exist_ok=True)
+    settings = sumatra_print_settings(paper, bin_item)
+    process = subprocess.Popen(
+        [
+            str(tool_path), "-silent", "-appdata", str(appdata_dir),
+            "-print-to", printer_name, "-print-settings", settings, str(pdf_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    observed: set[int] = set()
+    deadline = time.monotonic() + max(1.0, timeout_seconds)
+    exit_seen_at = None
+    while time.monotonic() < deadline:
+        current = windows_print_job_ids(win32print_module, printer_name)
+        if current is not None:
+            observed.update(current - known_job_ids)
+        return_code = process.poll()
+        if return_code is not None:
+            if return_code != 0:
+                raise RuntimeError(f"PDF print tool failed with exit code {return_code}")
+            if observed:
+                return observed
+            if exit_seen_at is None:
+                exit_seen_at = time.monotonic()
+            elif time.monotonic() - exit_seen_at >= 3.0:
+                break
+        time.sleep(0.05)
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    return observed
+
+
+def wait_for_spool_submission(
+    win32print_module,
+    printer_name: str,
+    known_job_ids: set[int],
+    *,
+    timeout_seconds: float = 20.0,
+    poll_seconds: float = 0.1,
+) -> set[int]:
+    """Wait for the PDF handler to create a job on the selected printer.
+
+    Shell handlers such as WPS return from ``os.startfile(..., 'print')``
+    before they resolve the default printer. Restoring the previous default
+    immediately can silently redirect the PDF to another queue.
+    """
+
+    deadline = time.monotonic() + max(0.1, timeout_seconds)
+    while time.monotonic() < deadline:
+        current = windows_print_job_ids(win32print_module, printer_name)
+        if current is None:
+            return set()
+        new_ids = current - known_job_ids
+        if new_ids:
+            return new_ids
+        time.sleep(max(0.02, poll_seconds))
+    return set()
+
+
 def register_contract_routes(app, ctx):
     db_factory = ctx["db"]
     now_iso = ctx["now_iso"]
@@ -3671,6 +5683,7 @@ def register_contract_routes(app, ctx):
     setting_get = ctx["setting_get"]
     setting_set = ctx["setting_set"]
     create_minvoice_client = ctx.get("create_minvoice_client")
+    configured_msmi_client_factory = ctx.get("create_msmi_client")
     root = ctx["root"]
     data_dir = ctx["data_dir"]
 
@@ -3688,6 +5701,8 @@ def register_contract_routes(app, ctx):
         }), status
 
     def create_msmi_client():
+        if configured_msmi_client_factory is not None:
+            return configured_msmi_client_factory()
         return MsmiClient(MsmiConfig.from_env_files([root / ".env", data_dir.parent / ".env"]))
 
     invoice_snapshot_columns = (
@@ -3855,6 +5870,10 @@ def register_contract_routes(app, ctx):
                     {where} GROUP BY i.id ORDER BY i.invoice_date DESC,i.id DESC LIMIT ?"""
         params.append(max(1, min(int(limit), 500)))
         invoices = [dict(row) for row in conn.execute(query, params)]
+        name_candidates = product_name_candidates(conn)
+        name_suggestions = {
+            key: rows[0] for key, rows in name_candidates.items() if len(rows) == 1
+        }
         for item in invoices:
             item["mapped_count"] = item["mapped_count"] or 0
             item["inventory_item_count"] = item["inventory_item_count"] or 0
@@ -3862,11 +5881,23 @@ def register_contract_routes(app, ctx):
                 """SELECT li.id,li.line_index,li.source_item_code,li.source_item_name,li.source_unit,
                           li.qty,li.unit_price,li.amount,li.tax_rate,li.source_nature,
                           li.inventory_eligible,li.validation_note,li.product_code,li.mapping_status,
+                          li.conversion_factor,li.stock_qty,li.stock_unit_price,
                           p.name product_name,p.unit product_unit
                    FROM msmi_invoice_items li LEFT JOIN products p ON p.code=li.product_code
                    WHERE li.invoice_id=? ORDER BY li.line_index""",
                 (item["id"],),
             )]
+            for line in item["items"]:
+                line["suggested_product_code"] = ""
+                line["suggested_product_name"] = ""
+                line["candidate_products"] = []
+                if line["inventory_eligible"] and line["mapping_status"] != "mapped":
+                    source_name_key = mapping_key(line["source_item_name"])
+                    line["candidate_products"] = name_candidates.get(source_name_key, [])[:20]
+                    suggestion = name_suggestions.get(source_name_key)
+                    if suggestion:
+                        line["suggested_product_code"] = suggestion["code"]
+                        line["suggested_product_name"] = suggestion["name"]
         return invoices
 
     @app.post("/api/catalog/import/preview")
@@ -4408,14 +6439,15 @@ def register_contract_routes(app, ctx):
     def api_operations_bootstrap():
         as_of = request.args.get("as_of") or date.today().isoformat()
         month = request.args.get("month") or as_of[:7]
+        active_only = request.args.get("active_only") == "1"
         with db_factory() as conn:
             sync_state = [dict(row) for row in conn.execute("SELECT * FROM msmi_sync_state")]
             inventory = inventory_rows(conn, as_of)
-            labor = [dict(row) for row in conn.execute(
+            labor = [] if active_only else [dict(row) for row in conn.execute(
                 "SELECT work_date,kitchen,amount,source FROM kitchen_labor_costs WHERE substr(work_date,1,7)=? ORDER BY work_date,kitchen",
                 (month,),
             )]
-            meal_attendance = [dict(row) for row in conn.execute(
+            meal_attendance = [] if active_only else [dict(row) for row in conn.execute(
                 """SELECT work_date,kitchen,shift,actual_count,ordered_count,source_file,source_sheet
                    FROM meal_attendance WHERE substr(work_date,1,7)=?
                    ORDER BY work_date,kitchen,shift""",
@@ -4432,7 +6464,7 @@ def register_contract_routes(app, ctx):
                     "available_qty": sum(row["available_qty"] for row in inventory),
                 },
                 "msmi": {"state": sync_state, "invoices": invoice_payload(conn, 30)},
-                "meal_plans": meal_plan_payload(conn, request.args.get("date", "")),
+                "meal_plans": [] if active_only else meal_plan_payload(conn, request.args.get("date", "")),
                 "meal_attendance": meal_attendance,
                 "meal_attendance_totals": {
                     "actual": sum(row["actual_count"] for row in meal_attendance),
@@ -4440,16 +6472,18 @@ def register_contract_routes(app, ctx):
                     "rows": len(meal_attendance),
                     "kitchens": len({row["kitchen"] for row in meal_attendance}),
                 },
-                "kitchen_units": [dict(row) for row in conn.execute("SELECT * FROM kitchen_units ORDER BY kitchen_code")],
-                "xcom_payment_profiles": list_payment_profiles(conn),
-                "payroll": payroll_rows(conn, month),
+                "kitchen_units": [] if active_only else [dict(row) for row in conn.execute("SELECT * FROM kitchen_units ORDER BY kitchen_code")],
+                "xcom_payment_profiles": [] if active_only else list_payment_profiles(conn),
+                "payroll": [] if active_only else payroll_rows(conn, month),
                 "labor_costs": labor,
-                "staff": [dict(row) for row in conn.execute("SELECT * FROM staff ORDER BY full_name")],
+                "staff": [] if active_only else [dict(row) for row in conn.execute("SELECT * FROM staff ORDER BY full_name")],
                 "print_jobs": [dict(row) for row in conn.execute("SELECT * FROM print_jobs ORDER BY id DESC LIMIT 50")],
                 "printer": {
                     "name": setting_get(conn, "printer_name", ""),
                     "copies": int(as_number(setting_get(conn, "print_copies", "1"), 1)),
-                    "paper": setting_get(conn, "print_paper", "A4"),
+                    "paper": setting_get(conn, "print_other_paper", "A5"),
+                    "delivery_paper": "A4",
+                    "other_paper": setting_get(conn, "print_other_paper", "A5"),
                     "default": printer_state["default"],
                     "installed": printer_state["installed"],
                     "supported": printer_state["supported"],
@@ -4591,14 +6625,17 @@ def register_contract_routes(app, ctx):
                     )
                     conn.execute(
                         """INSERT INTO inventory_transactions(
-                           txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
+                           txn_date,product_code,warehouse_codes_json,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
                            status,note,created_at,updated_at
-                           ) VALUES(?,?,?,?,?,'OPENING',?,?,'posted',?,?,?)
+                           ) VALUES(?,?,?,?,?,?,'OPENING',?,?,'posted',?,?,?)
                            ON CONFLICT(source_type,source_id,source_line) DO UPDATE SET
                            txn_date=excluded.txn_date,product_code=excluded.product_code,
+                           warehouse_codes_json=excluded.warehouse_codes_json,
                            qty_in=excluded.qty_in,qty_out=excluded.qty_out,unit_cost=excluded.unit_cost,
                            status='posted',note=excluded.note,updated_at=excluded.updated_at""",
-                        (pending["period"] + "-01", code, max(qty, 0), max(-qty, 0),
+                        (pending["period"] + "-01", code,
+                         json.dumps(item["warehouse_codes"], ensure_ascii=False, separators=(",", ":")),
+                         max(qty, 0), max(-qty, 0),
                          max(number_value(item["unit_cost"]), 0), pending["period"], code,
                          note, now_iso(), now_iso()),
                     )
@@ -4882,51 +6919,23 @@ def register_contract_routes(app, ctx):
     @app.get("/api/supplier-needs/<int:batch_id>")
     def api_supplier_needs(batch_id):
         with db_factory() as conn:
-            batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
-            if not batch:
-                return jsonify({"ok": False, "error": "Không tìm thấy phiên đơn"}), 404
-            stock = inventory_lookup(conn, batch["work_date"])
-            available = {code: max(row["available_qty"], 0) for code, row in stock.items()}
-            groups = {}
-            ordered_total = 0
-            required_total = 0
-            for row in conn.execute("SELECT * FROM orders WHERE batch_id=? ORDER BY id", (batch_id,)):
-                item = dict(row)
-                qty = max(number_value(item["qty"]), 0)
-                use_stock = min(qty, available.get(item["product_code"], 0))
-                available[item["product_code"]] = max(available.get(item["product_code"], 0) - use_stock, 0)
-                required = max(qty - use_stock, 0)
-                ordered_total += qty
-                required_total += required
-                if required <= 0:
-                    continue
-                rule = conn.execute(
-                    "SELECT combine_kitchens FROM supplier_rules WHERE supplier_code=?", (item["supplier"],)
-                ).fetchone()
-                combined = bool(rule and rule["combine_kitchens"])
-                key = f"{item['supplier']}|{'ALL' if combined else item['kitchen']}"
-                group = groups.setdefault(key, {
-                    "supplier": item["supplier"], "kitchen": "GỘP NHIỀU BẾP" if combined else item["kitchen"],
-                    "combine_kitchens": combined, "items": [], "total_qty": 0,
-                })
-                group["items"].append({
-                    "order_id": item["id"], "product_code": item["product_code"],
-                    "product_name": item["product_name"], "unit": item["unit"],
-                    "kitchen": item["kitchen"], "customer_qty": qty, "stock_used": use_stock,
-                    "required_qty": required, "note": item["note"],
-                })
-                group["total_qty"] += required
-            return jsonify({
-                "ok": True, "batch_id": batch_id, "work_date": batch["work_date"],
-                "formula": "max(lượng khách đặt - tồn khả dụng, 0)",
-                "ordered_qty": ordered_total, "required_qty": required_total,
-                "groups": list(groups.values()),
-            })
+            try:
+                payload = purchase_order_payload(conn, batch_id)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 404
+            return jsonify({"ok": True, **payload})
 
     @app.put("/api/supplier-rules/<supplier_code>")
     def api_supplier_rule(supplier_code):
         body = request.get_json(force=True) or {}
-        code = clean_text(supplier_code)
+        code = supplier_merge_key(clean_text(supplier_code))
+        if not code:
+            return jsonify({"ok": False, "error": "Nhà cung cấp không hợp lệ"}), 400
+        if code in SUPPLIER_POLICY_MANAGED:
+            return jsonify({
+                "ok": False,
+                "error": "NCC này dùng quy tắc dồn cố định đã chốt với khách",
+            }), 409
         with db_factory() as conn:
             conn.execute(
                 """INSERT INTO supplier_rules(supplier_code,combine_kitchens,updated_at) VALUES(?,?,?)
@@ -4934,6 +6943,245 @@ def register_contract_routes(app, ctx):
                 (code, 1 if body.get("combine_kitchens") else 0, now_iso()),
             )
             return jsonify({"ok": True})
+
+    @app.put("/api/supplier-order-status/<int:batch_id>/<supplier_code>")
+    def api_supplier_order_status(batch_id, supplier_code):
+        body = request.get_json(force=True) or {}
+        target_status = clean_text(body.get("status")).lower()
+        if target_status not in {"ordered", "reopened"}:
+            return jsonify({
+                "ok": False,
+                "error": "Trạng thái NCC chỉ được chuyển sang đã đặt hoặc mở lại",
+                "code": "invalid_supplier_order_status",
+            }), 400
+        try:
+            expected_revision = int(body.get("revision"))
+        except (TypeError, ValueError):
+            return jsonify({
+                "ok": False,
+                "error": "Thiếu revision trạng thái NCC; hãy tải lại màn hình",
+                "code": "supplier_status_revision_required",
+            }), 400
+        if expected_revision < 0:
+            return jsonify({
+                "ok": False,
+                "error": "Revision trạng thái NCC không hợp lệ",
+                "code": "invalid_supplier_status_revision",
+            }), 400
+        supplier_key = supplier_merge_key(supplier_code)
+        if not supplier_key:
+            return jsonify({"ok": False, "error": "Nhà cung cấp không hợp lệ"}), 400
+
+        with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone():
+                return jsonify({"ok": False, "error": "Không tìm thấy phiên đơn"}), 404
+            current_payload = purchase_order_payload(conn, batch_id)
+            if body.get("plan_hash") and body["plan_hash"] != current_payload["plan_hash"]:
+                return jsonify(ok=False, error="Nội dung đặt NCC đã đổi trong lúc tạo ảnh; tải lại và sao chép ảnh mới", code="stale_supplier_plan"), 409
+            checklist_item = next(
+                (item for item in current_payload["checklist"] if item["supplier_key"] == supplier_key),
+                None,
+            )
+            if checklist_item is None:
+                return jsonify({
+                    "ok": False,
+                    "error": "NCC không còn dòng đặt hàng trong phiên này",
+                    "code": "supplier_not_in_batch",
+                }), 404
+            current = conn.execute(
+                """SELECT supplier_label,status,revision,ordered_at,reopened_at,updated_at
+                   FROM supplier_order_statuses WHERE batch_id=? AND supplier_key=?""",
+                (batch_id, supplier_key),
+            ).fetchone()
+            current_status = current["status"] if current else "pending"
+            current_revision = int(current["revision"]) if current else 0
+            if expected_revision != current_revision:
+                return jsonify({
+                    "ok": False,
+                    "error": "Trạng thái NCC đã được thay đổi; hãy tải lại trước khi thao tác",
+                    "code": "stale_supplier_order_status",
+                    "supplier_key": supplier_key,
+                    "status": current_status,
+                    "revision": current_revision,
+                }), 409
+            allowed = (
+                target_status == "ordered" and current_status in {"pending", "reopened"}
+            ) or (
+                target_status == "reopened" and current_status == "ordered"
+            )
+            if not allowed:
+                return jsonify({
+                    "ok": False,
+                    "error": "Chuyển trạng thái NCC không hợp lệ; hãy tải lại màn hình",
+                    "code": "invalid_supplier_order_transition",
+                    "supplier_key": supplier_key,
+                    "status": current_status,
+                    "revision": current_revision,
+                }), 409
+
+            timestamp = now_iso()
+            new_revision = current_revision + 1
+            ordered_at = timestamp if target_status == "ordered" else (
+                current["ordered_at"] if current else None
+            )
+            reopened_at = timestamp if target_status == "reopened" else (
+                current["reopened_at"] if current else None
+            )
+            supplier_label = checklist_item["supplier"]
+            if current:
+                cursor = conn.execute(
+                    """UPDATE supplier_order_statuses
+                       SET supplier_label=?,status=?,revision=?,ordered_at=?,reopened_at=?,updated_at=?
+                       WHERE batch_id=? AND supplier_key=? AND revision=?""",
+                    (
+                        supplier_label, target_status, new_revision, ordered_at, reopened_at,
+                        timestamp, batch_id, supplier_key, current_revision,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("optimistic supplier-order status update lost inside transaction")
+            else:
+                conn.execute(
+                    """INSERT INTO supplier_order_statuses(
+                           batch_id,supplier_key,supplier_label,status,revision,
+                           ordered_at,reopened_at,updated_at
+                       ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (
+                        batch_id, supplier_key, supplier_label, target_status, new_revision,
+                        ordered_at, reopened_at, timestamp,
+                    ),
+                )
+            audit(
+                conn, now_iso, "supplier_order.status", "ok",
+                entity_type="supplier_order",
+                entity_id=f"{batch_id}:{supplier_key}",
+                metadata={
+                    "batch_id": batch_id, "supplier_key": supplier_key,
+                    "supplier": supplier_label, "previous_status": current_status,
+                    "status": target_status, "expected_revision": expected_revision,
+                    "revision": new_revision,
+                },
+            )
+            return jsonify({
+                "ok": True, "batch_id": batch_id, "supplier_key": supplier_key,
+                "supplier": supplier_label, "previous_status": current_status,
+                "status": target_status, "revision": new_revision,
+                "ordered_at": ordered_at, "reopened_at": reopened_at,
+                "updated_at": timestamp,
+            })
+
+    @app.post("/api/purchase-orders/import/preview")
+    def api_purchase_order_import_preview():
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file đặt NCC đã chỉnh"}), 400
+        try:
+            batch_id = int(request.form.get("batch_id") or 0)
+        except (TypeError, ValueError):
+            batch_id = 0
+        if batch_id <= 0:
+            return jsonify({"ok": False, "error": "Chưa chọn phiên đơn cần nạp lại"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file .xlsx hoặc .xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                if (
+                    len(entries) > 2_000
+                    or sum(item.file_size for item in entries) > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES
+                ):
+                    return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn"}), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc sai định dạng"}), 400
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with PURCHASE_ORDER_IMPORT_LOCK:
+            for old_token, item in list(PENDING_PURCHASE_ORDER_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_PURCHASE_ORDER_IMPORTS.pop(old_token, None)
+        workbook = None
+        formula_workbook = None
+        try:
+            workbook = load_workbook(
+                io.BytesIO(payload), read_only=True, data_only=True, keep_links=False
+            )
+            formula_workbook = load_workbook(
+                io.BytesIO(payload), read_only=True, data_only=False, keep_links=False
+            )
+            with db_factory() as conn:
+                preview = parse_purchase_order_workbook(
+                    conn, workbook, batch_id, formula_workbook=formula_workbook,
+                )
+                database_state_hash = purchase_order_database_state_hash(conn, batch_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Không đọc được file đặt NCC"}), 400
+        finally:
+            if workbook is not None:
+                workbook.close()
+            if formula_workbook is not None:
+                formula_workbook.close()
+
+        token = uuid.uuid4().hex
+        items = preview.pop("items")
+        source_hash = preview.pop("content_hash")
+        file_hash = hashlib.sha256(payload).hexdigest().upper()
+        with PURCHASE_ORDER_IMPORT_LOCK:
+            PENDING_PURCHASE_ORDER_IMPORTS[token] = {
+                "created": time.time(), "filename": filename, "batch_id": batch_id,
+                "source_hash": source_hash, "items": items,
+                "file_hash": file_hash, "format": preview["format"],
+                "database_state_hash": database_state_hash,
+                "has_errors": not preview["can_confirm"],
+            }
+        return jsonify({
+            "ok": True, "token": token, "filename": filename,
+            "source_hash": source_hash,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            **preview,
+        })
+
+    @app.post("/api/purchase-orders/import/confirm")
+    def api_purchase_order_import_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi file đặt NCC"}), 400
+        token = clean_text(body.get("token"))
+        with PURCHASE_ORDER_IMPORT_LOCK:
+            pending = PENDING_PURCHASE_ORDER_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; hãy chọn lại file"}), 410
+        if pending["has_errors"]:
+            return jsonify({"ok": False, "error": "File còn dòng lỗi nên chưa thể nhập"}), 400
+        try:
+            with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                batch_id = pending["batch_id"]
+                if purchase_order_database_state_hash(conn, batch_id) != pending["database_state_hash"]:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Dữ liệu đơn đã thay đổi sau khi xem trước; hãy nạp lại file",
+                    }), 409
+                result = apply_purchase_order_preview(
+                    conn,
+                    batch_id=batch_id,
+                    items=pending["items"],
+                    source_hash=pending["source_hash"],
+                    source_name=pending["filename"],
+                    format_name=pending["format"],
+                    now_iso=now_iso,
+                )
+            return jsonify({"ok": True, **result})
+        except PurchaseOrderApplyError as error:
+            return jsonify({
+                "ok": False, "error": str(error), "code": error.code,
+            }), error.status
 
     @app.get("/api/msmi/status")
     def api_msmi_status():
@@ -4944,26 +7192,15 @@ def register_contract_routes(app, ctx):
 
     @app.post("/api/msmi/sync")
     def api_msmi_sync():
-        body = request.get_json(silent=True) or {}
-        with db_factory() as conn:
-            tenant = setting_get(conn, "tenant_code", "TDP")
-            try:
-                result = sync_msmi(
-                    conn, create_msmi_client(), now_iso, tenant=tenant,
-                    max_pages=body.get("max_pages", 5), page_size=body.get("page_size", 199),
-                )
-                return jsonify({"ok": True, **result, "invoices": invoice_payload(conn, 30)})
-            except MsmiError as error:
-                return jsonify({"ok": False, "error": str(error), "read_only": True}), 502
-            except Exception:
-                reference = uuid.uuid4().hex[:10].upper()
-                app.logger.exception("mSMI sync failed [%s]", reference)
-                return jsonify({
-                    "ok": False,
-                    "error": f"Không đồng bộ được mSMI. Vui lòng thử lại hoặc báo mã {reference} cho bên hỗ trợ.",
-                    "reference": reference,
-                    "read_only": True,
-                }), 502
+        # The former global sync had no date scope and shared one cursor across
+        # unrelated periods. Keep the URL as an explicit compatibility guard;
+        # all ingestion now starts from a date-bounded workbench batch.
+        return jsonify({
+            "ok": False,
+            "error": "Hãy tạo phiên có Từ ngày–Đến ngày tại bàn làm việc hóa đơn rồi đồng bộ phiên đó",
+            "code": "date_bounded_batch_required",
+            "read_only": True,
+        }), 409
 
     @app.get("/api/msmi/invoices")
     def api_msmi_invoices():
@@ -4975,131 +7212,155 @@ def register_contract_routes(app, ctx):
     @app.put("/api/msmi/items/<int:item_id>/mapping")
     def api_msmi_mapping(item_id):
         body = request.get_json(force=True) or {}
-        product_code = clean_text(body.get("product_code")).upper()
+        try:
+            from invoice_mapping import InvoiceMappingError, save_mapping
+        except ImportError:  # pragma: no cover - package invocation
+            from .invoice_mapping import InvoiceMappingError, save_mapping
         with db_factory() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            try:
+                result = save_mapping(
+                    conn,
+                    direction="input",
+                    item_id=item_id,
+                    product_code=body.get("product_code"),
+                    now_iso=now_iso,
+                )
+            except InvoiceMappingError as error:
+                return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
             item = conn.execute(
-                """SELECT li.*,i.tenant,i.seller_tax_code,i.id invoice_id,i.receipt_status
-                   FROM msmi_invoice_items li
-                   JOIN msmi_invoices i ON i.id=li.invoice_id WHERE li.id=?""", (item_id,)
+                "SELECT invoice_id FROM msmi_invoice_items WHERE id=?", (item_id,)
             ).fetchone()
-            if not item:
-                return jsonify({"ok": False, "error": "Không tìm thấy dòng hóa đơn"}), 404
-            if item["receipt_status"] == "posted":
-                return jsonify({
-                    "ok": False,
-                    "error": "Phiếu nhập đã ghi kho; không được đổi ghép mã. Hãy lập điều chỉnh kho có kiểm soát nếu cần sửa",
-                }), 409
-            if not item["inventory_eligible"]:
-                return jsonify({
-                    "ok": False,
-                    "error": "Dòng này không có số lượng/đơn giá đủ điều kiện ghi kho nên không được ghép mã hàng",
-                }), 409
-            if not conn.execute("SELECT 1 FROM products WHERE code=?", (product_code,)).fetchone():
-                return jsonify({"ok": False, "error": "Mã hàng đích chưa có trong danh mục"}), 400
-            conn.execute(
-                """INSERT INTO item_mappings(
-                    tenant,seller_tax_code,source_item_code,source_item_name,product_code,updated_at
-                ) VALUES(?,?,?,?,?,?) ON CONFLICT(tenant,seller_tax_code,source_item_code,source_item_name)
-                DO UPDATE SET product_code=excluded.product_code,updated_at=excluded.updated_at""",
-                (item["tenant"], item["seller_tax_code"] or "", item["source_item_code"] or "",
-                 item["source_item_name"] or "", product_code, now_iso()),
-            )
-            conn.execute(
-                "UPDATE msmi_invoice_items SET product_code=?,mapping_status='mapped' WHERE id=?",
-                (product_code, item_id),
-            )
-            remaining = conn.execute(
-                """SELECT COUNT(*) n FROM msmi_invoice_items
-                   WHERE invoice_id=? AND inventory_eligible=1 AND mapping_status!='mapped'""",
-                (item["invoice_id"],),
-            ).fetchone()["n"]
-            eligible_count = conn.execute(
-                "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=? AND inventory_eligible=1",
-                (item["invoice_id"],),
-            ).fetchone()["n"]
-            conn.execute(
-                "UPDATE msmi_invoices SET receipt_status=?,updated_at=? WHERE id=? AND receipt_status!='posted'",
-                (
-                    "not_inventory" if eligible_count == 0 else ("ready" if remaining == 0 else "pending_mapping"),
-                    now_iso(), item["invoice_id"],
-                ),
-            )
-            audit(conn, now_iso, "msmi.mapping", "ok", entity_type="invoice_item", entity_id=item_id,
-                  metadata={"product_code": product_code})
-            return jsonify({"ok": True, "invoice": invoice_payload(conn, 1, item["invoice_id"])[0]})
+            return jsonify({
+                "ok": True,
+                **result,
+                "invoice": invoice_payload(conn, 1, item["invoice_id"])[0],
+            })
 
-    @app.post("/api/msmi/invoices/<int:invoice_id>/receipt")
-    def api_msmi_receipt(invoice_id):
+    @app.post("/api/msmi/invoices/<int:invoice_id>/suggested-mappings")
+    def api_msmi_suggested_mappings(invoice_id):
+        try:
+            from invoice_mapping import InvoiceMappingError, save_mapping
+        except ImportError:  # pragma: no cover - package invocation
+            from .invoice_mapping import InvoiceMappingError, save_mapping
         with db_factory() as conn:
             conn.execute("BEGIN IMMEDIATE")
             invoice = conn.execute("SELECT * FROM msmi_invoices WHERE id=?", (invoice_id,)).fetchone()
             if not invoice:
                 return jsonify({"ok": False, "error": "Không tìm thấy hóa đơn đầu vào"}), 404
-            if invoice["sync_status"] != "synced":
+            if invoice["receipt_status"] == "posted":
                 return jsonify({
                     "ok": False,
-                    "error": "Hóa đơn đang cần đối chiếu sau đồng bộ; chưa được tạo phiếu nhập",
+                    "error": "Phiếu nhập đã ghi kho; không được đổi ghép mã",
                 }), 409
-            items = [dict(row) for row in conn.execute(
+            suggestions = unique_product_name_suggestions(conn)
+            items = conn.execute(
                 """SELECT * FROM msmi_invoice_items
-                   WHERE invoice_id=? AND inventory_eligible=1 ORDER BY line_index""", (invoice_id,)
-            )]
-            if not items:
+                   WHERE invoice_id=? AND inventory_eligible=1 AND mapping_status!='mapped'
+                   ORDER BY line_index""",
+                (invoice_id,),
+            ).fetchall()
+            applied = 0
+            for item in items:
+                suggestion = suggestions.get(mapping_key(item["source_item_name"]))
+                if not suggestion:
+                    continue
+                product_code = suggestion["code"]
+                try:
+                    save_mapping(
+                        conn,
+                        direction="input",
+                        item_id=item["id"],
+                        product_code=product_code,
+                        now_iso=now_iso,
+                    )
+                    applied += 1
+                except InvoiceMappingError:
+                    # A suggestion must never bypass unit/frozen/scope gates.
+                    continue
+            if not applied:
                 return jsonify({
                     "ok": False,
-                    "error": "Hóa đơn không có dòng hàng đủ số lượng/đơn giá để tạo phiếu nhập kho",
+                    "error": "Không có mã nào khớp duy nhất theo tên để xác nhận tự động",
                 }), 400
-            missing = [item for item in items if item["mapping_status"] != "mapped" or not item["product_code"]]
-            if missing:
-                return jsonify({"ok": False, "error": f"Còn {len(missing)} dòng chưa ghép mã hàng"}), 400
-            try:
-                if as_date(invoice["invoice_date"]) != invoice["invoice_date"]:
-                    raise MsmiError("Ngày hóa đơn mSMI không hợp lệ")
-                for item in items:
-                    qty = msmi_number(item["qty"], f"Số lượng dòng {item['line_index']}")
-                    unit_price = msmi_number(item["unit_price"], f"Đơn giá dòng {item['line_index']}")
-                    amount = msmi_number(item["amount"], f"Thành tiền dòng {item['line_index']}")
-                    if qty <= 0 or unit_price < 0 or amount < 0:
-                        raise MsmiError(
-                            f"Dòng {item['line_index']} có số lượng/giá trị không hợp lệ"
-                        )
-            except MsmiError as exc:
-                conn.execute(
-                    "UPDATE msmi_invoices SET sync_status='review_required',error_message=?,updated_at=? WHERE id=?",
-                    (str(exc), now_iso(), invoice_id),
-                )
-                audit(
-                    conn, now_iso, "msmi.create_receipt", "blocked", str(exc),
-                    entity_type="msmi_invoice", entity_id=invoice_id,
-                )
-                return jsonify({"ok": False, "error": str(exc)}), 409
-            posted = 0
-            for item in items:
-                conn.execute(
-                    """INSERT INTO inventory_transactions(
-                        txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,
-                        status,note,created_at,updated_at
-                    ) VALUES(?,?,?,?,?,'MSMI_INPUT',?,?,'posted',?,?,?)
-                    ON CONFLICT(source_type,source_id,source_line) DO NOTHING""",
-                    (invoice["invoice_date"] or date.today().isoformat(), item["product_code"], item["qty"], 0,
-                     item["unit_price"], invoice["remote_id"], str(item["line_index"]),
-                     f"Hóa đơn {invoice['invoice_series']} {invoice['invoice_number']}", now_iso(), now_iso()),
-                )
-                posted += conn.execute("SELECT changes() n").fetchone()["n"]
+            remaining = conn.execute(
+                """SELECT COUNT(*) n FROM msmi_invoice_items
+                   WHERE invoice_id=? AND inventory_eligible=1 AND mapping_status!='mapped'""",
+                (invoice_id,),
+            ).fetchone()["n"]
             conn.execute(
-                "UPDATE msmi_invoices SET receipt_status='posted',updated_at=? WHERE id=?",
-                (now_iso(), invoice_id),
+                "UPDATE msmi_invoices SET receipt_status=?,updated_at=? WHERE id=?",
+                ("ready" if remaining == 0 else "pending_mapping", now_iso(), invoice_id),
             )
-            audit(conn, now_iso, "msmi.create_receipt", "ok", entity_type="msmi_invoice", entity_id=invoice_id,
-                  metadata={
-                      "new_inventory_lines": posted,
-                      "non_inventory_lines": conn.execute(
-                          "SELECT COUNT(*) n FROM msmi_invoice_items WHERE invoice_id=? AND inventory_eligible=0",
-                          (invoice_id,),
-                      ).fetchone()["n"],
-                  })
-            return jsonify({"ok": True, "new_inventory_lines": posted, "idempotent": posted == 0})
+            audit(conn, now_iso, "msmi.mapping_suggestions", "ok",
+                  entity_type="msmi_invoice", entity_id=invoice_id,
+                  metadata={"applied": applied, "remaining": remaining})
+            return jsonify({
+                "ok": True,
+                "applied": applied,
+                "remaining": remaining,
+                "invoice": invoice_payload(conn, 1, invoice_id)[0],
+            })
+
+    @app.post("/api/msmi/invoices/<int:invoice_id>/receipt")
+    def api_msmi_receipt(invoice_id):
+        try:
+            from invoice_receipt import InvoiceReceiptError, create_input_receipt
+        except ImportError:  # pragma: no cover - package invocation
+            from .invoice_receipt import InvoiceReceiptError, create_input_receipt
+        with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                return jsonify({"ok": True, **create_input_receipt(conn, invoice_id, now_iso)})
+            except InvoiceReceiptError as error:
+                return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
+
+    @app.get("/api/outgoing-invoices/readiness/<int:batch_id>")
+    def api_outgoing_invoice_readiness(batch_id):
+        with db_factory() as conn:
+            try:
+                payload = outgoing_invoice_readiness_payload(conn, batch_id)
+            except OutgoingReadinessError as exc:
+                return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+            return jsonify({"ok": True, **payload})
+
+    @app.get("/api/outgoing-invoices/shortages")
+    def api_outgoing_invoice_shortages():
+        try:
+            with db_factory() as conn:
+                payload = period_shortage_payload(
+                    conn,
+                    request.args.get("from"),
+                    request.args.get("to"),
+                    request.args.get("contractor", ""),
+                )
+        except OutgoingReadinessError as exc:
+            return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+        return jsonify({"ok": True, **payload})
+
+    @app.get("/api/outgoing-invoices/shortages/export")
+    def api_export_outgoing_invoice_shortages():
+        try:
+            with db_factory() as conn:
+                payload = period_shortage_payload(
+                    conn,
+                    request.args.get("from"),
+                    request.args.get("to"),
+                    request.args.get("contractor", ""),
+                )
+            workbook = shortage_workbook_bytes(payload)
+        except OutgoingReadinessError as exc:
+            return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+        suffix = re.sub(r"[^A-Za-z0-9_-]+", "_", payload["contractor"]).strip("_")
+        filename = f"DANH_SACH_THIEU_HDDV_{payload['date_from']}_{payload['date_to']}"
+        if suffix:
+            filename += f"_{suffix[:40]}"
+        return send_file(
+            io.BytesIO(workbook),
+            as_attachment=True,
+            download_name=filename + ".xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
     @app.post("/api/outgoing-invoices/draft/<int:batch_id>")
     def api_create_outgoing_drafts(batch_id):
@@ -5108,6 +7369,15 @@ def register_contract_routes(app, ctx):
             # transaction lets two batches both observe the same stock (or an
             # order mutate after we read it) before either draft exists.
             conn.execute("BEGIN IMMEDIATE")
+            try:
+                result = create_partial_outgoing_drafts(conn, batch_id, now_iso)
+            except OutgoingReadinessError as exc:
+                conn.rollback()
+                return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+            except ValueError as exc:
+                conn.rollback()
+                return jsonify({"ok": False, "error": str(exc)}), 400
+            return jsonify({"ok": True, **result})
             batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
             if not batch:
                 return jsonify({"ok": False, "error": "Không tìm thấy phiên đơn"}), 404
@@ -5298,6 +7568,10 @@ def register_contract_routes(app, ctx):
                 return jsonify({"ok": False, "error": "Cần ký hiệu hóa đơn hợp lệ, tối đa 50 ký tự"}), 400
             if not invoice_date:
                 return jsonify({"ok": False, "error": "Ngày hóa đơn phải hợp lệ dạng YYYY-MM-DD"}), 400
+            try:
+                validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, invoice_number)
+            except OutgoingReadinessError as exc:
+                return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
             snapshot = stored_invoice_snapshot(draft)
             if not snapshot:
                 if clean_text(draft["minvoice_status"]) in {"saved", "saving", "unknown"}:
@@ -5413,14 +7687,16 @@ def register_contract_routes(app, ctx):
                     "error": "Dự thảo đã lưu hoặc chưa đối soát xong với M-Invoice; không được hủy cục bộ",
                 }), 409
             if draft["status"] != "cancelled":
+                timestamp = now_iso()
                 conn.execute(
                     "UPDATE outgoing_invoice_drafts SET status='cancelled' WHERE id=?", (draft_id,)
                 )
                 conn.execute(
                     """UPDATE inventory_transactions SET status='cancelled',updated_at=?
                        WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'""",
-                    (now_iso(), str(draft_id)),
+                    (timestamp, str(draft_id)),
                 )
+                mark_substitution_actions_reversed_for_draft(conn, draft_id, timestamp)
                 audit(conn, now_iso, "outgoing.cancel", "ok", entity_type="outgoing_invoice", entity_id=draft_id)
             return jsonify({"ok": True, "idempotent": draft["status"] == "cancelled"})
 
@@ -5568,6 +7844,10 @@ def register_contract_routes(app, ctx):
 
             snapshot = None
             if not reconcile_only:
+                try:
+                    validate_draft_export_stock(conn, draft_id, draft["invoice_date"])
+                except OutgoingReadinessError as exc:
+                    return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
                 if not dry_run:
                     try:
                         snapshot, buyer = current_invoice_snapshot(conn, draft)
@@ -5865,9 +8145,11 @@ def register_contract_routes(app, ctx):
                         "removed_stale_rows": stale,
                     },
                 )
+                payable_ledger = refresh_payable_ledger(conn, now_iso())
                 return jsonify({
                     "ok": True, "inserted": 0, "replaced": stale, "unchanged": unchanged,
                     "idempotent": stale == 0, "source_hash": pending["source_hash"],
+                    "payable_ledger": payable_ledger,
                 })
             # This workbook is an authoritative historical-payables snapshot,
             # not an append-only journal.  Replace the prior snapshot even when
@@ -5903,10 +8185,11 @@ def register_contract_routes(app, ctx):
                     "snapshot_scope": "all_historical_payables",
                 },
             )
+            payable_ledger = refresh_payable_ledger(conn, timestamp)
         return jsonify({
             "ok": True, "inserted": len(pending["items"]), "replaced": replaced, "unchanged": 0,
             "idempotent": False,
-            "source_hash": pending["source_hash"],
+            "source_hash": pending["source_hash"], "payable_ledger": payable_ledger,
         })
 
     @app.post("/api/debt-adjustments")
@@ -5935,7 +8218,14 @@ def register_contract_routes(app, ctx):
             return jsonify({"ok": False, "error": str(exc)}), 400
         with db_factory() as conn:
             conn.execute("BEGIN")
-            return jsonify({"ok": True, **debt_period_payload(conn, period_from, period_to, tax_factor)})
+            payload = debt_period_payload(conn, period_from, period_to, tax_factor)
+            payload["receipts"] = [dict(row) for row in conn.execute(
+                """SELECT id,payment_date,party_code,amount,note,status,revision,created_by,reversed_by,reversal_reason
+                   FROM payments WHERE kind='receipt' AND party_type='contractor'
+                   AND payment_date>=? AND payment_date<=? ORDER BY payment_date,id""",
+                (period_from, period_to),
+            )]
+            return jsonify({"ok": True, **payload})
 
     @app.get("/api/export/debts")
     def api_export_debts():
@@ -6234,6 +8524,24 @@ def register_contract_routes(app, ctx):
         if menu_count <= 0 or servings_per_menu <= 0 or meal_price < 0 or other_cost < 0:
             return jsonify({"ok": False, "error": "Số thực đơn/suất phải dương và chi phí không được âm"}), 400
         with db_factory() as conn:
+            if not normalized_items:
+                return jsonify({
+                    "ok": False,
+                    "error": "Cần ít nhất một dòng nguyên liệu có mã hàng và định lượng",
+                }), 400
+            item_errors = []
+            for item_number, raw in enumerate(normalized_items, start=1):
+                code = clean_text(raw.get("product_code")).upper()
+                if not code:
+                    item_errors.append(f"Dòng {item_number}: thiếu mã hàng")
+                    continue
+                if raw["_norm_qty"] <= 0:
+                    item_errors.append(f"Dòng {item_number}: định lượng phải lớn hơn 0")
+                    continue
+                if not conn.execute("SELECT 1 FROM products WHERE code=?", (code,)).fetchone():
+                    item_errors.append(f"Dòng {item_number}: mã hàng {code} chưa có trong danh mục")
+            if item_errors:
+                return jsonify({"ok": False, "error": "; ".join(item_errors)}), 400
             kitchen = clean_text(body["kitchen"]).upper()
             unit = conn.execute("SELECT unit_code FROM kitchen_units WHERE kitchen_code=?", (kitchen,)).fetchone()
             unit_code = clean_text(body.get("xcom_code") or body.get("unit_code")) or (unit["unit_code"] if unit else "")
@@ -6264,8 +8572,6 @@ def register_contract_routes(app, ctx):
             for raw in normalized_items:
                 code = clean_text(raw.get("product_code")).upper()
                 product = conn.execute("SELECT * FROM products WHERE code=?", (code,)).fetchone()
-                if not product or raw["_norm_qty"] <= 0:
-                    continue
                 dated = conn.execute(
                     "SELECT price_value FROM dated_prices WHERE product_code=? AND price_group='HATRAN' AND period=?",
                     (code, period),
@@ -6629,9 +8935,11 @@ def register_contract_routes(app, ctx):
     @app.put("/api/print/settings")
     def api_print_settings():
         body = request.get_json(force=True) or {}
-        paper = clean_text(body.get("paper") or "A4").upper()
-        if paper != "A4":
-            return jsonify({"ok": False, "error": "Bộ PDF hiện được khóa và kiểm tra ở khổ A4"}), 400
+        other_paper = clean_text(
+            body.get("other_paper") or body.get("paper") or "A5"
+        ).upper()
+        if other_paper not in {"A4", "A5"}:
+            return jsonify({"ok": False, "error": "Chứng từ khác chỉ hỗ trợ khổ A4 hoặc A5"}), 400
         printer_name = clean_text(body.get("printer_name"))
         printer_state = windows_printer_state()
         if printer_name and printer_name not in printer_state["installed"]:
@@ -6645,7 +8953,7 @@ def register_contract_routes(app, ctx):
         with db_factory() as conn:
             setting_set(conn, "printer_name", printer_name)
             setting_set(conn, "print_copies", copies)
-            setting_set(conn, "print_paper", paper)
+            setting_set(conn, "print_other_paper", other_paper)
             invalidated = conn.execute(
                 """UPDATE print_jobs SET status='stale',approved_at=NULL,error_message=?
                    WHERE status IN ('preparing','prepared','approved')""",
@@ -6655,13 +8963,18 @@ def register_contract_routes(app, ctx):
                 audit(
                     conn, now_iso, "print.settings_invalidate", "ok",
                     entity_type="print_settings", entity_id="default",
-                    metadata={"jobs": invalidated, "copies": copies, "printer": printer_name},
+                    metadata={
+                        "jobs": invalidated, "copies": copies, "printer": printer_name,
+                        "delivery_paper": "A4", "other_paper": other_paper,
+                    },
                 )
             return jsonify({
                 "ok": True,
                 "printer": printer_name or printer_state["default"],
                 "copies": copies,
-                "paper": paper,
+                "paper": other_paper,
+                "delivery_paper": "A4",
+                "other_paper": other_paper,
                 "invalidated_jobs": invalidated,
                 "hardware_ready": bool(
                     printer_state["supported"]
@@ -6696,63 +9009,109 @@ def register_contract_routes(app, ctx):
                 )
                 return jsonify({"ok": False, "error": message}), 409
             copies = max(1, min(int(as_number(setting_get(conn, "print_copies", "1"), 1)), 10))
+            other_paper = clean_text(setting_get(conn, "print_other_paper", "A5")).upper()
+            if other_paper not in {"A4", "A5"}:
+                other_paper = "A5"
             printer_state = windows_printer_state()
             prepared_printer = clean_text(setting_get(conn, "printer_name", "")) or printer_state["default"]
-            conn.execute(
-                """INSERT INTO print_jobs(
-                       batch_id,document_type,file_path,status,created_at,paper,copies,printer_name,
-                       error_message,claim_id
-                   ) VALUES(?,?,'','preparing',?,'A4',?,?,NULL,?)
-                   ON CONFLICT(batch_id,document_type) DO UPDATE SET
-                       file_path='',status='preparing',created_at=excluded.created_at,
-                       paper='A4',copies=excluded.copies,printer_name=excluded.printer_name,
-                       file_sha256=NULL,input_sha256=NULL,manifest_path=NULL,page_count=0,
-                       approved_at=NULL,printed_at=NULL,submitted_at=NULL,error_message=NULL,
-                       claim_id=excluded.claim_id""",
-                (batch_id, "pdf_bundle", now_iso(), copies, prepared_printer, claim_id),
+            job_specs = (
+                ("delivery_pdf", "A4"),
+                ("other_pdf", other_paper),
             )
+            for document_type, paper in job_specs:
+                conn.execute(
+                    """INSERT INTO print_jobs(
+                           batch_id,document_type,file_path,status,created_at,paper,copies,printer_name,
+                           error_message,claim_id
+                       ) VALUES(?,?,'','preparing',?,?,?,?,NULL,?)
+                       ON CONFLICT(batch_id,document_type) DO UPDATE SET
+                           file_path='',status='preparing',created_at=excluded.created_at,
+                           paper=excluded.paper,copies=excluded.copies,printer_name=excluded.printer_name,
+                           file_sha256=NULL,input_sha256=NULL,manifest_path=NULL,page_count=0,
+                           approved_at=NULL,printed_at=NULL,submitted_at=NULL,error_message=NULL,
+                           claim_id=excluded.claim_id""",
+                    (
+                        batch_id, document_type, now_iso(), paper, copies,
+                        prepared_printer, claim_id,
+                    ),
+                )
             # Make the preparing claim visible before the comparatively slow
             # XLSX/PDF render.  Order mutation sees this row and is rejected.
             conn.commit()
             documents = {}
+            bundles = []
             try:
-                documents["supplier_orders"] = (
-                    ctx["export_supplier_orders"](conn, batch, orders),
-                    f"Don_NCC_{batch['work_date']}.xlsx",
-                )
                 documents["deliveries"] = (
                     ctx["export_deliveries"](conn, batch, orders),
                     f"Phieu_giao_{batch['work_date']}.xlsx",
                 )
-                documents["purchases"] = (
-                    ctx["export_purchase_documents"](conn, batch, orders),
-                    f"Bang_ke_{batch['work_date']}.xlsx",
+                purchase_exporter = ctx.get(
+                    "export_optional_purchase_documents",
+                    ctx["export_purchase_documents"],
                 )
+                purchase_workbook = purchase_exporter(conn, batch, orders)
+                if purchase_workbook is not None:
+                    documents["purchases"] = (
+                        purchase_workbook,
+                        f"Bang_ke_{batch['work_date']}.xlsx",
+                    )
                 documents["report"] = (
                     ctx["export_report"](conn, batch, orders),
                     f"Bao_cao_{batch['work_date']}.xlsx",
                 )
                 for _, (workbook, filename) in documents.items():
                     workbook.save(attempt_dir / filename)
-                sections = workbooks_to_sections({
-                    document_type: workbook
-                    for document_type, (workbook, _) in documents.items()
-                })
-                pdf_path = attempt_dir / f"Bo_chung_tu_{batch['work_date']}.pdf"
-                manifest = build_pdf_bundle(
-                    sections,
-                    pdf_path,
-                    company=setting_get(conn, "company", "CÔNG TY TNHH THỰC PHẨM THÀNH ĐẠT PHÁT"),
-                    document_title=f"Bộ chứng từ ngày {batch['work_date']}",
-                    generated_at=now_iso(),
+                bundle_inputs = (
+                    (
+                        "delivery_pdf", "A4",
+                        ("deliveries",),
+                        f"Bo_phieu_giao_A4_{batch['work_date']}.pdf",
+                    ),
+                    (
+                        "other_pdf", other_paper,
+                        tuple(
+                            source_type
+                            for source_type in ("purchases", "report")
+                            if source_type in documents
+                        ),
+                        f"Bo_chung_tu_khac_{other_paper}_{batch['work_date']}.pdf",
+                    ),
                 )
-                manifest_path = write_manifest(manifest, attempt_dir / "manifest.json")
+                print_titles = {
+                    "deliveries": "Phiếu giao hàng",
+                    "purchases": "Bảng kê và giấy biên nhận",
+                    "report": "Báo cáo tổng hợp",
+                }
+                for document_type, paper, source_types, filename in bundle_inputs:
+                    pdf_path = attempt_dir / filename
+                    manifest = build_excel_pdf_bundle(
+                        [
+                            {
+                                "path": attempt_dir / documents[source_type][1],
+                                "document_type": source_type,
+                                "title": print_titles[source_type],
+                            }
+                            for source_type in source_types
+                        ],
+                        pdf_path,
+                        generated_at=now_iso(),
+                        paper=paper,
+                    )
+                    manifest_path = write_manifest(
+                        manifest, attempt_dir / f"{document_type}.manifest.json"
+                    )
+                    bundles.append({
+                        "document_type": document_type,
+                        "paper": paper,
+                        "pdf_path": pdf_path,
+                        "manifest": manifest,
+                        "manifest_path": manifest_path,
+                    })
             except Exception as exc:
                 app.logger.exception("Print bundle preparation failed for batch %s", batch_id)
                 conn.execute(
                     """UPDATE print_jobs SET status='stale',error_message=?
-                       WHERE batch_id=? AND document_type='pdf_bundle' AND status='preparing'
-                         AND claim_id=?""",
+                       WHERE batch_id=? AND status='preparing' AND claim_id=?""",
                     (f"Chuẩn bị PDF thất bại: {str(exc)[:180]}", batch_id, claim_id),
                 )
                 return jsonify({"ok": False, "error": f"Không tạo được PDF chuẩn in: {str(exc)[:240]}"}), 500
@@ -6765,53 +9124,79 @@ def register_contract_routes(app, ctx):
             conn.rollback()
             conn.execute("BEGIN IMMEDIATE")
             current_batch = conn.execute("SELECT status FROM batches WHERE id=?", (batch_id,)).fetchone()
-            preparing = conn.execute(
-                """SELECT id FROM print_jobs WHERE batch_id=? AND document_type='pdf_bundle'
+            preparing_count = conn.execute(
+                """SELECT COUNT(*) n FROM print_jobs WHERE batch_id=?
+                   AND document_type IN ('delivery_pdf','other_pdf')
                    AND status='preparing' AND claim_id=?""",
                 (batch_id, claim_id),
-            ).fetchone()
-            if not current_batch or current_batch["status"] != "approved" or not preparing:
+            ).fetchone()["n"]
+            if (
+                not current_batch or current_batch["status"] != "approved"
+                or preparing_count != len(job_specs)
+            ):
                 return jsonify({
                     "ok": False,
                     "error": "Phiên đơn hoặc yêu cầu chuẩn bị in đã thay đổi; PDF vừa tạo không được duyệt",
                 }), 409
             conn.execute(
-                "DELETE FROM print_jobs WHERE batch_id=? AND document_type!='pdf_bundle'",
+                """DELETE FROM print_jobs WHERE batch_id=?
+                   AND document_type NOT IN ('delivery_pdf','other_pdf')
+                   AND status IN ('stale','cancelled','error','prepared')""",
                 (batch_id,),
             )
-            conn.execute(
-                """UPDATE print_jobs SET
-                       file_path=?,status='prepared',created_at=?,file_sha256=?,input_sha256=?,
-                       manifest_path=?,page_count=?,paper='A4',copies=?,printer_name=?,
-                       approved_at=NULL,printed_at=NULL,submitted_at=NULL,error_message=NULL
-                   WHERE batch_id=? AND document_type='pdf_bundle' AND status='preparing'
-                     AND claim_id=?""",
-                (
-                    str(pdf_path.resolve()), now_iso(), manifest["sha256"], manifest["input_sha256"],
-                    str(manifest_path.resolve()), manifest["pages"], copies, prepared_printer,
-                    batch_id, claim_id,
-                ),
-            )
-            if conn.execute("SELECT changes() n").fetchone()["n"] != 1:
-                return jsonify({
-                    "ok": False,
-                    "error": "Lượt chuẩn bị PDF đã bị thay thế; kết quả cũ không được công bố",
-                }), 409
+            for bundle in bundles:
+                manifest = bundle["manifest"]
+                changed = conn.execute(
+                    """UPDATE print_jobs SET
+                           file_path=?,status='prepared',created_at=?,file_sha256=?,input_sha256=?,
+                           manifest_path=?,page_count=?,paper=?,copies=?,printer_name=?,
+                           approved_at=NULL,printed_at=NULL,submitted_at=NULL,error_message=NULL
+                       WHERE batch_id=? AND document_type=? AND status='preparing'
+                         AND claim_id=?""",
+                    (
+                        str(bundle["pdf_path"].resolve()), now_iso(), manifest["sha256"],
+                        manifest["input_sha256"], str(bundle["manifest_path"].resolve()),
+                        manifest["pages"], bundle["paper"], copies, prepared_printer,
+                        batch_id, bundle["document_type"], claim_id,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Lượt chuẩn bị PDF đã bị thay thế; kết quả cũ không được công bố",
+                    }), 409
+            total_pages = sum(bundle["manifest"]["pages"] for bundle in bundles)
+            total_sections = sum(bundle["manifest"]["section_count"] for bundle in bundles)
             audit(
                 conn, now_iso, "print.prepare", "ok", entity_type="batch", entity_id=batch_id,
                 metadata={
-                    "document": "pdf_bundle", "pages": manifest["pages"],
-                    "sections": manifest["section_count"], "sha256": manifest["sha256"],
+                    "documents": [
+                        {
+                            "type": bundle["document_type"], "paper": bundle["paper"],
+                            "pages": bundle["manifest"]["pages"],
+                            "sha256": bundle["manifest"]["sha256"],
+                        }
+                        for bundle in bundles
+                    ],
+                    "pages": total_pages, "sections": total_sections,
                 },
             )
             return jsonify({
                 "ok": True,
-                "prepared": ["pdf_bundle"],
+                "prepared": [bundle["document_type"] for bundle in bundles],
                 "requires_approval": True,
-                "pages": manifest["pages"],
-                "sections": manifest["section_count"],
-                "sha256": manifest["sha256"],
-                "pdf_url": f"/api/print/pdf/{batch_id}",
+                "pages": total_pages,
+                "sections": total_sections,
+                "documents": [
+                    {
+                        "document_type": bundle["document_type"],
+                        "paper": bundle["paper"],
+                        "pages": bundle["manifest"]["pages"],
+                        "sha256": bundle["manifest"]["sha256"],
+                        "pdf_url": f"/api/print/pdf/{batch_id}/{bundle['document_type']}",
+                    }
+                    for bundle in bundles
+                ],
             })
 
     @app.post("/api/print/approve/<int:batch_id>")
@@ -6895,13 +9280,28 @@ def register_contract_routes(app, ctx):
                         raise ValueError("PDF in bị thiếu")
                     if hashlib.sha256(path.read_bytes()).hexdigest() != clean_text(job.get("file_sha256")):
                         raise ValueError("PDF đã thay đổi sau bước chuẩn bị")
-                    verify_pdf(path, minimum_pages=max(1, int(job.get("page_count") or 1)))
+                    paper = clean_text(job.get("paper")).upper()
+                    verify_excel_pdf(
+                        path,
+                        minimum_pages=max(1, int(job.get("page_count") or 1)),
+                        paper=paper,
+                    )
                     verified_jobs.append((job, path))
-            except (OSError, ValueError, PdfDocumentError) as exc:
+            except (OSError, ValueError, ExcelPrintError) as exc:
                 return jsonify({"ok": False, "error": f"Bộ PDF không còn hợp lệ: {str(exc)[:220]}"}), 409
 
-            if any(clean_text(job.get("paper")).upper() != "A4" for job in jobs):
-                return jsonify({"ok": False, "error": "PDF và cấu hình in phải cùng khổ A4"}), 409
+            job_types = {clean_text(job.get("document_type")) for job in jobs}
+            papers = {
+                clean_text(job.get("document_type")): clean_text(job.get("paper")).upper()
+                for job in jobs
+            }
+            if any(paper not in {"A4", "A5"} for paper in papers.values()):
+                return jsonify({"ok": False, "error": "Khổ giấy đã duyệt chỉ được là A4 hoặc A5"}), 409
+            split_types = {"delivery_pdf", "other_pdf"}
+            if job_types & split_types and job_types & split_types != split_types:
+                return jsonify({"ok": False, "error": "Bộ in A4/A5 chưa đủ hai nhóm chứng từ"}), 409
+            if papers.get("delivery_pdf") not in {None, "A4"}:
+                return jsonify({"ok": False, "error": "Phiếu giao hàng bắt buộc khổ A4"}), 409
             approved_copies = {max(1, min(int(as_number(job.get("copies"), 1)), 10)) for job in jobs}
             approved_printers = {clean_text(job.get("printer_name")) for job in jobs}
             if len(approved_copies) != 1 or len(approved_printers) != 1:
@@ -6929,22 +9329,34 @@ def register_contract_routes(app, ctx):
                     "physical_confirmation_required": False,
                 })
 
-            if not hardware_ready or not hasattr(os, "startfile"):
+            print_tool = pdf_print_tool_path()
+            if not hardware_ready or not print_tool:
                 return jsonify({
                     "ok": False,
-                    "error": "Chưa có máy in Windows hợp lệ; chọn đúng máy in đã cài trước khi bấm in",
+                    "error": "Chưa có máy in Windows hoặc bộ in PDF độc lập hợp lệ; chưa gửi lệnh in",
                 }), 409
             try:
                 import win32print
 
-                # Capture a real restore target before claiming the immutable
-                # job.  A valid default is required because printing through
-                # the Windows shell temporarily changes this global setting.
+                # Snapshot all global driver state before claiming the
+                # immutable job. Sumatra targets the printer directly, while
+                # the driver still needs a paper/bin pair per physical tray.
                 restore_printer = str(win32print.GetDefaultPrinter() or "").strip()
                 if not restore_printer or restore_printer not in printer_state["installed"]:
                     return jsonify({
                         "ok": False,
                         "error": "Windows chưa có máy in mặc định hợp lệ để khôi phục sau lệnh in",
+                    }), 409
+                restore_media_state = windows_printer_media_state(win32print, printer_name)
+                printer_bins = windows_printer_bins(win32print, printer_name)
+                bin_by_paper = {
+                    paper: select_windows_printer_bin(printer_bins, paper)
+                    for paper in set(papers.values())
+                }
+                if not restore_media_state or any(not item for item in bin_by_paper.values()):
+                    return jsonify({
+                        "ok": False,
+                        "error": "Không xác định được đúng khay A4/A5 của driver máy in; chưa gửi lệnh in",
                     }), 409
             except Exception:
                 return jsonify({
@@ -6968,24 +9380,55 @@ def register_contract_routes(app, ctx):
             conn.commit()
 
         submission_failed = False
-        restore_failed = False
+        default_restore_failed = False
+        paper_restore_failed = False
         commands_started = 0
+        spool_job_ids: set[int] = set()
         with PRINT_SUBMISSION_LOCK:
             live_restore_printer = restore_printer
+            live_restore_media_state = restore_media_state
             try:
                 current_default = str(win32print.GetDefaultPrinter() or "").strip()
                 if not current_default or current_default not in printer_state["installed"]:
                     raise RuntimeError("missing live default printer")
                 live_restore_printer = current_default
-                if current_default != printer_name:
-                    win32print.SetDefaultPrinter(printer_name)
-                for _, path in verified_jobs:
+                baseline_job_ids = windows_print_job_ids(win32print, printer_name)
+                if baseline_job_ids is None:
+                    raise RuntimeError("cannot read target print queue")
+                known_job_ids = set(baseline_job_ids)
+                current_media_state = windows_printer_media_state(win32print, printer_name)
+                if not current_media_state:
+                    raise RuntimeError("cannot read target printer media")
+                live_restore_media_state = current_media_state
+                for job, path in verified_jobs:
+                    paper = clean_text(job.get("paper")).upper()
+                    bin_item = bin_by_paper[paper]
+                    set_windows_printer_media(
+                        win32print, printer_name, paper, bin_item["code"]
+                    )
                     for _ in range(copies):
-                        os.startfile(str(path), "print")
                         commands_started += 1
+                        new_job_ids = submit_pdf_via_sumatra(
+                            print_tool, path, printer_name, paper, bin_item,
+                            win32print, known_job_ids,
+                            appdata_dir=data_dir / "sumatra_appdata",
+                        )
+                        if not new_job_ids:
+                            raise RuntimeError("PDF print tool did not create a spool job")
+                        known_job_ids.update(new_job_ids)
+                        spool_job_ids.update(new_job_ids)
             except Exception:
                 submission_failed = True
             finally:
+                # Restore both the paper form and its physical input tray only
+                # after each job has materialized in the target spooler.
+                try:
+                    set_windows_printer_media(
+                        win32print, printer_name,
+                        live_restore_media_state[0], live_restore_media_state[1],
+                    )
+                except Exception:
+                    paper_restore_failed = True
                 # Always compare the live default.  SetDefaultPrinter can fail
                 # after partially changing Windows state, so a boolean flag is
                 # not a reliable indication that restoration is unnecessary.
@@ -6993,7 +9436,9 @@ def register_contract_routes(app, ctx):
                     if str(win32print.GetDefaultPrinter() or "").strip() != live_restore_printer:
                         win32print.SetDefaultPrinter(live_restore_printer)
                 except Exception:
-                    restore_failed = True
+                    default_restore_failed = True
+
+        restore_failed = default_restore_failed or paper_restore_failed
 
         finished_at = now_iso()
         if submission_failed:
@@ -7016,7 +9461,9 @@ def register_contract_routes(app, ctx):
                         metadata={
                             "jobs": len(jobs), "copies": copies,
                             "commands_started": commands_started,
+                            "spool_jobs_observed": len(spool_job_ids),
                             "default_restored": not restore_failed,
+                            "printer_paper_restored": not paper_restore_failed,
                         },
                     )
             except Exception:
@@ -7030,6 +9477,7 @@ def register_contract_routes(app, ctx):
                 "status": "submission_unknown",
                 "error": "Windows không gửi được trọn bộ PDF; có thể một phần đã vào hàng đợi, không bấm lại",
                 "default_printer_restored": not restore_failed,
+                "printer_paper_restored": not paper_restore_failed,
             }), 500
 
         restore_warning = (
@@ -7055,7 +9503,9 @@ def register_contract_routes(app, ctx):
                     metadata={
                         "jobs": len(jobs), "copies": copies,
                         "commands_started": commands_started,
+                        "spool_jobs_observed": len(spool_job_ids),
                         "default_restored": not restore_failed,
+                        "printer_paper_restored": not paper_restore_failed,
                     },
                 )
         except Exception:
@@ -7073,20 +9523,36 @@ def register_contract_routes(app, ctx):
             "printer": printer_name,
             "hardware_ready": True,
             "physical_confirmation_required": True,
+            "spool_confirmed": True,
+            "spool_jobs_observed": len(spool_job_ids),
             "default_printer_restored": not restore_failed,
+            "printer_paper_restored": not paper_restore_failed,
+            "print_engine": "SumatraPDF 3.6.1",
         }
         if restore_warning:
             response["warning"] = restore_warning
         return jsonify(response)
 
     @app.get("/api/print/pdf/<int:batch_id>")
-    def api_print_pdf(batch_id):
+    @app.get("/api/print/pdf/<int:batch_id>/<document_type>")
+    def api_print_pdf(batch_id, document_type=None):
+        if document_type and document_type not in {"delivery_pdf", "other_pdf", "pdf_bundle"}:
+            return jsonify({"ok": False, "error": "Loại PDF in không hợp lệ"}), 400
         with db_factory() as conn:
-            job = conn.execute(
-                """SELECT * FROM print_jobs WHERE batch_id=? AND document_type='pdf_bundle'
-                   ORDER BY id DESC LIMIT 1""",
-                (batch_id,),
-            ).fetchone()
+            if document_type:
+                job = conn.execute(
+                    """SELECT * FROM print_jobs WHERE batch_id=? AND document_type=?
+                       ORDER BY id DESC LIMIT 1""",
+                    (batch_id, document_type),
+                ).fetchone()
+            else:
+                job = conn.execute(
+                    """SELECT * FROM print_jobs WHERE batch_id=?
+                       AND document_type IN ('pdf_bundle','delivery_pdf')
+                       ORDER BY CASE document_type WHEN 'pdf_bundle' THEN 0 ELSE 1 END,id DESC
+                       LIMIT 1""",
+                    (batch_id,),
+                ).fetchone()
             if not job:
                 return jsonify({"ok": False, "error": "Chưa chuẩn bị PDF cho phiên này"}), 404
             data = dict(job)
@@ -7096,8 +9562,12 @@ def register_contract_routes(app, ctx):
                 path = safe_print_path(data_dir, batch_id, data["file_path"])
                 if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != clean_text(data["file_sha256"]):
                     raise ValueError("PDF bị thiếu hoặc đã thay đổi")
-                verify_pdf(path, minimum_pages=max(1, int(data.get("page_count") or 1)))
-            except (OSError, ValueError, PdfDocumentError) as exc:
+                verify_excel_pdf(
+                    path,
+                    minimum_pages=max(1, int(data.get("page_count") or 1)),
+                    paper=clean_text(data.get("paper")).upper(),
+                )
+            except (OSError, ValueError, ExcelPrintError) as exc:
                 return jsonify({"ok": False, "error": str(exc)[:220]}), 409
             return send_file(
                 path,
@@ -7130,117 +9600,151 @@ def register_contract_routes(app, ctx):
         # a cancelled/unissued draft from producing an official-looking request.
         return api_invoice_payment_bundle(contractor)
 
+    @app.get("/api/outgoing-invoices/payment-scope/<contractor>")
+    def api_invoice_payment_scope(contractor):
+        try:
+            with db_factory() as conn:
+                conn.execute("PRAGMA query_only=ON")
+                scope = issued_invoice_payment_scope(
+                    conn,
+                    contractor,
+                    request.args.get("from"),
+                    request.args.get("to"),
+                )
+        except InvoicePaymentScopeError as exc:
+            return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+        return jsonify({"ok": True, **public_payment_scope(scope)})
+
+    @app.get("/api/outgoing-invoices/delivery-statement/<contractor>")
+    def api_invoice_delivery_statement(contractor):
+        period_from = request.args.get("from")
+        period_to = request.args.get("to")
+        with db_factory() as conn:
+            try:
+                scope = issued_invoice_payment_scope(conn, contractor, period_from, period_to)
+            except InvoicePaymentScopeError as exc:
+                return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+            expected_scope = clean_text(request.args.get("scope_id")).upper()
+            if expected_scope and expected_scope != scope["scope_id"]:
+                return jsonify({
+                    "ok": False,
+                    "error": "Phạm vi hóa đơn đã thay đổi; cần xem lại danh sách trước khi tải",
+                    "code": "stale_invoice_payment_scope",
+                }), 409
+            try:
+                statement = invoice_delivery_statement_scope_workbook(scope)
+            except InvoiceDeliveryStatementError as exc:
+                return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+            stream = io.BytesIO()
+            statement.save(stream)
+            statement.close()
+            stream.seek(0)
+            safe_code = re.sub(r"[^A-Z0-9_-]+", "_", scope["contractor"])[:40] or "KHACH_HANG"
+            audit(
+                conn, now_iso, "outgoing.invoice_delivery_statement", "ok",
+                entity_type="contractor", entity_id=scope["contractor"],
+                metadata={
+                    "from": scope["date_from"], "to": scope["date_to"],
+                    "invoices": len(scope["invoices"]),
+                    "amount": scope["totals"]["total_amount"],
+                    "scope_id": scope["scope_id"],
+                },
+            )
+            response = send_file(
+                stream, as_attachment=True,
+                download_name=(
+                    f"Bang_tong_hop_giao_nhan_{safe_code}_"
+                    f"{scope['date_from']}_{scope['date_to']}.xlsx"
+                ),
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            response.headers["X-TDP-Invoice-Scope"] = scope["scope_id"]
+            return response
+
     @app.get("/api/export/invoice-payment-bundle/<contractor>")
     def api_invoice_payment_bundle(contractor):
-        if Document is None:
-            return jsonify({"ok": False, "error": "Máy chưa cài thư viện python-docx"}), 500
-        period_from = clean_text(request.args.get("from"))
-        period_to = clean_text(request.args.get("to"))
-        try:
-            validate_date_range(period_from, period_to)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        contractor = clean_text(contractor).upper()
+        period_from = request.args.get("from")
+        period_to = request.args.get("to")
         with db_factory() as conn:
-            drafts = [dict(row) for row in conn.execute(
-                """SELECT * FROM outgoing_invoice_drafts
-                   WHERE contractor=? AND status='issued'
-                     AND issued_invoice_date BETWEEN ? AND ?
-                   ORDER BY issued_invoice_date,issued_invoice_series,issued_invoice_number,id""",
-                (contractor, period_from, period_to),
-            )]
-            if not drafts:
-                return jsonify({"ok": False, "error": "Không có hóa đơn đã phát hành đủ số/ngày trong kỳ"}), 404
-            if any(not clean_text(row.get("issued_invoice_number")) for row in drafts):
-                return jsonify({"ok": False, "error": "Còn hóa đơn chưa ghi số phát hành"}), 409
-            snapshot_fields = (
-                "buyer_name_snapshot", "buyer_tax_code_snapshot", "buyer_address_snapshot",
-                "company_name_snapshot", "company_tax_code_snapshot", "company_address_snapshot",
-                "payment_requester_snapshot", "payment_bank_name_snapshot",
-                "payment_bank_account_snapshot",
-            )
-            if any(any(not clean_text(row.get(field)) for field in snapshot_fields) for row in drafts):
-                return jsonify({
-                    "ok": False,
-                    "error": "Hóa đơn cũ chưa khóa đủ hồ sơ pháp lý/thanh toán; không dùng hồ sơ hiện tại để ghi đè lịch sử",
-                }), 409
-            snapshot_keys = {
-                tuple(clean_text(row.get(field)) for field in snapshot_fields)
-                for row in drafts
-            }
-            if len(snapshot_keys) != 1:
-                return jsonify({
-                    "ok": False,
-                    "error": "Các hóa đơn trong kỳ thuộc hồ sơ pháp lý/thanh toán khác nhau; hãy xuất tách kỳ",
-                }), 409
-            snapshot = drafts[0]
-
-            draft_ids = [row["id"] for row in drafts]
-            placeholders = ",".join("?" for _ in draft_ids)
-            lines = [dict(row) for row in conn.execute(
-                f"""SELECT l.*,d.issued_invoice_number,d.issued_invoice_series,d.issued_invoice_date,
-                            d.subtotal invoice_subtotal,d.tax_amount invoice_tax_amount,
-                            d.total_amount invoice_total,b.work_date,o.kitchen
-                     FROM outgoing_invoice_lines l
-                     JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
-                     JOIN orders o ON o.id=l.order_id
-                     JOIN batches b ON b.id=o.batch_id
-                     WHERE l.draft_id IN ({placeholders})
-                     ORDER BY d.issued_invoice_date,d.id,b.work_date,l.id""",
-                draft_ids,
-            )]
-            if not lines:
-                return jsonify({"ok": False, "error": "Hóa đơn đã phát hành không còn dòng giao hàng để đối chiếu"}), 409
-            details = [{
-                "invoice_date": row["issued_invoice_date"],
-                "invoice_series": row["issued_invoice_series"] or "",
-                "invoice_number": row["issued_invoice_number"],
-                "subtotal": vnd_round(row["subtotal"]),
-                "tax_amount": vnd_round(row["tax_amount"]),
-                "total_amount": vnd_round(row["total_amount"]),
-            } for row in drafts]
-            payment_total = sum(item["total_amount"] for item in details)
             try:
-                statement = invoice_delivery_statement_workbook(lines, drafts, tax_factor)
-            except ValueError as exc:
-                return jsonify({"ok": False, "error": str(exc)}), 409
-            document = invoice_payment_request_document(
-                company=snapshot["company_name_snapshot"],
-                company_tax_code=snapshot["company_tax_code_snapshot"],
-                company_address=snapshot["company_address_snapshot"],
-                recipient=snapshot["buyer_name_snapshot"],
-                recipient_tax_code=snapshot["buyer_tax_code_snapshot"],
-                recipient_address=snapshot["buyer_address_snapshot"],
-                requester=snapshot["payment_requester_snapshot"],
-                bank_name=snapshot["payment_bank_name_snapshot"],
-                bank_account=snapshot["payment_bank_account_snapshot"],
-                period_from=period_from, period_to=period_to, details=details,
-            )
-            docx_stream = io.BytesIO()
-            document.save(docx_stream)
+                scope = issued_invoice_payment_scope(
+                    conn, contractor, period_from, period_to,
+                )
+            except InvoicePaymentScopeError as exc:
+                return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+            expected_scope = clean_text(request.args.get("scope_id")).upper()
+            if expected_scope and expected_scope != scope["scope_id"]:
+                return jsonify({
+                    "ok": False,
+                    "error": "Phạm vi hóa đơn đã thay đổi; cần xem lại danh sách trước khi tải",
+                    "code": "stale_invoice_payment_scope",
+                }), 409
+            contractor = scope["contractor"]
+            period_from = scope["date_from"]
+            period_to = scope["date_to"]
+            drafts = scope["drafts"]
+            lines = scope["lines"]
+            details = scope["invoices"]
+            snapshot = scope["snapshot"]
+            payment_total = scope["totals"]["total_amount"]
+            try:
+                statement = invoice_delivery_statement_scope_workbook(scope)
+                payment_request = invoice_payment_request_workbook(
+                    scope,
+                    issue_date=request.args.get("issue_date") or period_to,
+                    request_number=request.args.get("request_number") or "……/CV/ĐNTT",
+                    contract_no=request.args.get("contract_no") or "",
+                    contract_date=request.args.get("contract_date") or "",
+                )
+            except (InvoiceDeliveryStatementError, InvoicePaymentDocumentError) as exc:
+                return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+            payment_stream = io.BytesIO()
+            payment_request.save(payment_stream)
+            payment_request.close()
             xlsx_stream = io.BytesIO()
             statement.save(xlsx_stream)
             statement.close()
             safe_code = re.sub(r"[^A-Z0-9_-]+", "_", contractor)[:40] or "KHACH_HANG"
             bundle = io.BytesIO()
             with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
-                archive.writestr(f"De_nghi_thanh_toan_{safe_code}_{period_from}_{period_to}.docx", docx_stream.getvalue())
-                archive.writestr(f"Bang_ke_giao_hang_{safe_code}_{period_from}_{period_to}.xlsx", xlsx_stream.getvalue())
+                archive.writestr(
+                    f"De_nghi_thanh_toan_{safe_code}_{period_from}_{period_to}.xlsx",
+                    payment_stream.getvalue(),
+                )
+                archive.writestr(
+                    f"Bang_tong_hop_giao_nhan_{safe_code}_{period_from}_{period_to}.xlsx",
+                    xlsx_stream.getvalue(),
+                )
+                invoice_sources = "\n".join(
+                    f"- {item['invoice_series']} / {item['invoice_number']} / {item['invoice_date']}: "
+                    f"{item['verification_source']}"
+                    for item in details
+                )
                 archive.writestr(
                     "THONG_TIN_DOI_CHIEU.txt",
-                    (f"Nhà thầu: {contractor}\nTừ ngày: {period_from}\nĐến ngày: {period_to}\n"
+                    ("HỒ SƠ HÓA ĐƠN ĐÃ ĐỐI CHIẾU\n"
+                     "Trạng thái: Đề nghị thanh toán và Bảng tổng hợp giao nhận là biểu mẫu chính thức "
+                     "theo file khách hàng cung cấp ngày 03/09/2026.\n"
+                     f"Mã phạm vi: {scope['scope_id']}\n"
+                     f"Nhà thầu: {contractor}\nTừ ngày: {period_from}\nĐến ngày: {period_to}\n"
                      f"Số hóa đơn: {len(details)}\nTổng đề nghị: {payment_total:,.0f} VNĐ\n"
-                     "Nguồn: hóa đơn đã xác nhận phát hành và lượng thực giao đã khóa.\n"),
+                     "Nguồn: chỉ hóa đơn đỏ đã xác nhận phát hành và chi tiết đã đối chiếu.\n"
+                     f"{invoice_sources}\n"),
                 )
             bundle.seek(0)
             audit(conn, now_iso, "outgoing.invoice_payment_bundle", "ok", entity_type="contractor",
                   entity_id=contractor, metadata={"from": period_from, "to": period_to,
-                                                   "invoices": len(details), "amount": payment_total})
-            return send_file(
+                                                   "invoices": len(details), "amount": payment_total,
+                                                   "scope_id": scope["scope_id"],
+                                                   "template_status": "official_customer_xlsx"})
+            response = send_file(
                 bundle, as_attachment=True,
-                download_name=f"Bo_de_nghi_thanh_toan_{safe_code}_{period_from}_{period_to}.zip",
+                download_name=f"Ho_so_de_nghi_thanh_toan_{safe_code}_{period_from}_{period_to}.zip",
                 mimetype="application/zip",
             )
+            response.headers["X-TDP-Template-Status"] = "official-customer-xlsx"
+            response.headers["X-TDP-Invoice-Scope"] = scope["scope_id"]
+            return response
 
 
 def _group_rows(rows, key):
@@ -7278,9 +9782,15 @@ def debt_period_payload(conn, period_from: str, period_to: str, tax_factor):
         remember_party("supplier", row["code"])
     for row in conn.execute("SELECT DISTINCT contractor FROM orders ORDER BY contractor"):
         remember_party("contractor", row["contractor"])
+    for row in conn.execute(
+        "SELECT DISTINCT contractor_code FROM receivable_ledger_lines ORDER BY contractor_code"
+    ):
+        remember_party("contractor", row["contractor_code"])
     for query in (
         "SELECT DISTINCT supplier FROM products ORDER BY supplier",
         "SELECT DISTINCT supplier FROM orders ORDER BY supplier",
+        "SELECT DISTINCT supplier FROM purchase_order_lines ORDER BY supplier",
+        "SELECT DISTINCT supplier FROM purchase_workbook_lines ORDER BY supplier",
         "SELECT DISTINCT supplier FROM historical_payable_lines ORDER BY supplier",
     ):
         for row in conn.execute(query):
@@ -7320,57 +9830,76 @@ def debt_period_payload(conn, period_from: str, period_to: str, tax_factor):
             parties[row["party_type"]][code]["opening"] += row["opening"]
             snapshot_cutoffs[row["party_type"]][code] = as_of_date
             snapshots_used[row["party_type"]][code] = as_of_date
-    for row in conn.execute(
-        """SELECT o.*,b.work_date FROM orders o JOIN batches b ON b.id=o.batch_id
-           WHERE b.status='approved' AND b.work_date<=? ORDER BY b.work_date,o.id""", (period_to,)
-    ):
-        item = dict(row)
-        contractor_subtotal = vnd_product(net_delivered(item), as_number(item["sell_price"]))
-        vat_percent = invoice_tax_percent(item["tax"])
-        contractor_tax = 0 if vat_percent <= 0 else vnd_product(contractor_subtotal, vat_percent / 100)
-        contractor_charge = contractor_subtotal + contractor_tax
-        supplier_charge = vnd_product(net_received(item), as_number(item["buy_price"]))
-        for party_type, code, amount in (
-            ("contractor", item["contractor"], contractor_charge),
-            ("supplier", item["supplier"], supplier_charge),
-        ):
-            code = party_key(party_type, code)
-            if not code:
-                continue
-            if (
-                party_type == "supplier"
-                and historical_through
-                and item["work_date"] <= historical_through
-            ):
-                continue
-            if item["work_date"] < snapshot_cutoffs[party_type][code]:
-                continue
-            target = parties[party_type][code]
-            if item["work_date"] < period_from:
-                target["opening"] += amount
-            else:
-                target["period_charge"] += amount
-    historical_summary = {"rows": 0, "amount": 0, "period_rows": 0, "period_amount": 0}
-    for row in conn.execute(
-        """SELECT purchase_date,supplier,amount FROM historical_payable_lines
-           WHERE purchase_date<=? ORDER BY purchase_date,id""", (period_to,)
-    ):
-        supplier = party_key("supplier", row["supplier"])
-        if not supplier:
-            continue
-        if row["purchase_date"] < snapshot_cutoffs["supplier"][supplier]:
-            continue
-        amount = vnd_round(row["amount"])
-        target = parties["supplier"][supplier]
-        historical_summary["rows"] += 1
-        historical_summary["amount"] += amount
-        if row["purchase_date"] < period_from:
+    def add_operational_charge(party_type, raw_code, amount, work_date):
+        code = party_key(party_type, raw_code)
+        if not code:
+            return
+        if work_date < snapshot_cutoffs[party_type][code]:
+            return
+        target = parties[party_type][code]
+        if work_date < period_from:
             target["opening"] += amount
         else:
             target["period_charge"] += amount
-            historical_summary["period_rows"] += 1
-            historical_summary["period_amount"] += amount
-    for row in conn.execute("SELECT * FROM payments WHERE payment_date<=?", (period_to,)):
+
+    # Contractor charges consume the dedicated operational receivable ledger.
+    # That ledger is sourced from approved net deliveries and transaction sell
+    # prices; issued VAT invoices are deliberately not an input to this balance.
+    for row in conn.execute(
+        """SELECT work_date,contractor_code,amount
+             FROM receivable_ledger_lines
+            WHERE status='active' AND work_date<=?
+            ORDER BY work_date,id""",
+        (period_to,),
+    ):
+        add_operational_charge(
+            "contractor", row["contractor_code"], vnd_round(row["amount"]), row["work_date"],
+        )
+
+    # Supplier charges use exactly the same source-line projection as the
+    # detailed payable ledger.  This keeps current canonical purchases,
+    # legacy orders and the authoritative history snapshot on one identity
+    # and cutoff policy, including supplier-code references after a rename.
+    try:
+        from payable_ledger import discover_payable_sources
+    except ImportError:  # pragma: no cover - package invocation
+        from .payable_ledger import discover_payable_sources
+    historical_summary = {"rows": 0, "amount": 0, "period_rows": 0, "period_amount": 0}
+    payable_ledger_existing = {
+        row["source_key"]: dict(row)
+        for row in conn.execute("SELECT * FROM payable_ledger_lines ORDER BY id")
+    }
+    payable_sources = sorted(
+        discover_payable_sources(conn, payable_ledger_existing),
+        key=lambda item: (item["work_date"], item["source_type"], item["source_key"]),
+    )
+    for row in payable_sources:
+        if row["work_date"] > period_to or row["reversal_reason"]:
+            continue
+        supplier = party_key("supplier", row["supplier_code"])
+        if not supplier:
+            continue
+        if row["work_date"] < snapshot_cutoffs["supplier"][supplier]:
+            continue
+        amount = vnd_round(row["amount"])
+        target = parties["supplier"][supplier]
+        if row["source_type"] == "historical_import":
+            historical_summary["rows"] += 1
+            historical_summary["amount"] += amount
+        if row["work_date"] < period_from:
+            target["opening"] += amount
+        else:
+            target["period_charge"] += amount
+            if row["source_type"] == "historical_import":
+                historical_summary["period_rows"] += 1
+                historical_summary["period_amount"] += amount
+    for row in conn.execute(
+        """SELECT * FROM payments
+            WHERE payment_date<=? AND COALESCE(status,'posted')='posted'
+              AND ((party_type='contractor' AND kind='receipt')
+                OR (party_type='supplier' AND kind='payment'))""",
+        (period_to,),
+    ):
         party_type = row["party_type"]
         if party_type not in parties:
             continue
@@ -7404,6 +9933,7 @@ def debt_period_payload(conn, period_from: str, period_to: str, tax_factor):
         "period_to": period_to,
         "contractors": dict(parties["contractor"]),
         "suppliers": dict(parties["supplier"]),
+        "receivable_source": "receivable_ledger_lines",
         "historical_payables": historical_summary,
         "historical_payables_through_date": historical_through or None,
         "snapshots_used": snapshots_used,
@@ -7420,6 +9950,32 @@ def validate_date_range(period_from: str, period_to: str):
         raise ValueError("Ngày bắt đầu phải trước hoặc bằng ngày kết thúc")
 
 
+def display_date_vn(value: str) -> str:
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        return str(value or "")
+
+
+def display_period_vn_in_text(value) -> str:
+    return re.sub(
+        r"(?<!\d)(20\d{2})-(0[1-9]|1[0-2])(?!\d)",
+        lambda match: f"{match.group(2)}/{match.group(1)}",
+        mapping_cell_text(value),
+    )
+
+
+def display_datetime_vn(value: str) -> str:
+    text = str(value or "").strip()
+    for pattern in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(text, pattern)
+            return parsed.strftime("%d/%m/%Y %H:%M:%S" if "%H" in pattern else "%d/%m/%Y")
+        except ValueError:
+            pass
+    return text
+
+
 def style_export_sheet(ws, title: str, subtitle: str, headers: list[str], money_columns=()):
     end_col = max(len(headers), 1)
     ws.insert_rows(1, 2)
@@ -7427,19 +9983,37 @@ def style_export_sheet(ws, title: str, subtitle: str, headers: list[str], money_
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=end_col)
     ws.cell(1, 1, title)
     ws.cell(2, 1, subtitle)
-    ws.cell(1, 1).font = Font(name="Arial", size=16, bold=True, color="FFFFFF")
-    ws.cell(1, 1).fill = PatternFill("solid", fgColor="17324D")
-    ws.cell(1, 1).alignment = Alignment(horizontal="center")
-    ws.cell(2, 1).font = Font(name="Arial", italic=True, color="475569")
-    ws.cell(2, 1).alignment = Alignment(horizontal="center")
+    # These are operational Excel sheets, not dashboard cards.  Keep their
+    # appearance close to the customer's plain workbooks: black Times New
+    # Roman text, no decorative colour bands, and a title that remains fully
+    # visible even on narrow two-column summaries.
+    ws.cell(1, 1).font = Font(name="Times New Roman", size=14, bold=True)
+    ws.cell(1, 1).alignment = Alignment(
+        horizontal="center", vertical="center", wrap_text=True,
+        shrink_to_fit=True,
+    )
+    ws.cell(2, 1).font = Font(name="Times New Roman", size=11, italic=True)
+    ws.cell(2, 1).alignment = Alignment(
+        horizontal="center", vertical="center", wrap_text=True,
+        shrink_to_fit=True,
+    )
+    ws.row_dimensions[1].height = 34 if end_col <= 2 and len(title) > 24 else 24
+    ws.row_dimensions[2].height = 28 if end_col <= 2 and len(subtitle) > 28 else 20
+    table_border = Border(
+        left=Side(style="thin", color="000000"),
+        right=Side(style="thin", color="000000"),
+        top=Side(style="thin", color="000000"),
+        bottom=Side(style="thin", color="000000"),
+    )
     for cell in ws[3]:
-        cell.font = Font(name="Arial", bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="087F73")
+        cell.font = Font(name="Times New Roman", size=11, bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = table_border
     for row in ws.iter_rows(min_row=4):
         for cell in row:
-            cell.font = Font(name="Arial", size=10)
+            cell.font = Font(name="Times New Roman", size=11)
             cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.border = table_border
     for column in money_columns:
         for row in range(4, ws.max_row + 1):
             ws.cell(row, column).number_format = "#,##0"
@@ -7451,7 +10025,26 @@ def style_export_sheet(ws, title: str, subtitle: str, headers: list[str], money_
         width = min(max([len(value) for value in values] + [10]) + 2, 42)
         ws.column_dimensions[get_column_letter(index)].width = width
     ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    # Short operational summaries are materially easier to read on portrait
+    # A4.  Wide detail tables remain landscape so no business column is lost.
+    ws.page_setup.orientation = (
+        ws.ORIENTATION_PORTRAIT if end_col <= 8 else ws.ORIENTATION_LANDSCAPE
+    )
+    ws.page_setup.scale = None
     ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_title_rows = "$3:$3"
+    ws.print_area = f"A1:{get_column_letter(end_col)}{max(ws.max_row, 3)}"
+    ws.page_margins.left = 0.25
+    ws.page_margins.right = 0.25
+    ws.page_margins.top = 0.45
+    ws.page_margins.bottom = 0.45
+    ws.page_margins.header = 0.15
+    ws.page_margins.footer = 0.2
+    ws.print_options.horizontalCentered = True
+    ws.oddFooter.center.text = "Trang &P / &N"
+    ws.sheet_view.showGridLines = False
 
 
 def send_workbook(workbook: Workbook, filename: str):
@@ -7490,7 +10083,7 @@ def debt_period_workbook(conn, payload: dict):
         style_export_sheet(
             ws,
             title,
-            f"Từ {period_from} đến {period_to} · đầu kỳ + phát sinh + điều chỉnh − đã thu/trả",
+            f"Từ {display_date_vn(period_from)} đến {display_date_vn(period_to)} · đầu kỳ + phát sinh + điều chỉnh − đã thu/trả",
             headers,
             money_columns=(2, 3, 4, 5, 6),
         )
@@ -7499,19 +10092,20 @@ def debt_period_workbook(conn, payload: dict):
     payment_headers = ["Ngày", "Loại", "Nhóm", "Đối tượng", "Số tiền", "Nội dung", "Ngày tạo"]
     ws.append(payment_headers)
     for row in conn.execute(
-        "SELECT * FROM payments WHERE payment_date>=? AND payment_date<=? ORDER BY payment_date,id",
+        "SELECT * FROM payments WHERE payment_date>=? AND payment_date<=? "
+        "AND COALESCE(status,'posted')='posted' ORDER BY payment_date,id",
         (period_from, period_to),
     ):
         ws.append([
-            row["payment_date"],
+            display_date_vn(row["payment_date"]),
             "Thu khách hàng" if row["kind"] == "receipt" else "Trả nhà cung cấp",
             "Phải thu" if row["party_type"] == "contractor" else "Phải trả",
             row["party_code"],
             row["amount"],
             row["note"],
-            row["created_at"],
+            display_datetime_vn(row["created_at"]),
         ])
-    style_export_sheet(ws, "LỊCH SỬ THU – CHI", f"Từ {period_from} đến {period_to}", payment_headers, (5,))
+    style_export_sheet(ws, "LỊCH SỬ THU – CHI", f"Từ {display_date_vn(period_from)} đến {display_date_vn(period_to)}", payment_headers, (5,))
 
     ws = workbook.create_sheet("Điều chỉnh")
     adjustment_headers = ["Ngày", "Nhóm", "Đối tượng", "Số điều chỉnh", "Lý do", "Ngày tạo"]
@@ -7521,14 +10115,14 @@ def debt_period_workbook(conn, payload: dict):
         (period_from, period_to),
     ):
         ws.append([
-            row["adjustment_date"],
+            display_date_vn(row["adjustment_date"]),
             "Phải thu" if row["party_type"] == "contractor" else "Phải trả",
             row["party_code"],
             row["amount"],
             row["note"],
-            row["created_at"],
+            display_datetime_vn(row["created_at"]),
         ])
-    style_export_sheet(ws, "ĐIỀU CHỈNH CÔNG NỢ", f"Từ {period_from} đến {period_to}", adjustment_headers, (4,))
+    style_export_sheet(ws, "ĐIỀU CHỈNH CÔNG NỢ", f"Từ {display_date_vn(period_from)} đến {display_date_vn(period_to)}", adjustment_headers, (4,))
 
     ws = workbook.create_sheet("Chi tiết phải trả cũ")
     payable_headers = [
@@ -7543,7 +10137,7 @@ def debt_period_workbook(conn, payload: dict):
         (period_from, period_to),
     ):
         ws.append([
-            row["purchase_date"], row["kitchen"], row["item_name"], row["qty"], row["unit"],
+            display_date_vn(row["purchase_date"]), row["kitchen"], row["item_name"], row["qty"], row["unit"],
             row["supplier"], row["buy_price"], row["damaged_qty"], row["added_qty"],
             row["reduced_qty"], row["missing_qty"], row["actual_qty"], row["source_amount"],
             row["calculated_amount"], row["source_amount"] - row["calculated_amount"], row["amount"],
@@ -7551,7 +10145,7 @@ def debt_period_workbook(conn, payload: dict):
         ])
     style_export_sheet(
         ws, "CHI TIẾT PHẢI TRẢ TỪ FILE KHÁCH",
-        f"Từ {period_from} đến {period_to} · giữ tiền khách đã chốt và hiển thị chênh lệch công thức",
+        f"Từ {display_date_vn(period_from)} đến {display_date_vn(period_to)} · giữ tiền khách đã chốt và hiển thị chênh lệch công thức",
         payable_headers, (7, 13, 14, 15, 16),
     )
     return workbook
@@ -7559,30 +10153,86 @@ def debt_period_workbook(conn, payload: dict):
 
 def payroll_workbook(conn, month: str):
     rows = payroll_rows(conn, month)
-    workbook = Workbook()
-    ws = workbook.active
-    ws.title = "Bảng lương"
+    if not PAYROLL_TEMPLATE_SOURCE.is_file():
+        raise FileNotFoundError(
+            "Thiếu mẫu LƯƠNG XƯỞNG đã chốt; không tạo bảng lương bằng mẫu tự đoán"
+        )
+    workbook = load_workbook(PAYROLL_TEMPLATE_SOURCE, data_only=False, read_only=False)
+    ws = workbook["LƯƠNG XƯỞNG"]
     headers = [
-        "STT", "Mã nhân sự", "Họ tên", "Chức vụ", "Bếp", "Giờ thường", "Tăng ca",
-        "Chủ nhật", "Ca đêm", "Ngày lễ", "Phụ cấp", "Trách nhiệm", "Tổng lương",
-        "BHXH NLĐ", "Tạm ứng", "Khấu trừ thử việc", "Thực lĩnh", "BHXH công ty",
+        "STT", "HỌ VÀ TÊN", "CHỨC VỤ", "Công HC", "Công TC", "Công CN",
+        "Công Đêm", "Công NL", "Phụ cấp", "Trách nhiệm", "Tổng Lương",
+        "Tạm ứng", "Thử việc", "BHXH người lao động đóng", "TỔNG",
+        "BHXH Công ty đóng",
     ]
-    ws.append(headers)
+    data_styles = [deepcopy(ws.cell(4, column)._style) for column in range(1, 17)]
+    total_styles = [deepcopy(ws.cell(5, column)._style) for column in range(1, 17)]
+    for column, label in enumerate(headers, 1):
+        ws.cell(3, column, label)
+    year, month_number = (int(value) for value in month.split("-"))
+    ws["A1"] = "LƯƠNG THÁNG"
+    ws["I1"] = month_number
+    ws["J1"] = year
+    ws["A2"] = "Lương cơ bản:"
+    # The customer's row 2 lists the base-salary rates actually used in the
+    # month (for example 5,000,000 and 8,000,000), rather than a prose note.
+    # Reproduce that behavior from the configured staff records.
+    for column in range(3, 17):
+        ws.cell(2, column, None)
+    base_salaries = sorted({
+        round(as_number(item.get("base_salary")))
+        for item in rows if as_number(item.get("base_salary")) > 0
+    })
+    for offset, amount in enumerate(base_salaries[:14], start=3):
+        ws.cell(2, offset, amount)
+        ws.cell(2, offset).number_format = "#,##0"
+    for row_number in range(4, max(ws.max_row, len(rows) + 4) + 1):
+        for column in range(1, 17):
+            ws.cell(row_number, column, None)
     for index, item in enumerate(rows, 1):
-        ws.append([
-            index, item["employee_code"], item["full_name"], item["role_name"], item["kitchen"],
-            item["normal_hours"], item["overtime_hours"], item["sunday_hours"], item["night_hours"],
-            item["holiday_hours"], item["allowance"], item["responsibility"], item["gross_salary"],
-            item["bhxh_employee"], item["advance"], item["probation_deduction"], item["net_salary"],
-            item["bhxh_company"],
-        ])
-    style_export_sheet(
-        ws,
-        f"BẢNG LƯƠNG THÁNG {month}",
-        "Công thường · tăng ca · Chủ nhật · ca đêm · ngày lễ · phụ cấp · BHXH · tạm ứng",
-        headers,
-        money_columns=(11, 12, 13, 14, 15, 16, 17, 18),
-    )
+        row_number = index + 3
+        values = [
+            index, item["full_name"], item["role_name"], item["normal_hours"],
+            item["overtime_hours"], item["sunday_hours"], item["night_hours"],
+            item["holiday_hours"], item["allowance"], item["responsibility"],
+            item["gross_salary"], item["advance"], item["probation_deduction"],
+            item["bhxh_employee"], item["net_salary"], item["bhxh_company"],
+        ]
+        for column, value in enumerate(values, 1):
+            cell = ws.cell(row_number, column, value)
+            cell._style = deepcopy(data_styles[column - 1])
+            if column >= 9:
+                cell.number_format = "#,##0"
+    total_row = len(rows) + 4
+    # The customer workbook merges the first three cells for the total label.
+    # Preserve that merge so ``TỔNG`` is not clipped inside the very narrow
+    # STT column when printed.
+    for merged_range in list(ws.merged_cells.ranges):
+        if merged_range.min_row == total_row and merged_range.max_row == total_row:
+            ws.unmerge_cells(str(merged_range))
+    ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=3)
+    for column in range(1, 17):
+        ws.cell(total_row, column)._style = deepcopy(total_styles[column - 1])
+        ws.cell(total_row, column, None)
+    ws.cell(total_row, 1, "TỔNG")
+    ws.cell(total_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(total_row, 15, f"=SUM(O4:O{total_row - 1})" if rows else 0)
+    ws.cell(total_row, 15).number_format = "#,##0"
+    # The customer workbook keeps the ``Tạm ứng`` column unusually narrow.
+    # Real six/seven-digit advances otherwise print as ``#####`` even though
+    # the underlying value is valid. Keep the golden layout and widen only
+    # this numeric column enough for an ordinary VND amount.
+    ws.column_dimensions["L"].width = max(ws.column_dimensions["L"].width or 0, 10)
+    ws.freeze_panes = "A4"
+    ws.print_title_rows = "$1:$3"
+    ws.print_area = f"A1:P{total_row}"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.scale = None
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_view.showGridLines = False
 
     ws = workbook.create_sheet("Chi phí theo bếp")
     labor_headers = ["Bếp", "Chi phí lao động"]
@@ -7593,7 +10243,14 @@ def payroll_workbook(conn, month: str):
         (month,),
     ):
         ws.append([row["kitchen"], row["amount"]])
-    style_export_sheet(ws, f"CHI PHÍ LAO ĐỘNG THÁNG {month}", "Tổng hợp theo bếp", labor_headers, (2,))
+    year_text, month_text = month.split("-", 1)
+    style_export_sheet(
+        ws,
+        f"CHI PHÍ LAO ĐỘNG THÁNG {month_text}/{year_text}",
+        "Tổng hợp theo bếp",
+        labor_headers,
+        (2,),
+    )
     return workbook
 
 
@@ -7692,32 +10349,39 @@ def meal_po_workbook(plans, work_date: str):
         ws = wb.create_sheet(title or "PO")
         ws.append([f"PO XƯỞNG CƠM – {approval_label}"])
         ws.merge_cells("A1:M1")
-        ws["A1"].font = Font(name="Arial", size=16, bold=True, color="FFFFFF")
-        ws["A1"].fill = PatternFill("solid", fgColor="17324D")
-        ws["A1"].alignment = Alignment(horizontal="center")
-        price_sources = sorted({item["price_source"] for _, item in rows if item.get("price_source")})
-        ws.append([f"Ngày {work_date}", "", "", f"XCOM {unit_code}", "", "", "",
+        ws["A1"].font = Font(name="Times New Roman", size=14, bold=True)
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        price_sources = sorted({
+            display_period_vn_in_text(item["price_source"])
+            for _, item in rows if item.get("price_source")
+        })
+        ws.append([f"Ngày {display_date_vn(work_date)}", "", "", f"XCOM {unit_code}", "", "", "",
                    f"Nguồn giá: {', '.join(price_sources)}"])
         for cell in ws[2]:
-            cell.font = Font(name="Arial", bold=True)
+            cell.font = Font(name="Times New Roman", size=11, bold=True)
         ws.append(["STT", "Bếp / ca", "Mã hàng", "Tên nguyên liệu", "ĐVT", "Suất áp dụng",
                    "Định lượng/1.000 suất", "Số lượng cần", "Đơn giá", "Thành tiền", "NCC", "Nguồn giá"])
         for index, (plan, item) in enumerate(rows, 1):
             ws.append([
                 index, f"{plan['kitchen']} / {plan['shift']}", item["product_code"], item["product_name"],
                 item["unit"], item["applicable_meal_count"], item["source_norm_per_1000"],
-                item["required_qty"], item["buy_price"], item["cost"], item["supplier"], item["price_source"],
+                item["required_qty"], item["buy_price"], item["cost"], item["supplier"],
+                display_period_vn_in_text(item["price_source"]),
             ])
         for cell in ws[3]:
-            cell.font = Font(name="Arial", bold=True, color="FFFFFF")
-            cell.fill = PatternFill("solid", fgColor="087F73")
+            cell.font = Font(name="Times New Roman", size=11, bold=True)
+            cell.border = Border(
+                left=Side(style="thin", color="000000"),
+                right=Side(style="thin", color="000000"),
+                top=Side(style="thin", color="000000"),
+                bottom=Side(style="thin", color="000000"),
+            )
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         detail_end = ws.max_row
         ws.append([])
         ws.append(["TỔNG HỢP SUẤT ĂN / COST"])
         ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=12)
-        ws.cell(ws.max_row, 1).font = Font(name="Arial", bold=True, color="FFFFFF")
-        ws.cell(ws.max_row, 1).fill = PatternFill("solid", fgColor="17324D")
+        ws.cell(ws.max_row, 1).font = Font(name="Times New Roman", size=11, bold=True)
         ws.cell(ws.max_row, 1).alignment = Alignment(horizontal="center")
         ws.append(["Bếp / ca", "Số thực đơn", "Suất/thực đơn", "Tổng suất", "Đơn giá suất",
                    "Doanh thu", "Chi phí thực phẩm", "Chi phí khác", "Chi phí lao động",
@@ -7732,8 +10396,13 @@ def meal_po_workbook(plans, work_date: str):
                 plan.get("note", ""),
             ])
         for cell in ws[summary_header]:
-            cell.font = Font(name="Arial", bold=True, color="FFFFFF")
-            cell.fill = PatternFill("solid", fgColor="087F73")
+            cell.font = Font(name="Times New Roman", size=11, bold=True)
+            cell.border = Border(
+                left=Side(style="thin", color="000000"),
+                right=Side(style="thin", color="000000"),
+                top=Side(style="thin", color="000000"),
+                bottom=Side(style="thin", color="000000"),
+            )
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws.freeze_panes = "A4"
         ws.auto_filter.ref = f"A3:L{detail_end}"
@@ -7747,6 +10416,22 @@ def meal_po_workbook(plans, work_date: str):
             for col in range(5, 12):
                 ws.cell(row, col).number_format = "#,##0"
             ws.cell(row, 12).number_format = "0.0%"
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+        ws.page_setup.scale = None
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.print_title_rows = "$3:$3"
+        ws.print_area = f"A1:M{ws.max_row}"
+        ws.page_margins.left = 0.2
+        ws.page_margins.right = 0.2
+        ws.page_margins.top = 0.4
+        ws.page_margins.bottom = 0.4
+        ws.page_margins.header = 0.15
+        ws.page_margins.footer = 0.2
+        ws.oddFooter.center.text = "Trang &P / &N"
+        ws.sheet_view.showGridLines = False
     if not wb.sheetnames:
         wb.create_sheet("PO")
     return wb
@@ -8391,11 +11076,11 @@ def import_legacy_attendance(conn, path: Path, source_name: str, now_iso, period
             formulas_book.close()
 
 
-def invoice_payment_request_document(company: str, company_tax_code: str, company_address: str,
-                                     recipient: str, recipient_tax_code: str, recipient_address: str,
-                                     requester: str, bank_name: str, bank_account: str,
-                                     period_from: str, period_to: str, details: list[dict]):
-    """Create an invoice-based request; no amounts are typed or inferred manually."""
+def _legacy_invoice_payment_request_document(company: str, company_tax_code: str, company_address: str,
+                                             recipient: str, recipient_tax_code: str, recipient_address: str,
+                                             requester: str, bank_name: str, bank_account: str,
+                                             period_from: str, period_to: str, details: list[dict]):
+    """Retained only for old-file compatibility; current routes use the approved XLSX form."""
     document = Document()
     section = document.sections[0]
     section.top_margin = Cm(1.5)
@@ -8405,6 +11090,12 @@ def invoice_payment_request_document(company: str, company_tax_code: str, compan
     normal = document.styles["Normal"]
     normal.font.name = "Times New Roman"
     normal.font.size = Pt(12)
+
+    control_notice = document.add_paragraph()
+    control_notice.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    control_run = control_notice.add_run("BIỂU MẪU DOCX CŨ – KHÔNG DÙNG CHO BÀN GIAO")
+    control_run.bold = True
+    control_run.font.size = Pt(11)
 
     header = document.add_table(rows=1, cols=2)
     header.autofit = False
@@ -8527,70 +11218,32 @@ def invoice_payment_request_document(company: str, company_tax_code: str, compan
     return document
 
 
-def invoice_delivery_statement_workbook(lines: list[dict], drafts: list[dict], tax_factor):
-    """Create a delivery statement and refuse any invoice/line total mismatch."""
-    workbook = Workbook()
-    detail = workbook.active
-    detail.title = "Bảng kê giao hàng"
-    headers = [
-        "STT", "Ngày giao", "Ngày HĐ", "Ký hiệu", "Số HĐ", "Bếp", "Mã hàng",
-        "Tên hàng", "ĐVT", "SL thực giao", "Đơn giá", "Tiền trước thuế",
-        "Thuế suất", "Tiền thuế", "Tổng thanh toán",
-    ]
-    detail.append(headers)
-    computed = defaultdict(lambda: {"subtotal": 0, "tax": 0, "total": 0})
-    for index, line in enumerate(lines, start=1):
-        amount = vnd_round(line.get("amount"))
-        vat_percent = invoice_tax_percent(line.get("tax"))
-        tax_amount = 0 if vat_percent <= 0 else vnd_product(amount, vat_percent / 100)
-        total_amount = amount + tax_amount
-        computed[line["draft_id"]]["subtotal"] += amount
-        computed[line["draft_id"]]["tax"] += tax_amount
-        computed[line["draft_id"]]["total"] += total_amount
-        detail.append([
-            index, line.get("work_date"), line.get("issued_invoice_date"),
-            line.get("issued_invoice_series"), line.get("issued_invoice_number"), line.get("kitchen"),
-            line.get("product_code"), line.get("product_name"), line.get("unit"),
-            line.get("qty"), vnd_round(line.get("unit_price")), amount,
-            line.get("tax"), tax_amount, total_amount,
-        ])
-    style_export_sheet(
-        detail, "BẢNG KÊ HÀNG HÓA/DỊCH VỤ ĐÃ GIAO",
-        "Nguồn: lượng thực giao thuộc hóa đơn đã xác nhận phát hành",
-        headers, money_columns=(11, 12, 14, 15),
+def invoice_delivery_statement_workbook(
+    lines: list[dict], drafts: list[dict], tax_factor=None, *, contractor="", scope_id="",
+    period_from="", period_to="",
+):
+    """Backward-compatible entrypoint for the dedicated issued-invoice exporter."""
+    return _invoice_delivery_statement_workbook(
+        lines, drafts, tax_factor, contractor=contractor, scope_id=scope_id,
+        period_from=period_from, period_to=period_to,
     )
 
-    reconcile = workbook.create_sheet("Đối chiếu hóa đơn")
-    reconcile_headers = [
-        "Ngày HĐ", "Ký hiệu", "Số HĐ", "Tiền HĐ trước thuế", "Tiền bảng kê trước thuế",
-        "Thuế HĐ", "Thuế bảng kê", "Tổng HĐ", "Tổng bảng kê", "Chênh lệch",
-    ]
-    reconcile.append(reconcile_headers)
-    mismatches = []
-    for draft in drafts:
-        values = computed[draft["id"]]
-        invoice_subtotal = vnd_round(draft["subtotal"])
-        invoice_tax = vnd_round(draft["tax_amount"])
-        invoice_total = vnd_round(draft["total_amount"])
-        difference = invoice_total - values["total"]
-        if any(abs(value) > 1 for value in (
-            invoice_subtotal - values["subtotal"], invoice_tax - values["tax"], difference,
-        )):
-            mismatches.append(str(draft.get("issued_invoice_number") or draft["id"]))
-        reconcile.append([
-            draft.get("issued_invoice_date"), draft.get("issued_invoice_series"),
-            draft.get("issued_invoice_number"), invoice_subtotal, values["subtotal"],
-            invoice_tax, values["tax"], invoice_total, values["total"], difference,
-        ])
-    if mismatches:
-        workbook.close()
-        raise ValueError("Tổng hóa đơn lệch bảng kê giao hàng: " + ", ".join(mismatches))
-    style_export_sheet(
-        reconcile, "ĐỐI CHIẾU HÓA ĐƠN VÀ BẢNG KÊ",
-        "Chỉ xuất khi toàn bộ chênh lệch nằm trong 1 VNĐ",
-        reconcile_headers, money_columns=(4, 5, 6, 7, 8, 9, 10),
+
+def invoice_delivery_statement_scope_workbook(scope: dict):
+    """Render a verified scope while retaining each invoice's provenance."""
+    provenance = {int(item["draft_id"]): item for item in scope["invoices"]}
+    drafts = []
+    for source_draft in scope["drafts"]:
+        draft = dict(source_draft)
+        proof = provenance[int(draft["id"])]
+        draft["verification_source"] = proof["verification_source"]
+        draft["source_invoice_id"] = proof.get("source_invoice_id")
+        drafts.append(draft)
+    return invoice_delivery_statement_workbook(
+        scope["lines"], drafts,
+        contractor=scope["contractor"], scope_id=scope["scope_id"],
+        period_from=scope["date_from"], period_to=scope["date_to"],
     )
-    return workbook
 
 
 def payment_request_document(company: str, recipient: str, requester: str, bank_name: str,

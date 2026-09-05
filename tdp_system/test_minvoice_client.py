@@ -98,6 +98,33 @@ class MinvoiceDraftTests(unittest.TestCase):
     def setUp(self):
         self.client = RecordingMinvoiceClient()
 
+    def test_outgoing_range_is_sent_to_minvoice_with_inclusive_page_contract(self):
+        self.client.responses["InvoiceApi78/GetInvoices"] = {
+            "ok": True,
+            "code": "00",
+            "data": [],
+            "total": 0,
+        }
+
+        result = self.client.get_outgoing_invoices(
+            "2026-08-01", "2026-08-31", "1C26TDP",
+            start=199, count=199, include_details=True,
+        )
+
+        self.assertEqual(0, result["total"])
+        call = self.client.calls[-1]
+        self.assertEqual("POST", call["method"])
+        self.assertEqual("InvoiceApi78/GetInvoices", call["path"])
+        self.assertEqual({
+            "tuNgay": "2026-08-01",
+            "denngay": "2026-08-31",
+            "khieu": "1C26TDP",
+            "start": 199,
+            "count": 199,
+            "coChiTiet": True,
+        }, call["payload"])
+        self.assertTrue(call["authenticated"])
+
     def test_validate_and_build_vat_draft(self):
         summary = self.client.validate_draft(valid_draft())
         self.assertEqual(summary, {
@@ -358,6 +385,7 @@ class MinvoiceDraftTests(unittest.TestCase):
             with db_factory() as connection:
                 connection.executescript(server.SCHEMA)
                 init_contract_schema(connection)
+                server.init_invoice_workbench_schema(connection)
                 connection.execute(
                     """INSERT INTO outgoing_invoice_drafts(
                            batch_id,contractor,invoice_date,status,subtotal,tax_amount,
@@ -391,6 +419,19 @@ class MinvoiceDraftTests(unittest.TestCase):
                        ) VALUES(?,1,'KM-01','Nuoc tang luc',4,'Chai',0,'10','2',0)""",
                     (draft_id,),
                 )
+                connection.execute("INSERT INTO products(code,name,unit) VALUES('KM-01','Nuoc tang luc','Chai')")
+                for source_type, qty_in, qty_out, source_id, status in (
+                    ("OPENING", 4, 0, "PROMO-OPENING", "posted"),
+                    ("OUTGOING_DRAFT", 0, 4, str(draft_id), "reserved"),
+                ):
+                    connection.execute(
+                        """INSERT INTO inventory_transactions(
+                           txn_date,product_code,qty_in,qty_out,unit_cost,source_type,
+                           source_id,source_line,status,created_at,updated_at
+                           ) VALUES('2026-08-01','KM-01',?,?,0,?,?,'1',?,
+                                    '2026-08-01','2026-08-01')""",
+                        (qty_in, qty_out, source_type, source_id, status),
+                    )
 
             app = Flask("minvoice-route-test")
             register_contract_routes(app, {

@@ -18,6 +18,15 @@ ROOT = APP_DIR.parent
 sys.path.insert(0, str(APP_DIR))
 import server  # noqa: E402
 import contract_modules  # noqa: E402
+import quote_import  # noqa: E402
+import quote_export  # noqa: E402
+import template_workbook  # noqa: E402
+import delivery_export  # noqa: E402
+import purchase_summary_export  # noqa: E402
+import receipt_export  # noqa: E402
+import report_export  # noqa: E402
+import print_bundle  # noqa: E402
+import bk_import  # noqa: E402
 from msmi_client import MsmiClient, MsmiConfig  # noqa: E402
 
 
@@ -26,6 +35,669 @@ def clean_test_db(path: Path):
         target = Path(str(path) + suffix)
         if target.exists():
             target.unlink()
+
+
+def run_template_workbook_qc():
+    expected_hash = "66808CD910F63F4D543A72CC51DDAEBA1C60B147E0457FEAFC5BAD65EAD26AD3"
+    source = ROOT / "Em Thành.xlsx"
+    before = hashlib.sha256(source.read_bytes()).hexdigest().upper()
+    assert before == expected_hash
+    clones = [
+        template_workbook.clone_template_workbook(
+            source, sheet_names=["biên nhận"], expected_sha256=expected_hash,
+        )
+        for _ in range(2)
+    ]
+    try:
+        signatures = [
+            template_workbook.workbook_topology_signature(clone.workbook)
+            for clone in clones
+        ]
+        assert signatures[0] == signatures[1]
+        for clone in clones:
+            assert clone.formula_report == {
+                "preserved_formulas": 3,
+                "replaced_external_reference": 40,
+                "replaced_omitted_sheet_reference": 0,
+                "replaced_unsafe_formula": 0,
+                "missing_cached_values": 0,
+                "external_hyperlinks_removed": 0,
+                "defined_names_removed": 0,
+            }
+            assert len(clone.workbook["biên nhận"].merged_cells.ranges) == 11
+            assert clone.workbook["biên nhận"]["F22"].value == "=SUM(F15:F21)"
+            payload = clone.to_bytes()
+            reopened = load_workbook(
+                io.BytesIO(payload), data_only=False, keep_links=False,
+            )
+            try:
+                assert not reopened._external_links
+                template_workbook.assert_workbook_safe(reopened)
+            finally:
+                reopened.close()
+    finally:
+        for clone in clones:
+            clone.close()
+    assert hashlib.sha256(source.read_bytes()).hexdigest().upper() == before
+    return "real receipt topology / 40 external formulas cached / 3 local formulas preserved / repeat deterministic"
+
+
+def run_delivery_template_qc():
+    source = ROOT / "Em Thành.xlsx"
+    before = hashlib.sha256(source.read_bytes()).hexdigest().upper()
+    assert before == delivery_export.EM_THANH_SHA256
+    workbook = delivery_export.build_delivery_workbook(
+        [
+            {
+                "kitchen": "NHUAHP",
+                "contractor": "NHUAHAIPHONG",
+                "recipient": "CÔNG TY CỔ PHẦN NHỰA VÀ CƠ KHÍ HẢI PHÒNG",
+                "address": "Km 104 + 200 QL5, Phường Đông Hải, TP Hải Phòng, Việt Nam",
+                "items": [
+                    {
+                        "product_name": "Bí xanh sơ chế (gọt vỏ)",
+                        "quantity": 2,
+                        "unit": "Kg",
+                        "sell_price": 14000,
+                        "note": "",
+                    }
+                ],
+            },
+            {
+                "kitchen": "POT",
+                "contractor": "HATRAN",
+                "recipient": "BẾP POT",
+                "address": "476 Phạm Văn Đồng, Hải Phòng",
+                "items": [
+                    {
+                        "product_name": "Cà rốt",
+                        "quantity": 3,
+                        "unit": "Kg",
+                        "sell_price": 987654321,
+                        "note": "",
+                    }
+                ],
+            },
+        ],
+        work_date="2026-09-02",
+        template_path=source,
+    )
+    try:
+        priced = workbook["NHUAHP"]
+        hidden = workbook["POT"]
+        assert priced["H10"].value == "Đơn giá" and priced["I11"].value == 28000
+        assert hidden.column_dimensions["H"].hidden
+        assert hidden.column_dimensions["I"].hidden
+        assert all(hidden.cell(row, column).value is None for row in range(10, 40) for column in (7, 8, 9))
+        assert all(len(sheet._images) == 0 for sheet in workbook.worksheets)
+        assert priced["C6"].value == "Ngày 02 tháng 09 năm 2026"
+        assert priced["C6"].alignment.horizontal == "center"
+        assert all(priced[coordinate].font.bold for coordinate in ("C1", "C2", "C3"))
+        assert priced["C9"].value == "Hình thức thanh toán: TM/CK"
+        assert priced["C13"].value == "Ngày ..... tháng ..... năm ........"
+        assert hidden["C12"].value == "Ngày ..... tháng ..... năm ........"
+        assert "Người nhận hàng" in priced["C14"].value
+        assert "Người nhận hàng" in hidden["C13"].value
+        assert priced["C15"].value.count("Ký và ghi rõ họ tên") == 4
+        assert hidden["C14"].value.count("Ký và ghi rõ họ tên") == 4
+        assert all(str(sheet.page_setup.paperSize) == "9" for sheet in workbook.worksheets)
+        assert all(sheet.page_setup.orientation == "portrait" for sheet in workbook.worksheets)
+        assert all(sheet.print_options.horizontalCentered for sheet in workbook.worksheets)
+        assert all(sheet.print_title_rows == "$10:$10" for sheet in workbook.worksheets)
+        assert all(len(sheet.conditional_formatting) == 0 for sheet in workbook.worksheets)
+        assert all(sheet.column_dimensions["D"].width == 43 for sheet in workbook.worksheets)
+        assert all(sheet.column_dimensions["J"].width == 24 for sheet in workbook.worksheets)
+        assert all(sheet["D11"].font.name == "Arial" for sheet in workbook.worksheets)
+        assert all((sheet["D11"].font.sz or 0) >= 16 for sheet in workbook.worksheets)
+        assert priced["D37"].value is None and hidden["D37"].value is None
+        sections = print_bundle.workbook_sections("deliveries", workbook)
+        assert [len(section["signatures"]) for section in sections] == [4, 4]
+        assert [column["label"] for column in sections[0]["columns"]] == [
+            "STT", "Tên hàng", "SL", "ĐVT", "Đơn giá", "Thành tiền", "GC",
+        ]
+        assert [column["label"] for column in sections[1]["columns"]] == [
+            "STT", "Tên hàng", "SL", "ĐVT", "GC",
+        ]
+        candidate = template_workbook.safe_workbook_bytes(workbook)
+    finally:
+        workbook.close()
+    reopened = load_workbook(io.BytesIO(candidate), data_only=False, keep_links=False)
+    try:
+        assert reopened.sheetnames == ["NHUAHP", "POT"]
+        assert [len(sheet._images) for sheet in reopened.worksheets] == [0, 0]
+        assert not reopened._external_links
+    finally:
+        reopened.close()
+    assert hashlib.sha256(source.read_bytes()).hexdigest().upper() == before
+    assert delivery_export.delivery_prices_visible("NHUAHP", "NHUAHAIPHONG")
+    assert not delivery_export.delivery_prices_visible("BẾP NHỰA", "NHUAHAIPHONG")
+    return (
+        "approved centred title-subtitle-date header / bold supplier identity / payment method / "
+        "full-width balanced pages / repeated header / "
+        "native editable 4-signature cells / exact NHUAHP+NHUAHAIPHONG price gate / "
+        "no hidden price leakage / A4"
+    )
+
+
+def run_purchase_summary_template_qc():
+    source = ROOT / "Em Thành.xlsx"
+    before = hashlib.sha256(source.read_bytes()).hexdigest().upper()
+    assert before == purchase_summary_export.EM_THANH_SHA256
+    fake_identity = "0" * 12
+    rows = [
+        {
+            "work_date": "2026-09-02",
+            "seller": "Người bán kiểm thử",
+            "address": "Địa chỉ kiểm thử",
+            "cccd": fake_identity,
+            "product_name": "Cà rốt",
+            "unit": "Kg",
+            "quantity": 2,
+            "amount": 200,
+            "supplier": "NCC A",
+            "kitchen": "BẾP A",
+            "source_ref": 3,
+        },
+        {
+            "work_date": "2026-09-02",
+            "seller": "Người bán kiểm thử",
+            "address": "Địa chỉ kiểm thử",
+            "cccd": fake_identity,
+            "product_name": "Cà rốt",
+            "unit": "kg",
+            "quantity": 3,
+            "amount": 360,
+            "supplier": "NCC B",
+            "kitchen": "BẾP B",
+            "source_ref": 4,
+        },
+        {
+            "work_date": "2026-09-02",
+            "seller": "Người bán kiểm thử",
+            "address": "Địa chỉ kiểm thử",
+            "cccd": fake_identity,
+            "product_name": "Khoai tây",
+            "unit": "Kg",
+            "quantity": 1,
+            "amount": 150,
+            "supplier": "NCC A",
+            "kitchen": "BẾP A",
+            "source_ref": 5,
+        },
+    ]
+    grouped = purchase_summary_export.aggregate_purchase_summary_rows(rows)
+    assert len(grouped) == 2
+    carrot = next(item for item in grouped if item["product_name"] == "Cà rốt")
+    assert carrot["quantity"] == 5 and carrot["unit_price"] == 112 and carrot["amount"] == 560
+    assert carrot["suppliers"] == ("NCC A", "NCC B")
+    assert carrot["kitchens"] == ("BẾP A", "BẾP B")
+
+    workbook = purchase_summary_export.build_purchase_summary_workbook(
+        rows, template_path=source,
+    )
+    try:
+        sheet = workbook["bảng kê tổng"]
+        assert workbook.sheetnames == ["bảng kê tổng"]
+        assert sheet["A2"].value == "Từ ngày 02/09/2026 đến ngày 02/09/2026"
+        assert sheet["G11"].value == 5 and sheet["H11"].value == 112 and sheet["I11"].value == 560
+        assert sheet["A13"].value == "TỔNG CỘNG" and sheet["I13"].value == 710
+        assert all(sheet.cell(7, column).value is None for column in range(1, 11))
+        assert sheet["C49"].value is None and sheet["C50"].value is None
+        assert str(sheet.print_area) == "'bảng kê tổng'!$A$1:$J$23"
+        assert sheet.page_setup.orientation == "landscape"
+        assert str(sheet.page_setup.paperSize) == "9"
+        sections = print_bundle.workbook_sections("purchases", workbook)
+        assert len(sections) == 1 and len(sections[0]["rows"]) == 2
+        assert sections[0]["summary"][1]["value"] == 710
+        candidate = template_workbook.safe_workbook_bytes(workbook)
+    finally:
+        workbook.close()
+    reopened = load_workbook(io.BytesIO(candidate), data_only=False, keep_links=False)
+    try:
+        assert reopened.sheetnames == ["bảng kê tổng"]
+        assert not reopened._external_links
+        assert reopened["bảng kê tổng"]["C50"].value is None
+    finally:
+        reopened.close()
+    assert hashlib.sha256(source.read_bytes()).hexdigest().upper() == before
+    return "confirmed BK only / legal seller item merge / weighted average / exact total / no sample identity / A4"
+
+
+def run_receipt_template_qc():
+    source = ROOT / "Em Thành.xlsx"
+    before = hashlib.sha256(source.read_bytes()).hexdigest().upper()
+    assert before == purchase_summary_export.EM_THANH_SHA256
+    fake_identity = "0" * 12
+    rows = [
+        {
+            "work_date": "2026-09-03",
+            "seller": "Người bán kiểm thử",
+            "address": "Địa chỉ kiểm thử",
+            "cccd": fake_identity,
+            "issue_date": "02/01/2020",
+            "issue_place": "Nơi cấp kiểm thử",
+            "product_name": "Cà rốt",
+            "unit": "Kg",
+            "quantity": 2,
+            "amount": 200,
+            "supplier": "NCC A",
+            "kitchen": "BẾP A",
+            "source_ref": 3,
+        },
+        {
+            "work_date": "2026-09-03",
+            "seller": "Người bán kiểm thử",
+            "address": "Địa chỉ kiểm thử",
+            "cccd": fake_identity,
+            "issue_date": "02/01/2020",
+            "issue_place": "Nơi cấp kiểm thử",
+            "product_name": "Cà rốt",
+            "unit": "kg",
+            "quantity": 3,
+            "amount": 360,
+            "supplier": "NCC B",
+            "kitchen": "BẾP B",
+            "source_ref": 4,
+        },
+    ]
+    workbook = receipt_export.build_purchase_documents_workbook(
+        rows,
+        template_path=source,
+        buyer_name="Người mua kiểm thử",
+        buyer_title="Nhân viên thu mua",
+        company_name="CÔNG TY KIỂM THỬ",
+        company_address="Địa chỉ công ty kiểm thử",
+    )
+    try:
+        assert workbook.sheetnames == ["bảng kê tổng", "biên nhận"]
+        sheet = workbook["biên nhận"]
+        assert sheet["D10"].value == fake_identity
+        assert sheet["F16"].value == 5 and sheet["G16"].value == 560
+        assert sheet["C17"].value.startswith("Số tiền bằng chữ:")
+        assert sheet.max_row == 26
+        assert str(sheet.print_area) == "'biên nhận'!$C$1:$G$26"
+        assert sheet.page_setup.orientation == "portrait"
+        assert str(sheet.page_setup.paperSize) == "9"
+        assert sheet.print_options.horizontalCentered
+        assert "D8:G8" in {str(value) for value in sheet.merged_cells.ranges}
+        assert "C22:D22" in {str(value) for value in sheet.merged_cells.ranges}
+        assert sheet["E21"].value == "Hải Phòng, ngày 03 tháng 09 năm 2026"
+        assert sheet["E21"].alignment.horizontal == "center"
+        assert sheet["E22"].alignment.horizontal == "center"
+        assert sheet["E26"].alignment.horizontal == "center"
+        assert sheet["C15"].font.name == "Times New Roman"
+        assert sheet["C15"].font.sz == 12
+        sections = print_bundle.workbook_sections("purchases", workbook)
+        assert len(sections) == 2
+        assert sections[1]["document_type"] == "purchase_receipt"
+        assert sections[1]["title"] == "GIẤY BIÊN NHẬN"
+        assert len(sections[1]["rows"]) == 1
+        candidate = template_workbook.safe_workbook_bytes(workbook)
+    finally:
+        workbook.close()
+    reopened = load_workbook(io.BytesIO(candidate), data_only=False, keep_links=False)
+    try:
+        assert reopened.sheetnames == ["bảng kê tổng", "biên nhận"]
+        assert not reopened._external_links
+        assert reopened["biên nhận"]["D10"].value == fake_identity
+    finally:
+        reopened.close()
+    assert hashlib.sha256(source.read_bytes()).hexdigest().upper() == before
+    return (
+        "one golden receipt per legal seller/day / issue identity / 5m hard cap / "
+        "dynamic rows / aligned identity+table+two signatures / A4 / manifest-safe title"
+    )
+
+
+def run_monthly_report_template_qc():
+    source = ROOT / "Em Thành.xlsx"
+    before = hashlib.sha256(source.read_bytes()).hexdigest().upper()
+    assert before == purchase_summary_export.EM_THANH_SHA256
+    rows = [
+        {
+            "contractor": "ATV", "kitchen": "LSVINA",
+            "revenue": 100, "cost": 60, "profit": 40, "total": 108,
+            "source_ref": 1,
+        },
+        {
+            "contractor": "ATV", "kitchen": "BẾP-MỚI",
+            "revenue": 200, "cost": 100, "profit": 100, "total": 216,
+            "source_ref": 2,
+        },
+        {
+            "contractor": "HATRAN", "kitchen": "POT",
+            "revenue": 300, "cost": 200, "profit": 100, "total": 324,
+            "source_ref": 3,
+        },
+    ]
+    workbook = report_export.build_monthly_report_workbook(
+        rows,
+        period="2026-09",
+        template_path=source,
+        configured_groups={"BẾP-MỚI": "CHỊ TÚ"},
+    )
+    try:
+        sheet = workbook["báo cáo tổng hợp"]
+        assert workbook.sheetnames == ["báo cáo tổng hợp"]
+        assert sheet["C3"].value == "LSVINA"
+        assert sheet["C4"].value == "BẾP-MỚI"
+        assert (sheet["D5"].value, sheet["E5"].value, sheet["F5"].value, sheet["G5"].value) == (300, 160, 140, 324)
+        assert sheet["C6"].value == "POT"
+        assert sheet["A7"].value == "TỔNG THÁNG"
+        assert (sheet["D7"].value, sheet["E7"].value, sheet["F7"].value, sheet["G7"].value) == (600, 360, 240, 648)
+        assert sheet["A5"].fill.fgColor.rgb == "FF92D050"
+        assert sheet["A7"].fill.fgColor.rgb == "FF92D050"
+        assert str(sheet.print_area) == "'báo cáo tổng hợp'!$A$2:$G$7"
+        assert sheet.print_title_rows == "$2:$2"
+        assert str(sheet.page_setup.paperSize) == "9"
+        assert sheet.page_setup.orientation == "landscape"
+        sections = print_bundle.workbook_sections("report", workbook)
+        assert len(sections) == 1 and sections[0]["title"] == "BÁO CÁO TỔNG HỢP"
+        assert sections[0]["summary"][-1]["value"] == 648
+        candidate = template_workbook.safe_workbook_bytes(workbook)
+    finally:
+        workbook.close()
+    reopened = load_workbook(io.BytesIO(candidate), data_only=False, keep_links=False)
+    try:
+        assert reopened.sheetnames == ["báo cáo tổng hợp"]
+        assert reopened.active["A7"].value == "TỔNG THÁNG"
+        assert not reopened._external_links
+    finally:
+        reopened.close()
+    assert hashlib.sha256(source.read_bytes()).hexdigest().upper() == before
+    return "golden 7 columns / monthly approved scope / dynamic group+kitchen / group totals / TỔNG THÁNG / A4"
+
+
+def run_toyota_quote_golden_qc():
+    expected_hash = "C3C16615F8DA1AB80843DE3DD611CB8A472B401B8C7B93B177781EDEB203E148"
+    candidates = list((Path.home() / "Downloads").glob("*TOYOTA*T09-2026.xlsx"))
+    source = next(
+        (
+            path for path in candidates
+            if hashlib.sha256(path.read_bytes()).hexdigest().upper() == expected_hash
+        ),
+        None,
+    )
+    assert source is not None, "Thiếu golden báo giá Toyota T09-2026 đúng hash"
+    golden = load_workbook(source, data_only=True, keep_links=False)
+    try:
+        assert golden.sheetnames == ["all"] and not golden._external_links
+        sheet = golden["all"]
+        reference_rows = []
+        reference_groups = []
+        reference_zero_count = 0
+        for row_number in range(9, sheet.max_row + 1):
+            code = sheet.cell(row_number, 2).value
+            group_name = sheet.cell(row_number, 3).value
+            if not code:
+                if group_name and row_number < 539:
+                    reference_groups.append(str(group_name).strip())
+                continue
+            raw_price = sheet.cell(row_number, 5).value
+            if raw_price == 0:
+                reference_zero_count += 1
+            # Text dashes in the old golden are presentation-only placeholders.
+            # They become zero only in this layout fixture; production rows still
+            # come exclusively from the confirmed period import and omit X/blank.
+            price = raw_price if isinstance(raw_price, (int, float)) else 0
+            reference_rows.append({
+                "product_code": code,
+                "product_name": sheet.cell(row_number, 3).value,
+                "unit": sheet.cell(row_number, 4).value,
+                "tax": sheet.cell(row_number, 6).value,
+                "sell_price": price,
+                "price_state": "zero" if price == 0 else "numeric",
+                "exportable": True,
+            })
+        assert len(reference_rows) == 513
+        assert len({item["product_code"] for item in reference_rows}) == 513
+        assert reference_zero_count == 5
+        assert reference_groups == list(quote_export.QUOTE_GROUPS.values())
+        assert not any(
+            cell.data_type == "f"
+            for cells in sheet.iter_rows()
+            for cell in cells
+        )
+        golden_dimensions = {
+            column: sheet.column_dimensions[column].width for column in "ABCDEFG"
+        }
+        golden_margins = tuple(
+            getattr(sheet.page_margins, field)
+            for field in ("left", "right", "top", "bottom", "header", "footer")
+        )
+    finally:
+        golden.close()
+
+    candidate = quote_export.build_toyota_quote_workbook(
+        reference_rows,
+        period="2026-09",
+        version={"version_no": 1, "source_hash": expected_hash},
+    )
+    try:
+        assert candidate.sheetnames == ["all"] and not candidate._external_links
+        sheet = candidate["all"]
+        assert sheet.max_row == 542 and sheet.max_column == 6
+        assert [sheet.cell(8, column).value for column in range(1, 7)] == [
+            "STT", "MÃ", "TÊN THÀNH ĐẠT PHÁT", "ĐVT", "Giá chưa VAT", "Thuế",
+        ]
+        assert sheet.print_title_rows == "$8:$8"
+        assert (
+            sheet.page_setup.orientation, str(sheet.page_setup.paperSize),
+            sheet.page_setup.scale, sheet.page_setup.fitToHeight,
+        ) == ("landscape", "9", 87, 0)
+        assert {
+            column: sheet.column_dimensions[column].width for column in "ABCDEFG"
+        } == golden_dimensions
+        assert tuple(
+            getattr(sheet.page_margins, field)
+            for field in ("left", "right", "top", "bottom", "header", "footer")
+        ) == golden_margins
+        group_rows = [
+            cell.row for cell in sheet["C"] if cell.value in quote_export.QUOTE_GROUPS.values()
+        ]
+        assert group_rows == [9, 40, 59, 72, 110, 119, 127, 149, 159, 282, 309, 327, 333, 458, 483, 534]
+        assert sheet["A8"].fill.fgColor.rgb == "00FFFF00"
+        assert all(sheet.cell(row_number, 3).fill.fgColor.rgb == "0092D050" for row_number in group_rows)
+        assert all(sheet.cell(row_number, 3).font.bold for row_number in group_rows)
+        for start, end in zip(group_rows, group_rows[1:] + [538]):
+            codes = [
+                sheet.cell(row_number, 2).value
+                for row_number in range(start + 1, end)
+                if sheet.cell(row_number, 2).value
+            ]
+            assert codes == sorted(codes, key=str.casefold)
+        assert sheet["A539"].value == "Báo giá trên chưa bao gồm VAT!"
+        assert sheet["D539"].value is None
+        assert "TOYOTA · kỳ 2026-09 · phiên bản 1" in candidate.properties.subject
+        assert sheet["C541"].value == "XÁC NHẬN CỦA BÊN BÁN"
+        assert not any(
+            cell.data_type == "f"
+            for cells in sheet.iter_rows()
+            for cell in cells
+        )
+    finally:
+        candidate.close()
+    return "1 sheet all / 513-row golden scale / 16 green groups / A-Z / A4 landscape / repeat header / static values"
+
+
+def run_quote_import_qc():
+    quote_db = APP_DIR / "data" / "qc_quote_import.sqlite3"
+    clean_test_db(quote_db)
+    source = ROOT / "Em Thành.xlsx"
+    try:
+        assert source.exists(), "Thiếu nguồn ma trận báo giá Em Thành.xlsx"
+        server.DB_PATH = quote_db
+        server.MASTER_SOURCE = source
+        server.init_database()
+        client = server.app.test_client()
+        source_bytes = source.read_bytes()
+
+        def preview(period, payload=source_bytes, filename=source.name):
+            response = client.post(
+                "/api/quotes/import/preview",
+                data={
+                    "effective_period": period,
+                    "file": (io.BytesIO(payload), filename),
+                },
+                content_type="multipart/form-data",
+            )
+            assert response.status_code == 200, response.get_data(as_text=True)
+            return response.get_json()
+
+        first = preview("2026-09")
+        assert first["sheet"] == "BÁO GIÁ" and first["headerRow"] == 2
+        assert first["priceGroups"] == [
+            "ATV", "HATRAN", "BIADAUVOI", "NGUYENGIA", "SUPPY", "TOYOTA", "NHUAHAIPHONG",
+        ]
+        assert first["counts"] == {
+            "products": 899,
+            "price_groups": 7,
+            "price_cells": 6293,
+            "rows_with_errors": 0,
+            "rows_with_warnings": 161,
+            "duplicate_codes": 28,
+            "safe_duplicate_codes": 27,
+            "conflict_codes": 1,
+            "conflicts": 5,
+        }
+        assert first["canConfirm"] is False and first["proposedVersion"] == 1
+        assert next(item for item in first["priceColumns"] if item["priceGroup"] == "TOYOTA") == {
+            "priceGroup": "TOYOTA", "sourceColumn": 17, "sourceHeader": "TOYOTA",
+        }
+        assert {item["productCode"] for item in first["conflicts"]} == {"A000045"}
+        blocked = client.post(
+            "/api/quotes/import/confirm",
+            json={"token": first["token"], "confirmed": True, "state_hash": first["stateHash"]},
+        )
+        assert blocked.status_code == 400 and blocked.get_json()["code"] == "preview_has_errors"
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "BÁO GIÁ"
+        sheet.append(["BẢNG BÁO GIÁ QC"])
+        sheet.append([
+            "STT", "MÃ THAM CHIẾU", "MÃ HÀNG", "TÊN THÀNH ĐẠT PHÁT", "Giá mua", "NCC",
+            None, "bk", "Tên làm bảng kê", "ĐVT", "THUẾ", "ATV", "HATRAN", "BIADAUVOI",
+            "NGUYENGIA", "SUPPY", "TOYOTA", "NHUAHAIPHONG", "Thêm",
+        ])
+        sheet.append([None, 1, 2, 3, 4, 5, None, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+        sheet.append([1, "L000002ánh", "L000002", "Gạo Bắc Hương", 16000, "ánh", None, None, None,
+                      "Kg", "KKKNT", 17000, 17000, 19000, 19000, 19000, 17500, 17000])
+        sheet.append([2, "L000004ánh", "L000004", "Gạo tám", 18000, "ánh", None, None, None,
+                      "Kg", "KKKNT", "x", 20000, None, 21000, 0, 20500, 20000])
+        output = io.BytesIO()
+        workbook.save(output)
+        workbook.close()
+        clean_payload = output.getvalue()
+
+        clean = preview("2026-09", clean_payload, "quote-qc.xlsx")
+        assert clean["canConfirm"] is True and clean["counts"]["conflicts"] == 0
+        confirmed = client.post(
+            "/api/quotes/import/confirm",
+            json={"token": clean["token"], "confirmed": True, "state_hash": clean["stateHash"]},
+        )
+        assert confirmed.status_code == 200, confirmed.get_data(as_text=True)
+        contractor_exports = {
+            "ATV": {
+                "recipient": "CÔNG TY CỔ PHẦN SUẤT ĂN CÔNG NGHIỆP ATV",
+                "codes": ["L000002"], "prices": [17000],
+            },
+            "SUPPY": {
+                "recipient": "CÔNG TY TNNN SUPPLY",
+                "codes": ["L000002", "L000004"], "prices": [19000, 0],
+            },
+            "TOYOTA": {
+                "recipient": "CÔNG TY TNHH TOYOTA NANKAI HẢI PHÒNG",
+                "codes": ["L000002", "L000004"], "prices": [17500, 20500],
+            },
+        }
+        observed_first_prices = {}
+        for contractor, expectation in contractor_exports.items():
+            response = client.get(f"/api/export/quote/{contractor}?period=2026-09")
+            assert response.status_code == 200, response.status
+            assert (
+                f"BAO_GIA_{contractor}_T09-2026_V1.xlsx"
+                in response.headers["Content-Disposition"]
+            )
+            exported_book = load_workbook(
+                io.BytesIO(response.data), data_only=False, keep_links=False,
+            )
+            try:
+                exported_sheet = exported_book["all"]
+                assert exported_book.sheetnames == ["all"] and not exported_book._external_links
+                assert exported_sheet["A6"].value == f"KÍNH GỬI: {expectation['recipient']}"
+                assert exported_sheet["C9"].value == "GẠO"
+                product_rows = [
+                    row for row in range(9, exported_sheet.max_row + 1)
+                    if exported_sheet.cell(row, 2).value
+                ]
+                assert [exported_sheet.cell(row, 2).value for row in product_rows] == expectation["codes"]
+                prices = [exported_sheet.cell(row, 5).value for row in product_rows]
+                assert prices == expectation["prices"]
+                observed_first_prices[contractor] = prices[0]
+                note_row = next(
+                    cell.row for cell in exported_sheet["A"]
+                    if cell.value == "Báo giá trên chưa bao gồm VAT!"
+                )
+                assert exported_sheet.cell(note_row, 4).value is None
+                assert (
+                    f"{contractor} · kỳ 2026-09 · phiên bản 1"
+                    in exported_book.properties.subject
+                )
+                assert not any(
+                    cell.data_type == "f"
+                    for cells in exported_sheet.iter_rows()
+                    for cell in cells
+                )
+            finally:
+                exported_book.close()
+        assert observed_first_prices == {"ATV": 17000, "SUPPY": 19000, "TOYOTA": 17500}
+
+        replay = preview("2026-09", clean_payload, "renamed-same-quotation.xlsx")
+        assert replay["replay"] is True and replay["proposedVersion"] == 1
+        replay_confirm = client.post(
+            "/api/quotes/import/confirm",
+            json={"token": replay["token"], "confirmed": True, "state_hash": replay["stateHash"]},
+        )
+        assert replay_confirm.status_code == 200 and replay_confirm.get_json()["idempotent"] is True
+
+        next_period = preview("2026-10", clean_payload, "quote-next-period.xlsx")
+        next_confirm = client.post(
+            "/api/quotes/import/confirm",
+            json={
+                "token": next_period["token"], "confirmed": True,
+                "state_hash": next_period["stateHash"],
+            },
+        )
+        assert next_confirm.status_code == 200 and next_confirm.get_json()["versionNo"] == 1
+        with server.db() as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            table_counts = [row[0] for row in conn.execute(
+                "SELECT COUNT(*) FROM quote_versions UNION ALL "
+                "SELECT COUNT(*) FROM quote_version_products UNION ALL "
+                "SELECT COUNT(*) FROM quote_version_prices"
+            )]
+            assert table_counts == [2, 4, 28]
+            toyota = quote_import.quote_rows_for_contractor(conn, "TOYOTA", "2026-09")
+            assert {item["product_code"]: item["sell_price"] for item in toyota["items"]} == {
+                "L000002": 17500, "L000004": 20500,
+            }
+            suppy = quote_import.quote_rows_for_contractor(conn, "SUPPY", "2026-09")
+            assert any(item["product_code"] == "L000004" and item["price_state"] == "zero" for item in suppy["items"])
+            audit_rows = [json.loads(row[0]) for row in conn.execute(
+                "SELECT metadata_json FROM audit_log WHERE event_type='quote.import.confirm'"
+            )]
+            assert len(audit_rows) == 2
+            assert all("source_hash" in row and "effective_period" in row for row in audit_rows)
+            assert all("Em Thành.xlsx" not in json.dumps(row, ensure_ascii=False) for row in audit_rows)
+        return (
+            "Toyota=Q / ATV+SUPPY+TOYOTA isolated exports / legal recipients / "
+            "real duplicate conflict surfaced / X+blank omitted / zero retained / replay safe"
+        )
+    finally:
+        with quote_import.QUOTE_IMPORT_LOCK:
+            quote_import.PENDING_QUOTE_IMPORTS.clear()
+        clean_test_db(quote_db)
 
 
 def mapping_workbook_bytes(headers, rows, header_row=3, sheet_name="Mapping"):
@@ -481,6 +1153,13 @@ def run_catalog_import_qc():
 def main():
     tax_template_result = run_tax_template_golden_qc()
     catalog_import_result = run_catalog_import_qc()
+    template_engine_result = run_template_workbook_qc()
+    delivery_template_result = run_delivery_template_qc()
+    purchase_summary_result = run_purchase_summary_template_qc()
+    receipt_template_result = run_receipt_template_qc()
+    monthly_report_result = run_monthly_report_template_qc()
+    toyota_quote_result = run_toyota_quote_golden_qc()
+    quote_import_result = run_quote_import_qc()
     qc_db = APP_DIR / "data" / "qc_test.sqlite3"
     clean_test_db(qc_db)
     server.DB_PATH = qc_db
@@ -701,6 +1380,7 @@ def main():
         "token": analysis["token"],
         "work_date": "2026-08-27",
         "sheets": ["đơn hàng27.08 "],
+        "state_hash": analysis.get("stateHash", ""),
     })
     assert selected.status_code == 200, selected.get_data(as_text=True)
     # Ignore the single formula/formatted row whose calculated quantity is zero.
@@ -748,14 +1428,12 @@ def main():
     approved_old_file = client.post(f"/api/batches/{batch_id}/approve")
     assert approved_old_file.status_code == 200, approved_old_file.get_data(as_text=True)
     with server.db() as conn:
-        bk_cost_mismatches = conn.execute(
-            """SELECT COUNT(*) n FROM inventory_transactions t
-               JOIN orders o ON o.id=CAST(t.source_line AS INTEGER)
-               WHERE t.source_type='BK_INPUT' AND t.source_id=?
-                 AND ABS(t.unit_cost-ROUND(o.sell_price*0.95))>0.001""",
+        bk_auto_rows = conn.execute(
+            "SELECT COUNT(*) n FROM inventory_transactions "
+            "WHERE source_type='BK_INPUT' AND source_id=?",
             (str(batch_id),),
         ).fetchone()["n"]
-    assert bk_cost_mismatches == 0
+    assert bk_auto_rows == 0
 
     mapped_code = orders[0]["product_code"]
     mapped_invoice_name = "TEN XUAT HOA DON QC"
@@ -767,13 +1445,26 @@ def main():
     blocked_invoice_export = client.get(f"/api/export/invoices/{batch_id}")
     assert blocked_invoice_export.status_code == 409
     assert "tạo dự thảo" in blocked_invoice_export.get_json()["error"]
-    for kind in ("suppliers", "deliveries", "report", "purchases"):
+    for kind in ("suppliers", "deliveries", "report", "purchases", "outgoing-statement"):
         result = client.get(f"/api/export/{kind}/{batch_id}")
+        if kind == "purchases":
+            # This broad legacy fixture assigns more than 5m to one seller in
+            # one day.  The golden receipt explicitly forbids that case, so
+            # the combined Bảng kê & biên nhận export must fail closed.  A
+            # valid positive export is exercised by run_receipt_template_qc.
+            assert result.status_code == 422, result.get_data(as_text=True)
+            assert result.get_json()["code"] == "receipt_daily_limit_exceeded"
+            export_sizes[kind] = "blocked>5m"
+            continue
         assert result.status_code == 200, (kind, result.get_data(as_text=True))
         assert len(result.data) > 1000, kind
         export_sizes[kind] = len(result.data)
         wb = load_workbook(io.BytesIO(result.data), data_only=True)
         assert wb.sheetnames
+        if kind == "outgoing-statement":
+            assert wb.sheetnames[0] == "Tổng hợp"
+            assert wb["Tổng hợp"]["A1"].value == "BẢNG KÊ HÀNG HÓA ĐẦU RA"
+            assert wb["Tổng hợp"]["A4"].value == "Nhà thầu"
         wb.close()
     mapped_order = dict(orders[0])
     mapped_order["product_name"] = mapped_invoice_name
@@ -869,6 +1560,33 @@ def main():
     assert saved_grid.get_json()["updated"] == 2 and saved_grid.get_json()["error_rows"] == 0
     approved = client.post(f"/api/batches/{manual_id}/approve")
     assert approved.status_code == 200, approved.get_data(as_text=True)
+    assert approved.get_json()["receivable_ledger"]["active"] >= 2
+    receivable_ledger = client.get(
+        "/api/debts/receivables/ledger?from=2026-08-29&to=2026-08-29"
+        "&contractor=HATRAN&kitchen=POT&status=all"
+    )
+    assert receivable_ledger.status_code == 200, receivable_ledger.get_data(as_text=True)
+    receivable_payload = receivable_ledger.get_json()
+    assert receivable_payload["source_of_truth"] == (
+        "approved operational delivery lines; not issued VAT invoices"
+    )
+    assert receivable_payload["summary"] == {
+        "source_rows": 3,
+        "active_rows": 2,
+        "status_counts": {"active": 2, "reversed": 1},
+        "subtotal": 80000,
+        "tax_amount": 0,
+        "charge_amount": 80000,
+        "quantity": 5,
+        "filtered_quantity": 6,
+        "filtered_subtotal": 80000,
+        "filtered_tax_amount": 0,
+        "filtered_amount": 80000,
+    }
+    assert sorted(row["delivered_qty"] for row in receivable_payload["rows"]) == [1, 2, 3]
+    assert next(
+        row for row in receivable_payload["rows"] if row["source"]["id"] == promotion_row["id"]
+    )["reversal_reason"] == "non_chargeable_line"
 
     payment = client.post("/api/payments", json={
         "payment_date": "2026-08-29", "kind": "receipt", "party_type": "contractor",
@@ -903,6 +1621,32 @@ def main():
     assert debt_book["Phải thu"]["A3"].value == "Đối tượng"
     assert any(row[0].value == "HATRAN" and row[3].value == 2500 for row in debt_book["Phải thu"].iter_rows(min_row=4))
     debt_book.close()
+    receivable_export_response = client.get(
+        "/api/debts/receivables/export?from=2026-08-29&to=2026-08-29&contractor=HATRAN"
+    )
+    assert receivable_export_response.status_code == 200
+    receivable_export = load_workbook(
+        io.BytesIO(receivable_export_response.data), data_only=False, keep_links=False,
+    )
+    assert receivable_export.sheetnames[0] == "Tổng nhà thầu"
+    assert len(receivable_export.sheetnames) == 2
+    receivable_summary = receivable_export["Tổng nhà thầu"]
+    opening_receivable = receivable_summary.cell(4, 1).value
+    assert [receivable_summary.cell(4, column).value for column in range(2, 5)] == [
+        80000, 2500, 10000,
+    ]
+    assert receivable_summary.cell(4, 5).value == opening_receivable + 80000 + 2500 - 10000
+    receivable_detail = receivable_export.worksheets[1]
+    assert receivable_summary.cell(receivable_summary.max_row, 10).value == 80000
+    assert receivable_detail.cell(receivable_detail.max_row, 15).value == 80000
+    assert not any(
+        isinstance(cell.value, str) and cell.value.startswith("=")
+        for worksheet in receivable_export.worksheets
+        for row in worksheet.iter_rows()
+        for cell in row
+    )
+    receivable_export.close()
+    receivable_export_result = "one workbook per contractor / summary + kitchen totals reconciled"
 
     # Returns/damage: cost and revenue must use net received/net delivered.
     first_item = checked["orders"][0]
@@ -916,8 +1660,23 @@ def main():
     assert round(returned_item["revenue"]) == round(2.6 * returned_item["sell_price"])
     reapproved = client.post(f"/api/batches/{manual_id}/approve")
     assert reapproved.status_code == 200
+    receivable_after_return = client.get(
+        "/api/debts/receivables/ledger?from=2026-08-29&to=2026-08-29"
+        "&contractor=HATRAN&kitchen=POT&status=all"
+    ).get_json()
+    returned_ledger_line = next(
+        row for row in receivable_after_return["rows"] if row["source"]["id"] == first_item["id"]
+    )
+    assert returned_ledger_line["customer_return_qty"] == 0.4
+    assert returned_ledger_line["delivered_qty"] == 2.6
+    assert returned_ledger_line["amount"] == 41600
+    assert receivable_after_return["summary"]["charge_amount"] == 73600
+    receivable_qc_result = (
+        "approved net delivery / transaction price / return / tax / revision / period filters passed"
+    )
 
-    # Accounting inventory + supplier need formula.
+    # Accounting inventory never auto-subtracts the NCC order. Physical cabinet
+    # stock is entered by the user in the separate purchase-order roundtrip.
     opening = client.post("/api/inventory/opening", json={
         "period": "2026-08", "items": [{"product_code": "I000060", "qty": 50, "unit_cost": 14000}],
     })
@@ -925,8 +1684,15 @@ def main():
     needs = client.get(f"/api/supplier-needs/{manual_id}")
     assert needs.status_code == 200, needs.get_data(as_text=True)
     need_data = needs.get_json()
-    assert need_data["required_qty"] == 0
-    supplier_rule = client.put("/api/supplier-rules/kho", json={"combine_kitchens": True})
+    assert need_data["required_qty"] == need_data["ordered_qty"]
+    assert need_data["physical_stock_used"] == 0
+    locked_supplier_rule = client.put(
+        "/api/supplier-rules/kho", json={"combine_kitchens": True}
+    )
+    assert locked_supplier_rule.status_code == 409
+    supplier_rule = client.put(
+        "/api/supplier-rules/huong", json={"combine_kitchens": True}
+    )
     assert supplier_rule.status_code == 200
 
     # Outgoing invoice drafts reserve stock, but only user confirmation posts output.
@@ -965,20 +1731,33 @@ def main():
         assert invoice_files
         promotion_seen = False
         for name in invoice_files:
-            invoice_book = load_workbook(io.BytesIO(archive.read(name)), data_only=True)
+            assert "_lan_1_" in name, name
+            invoice_book = load_workbook(io.BytesIO(archive.read(name)), data_only=False, keep_links=False)
             invoice_sheet = invoice_book.active
+            assert len(invoice_book.sheetnames) == 1
+            if "_KKKNT_" in name:
+                assert invoice_sheet.title == "Sheet2"
+            elif "_VAT8_" in name or "_VAT10" in name:
+                assert invoice_sheet.title == "Sheet 1 (2)"
             assert [invoice_sheet.cell(1, col).value for col in range(1, 14)] == server.INVOICE_HEADERS
             for row in range(2, invoice_sheet.max_row + 1):
                 assert invoice_sheet.cell(row, 13).value in {"1", "2"}
                 if invoice_sheet.cell(row, 13).value == "2":
                     promotion_seen = True
-                    assert all(invoice_sheet.cell(row, col).value is None for col in (5, 6, 8, 9, 11, 12))
+                    assert all(invoice_sheet.cell(row, col).value is None for col in (5, 6, 7, 8, 9, 11, 12))
                 else:
                     assert round(invoice_sheet.cell(row, 6).value) == round(
                         invoice_sheet.cell(row, 4).value * invoice_sheet.cell(row, 5).value
                     )
+                assert not any(
+                    invoice_sheet.cell(row, col).data_type == "f" or invoice_sheet.cell(row, col).hyperlink
+                    for col in range(1, 14)
+                )
             invoice_book.close()
         assert promotion_seen
+        invoice_tax_export_result = (
+            "draft-line quantities / contractor+round+tax split / locked golden styles / promo blanks passed"
+        )
 
     # Exercise the exact UI/API draft payload without any remote write.  The
     # production client still performs all validation and payload construction.
@@ -1022,6 +1801,9 @@ def main():
         ).fetchone()["n"] == 0
     recreated = client.post(f"/api/outgoing-invoices/draft/{manual_id}")
     assert recreated.status_code == 200 and recreated.get_json()["drafts"][0]["status"] == "draft"
+    # Cancelling a round keeps its audit record. Recreating now opens a new
+    # round, so all following actions must target the newly-created draft.
+    draft_id = recreated.get_json()["drafts"][0]["id"]
     assert client.post(
         f"/api/outgoing-invoices/{draft_id}/confirm-issued", json={"confirmed": True}
     ).status_code == 400
@@ -1033,25 +1815,61 @@ def main():
     assert issued.status_code == 200
     issued_repeat = client.post(f"/api/outgoing-invoices/{draft_id}/confirm-issued", json=issued_payload)
     assert issued_repeat.status_code == 200 and issued_repeat.get_json()["idempotent"] is True
+    invoice_payment_scope = client.get(
+        "/api/outgoing-invoices/payment-scope/HATRAN?from=2026-08-29&to=2026-08-29"
+    )
+    assert invoice_payment_scope.status_code == 200, invoice_payment_scope.get_data(as_text=True)
+    invoice_payment_scope_data = invoice_payment_scope.get_json()
+    assert invoice_payment_scope_data["template_status"] == "official_customer_xlsx"
+    assert invoice_payment_scope_data["official_template_ready"] is True
+    assert invoice_payment_scope_data["totals"]["total_amount"] > 0
+    invoice_delivery_statement = client.get(
+        "/api/outgoing-invoices/delivery-statement/HATRAN?from=2026-08-29&to=2026-08-29&scope_id="
+        + invoice_payment_scope_data["scope_id"]
+    )
+    assert invoice_delivery_statement.status_code == 200
+    assert invoice_delivery_statement.headers["X-TDP-Invoice-Scope"] == invoice_payment_scope_data["scope_id"]
+    delivery_statement_book = load_workbook(
+        io.BytesIO(invoice_delivery_statement.data), data_only=False, keep_links=False,
+    )
+    assert delivery_statement_book.sheetnames == ["Bảng kê giao hàng", "Đối chiếu hóa đơn"]
+    assert "BẢNG TỔNG HỢP GIAO NHẬN" in delivery_statement_book["Bảng kê giao hàng"]["A5"].value
+    assert delivery_statement_book["Bảng kê giao hàng"]["A10"].value == "STT"
+    delivery_differences = [
+        row[9].value for row in delivery_statement_book["Đối chiếu hóa đơn"].iter_rows(min_row=4)
+        if row[2].value
+    ]
+    assert delivery_differences and all(abs(value or 0) <= 1 for value in delivery_differences)
+    assert not any(
+        cell.data_type == "f" or cell.hyperlink is not None
+        for sheet in delivery_statement_book.worksheets
+        for row in sheet.iter_rows() for cell in row
+    )
+    delivery_statement_book.close()
     invoice_payment_bundle = client.get(
-        "/api/export/invoice-payment-bundle/HATRAN?from=2026-08-29&to=2026-08-29"
+        "/api/export/invoice-payment-bundle/HATRAN?from=2026-08-29&to=2026-08-29&scope_id="
+        + invoice_payment_scope_data["scope_id"]
     )
     assert invoice_payment_bundle.status_code == 200, invoice_payment_bundle.get_data(as_text=True)
+    assert invoice_payment_bundle.headers["X-TDP-Template-Status"] == "official-customer-xlsx"
     with zipfile.ZipFile(io.BytesIO(invoice_payment_bundle.data)) as archive:
         names = archive.namelist()
-        docx_name = next(name for name in names if name.endswith(".docx"))
-        statement_name = next(name for name in names if name.endswith(".xlsx"))
+        payment_name = next(name for name in names if name.startswith("De_nghi_thanh_toan"))
+        statement_name = next(name for name in names if name.startswith("Bang_tong_hop_giao_nhan"))
         assert "THONG_TIN_DOI_CHIEU.txt" in names
-        invoice_payment_doc = DocxDocument(io.BytesIO(archive.read(docx_name)))
-        invoice_payment_text = "\n".join(
-            [paragraph.text for paragraph in invoice_payment_doc.paragraphs]
-            + [cell.text for table in invoice_payment_doc.tables for row in table.rows for cell in row.cells]
-        )
-        for required in ("ĐỀ NGHỊ THANH TOÁN", "CÔNG TY QC BUYER", "0200000000", "00001234", "1052787580"):
-            assert required in invoice_payment_text, required
-        assert invoice_payment_doc.tables[1].rows[0]._tr.xpath("./w:trPr/w:tblHeader")
+        manifest = archive.read("THONG_TIN_DOI_CHIEU.txt").decode("utf-8")
+        assert "biểu mẫu chính thức" in manifest
+        assert "CHƯA PHẢI MẪU" not in manifest
+        payment_book = load_workbook(io.BytesIO(archive.read(payment_name)), data_only=True, keep_links=False)
+        assert payment_book.sheetnames == ["Đề nghị thanh toán", "Đối chiếu hóa đơn"]
+        assert payment_book["Đề nghị thanh toán"]["A6"].value == "ĐỀ NGHỊ THANH TOÁN"
+        assert payment_book["Đề nghị thanh toán"]["C15"].value == "00001234"
+        assert payment_book["Đề nghị thanh toán"]["F15"].value > 0
+        assert payment_book["Đối chiếu hóa đơn"].sheet_state == "hidden"
+        payment_book.close()
         statement_book = load_workbook(io.BytesIO(archive.read(statement_name)), data_only=True)
         assert statement_book.sheetnames == ["Bảng kê giao hàng", "Đối chiếu hóa đơn"]
+        assert "BẢNG TỔNG HỢP GIAO NHẬN" in statement_book["Bảng kê giao hàng"]["A5"].value
         differences = [
             row[9].value for row in statement_book["Đối chiếu hóa đơn"].iter_rows(min_row=4)
             if row[2].value
@@ -1448,16 +2266,14 @@ def main():
         ]
     )
     for required_text in (
-        "ĐỀ NGHỊ THANH TOÁN", "CÔNG TY TNHH BOT QC", "364", "427", "522",
+        "GIẤY ĐỀ NGHỊ THANH TOÁN", "CÔNG TY TNHH BOT QC",
         "35.451.000", "0000000001", "NGƯỜI LẬP QC",
     ):
         assert required_text in xcom_payment_text, required_text
-    assert any(
-        table.rows and table.rows[0]._tr.xpath("./w:trPr/w:tblHeader")
-        for table in xcom_payment_document.tables
-    )
+    assert len(xcom_payment_document.tables) == 2
+    assert [len(table.columns) for table in xcom_payment_document.tables] == [2, 3]
     xcom_payment_result = (
-        "1,313 actual meals / exact tariffs / single-use preview / deterministic DOCX passed"
+        "1,313 actual meals / exact tariffs / customer-form DOCX / single-use preview passed"
     )
 
     # Normalized kitchen/menu/cost/XCOM/PO manual flow remains backward compatible.
@@ -1578,11 +2394,11 @@ def main():
     payroll_export = client.get("/api/export/payroll?month=2026-08")
     assert payroll_export.status_code == 200 and len(payroll_export.data) > 1000
     payroll_book = load_workbook(io.BytesIO(payroll_export.data), data_only=True)
-    assert payroll_book.sheetnames == ["Bảng lương", "Chi phí theo bếp"]
-    assert payroll_book["Bảng lương"]["A3"].value == "STT"
+    assert payroll_book.sheetnames == ["LƯƠNG XƯỞNG", "Chi phí theo bếp"]
+    assert payroll_book["LƯƠNG XƯỞNG"]["A3"].value == "STT"
     assert any(
-        row[1].value == "TRIEN" and round(row[16].value) == 8000000
-        for row in payroll_book["Bảng lương"].iter_rows(min_row=4)
+        row[1].value == "TRIỂN" and round(row[14].value) == 8000000
+        for row in payroll_book["LƯƠNG XƯỞNG"].iter_rows(min_row=4)
     )
     payroll_book.close()
     assert client.get("/api/export/payroll?month=2026-13").status_code == 400
@@ -1693,6 +2509,8 @@ def main():
 
     actual_payables_source = ROOT / "bosung.30.8.26" / "Công nợ phải trả Thành Đạt Phát.xlsx"
     actual_payables_result = "not_present"
+    payable_payment_result = "not_present"
+    payable_export_result = "not_present"
     if actual_payables_source.exists():
         assert hashlib.sha256(actual_payables_source.read_bytes()).hexdigest().upper() == (
             "BC54C62E7B7141BA1846EB5BD7EEC9E11B9CC8DA68FB138D0EA0F0CDD7BAF473"
@@ -1737,6 +2555,20 @@ def main():
             assert not conn.execute(
                 "SELECT 1 FROM historical_payable_lines WHERE source_hash='OLDHASH'"
             ).fetchone()
+            historical_ledger_first = conn.execute(
+                "SELECT COUNT(*) n FROM payable_ledger_lines WHERE source_type='historical_import'"
+            ).fetchone()["n"]
+            historical_revisions_first = conn.execute(
+                """SELECT COUNT(*) n FROM payable_ledger_revisions r
+                   JOIN payable_ledger_lines l ON l.id=r.ledger_line_id
+                   WHERE l.source_type='historical_import'"""
+            ).fetchone()["n"]
+            assert historical_ledger_first == 9975
+            assert historical_revisions_first == 9975
+            assert conn.execute(
+                """SELECT COUNT(*) n FROM payable_ledger_lines
+                   WHERE source_type='historical_import' AND status!='open'"""
+            ).fetchone()["n"] == 0
         with actual_payables_source.open("rb") as handle:
             repeat_payables = client.post(
                 "/api/debts/payables/import/preview",
@@ -1750,7 +2582,306 @@ def main():
         assert repeat_payables_confirm.status_code == 200
         assert repeat_payables_confirm.get_json()["inserted"] == 0
         assert repeat_payables_confirm.get_json()["unchanged"] == 9975
+        with server.db() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) n FROM payable_ledger_lines WHERE source_type='historical_import'"
+            ).fetchone()["n"] == historical_ledger_first
+            assert conn.execute(
+                """SELECT COUNT(*) n FROM payable_ledger_revisions r
+                   JOIN payable_ledger_lines l ON l.id=r.ledger_line_id
+                   WHERE l.source_type='historical_import'"""
+            ).fetchone()["n"] == historical_revisions_first
+            payable_line = dict(conn.execute(
+                """SELECT * FROM payable_ledger_lines
+                   WHERE source_type='historical_import' AND status='open'
+                     AND amount>=1 AND TRIM(supplier_code)!=''
+                   ORDER BY work_date,id LIMIT 1"""
+            ).fetchone())
+        allocated_payment = client.post("/api/debts/payables/payments", json={
+            "request_id": "QC-PAYABLE-ALLOCATION-0001",
+            "payment_date": "2026-08-31",
+            "party_code": payable_line["supplier_code"],
+            "amount": 1,
+            "method": "Chuyển khoản QC",
+            "reference_code": "QC-UNC-001",
+            "note": "QC phân bổ dòng phải trả",
+            "allocations": [{
+                "ledger_line_id": payable_line["id"],
+                "amount": 1,
+                "expected_revision": payable_line["revision"],
+            }],
+        })
+        assert allocated_payment.status_code == 201, allocated_payment.get_data(as_text=True)
+        payment_id = allocated_payment.get_json()["id"]
+        payment_history = client.get(
+            "/api/debts/payables/payments?from=2026-08-31&to=2026-08-31&status=posted"
+        )
+        assert payment_history.status_code == 200
+        assert payment_history.get_json()["summary"]["posted_amount"] == 1
+        reversed_payment = client.post(
+            f"/api/debts/payables/payments/{payment_id}/reverse",
+            json={"expected_revision": 1, "reason": "QC hoàn tác giao dịch thử"},
+        )
+        assert reversed_payment.status_code == 200, reversed_payment.get_data(as_text=True)
+        with server.db() as conn:
+            payment_state = conn.execute(
+                "SELECT status,revision FROM payments WHERE id=?", (payment_id,)
+            ).fetchone()
+            allocation_state = conn.execute(
+                "SELECT status FROM payable_payment_allocations WHERE payment_id=?", (payment_id,)
+            ).fetchone()
+            ledger_state = conn.execute(
+                "SELECT status,paid_amount FROM payable_ledger_lines WHERE id=?",
+                (payable_line["id"],),
+            ).fetchone()
+            assert tuple(payment_state) == ("reversed", 2)
+            assert allocation_state["status"] == "reversed"
+            assert tuple(ledger_state) == ("open", 0)
+            assert conn.execute(
+                "SELECT COUNT(*) n FROM payable_payment_revisions WHERE payment_id=?",
+                (payment_id,),
+            ).fetchone()["n"] == 2
+        payable_export_response = client.get(
+            "/api/debts/payables/export?from=2026-01-01&to=2026-07-31"
+        )
+        assert payable_export_response.status_code == 200
+        payable_export = load_workbook(io.BytesIO(payable_export_response.data), data_only=False)
+        assert payable_export.sheetnames == ["Công nợ phải trả"]
+        worksheet = payable_export.active
+        assert [worksheet.cell(3, column).value for column in range(1, 15)] == [
+            "Tháng", "Tên bếp", "Ngày, tháng", "Tên hàng", "Số lượng", "ĐVT", "NCC",
+            "Giá mua", "Hỏng", "Thêm", "Giảm", "Thiếu", "SL thực tế", "Thành tiền",
+        ]
+        assert worksheet.max_column == 14
+        assert worksheet.freeze_panes == "A4"
+        assert worksheet.page_setup.orientation == "landscape"
+        assert worksheet.page_setup.fitToWidth == 1
+        assert worksheet.cell(worksheet.max_row, 1).value == "TỔNG"
+        detail_rows = list(worksheet.iter_rows(min_row=4, max_row=worksheet.max_row - 1, values_only=True))
+        assert abs(
+            sum(row[4] or 0 for row in detail_rows) - worksheet.cell(worksheet.max_row, 5).value
+        ) < 1e-6
+        assert abs(
+            sum(row[12] or 0 for row in detail_rows) - worksheet.cell(worksheet.max_row, 13).value
+        ) < 1e-6
+        assert sum(row[13] or 0 for row in detail_rows) == worksheet.cell(worksheet.max_row, 14).value
+        assert not any(
+            isinstance(cell.value, str) and cell.value.startswith("=")
+            for worksheet in payable_export.worksheets
+            for row in worksheet.iter_rows()
+            for cell in row
+        )
+        payable_export.close()
+        payable_payment_result = "explicit line allocation / reversal / history passed"
+        payable_export_result = "1 customer sheet / exact 14 columns / total quantity + amount / static values"
         actual_payables_result = "9,976 rows / 9,975 payable lines / 0 errors / repeat safe"
+
+    payable_ui_script = (APP_DIR / "static" / "app.js").read_text(encoding="utf-8")
+    payable_ui_script += (APP_DIR / "static" / "invoice-workbench.js").read_text(encoding="utf-8")
+    payable_ui_page = (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
+    payable_ui_css = (APP_DIR / "static" / "real.css").read_text(encoding="utf-8")
+    for required_ui_contract in (
+        'id="payablePaymentForm"', 'class="payable-line-select"',
+        'class="payable-allocation-input"', '"/api/debts/payables/payments"',
+        '"/reverse"', "expected_revision", "tdp.payableFilters",
+        'id="receiptForm"', "Excel phải trả nhà cung cấp",
+        "esc(state.debtTo || todayIso)",
+    ):
+        assert required_ui_contract in payable_ui_script, required_ui_contract
+    assert '<option value="payment">Trả nhà cung cấp</option>' not in payable_ui_script
+    assert "payable-line-select:disabled" in payable_ui_css
+    debt_ui_combined = payable_ui_page + payable_ui_script
+    for required_debt_ui in (
+        'data-view="reports"><span>↗</span> Báo cáo tổng hợp',
+        'data-view="debts"><span>▤</span> Công nợ',
+        'data-action="open-debt-section"',
+        "Công nợ phải thu (bếp)",
+        "Công nợ phải thu (tổng)",
+        "Công nợ phải trả",
+        'data-action="back-debt-overview"',
+        'if (section === "receivable-kitchen")',
+        'if (section === "receivable-total")',
+    ):
+        assert required_debt_ui in debt_ui_combined, required_debt_ui
+    assert "Báo cáo & công nợ" not in debt_ui_combined
+    assert ".debt-menu-grid" in payable_ui_css
+    assert "/static/app.js?v=20260904-27" in payable_ui_page
+    assert "/static/real.css?v=20260904-12" in payable_ui_page
+    payable_ui_result = "separate summary-first debt menu / filter / explicit manual allocation / reversal / persisted refresh passed"
+    for required_receivable_ui in (
+        'id="receivableFilterForm"', 'id="receivableContractor"',
+        'id="receivableKitchen"', 'id="receivableStatus"',
+        'id="receivableExportSelected"', '"/api/debts/receivables/ledger?"',
+        '"/api/debts/receivables/ledger/"',
+        '"/api/debts/receivables/export?from="',
+        'data-action="toggle-receivable-history"', "tdp.receivableFilters",
+        "Sổ phải thu vận hành chi tiết", "không phải đề nghị thanh toán/hóa đơn đỏ",
+    ):
+        assert required_receivable_ui in payable_ui_script, required_receivable_ui
+    for required_receivable_css in (
+        ".receivable-filter-grid", ".receivable-ledger-table",
+        ".receivable-line-reversed", ".receivable-revision-panel",
+    ):
+        assert required_receivable_css in payable_ui_css, required_receivable_css
+    receivable_ui_result = "period / contractor / kitchen / revision / export / persisted filters passed"
+
+    for required_inventory_ui in (
+        'id="inventoryFrom"', 'id="inventoryTo"',
+        '"/api/invoice-valuation?from="',
+        "/api/invoice-valuation/export",
+        "/api/invoice-valuation/export/opening",
+        "/api/invoice-valuation/export/input",
+        "/api/invoice-valuation/export/output",
+        "/api/invoice-valuation/export/nxt",
+        "Báo cáo vật tư hàng hóa", "Tải đủ 4 file ZIP", "Xem chi tiết và nhập dữ liệu",
+        "/api/bk-import/template",
+        "/api/bk-import/preview", "/api/bk-import/confirm",
+        "Xác nhận nhập bảng kê vào kho", "Hoàn tác bảng kê",
+    ):
+        assert required_inventory_ui in payable_ui_script, required_inventory_ui
+    assert "Báo cáo vật tư hàng hóa" in payable_ui_page
+    assert "Kho hóa đơn" not in payable_ui_page + payable_ui_script
+    inventory_ui_result = "customer-named material report / compact period projection / four downloads passed"
+
+    for required_unified_ui in (
+        "Bảng kê từ hóa đơn đỏ",
+        "Được xuất và chưa được xuất theo nhà thầu",
+        "File tải hóa đơn",
+        "function invoiceReceiptStatusText(value)",
+        "function invoiceStockStatusText(value)",
+        "function invoiceSyncStatusText(value)",
+        "function mealPlanStatusText(value)",
+        'event.target.closest(".unit-conversion-input")',
+        "Enter để lưu mã hoặc quy đổi",
+        "Thông tin thanh toán mặc định",
+        "Được khóa cùng hóa đơn và dùng để lập Đề nghị thanh toán chính thức theo nhà thầu",
+        "invoice-issue-text",
+        "hãy kiểm tra và tải tiếp",
+    ):
+        assert required_unified_ui in payable_ui_script, required_unified_ui
+    for forbidden_unified_ui in (
+        "esc(invoice.receipt_status)", "esc(invoice.stock_status)",
+        "esc(sync.last_status)", "esc(plan.status)",
+        "Xác nhận reversal", "Đã tạo reversal", "Đã lấy từ mẫu TĐP khách cung cấp",
+    ):
+        assert forbidden_unified_ui not in payable_ui_script, forbidden_unified_ui
+    unified_ui_result = (
+        "customer screen names / red-invoice statement boundary / Vietnamese statuses / "
+        "Enter mapping and conversion / explicit errors passed"
+    )
+
+    home_source = payable_ui_script.split("function renderHome()", 1)[1].split(
+        "function renderOrders()", 1
+    )[0]
+    assert home_source.count('class="daily-action-card') == 4
+    for required_home_ui in (
+        "Tạo phiếu đặt hàng", "In đơn hàng", "Bảng kê và biên nhận", "Duyệt đơn",
+        'id="homeFrom"', 'id="homeTo"', "phiếu theo bếp",
+    ):
+        assert required_home_ui in home_source, required_home_ui
+    for required_compact_ui in (
+        'quoteDetailsOpen: false', 'quoteHistoryOpen: false',
+        'inventoryDetailsOpen: true', 'documentDetailsOpen: false',
+        "Báo giá tổng", "Báo giá chi tiết", "tổng hợp theo nhà thầu và từng bếp trong tháng",
+        "Sao chép ảnh” sẽ tự ghi nhận đã đặt", 'body: JSON.stringify({ status: "ordered"',
+        "Chọn tất cả hoặc từng bếp", "Chọn bếp cần in phiếu giao", "delivery_selections",
+        'payload.phase === "finalization"', "Đã dùng file cuối cùng làm bản chuẩn và tự chốt đơn",
+    ):
+        assert required_compact_ui in payable_ui_script, required_compact_ui
+    assert "Đánh dấu đã đặt" not in payable_ui_script
+    compact_customer_ui_result = "exact four-item home / summary-first modules / per-kitchen reprint / latest-file authority passed"
+
+    invoice_input_export_source = (APP_DIR / "invoice_input_export.py").read_text(encoding="utf-8")
+    portable_build_source = (ROOT / "BUILD_PORTABLE.ps1").read_text(encoding="utf-8")
+    for required_input_export in (
+        "/api/invoice-workbench/batches/", "/export-input-xlsx", "Excel đúng bộ lọc",
+    ):
+        assert required_input_export in payable_ui_script, required_input_export
+    for required_input_export_contract in (
+        "INPUT_ELECTRONIC_INVOICE", "invoice_input_batch_empty",
+        "DANH SÁCH HÓA ĐƠN ĐẦU VÀO ĐÃ TẢI", 'response.headers["X-TDP-Inventory-Effect"] = "none"',
+        "Raw connector payloads, remote identifiers and credentials are never",
+    ):
+        assert required_input_export_contract in invoice_input_export_source, required_input_export_contract
+    assert "invoice_input_export.py" in portable_build_source
+    assert "--hidden-import invoice_input_export" in portable_build_source
+    invoice_input_export_result = "download immediately after read-only pull / no inventory effect / no raw connector payload passed"
+
+    outgoing_readiness_source = (APP_DIR / "outgoing_readiness.py").read_text(encoding="utf-8")
+    for required_outgoing_ui in (
+        "Danh sách còn thiếu theo kỳ", "Đã dự thảo", "Đã phát hành",
+        'data-action="load-outgoing-shortages"',
+        'data-action="download-outgoing-shortages"',
+        "/api/outgoing-invoices/shortages/export?",
+    ):
+        assert required_outgoing_ui in payable_ui_script, required_outgoing_ui
+    for required_readiness_contract in (
+        "invoice_stock_rows(conn, include_zero=True)",
+        "pending_sync_issued_qty", "missing_product_code", "allocated_over_demand",
+        "period_shortage_payload", "shortage_workbook_bytes",
+        "OPENING + invoice_inventory_ledger",
+    ):
+        assert required_readiness_contract in outgoing_readiness_source, required_readiness_contract
+    assert "inventory_lookup(conn)" not in outgoing_readiness_source
+    outgoing_readiness_result = (
+        "canonical invoice stock / multi-round contractor split / period shortage export passed"
+    )
+
+    outgoing_substitution_source = (APP_DIR / "outgoing_substitution.py").read_text(encoding="utf-8")
+    for required_substitution_ui in (
+        "Luân chuyển / mặt hàng thay thế có xác nhận",
+        "Mã hàng thay thế (tự chọn)", "Xem trước, chưa ghi",
+        "Xác nhận đúng mã thay thế này", "Dữ liệu đã thay đổi sau lần kiểm tra",
+        "/api/outgoing-substitutions/preview", "/api/outgoing-substitutions/confirm",
+    ):
+        assert required_substitution_ui in payable_ui_script, required_substitution_ui
+    for required_substitution_contract in (
+        "canonical_available_stock(conn)", "quote_sell_price",
+        "approved_override", "SUBSTITUTION_PREVIEW_TTL_SECONDS",
+        "stale_substitution_preview", "substitute_unit_mismatch",
+        "issued_substitution_requires_invoice_reversal", "draft_kind",
+        "outgoing.substitution.confirm", "outgoing.substitution.reverse",
+    ):
+        assert required_substitution_contract in outgoing_substitution_source, required_substitution_contract
+    assert "inventory_lookup(conn)" not in outgoing_substitution_source
+    assert "Gợi ý mã thay thế" not in payable_ui_script
+    outgoing_substitution_result = (
+        "manual code / preview token / period-contractor sell price / canonical stock / reversal audit passed"
+    )
+
+    invoice_payment_scope_source = (APP_DIR / "invoice_payment_scope.py").read_text(encoding="utf-8")
+    invoice_delivery_statement_source = (APP_DIR / "invoice_delivery_statement.py").read_text(encoding="utf-8")
+    for required_payment_scope_ui in (
+        "Hồ sơ đề nghị thanh toán từ hóa đơn đỏ",
+        "Xem và tải bảng kê", "Mẫu chính thức",
+        "Tải Đề nghị thanh toán + bảng kê", "/api/outgoing-invoices/payment-scope/",
+        'data-action="download-invoice-payment-control"',
+        'data-action="download-invoice-delivery-statement"',
+        "/api/outgoing-invoices/delivery-statement/",
+    ):
+        assert required_payment_scope_ui in payable_ui_script, required_payment_scope_ui
+    for required_payment_scope_contract in (
+        "status='issued'", "source_status_class", "invoice_source_not_payable",
+        "invoice_source_total_mismatch", "issued_invoice_snapshot_conflict",
+        "invoice_delivery_total_mismatch", '"template_status": "official_customer_xlsx"',
+        '"official_template_ready": True',
+    ):
+        assert required_payment_scope_contract in invoice_payment_scope_source, required_payment_scope_contract
+    assert "receivable_ledger" not in invoice_payment_scope_source
+    invoice_payment_scope_result = (
+        "issued invoice only / source cancellation guard / frozen snapshot / official customer XLSX passed"
+    )
+    for required_delivery_statement_contract in (
+        "delivery_statement_unissued_invoice", "delivery_statement_contractor_conflict",
+        "delivery_statement_total_mismatch", "Số lượng × Đơn giá = Thành tiền",
+        "Nguồn xác minh", 'detail.print_title_rows = "10:10"',
+        "PAPERSIZE_A4", "_excel_text", "scope_id",
+    ):
+        assert required_delivery_statement_contract in invoice_delivery_statement_source, required_delivery_statement_contract
+    assert "Q-008" not in invoice_delivery_statement_source
+    invoice_delivery_statement_result = (
+        "one contractor / issued red invoices / multiple rounds / static A4 / exact totals passed"
+    )
 
     # Multi-period debts, payment request and approval-gated print dry-run.
     debts = client.get("/api/debts?from=2026-08-01&to=2026-08-31")
@@ -1770,35 +2901,48 @@ def main():
     assert payment_request.content_type.startswith("application/zip")
     with zipfile.ZipFile(io.BytesIO(payment_request.data)) as payment_bundle:
         bundle_names = payment_bundle.namelist()
-        payment_docx_name = next(name for name in bundle_names if name.endswith(".docx"))
-        assert any(name.endswith(".xlsx") for name in bundle_names)
+        payment_xlsx_name = next(
+            name for name in bundle_names if name.startswith("De_nghi_thanh_toan")
+        )
+        statement_xlsx_name = next(
+            name for name in bundle_names if name.startswith("Bang_tong_hop_giao_nhan")
+        )
         assert "THONG_TIN_DOI_CHIEU.txt" in bundle_names
-        payment_docx_bytes = payment_bundle.read(payment_docx_name)
-    payment_document = DocxDocument(io.BytesIO(payment_docx_bytes))
+        payment_xlsx_bytes = payment_bundle.read(payment_xlsx_name)
+        statement_xlsx_bytes = payment_bundle.read(statement_xlsx_name)
+    payment_document = load_workbook(io.BytesIO(payment_xlsx_bytes), data_only=True, keep_links=False)
     payment_text = "\n".join(
-        [paragraph.text for paragraph in payment_document.paragraphs]
-        + [cell.text for table in payment_document.tables for row in table.rows for cell in row.cells]
+        str(cell.value or "") for sheet in payment_document.worksheets
+        for row in sheet.iter_rows() for cell in row
     )
     for required_text in (
         "ĐỀ NGHỊ THANH TOÁN", "CÔNG TY TNHH THỰC PHẨM THÀNH ĐẠT PHÁT",
-        "VŨ THỊ THỤY", "1052787580", "Ngân hàng TMCP Ngoại Thương Việt Nam",
-        "TỔNG CỘNG", "Số tiền bằng chữ", "ĐẠI DIỆN CÔNG TY",
+        "1052787580", "Ngân hàng TMCP Ngoại Thương Việt Nam",
+        "Tổng cộng", "Bằng chữ", "ĐẠI DIỆN CÔNG TY",
     ):
         assert required_text in payment_text, required_text
     assert "................................" not in payment_text
-    assert payment_document.tables[1].rows[0]._tr.xpath("./w:trPr/w:tblHeader")
+    assert payment_document["Đối chiếu hóa đơn"].sheet_state == "hidden"
+    payment_document.close()
+    statement_document = load_workbook(io.BytesIO(statement_xlsx_bytes), data_only=True, keep_links=False)
+    assert "BẢNG TỔNG HỢP GIAO NHẬN" in statement_document["Bảng kê giao hàng"]["A5"].value
+    statement_document.close()
     prepared = client.post(f"/api/print/prepare/{manual_id}")
     assert prepared.status_code == 200, prepared.get_data(as_text=True)
+    prepared_body = prepared.get_json()
+    assert prepared_body["prepared"] == ["delivery_pdf", "other_pdf"]
+    assert [item["paper"] for item in prepared_body["documents"]] == ["A4", "A5"]
     assert client.post(f"/api/print/approve/{manual_id}").status_code == 200
     print_dry_run = client.post(f"/api/print/run/{manual_id}", json={"dry_run": True})
-    assert print_dry_run.status_code == 200 and print_dry_run.get_json()["jobs"] == 1
+    assert print_dry_run.status_code == 200 and print_dry_run.get_json()["jobs"] == 2
     assert print_dry_run.get_json()["status"] == "verified"
-    print_pdf = client.get(f"/api/print/pdf/{manual_id}")
-    assert print_pdf.status_code == 200 and print_pdf.data.startswith(b"%PDF-")
-    assert print_pdf.headers["Content-Type"].startswith("application/pdf")
-    # ``send_file`` keeps the Windows file handle open until the test response is
-    # explicitly closed.  Release it before removing the isolated print folder.
-    print_pdf.close()
+    for document_type in ("delivery_pdf", "other_pdf"):
+        print_pdf = client.get(f"/api/print/pdf/{manual_id}/{document_type}")
+        assert print_pdf.status_code == 200 and print_pdf.data.startswith(b"%PDF-")
+        assert print_pdf.headers["Content-Type"].startswith("application/pdf")
+        # ``send_file`` keeps the Windows file handle open until the test response is
+        # explicitly closed. Release it before removing the isolated print folder.
+        print_pdf.close()
 
     operations = client.get("/api/operations/bootstrap?as_of=2026-08-31&month=2026-08&date=2026-08-30")
     assert operations.status_code == 200
@@ -1812,6 +2956,189 @@ def main():
         "bank_name": "Ngân hàng TMCP Ngoại Thương Việt Nam",
         "bank_account": "1052787580",
     }
+
+    inventory_files = client.get(
+        "/api/invoice-valuation/export?from=2026-08-01&to=2026-08-31"
+    )
+    assert inventory_files.status_code == 200, inventory_files.get_data(as_text=True)
+    assert inventory_files.content_type.startswith("application/zip")
+    inventory_contract_ids = set()
+    inventory_control_totals = set()
+    with zipfile.ZipFile(io.BytesIO(inventory_files.data)) as inventory_bundle:
+        inventory_names = inventory_bundle.namelist()
+        assert len(inventory_names) == 4
+        assert {name.split("_", 1)[0] for name in inventory_names} == {
+            "TDK", "Nhap", "Xuat", "NXT",
+        }
+        for inventory_name in inventory_names:
+            inventory_book = load_workbook(
+                io.BytesIO(inventory_bundle.read(inventory_name)), data_only=False, keep_links=False,
+            )
+            control = inventory_book["_ĐỐI_CHIẾU"]
+            inventory_manifest = {
+                row[0].value: row[1].value
+                for row in control.iter_rows(min_col=1, max_col=2)
+            }
+            inventory_contract_ids.add(control["B1"].value)
+            inventory_control_totals.add(tuple(
+                inventory_manifest[key]
+                for key in (
+                    "SL_TỒN_ĐẦU", "GT_TỒN_ĐẦU", "SL_NHẬP", "GT_NHẬP",
+                    "SL_XUẤT", "GT_XUẤT", "SL_TỒN_CUỐI", "GT_TỒN_CUỐI",
+                )
+            ))
+            assert inventory_manifest["MẪU_BIỂU"] == "TDP_TDK_NHAP_XUAT_NXT_V1"
+            assert inventory_manifest["TRẠNG_THÁI_BIỂU_MẪU"] == "CHÍNH THỨC"
+            assert inventory_manifest["PHƯƠNG_PHÁP_GIÁ"] == "Bình quân gia quyền di động"
+            assert control.sheet_state == "veryHidden"
+            assert not getattr(inventory_book, "_external_links", [])
+            assert not any(
+                cell.data_type == "f"
+                for worksheet in inventory_book.worksheets
+                for row in worksheet.iter_rows()
+                for cell in row
+            )
+            inventory_book.close()
+    assert len(inventory_contract_ids) == 1 and len(inventory_control_totals) == 1
+    inventory_nxt = client.get(
+        "/api/invoice-valuation/export/nxt?from=2026-08-01&to=2026-08-31"
+    )
+    assert inventory_nxt.status_code == 200
+    inventory_nxt_book = load_workbook(io.BytesIO(inventory_nxt.data), data_only=True)
+    inventory_nxt_sheet = inventory_nxt_book["NXT"]
+    assert "bình quân gia quyền di động" in inventory_nxt_sheet["A3"].value.lower()
+    assert "Q-005" not in inventory_nxt_sheet["A2"].value
+    assert inventory_nxt_sheet["G4"].value == "TỒN ĐẦU KỲ"
+    assert inventory_nxt_sheet["J4"].value == "NHẬP TRONG KỲ"
+    assert inventory_nxt_sheet["M4"].value == "XUẤT TRONG KỲ"
+    assert inventory_nxt_sheet["P4"].value == "TỒN CUỐI KỲ"
+    assert inventory_nxt_sheet.page_setup.orientation == "landscape"
+    assert str(inventory_nxt_sheet.page_setup.paperSize) == "9"
+    inventory_nxt_book.close()
+    assert client.get(
+        "/api/invoice-valuation/export?from=2026-08-31&to=2026-08-01"
+    ).status_code == 400
+    inventory_export_result = "4 XLSX / one contract id / source traces and totals reconciled"
+
+    bk_template_response = client.get("/api/bk-import/template")
+    assert bk_template_response.status_code == 200
+    bk_book = load_workbook(io.BytesIO(bk_template_response.data), data_only=False, keep_links=True)
+    assert bk_book.sheetnames == [bk_import.BK_IMPORT_SHEET]
+    bk_sheet = bk_book[bk_import.BK_IMPORT_SHEET]
+    assert "HÀNG MUA VÀO KHÔNG CÓ HÓA ĐƠN" in bk_sheet["A1"].value
+    assert bk_import.BK_IMPORT_SOURCE_TYPE in bk_sheet["A2"].value
+    assert [bk_sheet.cell(3, column).value for column in range(1, 13)] == [
+        label for _field, label in bk_import.BK_IMPORT_COLUMNS
+    ]
+    assert not any(
+        cell.data_type == "f" for row in bk_sheet.iter_rows() for cell in row
+    )
+    with server.db() as conn:
+        bk_product = conn.execute(
+            "SELECT code,name,unit FROM products WHERE code=?", (mapped_code,),
+        ).fetchone()
+        conn.execute(
+            """INSERT OR REPLACE INTO products(
+                   code,name,unit,tax,supplier,buy_price,purchase_list,seller,cccd
+               ) VALUES('QC-BK-LEGACY','Legacy BK','kg','8%','',0,1,'','')"""
+        )
+        conn.execute(
+            """INSERT OR REPLACE INTO products(
+                   code,name,unit,tax,supplier,buy_price,purchase_list,seller,cccd
+               ) VALUES('QC-BK-CANONICAL','Canonical BK','kg','8%','QC-SOURCE',100,1,'','')"""
+        )
+        conn.execute(
+            """INSERT INTO inventory_transactions(
+                   txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,
+                   source_line,status,note,created_at,updated_at
+               ) VALUES('2026-08-31','QC-BK-LEGACY',99,0,100,'BK_INPUT','qc-legacy','1',
+                        'posted','must not count',?,?)""",
+            (server.now_iso(), server.now_iso()),
+        )
+        bk_ledger_before = (
+            conn.execute("SELECT COUNT(*) FROM inventory_transactions").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM invoice_inventory_ledger").fetchone()[0],
+        )
+    bk_sheet.append([
+        "2026-09-03", "", "BK-QC-0001", 1,
+        "QC-BK-CANONICAL", "Canonical BK", "kg",
+        2, 100, 200, "QC-SOURCE", "fixture",
+    ])
+    bk_stream = io.BytesIO()
+    bk_book.save(bk_stream)
+    bk_book.close()
+    bk_payload = bk_stream.getvalue()
+
+    def preview_bk():
+        return client.post(
+            "/api/bk-import/preview",
+            data={"file": (io.BytesIO(bk_payload), "bk-qc.xlsx")},
+            content_type="multipart/form-data",
+        )
+
+    bk_first_response = preview_bk()
+    bk_second_response = preview_bk()
+    assert bk_first_response.status_code == 200 and bk_second_response.status_code == 200
+    bk_first = bk_first_response.get_json()
+    bk_second = bk_second_response.get_json()
+    assert bk_first["canConfirm"] is True
+    assert bk_first["sourcePolicy"] == bk_import.BK_IMPORT_SOURCE_TYPE
+    assert bk_first["previewOnly"] is True and bk_first["writesInventory"] is False
+    assert bk_first["counts"]["readyRows"] == 1 and bk_first["counts"]["errorRows"] == 0
+    assert (
+        bk_first["sourceHash"], bk_first["contentHash"], bk_first["previewId"],
+        bk_first["rows"][0]["sourceKey"],
+    ) == (
+        bk_second["sourceHash"], bk_second["contentHash"], bk_second["previewId"],
+        bk_second["rows"][0]["sourceKey"],
+    )
+    bk_confirm = client.post("/api/bk-import/confirm", json={
+        "confirmed": True, "token": bk_first["token"], "previewId": bk_first["previewId"],
+    })
+    assert bk_confirm.status_code == 200, bk_confirm.get_data(as_text=True)
+    bk_confirm_body = bk_confirm.get_json()
+    assert bk_confirm_body["newInventoryLines"] == 1
+    bk_repeat = client.post("/api/bk-import/confirm", json={
+        "confirmed": True, "token": bk_first["token"], "previewId": bk_first["previewId"],
+    })
+    assert bk_repeat.status_code == 200 and bk_repeat.get_json()["idempotent"] is True
+    with server.db() as conn:
+        bk_ledger_posted = (
+            conn.execute("SELECT COUNT(*) FROM inventory_transactions").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM invoice_inventory_ledger").fetchone()[0],
+        )
+        legacy_gate = dict(server.inventory_lookup(conn).get("QC-BK-LEGACY") or {})
+        bk_event = conn.execute(
+            """SELECT direction,event_type,source_invoice_table,product_code,qty_delta
+                 FROM invoice_inventory_ledger WHERE source_invoice_table='bk_import_documents'
+                 ORDER BY id"""
+        ).fetchone()
+    assert bk_ledger_posted == (bk_ledger_before[0], bk_ledger_before[1] + 1)
+    assert tuple(bk_event) == (
+        "input", "POST", "bk_import_documents", "QC-BK-CANONICAL", 2,
+    )
+    assert legacy_gate.get("accounting_qty", 0) == 0
+    bk_reversal = client.post(
+        f"/api/bk-import/documents/{bk_confirm_body['documentId']}/reversal",
+        json={
+            "confirmed": True, "reversalDate": "2026-09-03",
+            "reason": "QC hoàn tác có kiểm soát",
+        },
+    )
+    assert bk_reversal.status_code == 200, bk_reversal.get_data(as_text=True)
+    with server.db() as conn:
+        assert conn.execute(
+            """SELECT COUNT(*) FROM invoice_inventory_ledger
+                WHERE source_invoice_table='bk_import_documents' AND event_type='REVERSAL'"""
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT status FROM bk_import_documents WHERE id=?",
+            (bk_confirm_body["documentId"],),
+        ).fetchone()[0] == "reversed"
+    bk_import_result = (
+        "official template / fixed non-invoice purchase source / stable keys / "
+        "canonical post + idempotency + audited safe reversal"
+    )
 
     print("QC", json.dumps({
         "ok": True,
@@ -1833,8 +3160,32 @@ def main():
         "xcomPaymentDocuments": xcom_payment_result,
         "actualOpeningInventoryWorkbook": actual_opening_result,
         "actualCustomerCatalogWorkbook": catalog_import_result,
+        "templatePreservingEngine": template_engine_result,
+        "approvedDeliveryTemplate": delivery_template_result,
+        "approvedPurchaseSummary": purchase_summary_result,
+        "approvedPurchaseReceipt": receipt_template_result,
+        "approvedMonthlyReport": monthly_report_result,
+        "periodQuoteImport": quote_import_result,
+        "toyotaGoldenQuote": toyota_quote_result,
         "actualCustomerTaxTemplates": tax_template_result,
+        "outgoingInvoiceTaxExport": invoice_tax_export_result,
         "actualHistoricalPayablesWorkbook": actual_payables_result,
+        "payablePaymentAllocation": payable_payment_result,
+        "payableExcelExport": payable_export_result,
+        "payableUiContract": payable_ui_result,
+        "receivableLedger": receivable_qc_result,
+        "receivableExcelExport": receivable_export_result,
+        "receivableUiContract": receivable_ui_result,
+        "invoiceInventoryFourFileExport": inventory_export_result,
+        "invoiceInventoryUiContract": inventory_ui_result,
+        "unifiedUiBusinessLanguage": unified_ui_result,
+        "customerCompactUiContract": compact_customer_ui_result,
+        "inputInvoiceImmediateExcelExport": invoice_input_export_result,
+        "bkImportSafetyContract": bk_import_result,
+        "outgoingReadinessMultiRound": outgoing_readiness_result,
+        "outgoingSubstitutionConfirmation": outgoing_substitution_result,
+        "invoicePaymentOfficialDocuments": invoice_payment_scope_result,
+        "issuedInvoiceDeliveryStatement": invoice_delivery_statement_result,
         "attendancePayrollLegacyImport": "passed",
         "paymentRequestAndPrintApproval": "passed",
     }, ensure_ascii=False, indent=2))

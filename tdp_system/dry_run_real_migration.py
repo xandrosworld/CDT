@@ -8,7 +8,9 @@ import re
 import sqlite3
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,6 +19,50 @@ INPUTS = ROOT / "_HANDOFF" / "EXTERNAL_INPUTS"
 BOSUNG = ROOT / "bosung.30.8.26"
 ATTENDANCE_ROOT = BOSUNG / "CHẤM CÔNG+ SUẤT ĂN  2026"
 MEAL_ROOT = ATTENDANCE_ROOT / "SUẤT ĂN XƯỞNG CƠM 2026"
+
+# Volatile/supporting tables may legitimately receive bookkeeping rows when the
+# new source starts. Every other pre-existing business table is fingerprinted
+# before and immediately after schema initialization.
+PRESERVATION_EXCLUSIONS = {
+    "audit_log",
+    "print_jobs",
+    "settings",
+    "sqlite_sequence",
+}
+
+# Tables carrying quantities, balances, prices, debt, or payroll amounts.
+# Only hashes and row counts are ever written to the migration report.
+FINANCIAL_TABLES = {
+    "attendance_entries",
+    "balances",
+    "dated_prices",
+    "debt_adjustments",
+    "historical_payable_lines",
+    "inventory_transactions",
+    "kitchen_labor_costs",
+    "meal_attendance",
+    "meal_plan_items",
+    "meal_plans",
+    "orders",
+    "outgoing_invoice_drafts",
+    "outgoing_invoice_lines",
+    "payments",
+    "payroll_adjustments",
+    "product_prices",
+    "purchase_order_lines",
+    "xcom_meal_tariffs",
+    "xcom_payment_previews",
+}
+
+SAFE_COUNT_METRICS = {
+    "attendance_entries", "dates", "duplicate", "error", "errors", "items",
+    "kitchens", "labor_cost_entries", "manual_attendance_preserved",
+    "manual_payroll_preserved", "negative", "new", "new_names", "new_products",
+    "payroll_overrides", "plans", "ready", "retained_products", "skipped",
+    "rows", "source_rows", "staff", "suppliers", "total", "unchanged", "unchanged_names",
+    "unchanged_products", "unique_products", "update", "update_names",
+    "update_products", "warning", "warnings",
+}
 
 
 def file_sha256(path: Path) -> str:
@@ -38,6 +84,35 @@ def clone_sqlite(source_path: Path, target_path: Path) -> None:
         source.close()
 
 
+def unique_file(root: Path, pattern: str) -> Path:
+    candidates = sorted(path for path in root.glob(pattern) if path.is_file())
+    if len(candidates) != 1:
+        raise FileNotFoundError(
+            f"Expected exactly one source matching {pattern!r}; found {len(candidates)}"
+        )
+    return candidates[0]
+
+
+def meal_attendance_file(period: str, preferred_name: str) -> Path:
+    preferred = MEAL_ROOT / preferred_name
+    if preferred.is_file():
+        return preferred
+    month = int(period[-2:])
+    month_pattern = re.compile(rf"^SU.*?\s+T{month}(?:[-.]|$)", re.IGNORECASE)
+    candidates = [
+        path
+        for path in BOSUNG.rglob("*.xlsx")
+        if not path.name.startswith("~$")
+        and month_pattern.search(path.name)
+        and ("XƯỞNG CƠM" in path.parent.name.upper() or "XU_NG COM" in path.parent.name.upper())
+    ]
+    if len(candidates) != 1:
+        raise FileNotFoundError(
+            f"Expected exactly one meal-attendance source for {period}; found {len(candidates)}"
+        )
+    return candidates[0]
+
+
 def canonical_digest(connection: sqlite3.Connection, statements: list[tuple[str, tuple]]) -> str:
     digest = hashlib.sha256()
     for sql, params in statements:
@@ -49,6 +124,151 @@ def canonical_digest(connection: sqlite3.Connection, statements: list[tuple[str,
             )
             digest.update(b"\n")
     return digest.hexdigest().upper()
+
+
+def quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def user_tables(connection: sqlite3.Connection) -> list[str]:
+    return [
+        str(row[0])
+        for row in connection.execute(
+            """SELECT name FROM sqlite_master
+               WHERE type='table' AND name NOT LIKE 'sqlite_%'
+               ORDER BY name"""
+        )
+    ]
+
+
+def capture_existing_table_fingerprints(
+    connection: sqlite3.Connection,
+    table_names: list[str] | None = None,
+    baseline: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Fingerprint existing values without returning or logging any raw data."""
+    available = set(user_tables(connection))
+    selected = table_names or sorted(available - PRESERVATION_EXCLUSIONS)
+    result: dict[str, dict[str, Any]] = {}
+    for table in selected:
+        if table not in available:
+            continue
+        quoted_table = quote_identifier(table)
+        columns = (
+            list(baseline[table]["columns"])
+            if baseline is not None and table in baseline
+            else [
+                str(row[1])
+                for row in connection.execute(f"PRAGMA table_info({quoted_table})")
+            ]
+        )
+        quoted_columns = ",".join(quote_identifier(column) for column in columns)
+        order_clause = ",".join(quote_identifier(column) for column in columns)
+        rows_sql = f"SELECT {quoted_columns} FROM {quoted_table}"
+        if order_clause:
+            rows_sql += f" ORDER BY {order_clause}"
+        row_count = int(
+            connection.execute(f"SELECT COUNT(*) FROM {quoted_table}").fetchone()[0]
+        )
+        result[table] = {
+            "columns": columns,
+            "row_count": row_count,
+            "digest": canonical_digest(connection, [(rows_sql, ())]),
+        }
+    return result
+
+
+def compare_table_fingerprints(
+    before: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    missing_tables = sorted(set(before) - set(after))
+    count_changes = sorted(
+        table for table in set(before) & set(after)
+        if before[table]["row_count"] != after[table]["row_count"]
+    )
+    content_changes = sorted(
+        table for table in set(before) & set(after)
+        if before[table]["digest"] != after[table]["digest"]
+    )
+    financial_changes = sorted(
+        table for table in content_changes if table in FINANCIAL_TABLES
+    )
+    return {
+        "tables_checked": len(before),
+        "missing_tables": missing_tables,
+        "count_changes": count_changes,
+        "content_changes": content_changes,
+        "financial_changes": financial_changes,
+        "counts_unchanged": not missing_tables and not count_changes,
+        "content_unchanged": not missing_tables and not content_changes,
+        "financial_values_unchanged": not missing_tables and not financial_changes,
+    }
+
+
+def safe_step_summary(step: dict[str, Any]) -> dict[str, Any]:
+    """Reduce an import result to non-sensitive operational evidence."""
+    preview = step.get("preview") if isinstance(step.get("preview"), dict) else {}
+    counts = preview.get("counts") if isinstance(preview.get("counts"), dict) else {}
+    summary: dict[str, Any] = {
+        "name": str(step.get("name") or ""),
+        "status": "blocked" if step.get("blocked") is True else "ready",
+        "semantic_idempotent": step.get("semantic_idempotent") is True,
+        "preview_row_count": int(preview.get("preview_rows_returned") or 0),
+        "preview_issue_count": int(preview.get("issue_rows_returned") or 0),
+        "preview_warning_count": int(preview.get("warning_messages") or 0),
+        "count_metrics": {
+            str(key): int(value)
+            for key, value in counts.items()
+            if key in SAFE_COUNT_METRICS
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        },
+    }
+    for key in (
+        "rows_first",
+        "rows_repeat",
+        "ledger_rows_first",
+        "ledger_rows_repeat",
+        "batches_first",
+        "batches_repeat",
+    ):
+        if isinstance(step.get(key), int) and not isinstance(step.get(key), bool):
+            summary[key] = int(step[key])
+    return summary
+
+
+def sensitive_log_policy(report: dict[str, Any]) -> dict[str, bool]:
+    """Declare and mechanically validate the report's strict allowlist shape."""
+    allowed_top_level = {
+        "run_dir", "source_db", "source_hash_before", "source_hash_after",
+        "source_db_unchanged", "clone_backup_path", "clone_hash_before_schema",
+        "clone_hash_after_schema", "clone_hash_final", "clone_integrity_before",
+        "schema_migration", "source_new_health", "source_new_bootstrap",
+        "steps", "blocked_steps", "all_ready_steps_idempotent",
+        "clone_final_counts", "clone_integrity", "checks", "migration_passed",
+        "sensitive_data_policy",
+    }
+    allowed_step_keys = {
+        "name", "status", "semantic_idempotent", "preview_row_count",
+        "preview_issue_count", "preview_warning_count", "count_metrics",
+        "rows_first", "rows_repeat", "ledger_rows_first", "ledger_rows_repeat",
+        "batches_first", "batches_repeat",
+    }
+    top_level_ok = set(report).issubset(allowed_top_level)
+    steps_ok = isinstance(report.get("steps"), list) and all(
+        isinstance(step, dict) and set(step).issubset(allowed_step_keys)
+        and isinstance(step.get("count_metrics", {}), dict)
+        and set(step.get("count_metrics", {})).issubset(SAFE_COUNT_METRICS)
+        for step in report.get("steps", [])
+    )
+    return {
+        "environment_values_logged": False,
+        "raw_rows_logged": False,
+        "personal_identifiers_logged": False,
+        "business_amounts_logged": False,
+        "allowlist_shape_valid": bool(top_level_ok and steps_ok),
+    }
 
 
 def compact_error(response) -> str:
@@ -121,6 +341,122 @@ def connection(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def fixture_work_date(*labels: str, year: int = 2026) -> str:
+    """Resolve a dated fixture label exactly as the import UI does.
+
+    Legacy daily workbooks carry only ``dd.mm`` in the filename/sheet name, so
+    the API intentionally leaves ``detectedWorkDate`` empty and the operator UI
+    supplies the date.  This release dry-run is pinned to the 2026 snapshot and
+    must emulate that explicit UI choice instead of reporting a false blocker.
+    """
+
+    for label in labels:
+        match = re.search(r"(?:^|\D)(\d{1,2})[.\-_/](\d{1,2})(?:\D|$)", str(label or ""))
+        if not match:
+            continue
+        try:
+            return date(year, int(match.group(2)), int(match.group(1))).isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
+def run_order_import_replay(client, clone_path: Path, orders_path: Path) -> dict[str, Any]:
+    order_analyze = upload(client, "/api/import/analyze", orders_path)
+    order_work_date = str(order_analyze.get("detectedWorkDate") or "")
+    candidates = order_analyze.get("sheets") or []
+    selected_sheets = [
+        item["name"] for item in candidates
+        if re.search(r"(?<!\d)29\D*0?8(?!\d)", str(item.get("name") or ""))
+    ]
+    if not order_work_date and len(selected_sheets) == 1:
+        order_work_date = fixture_work_date(orders_path.name, selected_sheets[0])
+    if (
+        not re.fullmatch(r"\d{4}-\d{2}-\d{2}", order_work_date)
+        or len(selected_sheets) != 1
+    ):
+        client.post("/api/import/cancel", json={"token": order_analyze.get("token")})
+        return {
+            "name": "orders_detected_daily_workbook",
+            "preview": {
+                "preview_rows_returned": sum(
+                    int(item.get("rows") or 0) for item in candidates
+                    if isinstance(item, dict)
+                ),
+                "issue_rows_returned": 1,
+            },
+            "blocked": True,
+            "semantic_idempotent": False,
+        }
+
+    order_first_payload = require_ok(
+        client.post("/api/import/confirm", json={
+            "token": order_analyze["token"], "sheets": selected_sheets,
+            "work_date": order_work_date,
+            "state_hash": order_analyze.get("stateHash", ""),
+        }),
+        "POST /api/import/confirm first",
+    )
+    order_query = [(
+        """SELECT b.id,b.work_date,b.source_name,b.status,o.work_date,o.contractor,o.kitchen,
+                  o.product_code,o.product_name,o.qty,o.actual_received,o.actual_delivered,
+                  o.damaged_qty,o.supplier_return_qty,o.customer_return_qty,o.unit,o.supplier,
+                  o.buy_price,o.sell_price,o.tax,o.invoice_nature,o.purchase_list,o.seller,o.cccd,
+                  o.note,o.source_sheet,o.source_row,o.errors,o.warnings
+           FROM batches b JOIN orders o ON o.batch_id=b.id
+           WHERE b.source_name=? ORDER BY b.id,o.id""",
+        (orders_path.name,),
+    )]
+    with connection(clone_path) as conn:
+        order_digest_first = canonical_digest(conn, order_query)
+        batches_first = conn.execute(
+            "SELECT COUNT(*) n FROM batches WHERE source_name=?", (orders_path.name,),
+        ).fetchone()["n"]
+        order_rows_first = conn.execute(
+            """SELECT COUNT(*) n FROM orders o JOIN batches b ON b.id=o.batch_id
+               WHERE b.source_name=?""", (orders_path.name,),
+        ).fetchone()["n"]
+
+    order_repeat_analyze = upload(client, "/api/import/analyze", orders_path)
+    if order_repeat_analyze.get("detectedWorkDate") != order_work_date:
+        client.post("/api/import/cancel", json={"token": order_repeat_analyze.get("token")})
+        raise RuntimeError("Order workbook detected date changed between repeated analyses")
+    order_repeat_payload = require_ok(
+        client.post("/api/import/confirm", json={
+            "token": order_repeat_analyze["token"], "sheets": selected_sheets,
+            "work_date": order_work_date,
+            "state_hash": order_repeat_analyze.get("stateHash", ""),
+        }),
+        "POST /api/import/confirm repeat",
+    )
+    with connection(clone_path) as conn:
+        order_digest_repeat = canonical_digest(conn, order_query)
+        batches_repeat = conn.execute(
+            "SELECT COUNT(*) n FROM batches WHERE source_name=?", (orders_path.name,),
+        ).fetchone()["n"]
+        order_rows_repeat = conn.execute(
+            """SELECT COUNT(*) n FROM orders o JOIN batches b ON b.id=o.batch_id
+               WHERE b.source_name=?""", (orders_path.name,),
+        ).fetchone()["n"]
+
+    return {
+        "name": "orders_detected_daily_workbook",
+        "preview": {
+            "preview_rows_returned": order_rows_first,
+            "issue_rows_returned": 0,
+        },
+        "batches_first": batches_first,
+        "batches_repeat": batches_repeat,
+        "rows_first": order_rows_first,
+        "rows_repeat": order_rows_repeat,
+        "semantic_idempotent": (
+            order_digest_first == order_digest_repeat
+            and order_first_payload.get("batch", {}).get("id")
+            == order_repeat_payload.get("batch", {}).get("id")
+        ),
+    }
+
+
 def main() -> int:
     if not SOURCE_DB.is_file():
         raise FileNotFoundError(SOURCE_DB)
@@ -130,6 +466,9 @@ def main() -> int:
     clone_path = run_dir / "tdp-migration-clone.sqlite3"
     clone_sqlite(SOURCE_DB, clone_path)
     clone_hash_before_schema = file_sha256(clone_path)
+    with connection(clone_path) as conn:
+        clone_integrity_before = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
+        legacy_before = capture_existing_table_fingerprints(conn)
 
     # The application must be imported only after its DB path points at the clone.
     os.environ["TDP_DB_PATH"] = str(clone_path)
@@ -145,15 +484,52 @@ def main() -> int:
     server.init_database()
     client = server.app.test_client()
 
+    clone_hash_after_schema = file_sha256(clone_path)
+    with connection(clone_path) as conn:
+        legacy_after = capture_existing_table_fingerprints(
+            conn,
+            table_names=sorted(legacy_before),
+            baseline=legacy_before,
+        )
+    schema_migration = compare_table_fingerprints(legacy_before, legacy_after)
+
+    health_response = client.get("/health")
+    health_payload = health_response.get_json(silent=True) or {}
+    source_new_health = {
+        "status_code": health_response.status_code,
+        "ok": health_payload.get("ok") is True,
+        "database_ready": health_payload.get("database_ready") is True,
+        "schema_ready": health_payload.get("schema_ready") is True,
+        "integrity": str(health_payload.get("integrity") or ""),
+        "duplicate_invoice_identity_warning": (
+            health_payload.get("duplicate_invoice_identity_warning") is True
+        ),
+        "duplicate_payable_source_warning": (
+            health_payload.get("duplicate_payable_source_warning") is True
+        ),
+    }
+    bootstrap_response = client.get("/api/bootstrap")
+    bootstrap_payload = bootstrap_response.get_json(silent=True) or {}
+    source_new_bootstrap = {
+        "status_code": bootstrap_response.status_code,
+        "ok": bootstrap_payload.get("ok") is True,
+    }
+
     report: dict = {
         "run_dir": str(run_dir),
         "source_db": str(SOURCE_DB),
         "source_hash_before": source_hash_before,
+        "clone_backup_path": str(clone_path),
         "clone_hash_before_schema": clone_hash_before_schema,
+        "clone_hash_after_schema": clone_hash_after_schema,
+        "clone_integrity_before": clone_integrity_before,
+        "schema_migration": schema_migration,
+        "source_new_health": source_new_health,
+        "source_new_bootstrap": source_new_bootstrap,
         "steps": [],
     }
 
-    catalog_path = INPUTS / "08410fad-ten_hang_dung_ma_hang thụy.xlsx"
+    catalog_path = unique_file(INPUTS, "08410fad*.xlsx")
     catalog_preview = upload(client, "/api/catalog/import/preview", catalog_path)
     catalog_first = confirm(client, "/api/catalog/import/confirm", catalog_preview["token"])
     with connection(clone_path) as conn:
@@ -279,7 +655,7 @@ def main() -> int:
         "2026-08": "SUẤT ĂN T8.2026.xlsx",
     }
     for period, filename in meal_files.items():
-        path = MEAL_ROOT / filename
+        path = meal_attendance_file(period, filename)
         meal_preview = upload(
             client, "/api/kitchen/attendance/import/preview", path, {"period": period},
         )
@@ -388,14 +764,42 @@ def main() -> int:
            FROM historical_payable_lines ORDER BY source_hash,source_sheet,source_row""",
         (),
     )]
+    payable_ledger_query = [
+        (
+            """SELECT source_key,source_type,source_table,source_ref,source_revision,
+                      source_hash,source_sheet,source_row,batch_id,work_date,kitchen,
+                      product_code,product_name,actual_qty,unit,supplier_code,
+                      supplier_snapshot,buy_price,amount,paid_amount,status,reversal_reason,
+                      snapshot_hash,revision
+               FROM payable_ledger_lines ORDER BY source_key""",
+            (),
+        ),
+        (
+            """SELECT l.source_key,r.revision,r.change_kind,r.snapshot_hash,
+                      r.source_revision,r.source_hash,r.amount,r.paid_amount,r.status,
+                      r.reversal_reason
+               FROM payable_ledger_revisions r
+               JOIN payable_ledger_lines l ON l.id=r.ledger_line_id
+               ORDER BY l.source_key,r.revision""",
+            (),
+        ),
+    ]
     with connection(clone_path) as conn:
         payables_digest_first = canonical_digest(conn, payables_query)
         payables_rows_first = conn.execute("SELECT COUNT(*) n FROM historical_payable_lines").fetchone()["n"]
+        payable_ledger_digest_first = canonical_digest(conn, payable_ledger_query)
+        payable_ledger_rows_first = conn.execute(
+            "SELECT COUNT(*) n FROM payable_ledger_lines WHERE source_type='historical_import'"
+        ).fetchone()["n"]
     payables_repeat_preview = upload(client, "/api/debts/payables/import/preview", payables_path)
     payables_repeat = confirm(client, "/api/debts/payables/import/confirm", payables_repeat_preview["token"])
     with connection(clone_path) as conn:
         payables_digest_repeat = canonical_digest(conn, payables_query)
         payables_rows_repeat = conn.execute("SELECT COUNT(*) n FROM historical_payable_lines").fetchone()["n"]
+        payable_ledger_digest_repeat = canonical_digest(conn, payable_ledger_query)
+        payable_ledger_rows_repeat = conn.execute(
+            "SELECT COUNT(*) n FROM payable_ledger_lines WHERE source_type='historical_import'"
+        ).fetchone()["n"]
     report["steps"].append({
         "name": "historical_payables",
         "file": str(payables_path),
@@ -404,132 +808,115 @@ def main() -> int:
         "confirm_repeat": payables_repeat,
         "rows_first": payables_rows_first,
         "rows_repeat": payables_rows_repeat,
-        "semantic_idempotent": payables_digest_first == payables_digest_repeat,
+        "ledger_rows_first": payable_ledger_rows_first,
+        "ledger_rows_repeat": payable_ledger_rows_repeat,
+        "semantic_idempotent": (
+            payables_digest_first == payables_digest_repeat
+            and payable_ledger_digest_first == payable_ledger_digest_repeat
+        ),
     })
 
-    orders_path = INPUTS / "Đơn hàng 29.08.xlsx"
-    order_analyze = upload(client, "/api/import/analyze", orders_path)
-    candidates = order_analyze.get("sheets") or []
-    selected_sheets = [
-        item["name"] for item in candidates
-        if re.search(r"(?<!\d)29\D*0?8(?!\d)", str(item.get("name") or ""))
-    ]
-    if not selected_sheets:
-        raise RuntimeError(
-            "Order workbook has no analyzed sheet matching day 29.08; candidates="
-            + json.dumps(candidates, ensure_ascii=False)
-        )
-    order_first_payload = require_ok(
-        client.post("/api/import/confirm", json={
-            "token": order_analyze["token"], "sheets": selected_sheets, "work_date": "2026-08-29",
-        }),
-        "POST /api/import/confirm first",
-    )
-    first_batch_id = order_first_payload["batch"]["id"]
-    order_query = [(
-        """SELECT b.id,b.work_date,b.source_name,b.status,o.work_date,o.contractor,o.kitchen,
-                  o.product_code,o.product_name,o.qty,o.actual_received,o.actual_delivered,
-                  o.damaged_qty,o.supplier_return_qty,o.customer_return_qty,o.unit,o.supplier,
-                  o.buy_price,o.sell_price,o.tax,o.invoice_nature,o.purchase_list,o.seller,o.cccd,
-                  o.note,o.source_sheet,o.source_row,o.errors,o.warnings
-           FROM batches b JOIN orders o ON o.batch_id=b.id
-           WHERE b.source_name=? ORDER BY b.id,o.id""",
-        (orders_path.name,),
-    )]
-    with connection(clone_path) as conn:
-        order_digest_first = canonical_digest(conn, order_query)
-        batches_first = conn.execute(
-            "SELECT COUNT(*) n FROM batches WHERE source_name=?", (orders_path.name,),
-        ).fetchone()["n"]
-        order_rows_first = conn.execute(
-            """SELECT COUNT(*) n FROM orders o JOIN batches b ON b.id=o.batch_id
-               WHERE b.source_name=?""", (orders_path.name,),
-        ).fetchone()["n"]
-
-    order_repeat_analyze = upload(client, "/api/import/analyze", orders_path)
-    order_repeat_payload = require_ok(
-        client.post("/api/import/confirm", json={
-            "token": order_repeat_analyze["token"], "sheets": selected_sheets, "work_date": "2026-08-29",
-        }),
-        "POST /api/import/confirm repeat",
-    )
-    second_batch_id = order_repeat_payload["batch"]["id"]
-    with connection(clone_path) as conn:
-        order_digest_repeat = canonical_digest(conn, order_query)
-        batches_repeat = conn.execute(
-            "SELECT COUNT(*) n FROM batches WHERE source_name=?", (orders_path.name,),
-        ).fetchone()["n"]
-        order_rows_repeat = conn.execute(
-            """SELECT COUNT(*) n FROM orders o JOIN batches b ON b.id=o.batch_id
-               WHERE b.source_name=?""", (orders_path.name,),
-        ).fetchone()["n"]
-
-    def order_result(payload: dict) -> dict:
-        orders = payload.get("orders") or []
-        return {
-            "batch_id": (payload.get("batch") or {}).get("id"),
-            "batch_status": (payload.get("batch") or {}).get("status"),
-            "idempotent": payload.get("idempotent"),
-            "import_key": payload.get("importKey"),
-            "source_hash": payload.get("sourceHash"),
-            "selected_sheets": payload.get("selectedSheets"),
-            "orders": len(orders),
-            "error_rows": sum(bool(item.get("errors")) for item in orders),
-            "warning_rows": sum(bool(item.get("warnings")) for item in orders),
-            "summary": payload.get("summary"),
-            "skippedSheets": payload.get("skippedSheets"),
-        }
-
-    report["steps"].append({
-        "name": "orders_2026_08_29",
-        "file": str(orders_path),
-        "analyzed_candidates": candidates,
-        "selected_sheets": selected_sheets,
-        "confirm_first": order_result(order_first_payload),
-        "confirm_repeat": order_result(order_repeat_payload),
-        "first_batch_id": first_batch_id,
-        "second_batch_id": second_batch_id,
-        "batches_first": batches_first,
-        "batches_repeat": batches_repeat,
-        "rows_first": order_rows_first,
-        "rows_repeat": order_rows_repeat,
-        "semantic_idempotent": order_digest_first == order_digest_repeat,
-    })
+    orders_path = unique_file(INPUTS, "*29.08*.xlsx")
+    report["steps"].append(run_order_import_replay(client, clone_path, orders_path))
 
     with connection(clone_path) as conn:
-        report["clone_final_counts"] = {
+        clone_final_counts = {
             table: conn.execute(f"SELECT COUNT(*) n FROM {table}").fetchone()["n"]
             for table in (
                 "products", "outgoing_product_names", "inventory_transactions", "meal_plans",
                 "meal_plan_items", "meal_attendance", "staff", "attendance_entries",
                 "payroll_adjustments", "kitchen_labor_costs", "historical_payable_lines",
+                "payable_ledger_lines", "payable_ledger_revisions",
+                "payable_payment_allocations", "payable_payment_revisions",
+                "receivable_ledger_lines", "receivable_ledger_revisions",
                 "batches", "orders",
             )
         }
         integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-        foreign_key_issues = [list(row) for row in conn.execute("PRAGMA foreign_key_check")]
-        report["clone_integrity"] = {
+        foreign_key_issue_count = sum(1 for _ in conn.execute("PRAGMA foreign_key_check"))
+        clone_integrity = {
             "integrity_check": integrity,
-            "foreign_key_issues": foreign_key_issues,
+            "foreign_key_issue_count": foreign_key_issue_count,
         }
 
-    report["source_hash_after"] = file_sha256(SOURCE_DB)
-    report["source_db_unchanged"] = report["source_hash_after"] == source_hash_before
-    report["blocked_steps"] = [
+    source_hash_after = file_sha256(SOURCE_DB)
+    source_db_unchanged = source_hash_after == source_hash_before
+    blocked_steps = [
         step["name"] for step in report["steps"] if step.get("blocked") is True
     ]
-    report["all_ready_steps_idempotent"] = all(
+    all_ready_steps_idempotent = all(
         step.get("semantic_idempotent") is True
         for step in report["steps"] if step.get("blocked") is not True
     )
-    report["all_semantic_idempotent"] = all(
-        step.get("semantic_idempotent") is True for step in report["steps"]
-    )
+    clone_hash_final = file_sha256(clone_path)
+    safe_report: dict[str, Any] = {
+        "run_dir": str(run_dir),
+        "source_db": str(SOURCE_DB),
+        "source_hash_before": source_hash_before,
+        "source_hash_after": source_hash_after,
+        "source_db_unchanged": source_db_unchanged,
+        "clone_backup_path": str(clone_path),
+        "clone_hash_before_schema": clone_hash_before_schema,
+        "clone_hash_after_schema": clone_hash_after_schema,
+        "clone_hash_final": clone_hash_final,
+        "clone_integrity_before": clone_integrity_before,
+        "schema_migration": schema_migration,
+        "source_new_health": source_new_health,
+        "source_new_bootstrap": source_new_bootstrap,
+        "steps": [safe_step_summary(step) for step in report["steps"]],
+        "blocked_steps": blocked_steps,
+        "all_ready_steps_idempotent": all_ready_steps_idempotent,
+        "clone_final_counts": clone_final_counts,
+        "clone_integrity": clone_integrity,
+    }
+    safe_report["sensitive_data_policy"] = sensitive_log_policy(safe_report)
+    checks = {
+        "source_db_unchanged": source_db_unchanged,
+        "clone_integrity_before_ok": clone_integrity_before.lower() == "ok",
+        "legacy_counts_unchanged": schema_migration["counts_unchanged"],
+        "legacy_content_unchanged": schema_migration["content_unchanged"],
+        "legacy_financial_values_unchanged": schema_migration["financial_values_unchanged"],
+        "source_new_health_ok": (
+            source_new_health["status_code"] == 200
+            and source_new_health["ok"]
+            and source_new_health["database_ready"]
+            and source_new_health["schema_ready"]
+            and source_new_health["integrity"] == "ok"
+            and not source_new_health["duplicate_invoice_identity_warning"]
+            and not source_new_health["duplicate_payable_source_warning"]
+        ),
+        "source_new_bootstrap_ok": (
+            source_new_bootstrap["status_code"] == 200 and source_new_bootstrap["ok"]
+        ),
+        "clone_final_integrity_ok": (
+            str(clone_integrity["integrity_check"]).lower() == "ok"
+            and clone_integrity["foreign_key_issue_count"] == 0
+        ),
+        "ready_import_steps_idempotent": all_ready_steps_idempotent,
+        "sensitive_report_allowlist_ok": safe_report["sensitive_data_policy"][
+            "allowlist_shape_valid"
+        ],
+    }
+    safe_report["checks"] = checks
+    safe_report["migration_passed"] = all(checks.values())
+    safe_report["sensitive_data_policy"] = sensitive_log_policy(safe_report)
     report_path = run_dir / "migration-report.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    report_path.write_text(
+        json.dumps(safe_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(json.dumps({
+        "migration_passed": safe_report["migration_passed"],
+        "checks": safe_report["checks"],
+        "blocked_steps": safe_report["blocked_steps"],
+        "source_hash_before": source_hash_before,
+        "source_hash_after": source_hash_after,
+        "clone_hash_before_schema": clone_hash_before_schema,
+        "clone_hash_after_schema": clone_hash_after_schema,
+        "clone_hash_final": clone_hash_final,
+    }, ensure_ascii=False, indent=2))
     print(f"REPORT_PATH={report_path}")
-    return 0
+    return 0 if safe_report["migration_passed"] else 1
 
 
 if __name__ == "__main__":

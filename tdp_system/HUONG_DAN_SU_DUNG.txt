@@ -6,52 +6,136 @@ KHỞI ĐỘNG
 3. Mặc định hệ thống chỉ mở trên máy đang chạy để bảo vệ dữ liệu. Chỉ khi cần dùng qua Wi-Fi/LAN, kỹ thuật mới bật TDP_ALLOW_LAN=1 và cấu hình TDP_TRUSTED_HOSTS; sau đó máy khác dùng địa chỉ hiện trong cửa sổ khởi động.
 
 LUỒNG ĐƠN HÀNG
-1. Vào “Nhập & kiểm tra đơn” → “Nạp phiên Excel mới”.
-2. Chỉ chọn đúng sheet ngày cần nhập; không nhập sheet gộp/lịch sử.
-3. Sửa lỗi, bổ sung giá và lượng thực nhận/thực giao → Duyệt phiên đơn.
-4. “Đặt hàng NCC” tự tính max(lượng khách đặt − tồn khả dụng, 0), tách theo NCC/bếp và quy tắc gộp.
-   Có thể bấm “Gộp NCC này” hoặc “Tách theo bếp”; quy tắc được lưu cho các lần sau.
-5. Hàng hỏng/trả NCC làm giảm số thực nhận; khách trả làm giảm số thực giao.
+1. Vào “Công việc hằng ngày” → chọn Từ ngày/Đến ngày → “Chọn file Excel”. Khi cần sửa tay, vào “Nhập & sửa đơn”.
+2. Ở lần nhập đầu, chỉ chọn đúng sheet ngày cần nhập; không nhập sheet gộp/lịch sử.
+3. Sửa các dòng được tô báo thiếu, bổ sung giá và lượng thực nhận/thực giao. File hợp lệ được tải sau cùng của ngày là bản hệ thống đang dùng.
+4. Vào “Đặt hàng nhà cung cấp” → tải trang `đặt hàng` chuẩn. Người dùng tự kiểm tra hàng thật còn trong tủ/kho rồi sửa Số lượng, Hỏng/Thêm/Giảm/Thiếu, Nhà cung cấp và Giá mua; lưu file, chọn lại file, xem trước rồi xác nhận.
+   Số lượng thực tế = Số lượng + Thêm − Hỏng − Giảm − Thiếu. Thành tiền = Số lượng thực tế × Giá mua và được làm tròn VND; hệ thống chặn nếu công thức/cache lệch. Dòng mua ngoài có số lượng dương bắt buộc có giá mua lớn hơn 0; dòng lấy từ Kho được phép giá 0.
+   Hệ thống vẫn nhận file round-trip 13 cột của bản cũ để chuyển tiếp, nhưng file xuất mới dùng đúng cấu trúc sheet của khách. Phần mua này không sửa đơn khách, lượng giao, giá bán, doanh thu, phải thu hay kho hóa đơn.
+   Sau khi nạp, màn hình tách theo NCC/bếp và quy tắc gộp để người dùng kiểm tra/gửi NCC. Hoài chỉ dồn Cà rốt; Thu, Kỳ, Tân, Phượng, Dung và Kho dồn các dòng trùng tên hàng; NCC khác không tự dồn. Dồn chỉ áp dụng ở phần trình bày/gửi NCC, các dòng gốc vẫn được giữ nguyên để truy vết.
+   Bấm “Sao chép ảnh” để lấy ảnh gửi NCC; ngay sau khi tạo ảnh thành công, hệ thống tự ghi nhận “Đã đặt”. Nếu cần sửa/gửi lại, bấm “Mở lại”.
+   Ảnh gửi NCC chỉ có Mã bếp, Ngày, Tên hàng, Số lượng, ĐVT, NCC và Ghi chú. Ảnh không đưa tồn tủ, giá mua, thành tiền, tổng sau trừ tồn hay cột kiểm soát nội bộ.
+5. Khi có file hoàn chỉnh cuối ngày, chọn “Chọn file Excel” lần nữa. Hệ thống nhận đúng ngày cũ, kiểm tra riêng hai phần “Bán/giao” và “Mua/phải trả”. Nếu cả hai phần hợp lệ, hệ thống tự dùng toàn bộ file tải sau cùng làm bản chuẩn và tự chốt đơn, không bắt người dùng duyệt thêm lần nữa.
+   Nếu file còn lỗi/xung đột, hệ thống không âm thầm bỏ qua: màn kiểm tra hiện rõ phần đạt và phần cần sửa. “Bán/giao” chỉ cập nhật đơn khách, lượng thực giao, giá bán giao dịch, doanh thu và phải thu; “Mua/phải trả” chỉ cập nhật phần mua và phải trả. Nếu chốt cả hai mà một phần lỗi, toàn bộ lần chốt được hoàn tác. File cũ đã bị file mới thay thế không thể ghi đè trở lại.
+6. Hàng hỏng/trả NCC làm giảm số thực nhận; khách trả làm giảm số thực giao.
+
+BIỂU MẪU EXCEL CỐ ĐỊNH
+- Nền sinh biểu mẫu luôn tạo bản sao từ đúng sheet golden trong `Em Thành.xlsx`; không sửa file mẫu gốc. Bản sao giữ bố cục, style, ô gộp, kích thước dòng/cột, vùng ký và thiết lập in của mẫu.
+- Công thức nội bộ an toàn của sheet được giữ. Công thức hoặc liên kết trỏ sang workbook ngoài/sheet không đi kèm được chuyển thành giá trị tĩnh đã có trong mẫu, để file đầu ra độc lập và không hiện yêu cầu cập nhật link khi mở.
+- Dữ liệu hệ thống được ghi dưới dạng giá trị; chuỗi có thể trở thành công thức và số không hữu hạn bị chặn. Trước khi tải, workbook được mở lại để kiểm tra không còn external link/công thức nguy hiểm; luồng PDF tiếp tục kiểm tra riêng khổ A4/A5.
+
+PHIẾU GIAO HÀNG
+- Vào “Công việc hằng ngày” → “Xem phiếu giao”, hoặc “In giấy tờ” → chọn Đơn hàng đi giao. Bản xem mở ngay trong phần mềm; chọn phiếu rồi mới tải Excel hoặc in. File tạo một sheet riêng cho từng mã bếp có số thực giao ròng dương; số thực giao ròng bằng Số thực giao trừ Khách trả. Dòng trả hết không tạo dòng giao trống. Bản in có thông tin nhà cung cấp in đậm, tiêu đề–dòng kiêm xuất kho–ngày nằm ba dòng căn giữa, hình thức thanh toán TM/CK, bảng chữ lớn và bốn vị trí ký thẳng hàng.
+- Mỗi sheet lấy mẫu `đơn hàng đi giao` đã được duyệt trong `Em Thành.xlsx`: đúng thông tin bên bán, tên đơn vị mua/địa chỉ theo danh mục `T.chiếu`, ngày phiên và bảng hàng. Phần cuối là chữ và ô Excel thật cho bốn vùng ký Trực ban – Bảo vệ – Người giao hàng – Người nhận hàng, không còn chèn ảnh chụp. Có thể cấu hình lại tên pháp nhân/địa chỉ theo đúng mã bếp nếu hợp đồng thay đổi; không dò tên gần đúng.
+- Chỉ đúng cặp mã bếp `NHUAHP` và nhà thầu `NHUAHAIPHONG` được hiện Đơn giá, Thành tiền và Tổng tiền. Mọi bếp khác bị xóa toàn bộ dữ liệu giá rồi mới ẩn hai cột giá; cờ cũ hoặc tên có chữ “Nhựa” không thể tự bật giá. Cột giá mua nội bộ luôn để trống và ẩn trên mọi phiếu.
+- Phiếu chỉ giữ đúng số dòng có giao, không in các dòng trắng của mẫu. Ngày nằm ở góc phải; Tên hàng, SL và ĐVT đặt gần nhau với chữ lớn, đều hàng. Bảng dùng hết chiều ngang A4 dọc, không còn màu cảnh báo nội bộ. Phiếu dài được chia đều số dòng giữa các trang, lặp lại tiêu đề cột ở trang sau và chỉ đặt bốn vùng ký tại cuối trang cuối; không ép toàn bộ vào một trang làm chữ bị nhỏ.
+
+BẢNG KÊ THU MUA TỔNG
+- Tải “Bảng kê & biên nhận” tại đúng phiên đơn. Sheet `bảng kê tổng` chỉ lấy các dòng có đánh dấu BK thuộc phần Mua/phải trả đã chốt; không lấy doanh thu, số thực giao, sổ phải thu hoặc hóa đơn đầu ra.
+- Mỗi dòng BK phải có người bán và CCCD/CMND 9 hoặc 12 chữ số hợp lệ. Địa chỉ lấy từ danh mục định danh nội bộ. Nếu thiếu hoặc mâu thuẫn, hệ thống dừng xuất và chỉ nêu số dòng nguồn cần sửa, không đưa số định danh vào thông báo hay log.
+- Cùng ngày, cùng người bán và cùng tên hàng/ĐVT được dồn thành một dòng dù phát sinh ở nhiều NCC hoặc bếp; các chiều NCC, bếp và dòng nguồn vẫn được giữ để truy vết nội bộ. Nếu các dòng có giá khác nhau, Đơn giá trên bảng kê là bình quân gia quyền và Tổng giá thanh toán vẫn bằng đúng tổng mua đã chốt.
+- Với batch cũ chưa có phần mua canonical, Giá mua đã lưu được ưu tiên; chỉ khi giá mua còn trống mới áp dụng tỷ lệ bảng kê đã cấu hình (mặc định 95% giá bán) theo ghi chú của mẫu. Dòng không đủ căn cứ giá bị chặn, không tự lấy từ phải thu.
+- File lấy nguyên bố cục sheet `bảng kê tổng` trong `Em Thành.xlsx`, xóa toàn bộ dữ liệu ví dụ và ghi chú hướng dẫn nằm ngoài biểu mẫu, tự co/giãn số dòng, dời tổng tiền/vùng ký, ghi đủ ngày từng dòng và số tiền bằng chữ. Vùng in là A4 ngang, một trang theo chiều rộng; bảng dài được phép sang trang và lặp lại ba dòng tiêu đề.
+
+BIÊN NHẬN THU MUA
+- Đoàn Văn Giang và Nguyễn Văn Toại đã bị loại khỏi bảng kê/biên nhận mới theo quyết định ngày 05/09/2026. Dòng của hai người này không được tính vào tổng chứng từ; màn xem báo rõ phần bị loại và Excel có ghi chú tại ô đầu. Đơn hàng, kho, công nợ và lịch sử cũ vẫn được giữ nguyên. Nếu tất cả dòng đều bị loại, hệ thống báo không có chứng từ hợp lệ để lập.
+- Cùng file “Bảng kê & biên nhận” tạo đúng một sheet biên nhận cho mỗi người bán pháp lý trong từng ngày. Tên sheet chỉ đánh số `biên nhận`, `biên nhận 02`...; không đưa tên người bán hoặc CCCD/CMND vào tên sheet hay manifest kỹ thuật.
+- Mỗi biên nhận chỉ lấy các dòng BK đã chốt của đúng người bán/ngày, dùng số lượng thực tế, giá mua và thành tiền cùng nguồn với `bảng kê tổng`. Các dòng cùng mặt hàng/ĐVT được dồn và dùng bình quân gia quyền; không lấy doanh thu hoặc phải thu.
+- Người bán phải có đủ địa chỉ, CCCD/CMND, ngày cấp và nơi cấp trong danh mục định danh nội bộ. Thiếu/mâu thuẫn sẽ chặn xuất nhưng thông báo chỉ chỉ ra dòng nguồn, không lặp lại số giấy tờ. Tổng của một người bán trong một ngày vượt 5.000.000 đồng cũng bị chặn; hệ thống không tự chia thành nhiều biên nhận để lách giới hạn.
+- Sheet lấy nguyên golden `biên nhận` trong `Em Thành.xlsx`: đúng quốc hiệu, câu chữ, pháp nhân, năm cột Tên hàng–ĐVT–Đơn giá–Số lượng–Thành tiền, tổng, tiền bằng chữ và hai vùng ký. Thông tin người bán thẳng cột; bảng dùng Times New Roman dễ đọc; ngày ký nằm cân giữa phía bên bán; hai vùng ký chia đều và tên người bán căn giữa. Số dòng tự co/giãn, dữ liệu/ghi chú ví dụ bị xóa và mỗi sheet có vùng in một trang A4 dọc.
+- Có thể đổi người mua hàng bằng hai cấu hình `purchase_receipt_buyer_name` và `purchase_receipt_buyer_title`; địa điểm ký dùng `purchase_receipt_location`. Nếu chưa cấu hình, biểu mẫu giữ người mua và địa điểm của golden hiện hành.
+
+BÁO CÁO TỔNG HỢP THÁNG
+- Chọn một phiên thuộc tháng cần xem rồi tải “Báo cáo”. File dùng đúng một sheet `báo cáo tổng hợp` từ golden, với bảy cột: Nhóm khách hàng (tiêu đề A để trống như mẫu), Khách hàng/nhà thầu, Mã khách hàng/mã bếp, Doanh số bán, Giá vốn, Lợi nhuận gộp và Tổng thanh toán.
+- Nguồn tháng gồm mọi phiên đã duyệt trong cùng tháng. Nếu phiên đang chọn còn là nháp, file chỉ thêm phiên nháp đó để xem trước và không đưa các phiên nháp khác vào. Báo cáo không lấy số dư, khoản thu/chi hoặc sổ phải thu/phải trả; các phần đó vẫn xem ở báo cáo công nợ riêng.
+- Doanh số và Tổng thanh toán lấy số thực giao ròng cùng giá bán giao dịch/thuế; Giá vốn lấy số thực nhận ròng cùng giá mua; Lợi nhuận gộp luôn bằng Doanh số bán trừ Giá vốn. Cùng mã bếp trong tháng được cộng dồn và bắt buộc chỉ thuộc một nhà thầu.
+- Hệ thống giữ thứ tự nhóm/mã bếp đã có trong golden. Có thể cấu hình `report_group_<MÃ_BẾP>` để đổi Nhóm khách hàng; bếp mới chưa cấu hình vẫn tự xuất hiện dưới nhóm nhà thầu của nó, không cần chèn dòng hoặc sửa công thức Excel.
+- Nhóm có nhiều bếp được theo sau bởi dòng tổng nhóm nền xanh; cuối file luôn có `TỔNG THÁNG` nền xanh. Tất cả số là giá trị tĩnh đã đối soát, vùng in A4 ngang và lặp hàng tiêu đề khi báo cáo dài.
+
+BÁO GIÁ THEO KỲ
+- File báo giá được nạp bằng luồng riêng, không chọn sheet `BÁO GIÁ` trong lúc nạp đơn hằng ngày.
+- Trước khi nạp phải chọn kỳ hiệu lực dạng YYYY-MM. Có thể nạp giá tháng sau từ ngày 25 trong khi đơn hiện tại vẫn dùng phiên bản đã xác nhận của tháng hiện tại.
+- Hệ thống xem trước đúng sheet `BÁO GIÁ`, hash nguồn, các nhóm nhà thầu, số dòng/lỗi và số phiên bản dự kiến; chỉ ghi sau khi người dùng xác nhận đúng preview còn hiệu lực.
+- Nạp lại đúng bytes cho cùng kỳ là replay, không tạo phiên bản trùng. File điều chỉnh tạo phiên bản tiếp theo; các phiên bản cũ và giá đã chụp trên đơn cũ được giữ nguyên để truy vết.
+- Giá bán của đơn mới lấy theo nhà thầu và kỳ ngày đơn. Giá mua có số trong báo giá đúng kỳ được ưu tiên; nếu ô giá mua không có số thì chỉ giá mua thực tế trên dòng vận hành mới được bổ sung, không lấy ngược giá danh mục của kỳ khác.
+- Hệ thống nối cột giá bằng đúng mã/header nhà thầu, không đoán theo vị trí. Preview luôn hiện header và chữ cột Excel để kiểm tra; ví dụ Toyota trong mẫu chuẩn là cột Q.
+- Dòng `X` hoặc rỗng không xuất. Giá bằng 0 vẫn hiện rõ và được giữ để người dùng xác nhận, không bị hiểu nhầm là trống.
+- Cùng một mã/cùng dữ liệu được gộp thành một dòng và vẫn giữ số dòng nguồn để truy vết. Nếu cùng mã nhưng khác giá mua, giá bán, tên, ĐVT hoặc thuế, preview nêu rõ mã/nhóm/dòng xung đột và chặn xác nhận; cần sửa file rồi nạp lại, hệ thống không tự chọn một dòng.
+- Mọi nhà thầu giá theo nhóm chỉ tải được khi kỳ đang chọn đã có phiên bản được xác nhận. Tất cả dùng cùng mẫu chuẩn đã đối chiếu Toyota: một sheet `all`, đúng người nhận của từng nhà thầu, các nhóm hàng nền xanh, mã tăng dần trong từng nhóm, sáu cột chuẩn, A4 ngang và lặp dòng tiêu đề. Tên file và dòng nguồn cuối bảng ghi rõ mã nhà thầu/kỳ/phiên bản; file độc lập không có công thức hoặc liên kết ngoài. Giá của mỗi file chỉ lấy từ đúng header nhà thầu đó, không dùng chung hay lấy bù từ nhà thầu khác.
+- GIANHAPTAY và YLKHAN là giá theo ngày nên phải chọn đúng phiên đơn trước khi tải báo giá. File vẫn dùng cùng mẫu chuẩn nhưng tiêu đề/dòng nguồn ghi ngày và mã phiên đơn. Nếu cùng mã xuất hiện ở nhiều bếp với cùng tên, ĐVT, thuế và giá thì file chỉ giữ một dòng có truy vết; nếu khác dữ liệu hoặc khác giá, hệ thống chặn xuất để người dùng sửa, không tự lấy một dòng.
 
 KHO, CÔNG NỢ VÀ HÓA ĐƠN
-- “Kho hóa đơn” là kho sổ sách: tồn đầu + hóa đơn đầu vào + bảng kê BK − hóa đơn đầu ra.
-- Nạp tồn đầu kỳ: chọn đúng kỳ trong “Kho hóa đơn” → bấm “Nạp Excel tồn đầu kỳ” → kiểm tra tổng số mã, tổng giá trị, dòng âm và cảnh báo → bấm xác nhận.
+- “Báo cáo vật tư hàng hóa” là sổ chuẩn: tồn đầu đã chốt + hóa đơn đầu vào đã ghi kho + bảng kê mua vào đã xác nhận − hóa đơn đầu ra đã phát hành, ghép mã đủ và được xác nhận xuất kho. Bản nháp chỉ giữ tồn khả dụng, không ghi xuất; chữ/cờ bảng kê trên đơn chỉ là gợi ý và không tự cộng tồn khi duyệt đơn hàng.
+- Chọn `Từ ngày – Đến ngày` để xem cùng một projection giá bình quân. Nút “Tải đủ 4 file ZIP” tạo đúng bốn workbook TĐK, Nhập trong kỳ, Xuất trong kỳ và NXT; bốn file dùng chung mã đối chiếu ẩn và cùng bộ tổng nên không thể lấy nhầm kỳ với nhau. Có thể tải riêng từng file bằng bốn nút bên cạnh.
+- File TĐK bám cấu trúc workbook `TĐK T8-2026.xlsx thụy.xlsx`. Chi tiết Nhập/Xuất lấy dấu vết hóa đơn đã ghi kho; hoàn tác xuất hiện số âm. File NXT luôn kiểm tra `TĐK + Nhập − Xuất = Tồn cuối` cho cả số lượng và giá trị, dùng bình quân di động và tuyệt đối không dùng giá bán làm giá vốn.
+- Bộ bốn file là biểu mẫu chính thức dùng cùng contract/projection từ cấu trúc TĐK khách đã gửi: file TĐK clone golden; Nhập, Xuất và NXT là các biểu mẫu dẫn xuất nhất quán từ sổ chuẩn. NXT giữ đủ Mã TĐP, Tên TĐP, Tên trên HĐ, Mã kho, T/Suất và ĐVT; sau đó trình bày bốn nhóm Tồn đầu kỳ, Nhập, Xuất, Tồn cuối kỳ. File dùng giá trị tĩnh, khổ A4 ngang, có mã đối chiếu ẩn và không chứa công thức hoặc liên kết ngoài.
+- Nạp tồn đầu kỳ: vào “Báo cáo vật tư hàng hóa” → mở “Xem chi tiết và nhập dữ liệu” → bấm “Nạp Excel tồn đầu kỳ” → kiểm tra tổng số mã, tổng giá trị, dòng âm và cảnh báo → bấm xác nhận.
+- Chốt kho cuối tháng: chọn khoảng ngày thuộc tháng cần chốt, kiểm tra “Tổng lượng tồn cuối” và “Tổng giá trị tồn cuối”, rồi bấm “Chốt tháng … và chuyển sang …”. Hệ thống thay tồn đầu tháng sau bằng đúng tồn cuối tháng trước, không cộng chồng. Nếu cần sửa lại tháng đã chốt, bấm “Mở lại tháng …”, sửa xong phải chốt lại; nếu tháng sau đã chốt tiếp thì phải mở tháng sau trước.
 - Hệ thống gộp các dòng cùng mã TĐP, giữ số lượng âm và ưu tiên cột Thành tiền của sổ khách. Nạp lại cùng file/kỳ sẽ cập nhật, không cộng trùng.
 - Mã TĐP chưa có sẽ được tạo sau khi xác nhận. Nhà cung cấp của mã mới để trống; cần gán trước khi dùng mã đó để sinh đơn đặt NCC.
-- mSMI chỉ đọc và đồng bộ tăng dần; hóa đơn đã có không được tạo lại.
-- Ghép đủ mã hàng nguồn với mã TĐP rồi mới bấm “Tạo phiếu nhập”. Mapping được ghi nhớ.
-- Hóa đơn đầu ra dùng lượng thực giao, phải đủ tồn và chỉ tạo dự thảo. Dự thảo đang giữ tồn có thể “Hủy & nhả tồn”.
+- BK là hàng mua vào không có hóa đơn và dùng file Excel riêng do hệ thống cung cấp, không lấy từ mSMI. Bấm “Tải mẫu BK trắng” để nhập tay; nếu đang chọn một phiên đơn đã duyệt, bấm “Tải mẫu theo phiên đang chọn” để hệ thống lấy các dòng có cờ BK đã chốt, số lượng thực nhận, mã/NCC và mặc định giá BK theo tỷ lệ giá bán đã cấu hình (95% nếu chưa đổi). Người dùng phải xem/sửa file trước khi chọn lại để preview; loại nguồn đã cố định, không phải tự chọn. Không nhập CCCD/CMND vào file.
+- Preview BK kiểm tra mã hàng, tên hàng, ĐVT, số lượng và đơn giá dương, `Thành tiền = Số lượng × Đơn giá`, công thức/hyperlink, khóa ngày + số tham chiếu + dòng nguồn và các lần nhập trước. Preview chưa ghi kho. Chỉ sau nút “Xác nhận nhập BK vào kho”, hệ thống mới ghi đúng một lần vào ledger chuẩn dùng cho readiness/NXT; nạp lại cùng nội dung không cộng lặp và thay đổi cùng khóa nguồn bị chặn.
+- Muốn hủy một bộ đã nhập, dùng “Hoàn tác BK”, nhập ngày và lý do rồi xác nhận. Hệ thống tạo bút toán ngược, giữ nguyên lịch sử/audit và từ chối nếu hoàn tác làm âm kho tại bất kỳ mốc sau đó hoặc bị che bởi một kỳ tồn đầu mới; không xóa/sửa trực tiếp bút toán cũ. Các dòng `BK_INPUT` tự sinh kiểu cũ vẫn không được tính vào tồn khả dụng.
+- Trong “Bàn làm việc hóa đơn”, chọn riêng Đầu vào hoặc Đầu ra và đúng `Từ ngày – Đến ngày`. Mỗi bảng chỉ hiện hóa đơn thuộc phiên/khoảng ngày đang chọn; có thể tiếp tục cursor an toàn, đồng bộ lại không nhân đôi. Dòng chưa ghép/khác ĐVT phải nhập mã hoặc hệ số quy đổi bằng tay; mapping được ghi nhớ riêng theo nguồn và chiều hóa đơn, không tự dùng mapping đầu vào cho đầu ra.
+- Hóa đơn đầu vào lấy từ mSMI theo chế độ chỉ đọc và đồng bộ tăng dần; hóa đơn đã có không được tạo lại. Ngay sau khi kéo xong, tại bảng phiên đồng bộ đầu vào bấm “Xuất Excel” để lấy danh sách hóa đơn, chi tiết hàng hóa và sheet đối chiếu phiên; thao tác này không cần ghép mã, không tạo phiếu nhập và không tác động kho. Ghép đủ mã/quy đổi rồi mới bấm “Tạo phiếu nhập”.
+- Hóa đơn đầu ra canonical chỉ lấy từ M-Invoice theo chế độ chỉ đọc. Chỉ hóa đơn gốc đã gửi CQT thành công, đồng bộ đủ, ghép đủ mã/quy đổi và còn trạng thái hợp lệ mới hiện “Xác nhận xuất kho hóa đơn”. Nháp/chờ ký/chưa rõ/hủy/thay thế/điều chỉnh bị chặn hoặc đưa vào đối chiếu; không tự suy đoán thành đã phát hành.
+- Khi M-Invoice đổi sang hủy/thay thế/điều chỉnh sau khi đã post, dùng “Xác nhận hoàn tác xuất kho”; hệ thống thêm bút toán đảo có audit, không xóa lịch sử. Lỗi giữa chừng phải giữ nguyên ledger và phiên có mã lỗi an toàn để tải/tiếp tục lại.
+- Hóa đơn đầu ra dùng lượng thực giao và chỉ được mở khóa bằng tồn hóa đơn chuẩn (tồn đầu đã chọn + sổ hóa đơn đã ghi kho). Điều chỉnh tay, kho vận hành tương thích và cờ BK không làm tăng lượng được phép lập. Mỗi dòng có số lượng dương bắt buộc có mã hàng TĐP và nhà thầu.
+- Nếu cần 10 nhưng mới có tồn 7, hệ thống tạo dự thảo 7 và giữ 3 ở trạng thái còn thiếu. Khi có thêm hóa đơn đầu vào, bấm lại để tạo vòng tiếp theo; số đã dự thảo và đã phát hành được tách riêng, mỗi vòng/danh sách tách theo từng nhà thầu và không dùng lại cùng một lượng tồn.
+- Dự thảo đang giữ tồn có thể “Hủy & nhả tồn”. Việc giữ tồn có hiệu lực toàn cục kể cả phiên ngày tương lai, nên mở một phiên cũ hơn cũng không thể dùng trùng; hóa đơn đã xác nhận cục bộ tiếp tục giữ lượng đó cho tới khi khớp được bản hóa đơn nguồn đã ghi trong sổ chuẩn.
+- Tại “Bảng kê, biên nhận và hóa đơn”, vùng “Danh sách còn thiếu theo kỳ” cho phép chọn Từ ngày/Đến ngày và nhà thầu, xem tổng cần/đã dự thảo/đã phát hành/có thể lập/còn thiếu rồi tải Excel. File chỉ chứa phần còn thiếu, có sheet tổng và sheet riêng từng nhà thầu, gồm mã hàng, số lượng, đơn giá và giá trị để chạy lại vài ngày sau hoặc xin luân chuyển cuối tháng.
+- Khi khách duyệt dùng mặt hàng thay thế, mở vùng “Luân chuyển / mặt hàng thay thế có xác nhận”: tự chọn đúng dòng đang thiếu, tự nhập mã TĐP thay thế, số lượng, người xác nhận và lý do rồi bấm “Xem trước, chưa ghi”. Hệ thống không tự gợi ý thành quyết định; chỉ cho tiếp tục khi hai mã khác nhau, ĐVT khớp và kho hóa đơn của mã thay thế còn đủ.
+- Preview phải hiện rõ mã gốc → mã thay thế, số lượng, tồn trước khi giữ, thuế, giá bán và nguồn giá. Giá mặc định chỉ lấy từ báo giá đã xác nhận đúng kỳ/nhà thầu; tuyệt đối không lấy giá mua, giá vốn hay bình quân kho làm giá bán. Nếu dùng giá riêng, phải nhập giá override, lý do duyệt và tick xác nhận thẩm quyền rồi preview lại. Sửa bất kỳ ô nào sau preview thì phải preview lại.
+- Sau nút xác nhận cuối, hệ thống tạo vòng dự thảo thay thế, giữ tồn của mã thay thế và lưu lịch sử/audit nhưng không sửa mã, tên hay giá trên dòng đơn gốc. Có thể hoàn tác và nhả tồn khi dự thảo còn chỉnh được; lựa chọn đã hoàn tác vẫn nằm trong lịch sử. Khi đã lưu/chưa đối soát trên M-Invoice hoặc đã phát hành thì không được hoàn tác cục bộ, phải đi theo luồng hoàn tác hóa đơn chuẩn. Có thể xem trước mới để xác nhận lại cùng lựa chọn sau một lần hoàn tác; mã xem trước cũ không được dùng lại.
+- Nút “Tải ZIP vòng này” chỉ lấy đúng số lượng của các dòng đang được vòng dự thảo hiện tại giữ tồn; không lấy lại toàn bộ số thực giao của đơn. Vòng cũ đã phát hành không chặn tải vòng mới, nhưng không được đưa lại vào ZIP. Mỗi file trong ZIP chỉ có một nhà thầu, một vòng và một nhóm thuế.
+- Các nhóm KKKNT, VAT 8%, VAT 10% và VAT 10% có khuyến mại bám bốn file khách chốt trong `bosung.30.8.26`. `thue 0.xlsx` là KKKNT với mã nội bộ `-2`, tuyệt đối không đổi thành VAT 0%. Dòng khuyến mại có Tính chất `2`, giữ số lượng và thuế 10 nhưng các ô Đơn giá/Cộng tiền/%CK/Tiền CK/Tiền trước thuế/Tiền thuế/Tổng tiền phải để trống. Mẫu sai hash, dòng lệch Số lượng × Đơn giá hoặc chuỗi có thể thành công thức đều bị chặn/ghi an toàn trước khi tải.
 - Danh mục tên xuất hóa đơn: vào “Danh mục & sao lưu”, có thể lưu từng mã hoặc nạp cả file Excel. File cần có Mã/Tên hàng và Tên xuất hóa đơn.
 - Với file danh mục đầy đủ, vào “Danh mục & sao lưu” → “Nạp danh mục khách chốt” → kiểm tra số mã mới/cập nhật/mã cũ được giữ → bấm xác nhận. Hệ thống giữ nguyên NCC, giá mua và bảng giá của mã hiện có, đồng thời thêm mã mới và lưu tên xuất hóa đơn.
 - Tên xuất hóa đơn có thể khác hẳn tên TĐP nếu khách chủ động chọn mặt hàng thay thế cho hàng đặc thù. Hệ thống dùng đúng tên trong file đã được khách xác nhận và vẫn chỉ tạo dự thảo; người dùng phải kiểm tra trước khi ký/phát hành.
 - Nạp lại cùng file danh mục không nhân đôi. Mã cũ không có trong file mới vẫn được giữ; hệ thống không tự xóa danh mục.
 - Khi nạp danh sách Excel, phải xem trước và bấm xác nhận. Nếu còn dòng sai hoặc cùng mã có hai giá trị khác nhau, hệ thống không ghi bất kỳ dòng nào.
-- Người dùng tự kiểm tra, ký và phát hành trên M-Invoice; sau đó mới bấm “Xác nhận đã ký/phát hành” để ghi xuất kho. Hệ thống không tự ký/phát hành.
-- Công nợ hỗ trợ số dư đầu kỳ, thu/chi, điều chỉnh, xem theo khoảng ngày và tải Excel công nợ kỳ.
-- Trước khi xuất đề nghị thanh toán, vào “Danh mục & sao lưu” kiểm tra người đề nghị, ngân hàng và số tài khoản.
+- Người dùng tự kiểm tra, ký và phát hành trên M-Invoice. Nút “Ghi nhận hóa đơn đã phát hành” ở vùng dự thảo chỉ khóa hồ sơ cục bộ và tiếp tục giữ tồn chờ đối soát; nút này chưa ghi sổ TĐK–NXT. Muốn ghi giảm kho chuẩn, vào “Bàn làm việc hóa đơn” → Đầu ra M-Invoice, tải đúng khoảng ngày, ghép mã/quy đổi ĐVT rồi bấm “Xác nhận xuất kho hóa đơn”. Hệ thống không tự ký/phát hành.
+- Tồn chờ của xác nhận cục bộ chỉ được thay thế/nhả khi bản M-Invoice đã đồng bộ khớp đúng ký hiệu, số, ngày và toàn bộ mã hàng–ĐVT–số lượng; lệch bất kỳ chi tiết nào thì giữ nguyên tồn chờ và yêu cầu đối chiếu.
+- Trước khi lập bảng kê giao hàng theo hóa đơn hoặc hồ sơ đề nghị thanh toán, chọn nhà thầu rồi bấm “Xem hóa đơn đỏ trước khi tải”. Phạm vi chỉ nhận các vòng hóa đơn đã phát hành có số/ngày, snapshot pháp lý/thanh toán đầy đủ và tổng chi tiết khớp hóa đơn; đơn khách, phiếu giao, dự thảo, vòng đã hủy và sổ phải thu vận hành không được cộng vào.
+- Nếu hệ thống đã đồng bộ được bản hóa đơn nguồn, trạng thái nguồn phải vẫn là `issued` và không nằm ở `blocked/reversal_required/reversed`; hóa đơn nguồn đã hủy, thay thế, điều chỉnh, chưa rõ trạng thái hoặc lệch tổng sẽ chặn cả hồ sơ để đối chiếu. Nếu chưa có bản nguồn đồng bộ, hệ thống ghi rõ đây là xác nhận phát hành cục bộ có audit, không giả là đã đối soát connector thật.
+- Nút “Tải Bảng tổng hợp giao nhận” sinh XLSX chính thức cho đúng một nhà thầu theo bố cục 10 cột khách cung cấp: ngày, tên hàng, ĐVT, số lượng, đơn giá, thành tiền, thuế suất, tiền thuế và thanh toán. Sheet đối chiếu giữ ngày/ký hiệu/số hóa đơn và chênh lệch để truy vết. Mọi hóa đơn phải khớp trong ngưỡng 1 VNĐ; vượt ngưỡng thì chặn, tuyệt đối không tự cân. Đây là chứng từ đầu ra theo hóa đơn đỏ, khác hoàn toàn sheet `bảng kê tổng` của phần Mua/phải trả.
+- Nút “Tải Đề nghị thanh toán + bảng kê” tạo gói chính thức gồm Đề nghị thanh toán XLSX sáu cột và Bảng tổng hợp giao nhận XLSX theo đúng file khách cung cấp. Số liệu chỉ lấy từ hóa đơn đỏ đã phát hành của đúng một nhà thầu; công thức, liên kết ngoài và hàm VnTools của file lịch sử không được mang sang. Nếu có thêm, bớt hoặc thay đổi hóa đơn thì phải xem lại trước khi tải.
+- “Báo cáo” và “Công nợ” là hai mục riêng trên thanh bên. Vào “Công nợ”, màn đầu chỉ có ba lựa chọn gọn: “Công nợ phải thu (bếp)”, “Công nợ phải thu (tổng)” và “Công nợ phải trả”; bấm đúng mục mới hiện số liệu và thao tác chi tiết.
+- Công nợ hỗ trợ số dư đầu kỳ, thu/chi, điều chỉnh, xem theo khoảng ngày và tải Excel công nợ kỳ. Các thao tác ít dùng về số dư đầu kỳ/điều chỉnh được xếp trong vùng có thể mở thêm, không làm rối phần tổng quan.
+- Sổ phải thu vận hành lấy từng dòng đơn đã duyệt theo `Số thực giao ròng = Số thực giao − Khách trả`, nhân đúng giá bán giao dịch của dòng và cộng thuế vận hành theo mã thuế. Số đã đặt không thay cho số thực giao; giá chuẩn trong danh mục không ghi đè giá giao dịch đã chốt.
+- Sổ phải thu xem được theo Từ ngày/Đến ngày, nhà thầu và bếp. Mỗi dòng giữ batch, mã dòng nguồn và revision; sửa giao/khách trả/giá sẽ đưa phiên về nháp, hoàn tác dòng cũ và chỉ phát sinh lại sau khi duyệt. Dòng nguồn bị bỏ được giữ trạng thái hoàn tác, không bị xóa hoặc cộng lại nếu mã SQLite được tái sử dụng.
+- Đây là công nợ vận hành, tách khỏi hóa đơn đỏ: hóa đơn nháp, đã phát hành hoặc tổng tiền trên hóa đơn không phải nguồn tính sổ này. Số dư đầu kỳ, khoản thu khách và điều chỉnh có lý do/audit được cộng trừ theo tài khoản nhà thầu; khoản trả NCC không được trộn vào phải thu.
+- File Excel phải thu luôn tách riêng từng nhà thầu. Khi chọn một nhà thầu, hệ thống tải một file `.xlsx`; khi tải tất cả, hệ thống tạo `.zip` chứa đúng một file cho mỗi nhà thầu có phát sinh/số dư trong kỳ, không có workbook gộp nhiều nhà thầu. Sheet đầu `Tổng nhà thầu` ghi số dư đầu kỳ, phát sinh, điều chỉnh, đã thu, cuối kỳ và tổng theo bếp; các sheet sau tự sinh theo từng bếp có thực giao trong kỳ. Tổng phát sinh các sheet bếp bắt buộc khớp sheet đầu, nếu lệch hệ thống dừng xuất. Kỳ rỗng của một nhà thầu vẫn có sheet tổng để đối soát; gói tải tất cả rỗng có thông báo rõ không phát sinh.
+- Tại “Công nợ” → “Công nợ phải thu (bếp)”, người dùng lọc theo kỳ, nhà thầu, bếp và trạng thái hiệu lực/đã hoàn tác. Bảng chi tiết hiện số đặt, thực giao, khách trả, giao ròng, giá bán giao dịch, thuế, phải thu và lịch sử từng dòng. Khi chọn một bếp, bảng chi tiết chỉ hiện bếp đó nhưng dòng đối soát đầu kỳ/phát sinh/đã thu/cuối kỳ vẫn là toàn bộ tài khoản nhà thầu. Nút Excel của nhà thầu luôn tải toàn bộ các bếp trong kỳ; nút ZIP tải từng file độc lập của mọi nhà thầu.
+- Mỗi dòng mua đã chốt được lưu vào sổ phải trả chi tiết theo ngày, batch, bếp, mã/tên hàng, số lượng thực tế, ĐVT, giá mua, thành tiền và NCC. Nạp/chốt lại đúng dòng nguồn không cộng trùng; dòng nguồn bị bỏ hoặc nằm trong vùng lịch sử đã có snapshot được chuyển sang “đã hoàn tác” thay vì bị xóa.
+- Sổ chi tiết phân biệt còn phải trả, đã trả một phần, đã trả đủ và đã hoàn tác; mọi lần đổi trạng thái đều giữ revision để truy ngược. Import lịch sử có ngày cutoff riêng để đơn mua hiện tại không bị cộng lại vào phần lịch sử.
+- Tại “Công nợ” → “Công nợ phải trả”, chọn Từ ngày/Đến ngày, NCC và trạng thái rồi bấm “Xem công nợ”. Bộ lọc được giữ khi tải lại trang. Ngày thanh toán mặc định là ngày cuối kỳ đang xem; có thể sửa trước khi ghi nhận. Chọn từng ô ở cột Chọn, tự nhập “Phân bổ lần này”, rồi kiểm tra NCC và Tổng phân bổ trước khi xác nhận.
+- Mỗi khoản trả NCC phải chọn rõ từng dòng nợ và nhập số tiền phân bổ của từng dòng; tổng phân bổ phải bằng đúng số tiền thanh toán. Có thể trả một phần, trả đủ hoặc dùng nhiều lần thanh toán cho cùng dòng. Hệ thống không tự chọn dòng cũ nhất, không tự chia tiền và chặn trả vượt số còn phải trả.
+- Khoản đã trả đủ không còn nằm trong góc nhìn “còn phải trả” nhưng vẫn có trong lịch sử cùng ngày, nội dung, phương thức/mã tham chiếu và các dòng đã phân bổ. Nếu ghi nhầm phải dùng hoàn tác có lý do; giao dịch, phân bổ và revision vẫn được giữ, không dùng xóa.
+- File Excel phải trả chỉ có một sheet “Công nợ phải trả” và đúng 14 cột khách đã chốt: Tháng, Tên bếp, Ngày tháng, Tên hàng, Số lượng, ĐVT, NCC, Giá mua, Hỏng, Thêm, Giảm, Thiếu, SL thực tế, Thành tiền. Không đưa cột kỹ thuật, trạng thái, thanh toán hoặc mã audit vào file gửi khách.
+- Cuối bảng có dòng TỔNG cho Số lượng, Hỏng, Thêm, Giảm, Thiếu, SL thực tế và Thành tiền. Dòng nguồn đã hoàn tác vẫn được giữ trong lịch sử hệ thống nhưng không xuất vào mẫu công nợ gửi khách. File dùng giá trị tĩnh, không sao chép công thức/vùng in lỗi của file lịch sử.
+- Trên giao diện, các vùng có số lượng hàng đều phải kèm tổng số lượng và tổng tiền phù hợp với nội dung đang xem. Nếu tổng ledger lệch lịch sử phân bổ, hệ thống dừng xuất file thay vì tạo báo cáo sai.
+- Trước khi lập hồ sơ thanh toán, vào “Danh mục & sao lưu” kiểm tra “Thông tin thanh toán mặc định” gồm người đề nghị, ngân hàng và số tài khoản. Dữ liệu này được khóa cùng hóa đơn và đưa vào Đề nghị thanh toán chính thức.
 
-XƯỞNG CƠM, CHẤM CÔNG VÀ LƯƠNG
-- Xưởng cơm: ngày/bếp/ca → số suất → định lượng → nguyên liệu → giá HATRAN đúng kỳ → XCOM → PO.
-- Để nạp file menu/cost: chọn đúng ngày, bấm “Nạp định mức/PO”, kiểm tra từng bếp/ca và số nguyên liệu trên màn hình xem trước rồi mới xác nhận.
-- Hệ thống ưu tiên cột số lượng cần đã chốt trong file; nếu khác công thức định lượng × số suất / 1.000 thì có cảnh báo và tự quy đổi lại định lượng/suất để PO giữ đúng số lượng.
-- Với bếp có nhiều thực đơn, kiểm tra cả số thực đơn, suất/thực đơn và tổng suất. Ví dụ 2 thực đơn × 23 suất được tính là 46 suất tổng.
-- Thành tiền nguyên liệu, doanh thu, tổng chi và lợi nhuận được tính lại từ chi tiết; không lấy nguyên trạng tổng cũ nếu công thức trong file đang trống/lỗi.
-- Ghép bếp → XCOM có thể lưu từng bếp hoặc nạp file Excel có Mã/Tên bếp và XCOM; file cũ ghi tiêu đề Unit vẫn đọc được.
-- PO gộp các bếp cùng XCOM vào một sheet. Khi chưa duyệt, tên file và tiêu đề ghi rõ NHÁP/BẢN NHÁP; phải đủ XCOM, giá suất ăn và giá nguyên liệu mới duyệt được.
-- GIANHAPTAY và YLKHAN dùng giá theo ngày, không tự lấy giá ngày trước.
-- Chấm suất ăn thực tế: bấm “Nạp chấm suất tháng”, kiểm tra tổng theo ngày/bếp/ca rồi xác nhận. Nếu tổng nhìn thấy mâu thuẫn công thức hoặc còn #REF!, hệ thống chặn xác nhận thay vì tự đoán. Nạp lại cùng tháng sẽ cập nhật/thay thế, không cộng trùng và không đổi số suất đặt ban đầu của PO.
-- Nạp file chấm công hiện tại để chuẩn hóa ngày công, tăng ca, Chủ nhật và chi phí lao động theo bếp.
-- Có thể chấm/sửa công một ngày và bổ sung phụ cấp, trách nhiệm, BHXH, tạm ứng, thử việc hoặc số lương chốt theo tháng.
-- Bảng lương giữ các công thức lương, BHXH, tạm ứng và điều chỉnh theo tháng; bấm “Tải bảng lương” để lấy Excel.
+GIAO DIỆN ĐÃ THU GỌN
+- Suất ăn/PO và Chấm công/lương không còn trên menu và không nằm trong luồng làm việc hằng ngày. Dữ liệu cũ vẫn được giữ để tra lại khi cần hỗ trợ.
+- Kho thực tế và Đặt hàng nhà cung cấp vẫn hoạt động. Bỏ hai mục trên không bỏ chức năng trừ kho khi đặt hàng.
 
-DUYỆT VÀ IN
-1. Duyệt phiên đơn.
-2. Vào “Duyệt & in” → “Chuẩn bị” → kiểm tra file → “Duyệt bộ in”.
-3. Chọn máy in mặc định Windows, số bản/khổ giấy rồi bấm “In một nút”.
-4. Không tự in theo lịch; không in khi chưa duyệt.
+IN GIẤY TỜ
+1. Vào “In giấy tờ”, chọn loại cần lấy: Đơn hàng đi giao, Đơn đặt nhà cung cấp, Bảng kê và biên nhận hoặc Báo cáo tổng hợp.
+2. Chọn Từ ngày/Đến ngày. Với phiếu giao, có thể chọn tất cả hoặc bỏ chọn từng bếp; với giấy tờ khác, có thể chọn từng ngày.
+3. Bấm “Xem” để đọc chứng từ ngay trên màn hình. Chọn các phiếu cần lấy rồi bấm “Tải Excel đã chọn” hoặc “In phiếu đã chọn”. Nếu có sửa đơn sau khi mở bản xem, bấm “Đọc lại dữ liệu mới”.
+4. Khi cần gửi thẳng toàn bộ giấy tờ của ngày đang chọn sang máy in Windows, mở “In trực tiếp trọn bộ của ngày đang chọn”, tạo bản xem trước, xác nhận bộ giấy rồi gửi in.
+5. Phiếu giao/đơn đi giao dùng A4; giấy tờ khác có thể chọn A5 hoặc A4. Hệ thống không tự in theo lịch và vẫn cần kiểm tra giấy ra thực tế.
+- File “Đặt hàng nhà cung cấp” là bảng làm việc để sửa, nạp lại hoặc sao chép ảnh gửi từng NCC; không phải giấy giao hàng và không nằm trong bộ PDF in một nút.
 
 AN TOÀN DỮ LIỆU
-- Vào “Danh mục & sao lưu” → “Tải bản sao lưu SQLite” trước khi chuyển máy hoặc cập nhật.
+- Sau khi bấm Lưu/Xác nhận thành công, dữ liệu được lưu ngay; ô đang gõ chưa xác nhận chưa được lưu.
+- Khi phần mềm đang mở, hệ thống tự sao lưu mỗi 30 phút; giữ bản mới nhất của 14 ngày có sao lưu. Khi nâng cấp có bản sao riêng trước khi thay đổi dữ liệu; không sao được thì dừng nâng cấp.
+- Vào “Danh mục & sao lưu” xem giờ sao lưu thành công gần nhất. Nếu có cảnh báo, kiểm tra ổ đĩa còn chỗ trống và liên hệ hỗ trợ; hệ thống sẽ tự thử lại.
+- Bản nâng cấp không ghi đè dữ liệu cũ bằng dữ liệu kèm theo. Không xóa dữ liệu để cài lại phần mềm.
+- Bản sao nằm cùng máy không phòng được hỏng/mất ổ đĩa. Nên tải thêm bản sang ổ khác; trước khi chuyển máy cần nhờ hỗ trợ chuyển đúng dữ liệu.
+- Vào “Danh mục & sao lưu” → “Tải bản sao lưu dữ liệu” trước khi chuyển máy hoặc cập nhật.
 - Không gửi file .env; trên máy mới kỹ thuật cấu hình riêng.
 - Không xóa thư mục data. Muốn chuyển máy phải chép cả thư mục data.
 - Không gửi cho khách file có “QC” hoặc “page” trong tên.

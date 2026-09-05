@@ -42,6 +42,7 @@ demo_tdp/*
 !demo_tdp/styles.css
 *.xlsx
 *.xls
+*.xlsm
 *.docx
 *.pdf
 *.png
@@ -63,3 +64,18 @@ MO_DEMO_TDP.bat
 Thumbs.db
 .vscode/
 .idea/
+
+# Local delivery copies, customer evidence and scratch work
+/BAN_GIAO_TDP_*/
+/_STAGING_KHONG_BAN_GIAO_TDP_*/
+/KIEM_TRA_CUOI_BIEU_MAU_*/
+/HUONG_DAN_TDP_*/
+/hihi/
+/tmp/
+tdp_system/print_tools/SumatraPDF-settings.txt
+
+# Sanitized runtime layouts (explicit allowlist; seller identities stay private)
+!tdp_system/templates/daily_order_template.xlsx
+!tdp_system/templates/bot_payment_template.xlsx
+!tdp_system/templates/payroll_template.xlsx
+!tdp_system/templates/simple_payment_request_template.docx

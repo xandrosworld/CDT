@@ -7,10 +7,16 @@ from copy import deepcopy
 from unittest.mock import patch
 
 try:
-    from contract_modules import init_contract_schema, sync_msmi, upsert_msmi_invoice
+    from contract_modules import (
+        as_date, init_contract_schema, sync_msmi, unique_product_name_suggestions,
+        upsert_msmi_invoice,
+    )
     from msmi_client import MsmiClient, MsmiConfig
 except ImportError:  # pragma: no cover - package invocation
-    from .contract_modules import init_contract_schema, sync_msmi, upsert_msmi_invoice
+    from .contract_modules import (
+        as_date, init_contract_schema, sync_msmi, unique_product_name_suggestions,
+        upsert_msmi_invoice,
+    )
     from .msmi_client import MsmiClient, MsmiConfig
 
 
@@ -96,6 +102,40 @@ def memory_database_with_legacy_sync_state():
 
 
 class MsmiBackfillTests(unittest.TestCase):
+    def test_utc_invoice_timestamp_uses_vietnam_business_date(self):
+        self.assertEqual("2026-08-01", as_date("2026-07-31T17:00:00Z"))
+        self.assertEqual("2026-09-01", as_date("2026-08-31T17:00:00+00:00"))
+        self.assertEqual("2026-08-01", as_date("2026-08-01T00:00:00+07:00"))
+        self.assertEqual("2026-08-01", as_date("2026-08-01"))
+        self.assertEqual("2026-08-01", as_date("01/08/2026"))
+
+    def test_name_suggestions_only_return_unique_normalized_product_names(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE products(code TEXT PRIMARY KEY,name TEXT)")
+        conn.execute("CREATE TABLE outgoing_product_names(product_code TEXT PRIMARY KEY,invoice_name TEXT)")
+        conn.executemany(
+            "INSERT INTO products(code,name) VALUES(?,?)",
+            [
+                ("P-CHUOI", "Chuối xanh"),
+                ("P-RIENG-1", "Củ riềng"),
+                ("P-RIENG-2", "Cu rieng"),
+                ("P-BLANK", ""),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO outgoing_product_names(product_code,invoice_name) VALUES(?,?)",
+            [("P-CHUOI", "Chuối xanh"), ("P-RIENG-1", "Riềng"), ("P-RIENG-2", "Riềng")],
+        )
+        try:
+            suggestions = unique_product_name_suggestions(conn)
+            self.assertEqual(suggestions["chuoixanh"]["code"], "P-CHUOI")
+            self.assertNotIn("curieng", suggestions)
+            self.assertNotIn("rieng", suggestions)
+            self.assertNotIn("", suggestions)
+        finally:
+            conn.close()
+
     def test_http_client_translates_internal_zero_based_page_to_production_one_based_page(self):
         client = MsmiClient(MsmiConfig("https://example.invalid", "secret"))
         with patch.object(client, "_get", return_value={"listInvoice": []}) as mocked:
@@ -156,6 +196,39 @@ class MsmiBackfillTests(unittest.TestCase):
             self.assertEqual(conn.execute(
                 "SELECT receipt_status FROM msmi_invoices WHERE id=?", (service_id,)
             ).fetchone()["receipt_status"], "not_inventory")
+        finally:
+            conn.close()
+
+    def test_zero_quantity_negative_discount_line_does_not_block_positive_invoice(self):
+        conn = memory_database_with_legacy_sync_state()
+        now = "2026-09-01T01:02:03"
+        try:
+            remote = remote_invoice(1)
+            remote["hdhhdvu"].append({
+                "ma": "DISCOUNT",
+                "ten": "Chiết khấu thương mại",
+                "sluong": 0,
+                "dgia": 0,
+                "thtien": -500,
+                "tchat": 3,
+                "tsuat": 0,
+            })
+            invoice_id, created = upsert_msmi_invoice(
+                conn, remote, "INPUT_ELECTRONIC_INVOICE", "TDP", now
+            )
+            self.assertTrue(created)
+            invoice = conn.execute(
+                "SELECT sync_status,receipt_status FROM msmi_invoices WHERE id=?", (invoice_id,)
+            ).fetchone()
+            self.assertEqual(invoice["sync_status"], "synced")
+            self.assertEqual(invoice["receipt_status"], "pending_mapping")
+            discount = conn.execute(
+                "SELECT * FROM msmi_invoice_items WHERE invoice_id=? AND line_index=2", (invoice_id,)
+            ).fetchone()
+            self.assertEqual(discount["amount"], -500)
+            self.assertEqual(discount["inventory_eligible"], 0)
+            self.assertEqual(discount["mapping_status"], "not_inventory")
+            self.assertTrue(discount["validation_note"])
         finally:
             conn.close()
 

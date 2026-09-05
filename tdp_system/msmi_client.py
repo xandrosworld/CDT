@@ -46,7 +46,10 @@ class MsmiConfig:
         if not token:
             missing.append("MSMI_API_TOKEN")
         if missing:
-            raise MsmiError("Thiếu cấu hình mSMI trong .env: " + ", ".join(missing))
+            raise MsmiError(
+                "mSMI chưa được cài đặt trên máy này. "
+                "Cần đặt file cấu hình .env hợp lệ cạnh TDP_Server.exe rồi mở lại hệ thống"
+            )
         return cls(api_base_url=base, api_token=token)
 
 
@@ -101,8 +104,9 @@ class MsmiClient:
             "page": internal_page + 1,
             "size": max(1, min(int(size), self.MAX_PAGE_SIZE)),
         }
-        # These optional names follow mSMI OpenAPI v1.1.1. Omitting them keeps
-        # compatibility with tenants that do not enable a date filter.
+        # These optional names follow mSMI OpenAPI v1.1.1. Some production
+        # tenants accept but ignore them, so the ingestion layer must still
+        # enforce the inclusive date boundary locally while it paginates.
         if from_date:
             params["fromDate"] = from_date
         if to_date:

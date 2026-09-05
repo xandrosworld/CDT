@@ -14,6 +14,7 @@ approval/audit workflows.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import io
@@ -21,11 +22,13 @@ import json
 import re
 import secrets
 import sqlite3
+import sys
 import unicodedata
 import zipfile
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from docx import Document
@@ -35,7 +38,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -133,6 +136,13 @@ SHIFT_LABELS = {
     "TONG": "Tổng",
 }
 PAYMENT_PREVIEW_TTL_MINUTES = 15
+PRINT_TEMPLATE_DIR = (
+    Path(getattr(sys, "_MEIPASS")) / "templates"
+    if bool(getattr(sys, "frozen", False))
+    else Path(__file__).resolve().parent / "templates"
+)
+SIMPLE_PAYMENT_TEMPLATE = PRINT_TEMPLATE_DIR / "simple_payment_request_template.docx"
+BOT_PAYMENT_TEMPLATE = PRINT_TEMPLATE_DIR / "bot_payment_template.xlsx"
 
 
 class XcomPaymentError(ValueError):
@@ -809,7 +819,17 @@ def _canonicalize_office_zip(payload: bytes) -> bytes:
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 0
             info.external_attr = 0
-            canonical.writestr(info, archive.read(name))
+            content = archive.read(name)
+            if name == "docProps/core.xml":
+                # openpyxl replaces the modified timestamp at save time.  Two
+                # otherwise identical files created across a one-second
+                # boundary therefore used to receive different hashes.
+                content = re.sub(
+                    rb"(<dcterms:modified\b[^>]*>)[^<]*(</dcterms:modified>)",
+                    rb"\g<1>1980-01-01T00:00:00Z\g<2>",
+                    content,
+                )
+            canonical.writestr(info, content)
     return output.getvalue()
 
 
@@ -822,146 +842,86 @@ def _format_date_vn(value: str) -> str:
     return parsed.strftime("%d/%m/%Y")
 
 
+def _replace_template_paragraph(paragraph, text: str) -> None:
+    """Replace text while retaining the approved paragraph/run artwork."""
+
+    source_properties = None
+    if paragraph.runs and paragraph.runs[0]._r.rPr is not None:
+        source_properties = copy.deepcopy(paragraph.runs[0]._r.rPr)
+    for run in list(paragraph.runs):
+        paragraph._p.remove(run._r)
+    target = paragraph.add_run(text)
+    if source_properties is not None:
+        target._r.insert(0, source_properties)
+
+
+def _replace_template_cell(cell, text: str) -> None:
+    _replace_template_paragraph(cell.paragraphs[0], text)
+    for paragraph in list(cell.paragraphs[1:]):
+        cell._tc.remove(paragraph._p)
+
+
 def build_simple_payment_request_docx(summary: dict[str, Any], issue_date: Any) -> bytes:
-    """Create the compact meal-payment request used by non-BOT profiles."""
+    """Fill the customer's approved one-page meal-payment request artwork."""
 
     profile = dict(summary["profile"])
     _validate_profile_for_output(profile)
     issue_date = _iso_date(issue_date, "Ngày lập chứng từ")
-    document = Document()
-    section = document.sections[0]
-    # Named form override: Vietnamese accounting forms are A4, not US Letter.
-    section.orientation = WD_ORIENT.PORTRAIT
-    section.page_width = Cm(21)
-    section.page_height = Cm(29.7)
-    section.top_margin = Cm(1.5)
-    section.bottom_margin = Cm(1.5)
-    section.left_margin = Cm(1.8)
-    section.right_margin = Cm(1.8)
-    normal = document.styles["Normal"]
-    normal.font.name = "Times New Roman"
-    normal._element.rPr.rFonts.set(qn("w:ascii"), "Times New Roman")
-    normal._element.rPr.rFonts.set(qn("w:hAnsi"), "Times New Roman")
-    normal.font.size = Pt(12)
-    normal.paragraph_format.space_after = Pt(3)
-    normal.paragraph_format.line_spacing = 1.08
-
-    header = document.add_table(rows=1, cols=2)
-    _set_table_geometry(header, (4200, 5000))
-    left = header.cell(0, 0).paragraphs[0]
-    left.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _set_docx_run_font(left.add_run(profile["issuer_name"].upper()), size=11.5, bold=True)
-    right = header.cell(0, 1).paragraphs[0]
-    right.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _set_docx_run_font(
-        right.add_run("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc"),
-        size=11.5,
-        bold=True,
-    )
-    title = document.add_paragraph()
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.paragraph_format.space_before = Pt(14)
-    title.paragraph_format.space_after = Pt(4)
-    _set_docx_run_font(title.add_run("ĐỀ NGHỊ THANH TOÁN"), size=16, bold=True)
-    issue = date.fromisoformat(issue_date)
-    issue_paragraph = document.add_paragraph()
-    issue_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _set_docx_run_font(
-        issue_paragraph.add_run(f"Ngày {issue.day:02d} tháng {issue.month:02d} năm {issue.year}"),
-        size=11.5,
-    )
-
-    metadata = [
-        ("Kính gửi: ", profile["recipient_name"].upper()),
-        ("Đơn vị đề nghị: ", profile["issuer_name"]),
-        ("Người đề nghị: ", profile["requester"]),
-        (
-            "Nội dung: ",
-            f"Thanh toán tiền suất ăn thực tế từ {_format_date_vn(summary['date_from'])} "
-            f"đến {_format_date_vn(summary['date_to'])}",
-        ),
-    ]
-    if profile.get("contract_no"):
-        contract_text = profile["contract_no"]
-        if profile.get("contract_date"):
-            contract_text += f" ngày {_format_date_vn(_iso_date(profile['contract_date'], 'Ngày hợp đồng'))}"
-        metadata.append(("Theo hợp đồng: ", contract_text))
-    for label, value in metadata:
-        paragraph = document.add_paragraph()
-        paragraph.paragraph_format.space_after = Pt(2)
-        _set_docx_run_font(paragraph.add_run(label), bold=True)
-        _set_docx_run_font(paragraph.add_run(str(value)))
-
-    table = document.add_table(rows=1, cols=6)
-    table.style = "Table Grid"
-    widths = (580, 1100, 1600, 1250, 1850, 2820)
-    _set_table_geometry(table, widths)
-    headers = ("STT", "Kỳ", "Ca ăn", "Suất thực tế", "Đơn giá", "Thành tiền (VNĐ)")
-    for index, (cell, label) in enumerate(zip(table.rows[0].cells, headers)):
-        paragraph = cell.paragraphs[0]
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _set_docx_run_font(paragraph.add_run(label), size=10.5, bold=True)
-    _mark_repeat_header(table.rows[0])
-    for index, line in enumerate(summary["summary_lines"], start=1):
-        cells = table.add_row().cells
-        values = (
-            index,
-            line["period"],
-            line["shift_label"],
-            line["actual_count"],
-            _format_vnd(line["unit_price"]),
-            _format_vnd(line["amount"]),
+    if not SIMPLE_PAYMENT_TEMPLATE.is_file():
+        raise XcomPaymentError(
+            "Thiếu mẫu giấy đề nghị thanh toán suất ăn đã chốt; không tạo chứng từ bằng mẫu tự đoán",
+            code="missing_document_template",
         )
-        for column, (cell, value) in enumerate(zip(cells, values)):
-            paragraph = cell.paragraphs[0]
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT if column >= 3 else WD_ALIGN_PARAGRAPH.CENTER
-            _set_docx_run_font(paragraph.add_run(str(value)), size=10.5)
-    for label, value in (
-        ("Cộng tiền trước thuế", summary["subtotal"]),
-        (f"Thuế GTGT ({summary['vat_rate']}%)", summary["vat_amount"]),
-        ("TỔNG CỘNG", summary["total"]),
-    ):
-        cells = table.add_row().cells
-        merged = cells[0]
-        for merge_cell in cells[1:5]:
-            merged = merged.merge(merge_cell)
-        label_paragraph = cells[0].paragraphs[0]
-        label_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        _set_docx_run_font(label_paragraph.add_run(label), size=10.5, bold=True)
-        value_paragraph = cells[5].paragraphs[0]
-        value_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        _set_docx_run_font(value_paragraph.add_run(_format_vnd(value)), size=10.5, bold=True)
+    document = Document(SIMPLE_PAYMENT_TEMPLATE)
+    if len(document.paragraphs) < 11 or len(document.tables) != 2:
+        raise XcomPaymentError(
+            "Mẫu giấy đề nghị thanh toán suất ăn sai cấu trúc",
+            code="invalid_document_template",
+        )
+    issue = date.fromisoformat(issue_date)
 
-    payment_lines = [
-        ("Số tiền bằng chữ: ", number_to_vietnamese(summary["total"]) + "./."),
-        ("Hình thức thanh toán: ", "Chuyển khoản"),
-        ("Đơn vị thụ hưởng: ", profile["beneficiary_name"]),
-        ("Số tài khoản: ", profile["bank_account"]),
-        ("Tại ngân hàng: ", profile["bank_name"]),
-    ]
-    for label, value in payment_lines:
-        paragraph = document.add_paragraph()
-        paragraph.paragraph_format.space_after = Pt(2)
-        _set_docx_run_font(paragraph.add_run(label), bold=True)
-        _set_docx_run_font(paragraph.add_run(str(value)))
-    signatures = document.add_table(rows=1, cols=2)
-    _set_table_geometry(signatures, (4600, 4600))
-    signature_values = (
-        ("NGƯỜI LẬP", profile.get("requester", "")),
-        ("ĐẠI DIỆN ĐƠN VỊ", profile.get("seller_signer_name", "")),
+    content = (
+        f"Thanh toán tiền suất ăn ca từ {_format_date_vn(summary['date_from'])} "
+        f"đến {_format_date_vn(summary['date_to'])}"
     )
-    for cell, (heading, signer) in zip(signatures.rows[0].cells, signature_values):
-        paragraph = cell.paragraphs[0]
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _set_docx_run_font(paragraph.add_run(heading + "\n(Ký, ghi rõ họ tên)"), bold=True)
-        if signer:
-            _set_docx_run_font(paragraph.add_run("\n\n\n" + signer), bold=True)
+    replacements = {
+        0: "GIẤY ĐỀ NGHỊ THANH TOÁN",
+        1: f"Ngày {issue.day:02d} tháng {issue.month:02d} năm {issue.year}",
+        2: f"Kính gửi: {profile['recipient_name'].upper()}",
+        3: f"Họ và tên người đề nghị thanh toán: {profile['requester']}",
+        4: "Bộ phận (hoặc địa chỉ): Nhân viên kế toán",
+        5: f"Nội dung thanh toán: {content}",
+        6: f"Số tiền: {_format_vnd(summary['total'])} VNĐ",
+        7: f"(Bằng chữ: {number_to_vietnamese(summary['total'])}./.)",
+        8: "Thanh toán bằng chuyển khoản",
+        9: f"Đơn vị thụ hưởng: {profile['beneficiary_name']}",
+        10: f"Số tài khoản: {profile['bank_account']} Tại Ngân hàng {profile['bank_name']}.",
+    }
+    for index, paragraph in enumerate(document.paragraphs):
+        _replace_template_paragraph(paragraph, replacements.get(index, ""))
+
+    issuer_address = _clean(profile.get("issuer_address"))
+    issuer_heading = profile["issuer_name"].upper()
+    if issuer_address:
+        issuer_heading += "\n" + issuer_address
+    _replace_template_cell(document.tables[0].cell(0, 0), issuer_heading)
+    _replace_template_cell(
+        document.tables[0].cell(0, 1),
+        "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập – Tự do – Hạnh phúc",
+    )
+    signatures = document.tables[1]
+    _replace_template_cell(
+        signatures.cell(0, 0),
+        f"Người đề nghị thanh toán\n(Ký, họ tên)\n\n\n{profile['requester']}",
+    )
+    _replace_template_cell(signatures.cell(0, 1), "")
+    _replace_template_cell(signatures.cell(0, 2), "Người duyệt\n(Ký, họ tên)")
 
     fixed_datetime = datetime.combine(date.fromisoformat(issue_date), datetime.min.time())
     document.core_properties.created = fixed_datetime
     document.core_properties.modified = fixed_datetime
-    document.core_properties.author = "Xandro Systems"
-    document.core_properties.last_modified_by = "Xandro Systems"
+    document.core_properties.author = "Thành Đạt Phát"
+    document.core_properties.last_modified_by = "Thành Đạt Phát"
     document.core_properties.title = f"Đề nghị thanh toán {summary['profile_code']} {summary['date_from']} {summary['date_to']}"
     stream = io.BytesIO()
     document.save(stream)
@@ -974,7 +934,7 @@ THIN_BORDER = Border(
     top=Side(style="thin", color="808080"),
     bottom=Side(style="thin", color="808080"),
 )
-HEADER_FILL = PatternFill("solid", fgColor="D9EAF7")
+HEADER_FILL = PatternFill(fill_type=None)
 TOTAL_FILL = PatternFill("solid", fgColor="FFF2CC")
 
 
@@ -1005,7 +965,7 @@ def _sheet_setup(ws, *, repeat_rows: str = "") -> None:
         ws.print_title_rows = repeat_rows
 
 
-def build_bot_payment_bundle_xlsx(summary: dict[str, Any], issue_date: Any) -> bytes:
+def _build_bot_payment_bundle_xlsx_obsolete(summary: dict[str, Any], issue_date: Any) -> bytes:
     """Create BOT's four-sheet attendance/payment/reconciliation workbook."""
 
     profile = dict(summary["profile"])
@@ -1251,6 +1211,307 @@ def build_bot_payment_bundle_xlsx(summary: dict[str, Any], issue_date: Any) -> b
     workbook.properties.title = f"Bộ chứng từ suất ăn {summary['profile_code']} {summary['date_from']} {summary['date_to']}"
     stream = io.BytesIO()
     workbook.save(stream)
+    return _canonicalize_office_zip(stream.getvalue())
+
+
+def build_bot_payment_bundle_xlsx(summary: dict[str, Any], issue_date: Any) -> bytes:
+    """Fill the customer's approved BOT reconciliation/payment workbook."""
+
+    profile = dict(summary["profile"])
+    _validate_profile_for_output(profile)
+    if profile.get("document_type") != "MEAL_BOT_BUNDLE":
+        raise XcomPaymentError(
+            "Hồ sơ không được cấu hình loại MEAL_BOT_BUNDLE",
+            code="invalid_document_type",
+        )
+    issue_date = _iso_date(issue_date, "Ngày lập chứng từ")
+    date_from = date.fromisoformat(summary["date_from"])
+    date_to = date.fromisoformat(summary["date_to"])
+    if (date_from.year, date_from.month) != (date_to.year, date_to.month):
+        raise XcomPaymentError(
+            "Mẫu BOT là hồ sơ theo tháng; từ ngày và đến ngày phải trong cùng một tháng",
+            code="invalid_bot_period",
+        )
+    day_count = (date_to - date_from).days + 1
+    if day_count > 31:
+        raise XcomPaymentError("Hồ sơ BOT không được vượt quá 31 ngày", code="invalid_bot_period")
+    if not BOT_PAYMENT_TEMPLATE.is_file():
+        raise XcomPaymentError(
+            "Thiếu mẫu biên bản đối chiếu và đề nghị thanh toán BOT đã chốt",
+            code="missing_document_template",
+        )
+
+    workbook = load_workbook(BOT_PAYMENT_TEMPLATE, data_only=False, read_only=False)
+    expected_sheets = ["BBĐC", "ĐNTT", "suất ăn"]
+    if workbook.sheetnames != expected_sheets:
+        workbook.close()
+        raise XcomPaymentError("Mẫu hồ sơ BOT sai cấu trúc", code="invalid_document_template")
+    reconcile = workbook["BBĐC"]
+    payment = workbook["ĐNTT"]
+    attendance = workbook["suất ăn"]
+
+    bucket_column = {"SANG": "C", "TRUA": "D", "CHIEU": "E", "DEM": "E"}
+    daily: dict[str, dict[str, Decimal]] = defaultdict(
+        lambda: {"SANG": Decimal("0"), "TRUA": Decimal("0"), "TOI": Decimal("0")}
+    )
+    prices: dict[str, set[int]] = {"SANG": set(), "TRUA": set(), "TOI": set()}
+    for row in summary["detail_rows"]:
+        shift = row["shift"]
+        if shift not in bucket_column:
+            workbook.close()
+            raise XcomPaymentError(
+                f"Ca {row['shift_label']} không có cột tương ứng trên mẫu BOT",
+                code="invalid_bot_shift",
+            )
+        bucket = "TOI" if shift in {"CHIEU", "DEM"} else shift
+        daily[row["work_date"]][bucket] += Decimal(str(row["actual_count"]))
+        prices[bucket].add(int(row["unit_price"]))
+    conflicting = [bucket for bucket, values in prices.items() if len(values) > 1]
+    if conflicting:
+        workbook.close()
+        raise XcomPaymentError(
+            "Một ca BOT đang có nhiều đơn giá trong cùng kỳ; không thể điền đúng mẫu đã chốt",
+            code="conflicting_bot_tariff",
+            details=conflicting,
+        )
+    unit_prices = {bucket: next(iter(values), 0) for bucket, values in prices.items()}
+    quantities = {
+        bucket: sum((values[bucket] for values in daily.values()), Decimal("0"))
+        for bucket in ("SANG", "TRUA", "TOI")
+    }
+
+    issue = date.fromisoformat(issue_date)
+    contract_date = date.fromisoformat(_iso_date(profile["contract_date"], "Ngày hợp đồng"))
+    period_text = f"{date_from.strftime('%d/%m/%Y')} đến ngày {date_to.strftime('%d/%m/%Y')}"
+    contract_text = profile["contract_no"]
+    buyer = profile["recipient_name"]
+    seller = profile["issuer_name"]
+    vat_label = f"{summary['vat_rate']}%"
+
+    # Biên bản đối chiếu: all clauses and coordinates follow the customer's
+    # BBĐC sheet; only profile, period, attendance and calculated values vary.
+    reconcile["A1"] = "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"
+    reconcile["A2"] = "Độc lập - Tự do - Hạnh Phúc"
+    reconcile["A3"] = "BIÊN BẢN ĐỐI CHIẾU"
+    reconcile["A4"] = f"(Số {date_from.month:02d})"
+    reconcile["A5"] = (
+        f"-        Căn cứ vào Hợp đồng kinh tế số {contract_text} kí ngày "
+        f"{contract_date.day:02d} tháng {contract_date.month:02d} năm {contract_date.year} "
+        f"giữa {buyer} và {seller}"
+    )
+    reconcile["A6"] = (
+        f"-        Căn cứ bảng kê chi tiết suất cơm hằng ngày (từ ngày {period_text}) "
+        f"số: {date_from.month:02d}-{date_from.year}/BKCT-HATRAN BOT"
+    )
+    reconcile["A7"] = "-        Căn cứ tình hình thực tế thực hiện hợp đồng."
+    reconcile["A8"] = f"Hôm nay, ngày {issue.day:02d} tháng {issue.month:02d} năm {issue.year}, chúng tôi gồm:"
+    reconcile["A9"] = f"BÊN MUA (Bên A): {buyer.upper()}"
+    reconcile["A10"] = (
+        f"Đại diện         : {profile['buyer_signer_name']}              "
+        f"Chức Vụ: {profile['buyer_signer_title']}"
+    )
+    reconcile["A11"] = ""
+    reconcile["A12"] = f"BÊN BÁN (Bên B): {seller.upper()}"
+    reconcile["A13"] = (
+        f"Đại diện         : {profile['seller_signer_name']}              "
+        f"Chức Vụ: {profile['seller_signer_title']}"
+    )
+    reconcile["A14"] = (
+        f"Hai bên thống nhất ký biên bản đối chiếu hợp đồng kinh tế số {contract_text} "
+        f"kí ngày {contract_date.day:02d} tháng {contract_date.month:02d} năm {contract_date.year} như sau:"
+    )
+    reconcile["A15"] = "Điều 1: Điều khoản thực hiện hợp đồng:"
+    reconcile["A16"] = (
+        f"Bên B đã hoàn thành công việc cung cấp cơm phục vụ cho CBCNV {buyer} "
+        f"từ ngày {period_text}. Số lượng suất cơm chi tiết mỗi ngày theo bảng sau:"
+    )
+    for cell, value in {
+        "A17": "STT", "B17": "Ngày Tháng", "C17": "SL Suất Ăn\nSáng",
+        "D17": "SL Suất Ăn\nTrưa", "E17": "SL Suất Ăn\nTối", "F17": "Ghi chú",
+    }.items():
+        reconcile[cell] = value
+    reconcile["E18"] = "Tối"
+    for offset in range(31):
+        row_number = 19 + offset
+        current = date_from + timedelta(days=offset)
+        if current <= date_to:
+            reconcile.cell(row_number, 1, offset + 1)
+            reconcile.cell(row_number, 2, current)
+            reconcile.cell(row_number, 2).number_format = "dd/mm/yyyy"
+            values = daily.get(current.isoformat(), {})
+            reconcile.cell(row_number, 3, _normal_number(values.get("SANG", Decimal("0"))))
+            reconcile.cell(row_number, 4, _normal_number(values.get("TRUA", Decimal("0"))))
+            reconcile.cell(row_number, 5, _normal_number(values.get("TOI", Decimal("0"))))
+        else:
+            for column in range(1, 7):
+                reconcile.cell(row_number, column, None)
+    reconcile["B50"] = "Tổng"
+    for column in ("C", "D", "E"):
+        reconcile[f"{column}50"] = f"=SUM({column}19:{column}49)"
+    reconcile["A52"] = "Trong quá trình thực hiện hợp đồng có các giá trị thanh toán được 2 bên xác nhận là:"
+    shift_rows = (("SANG", "sáng", 53), ("TRUA", "trưa", 56), ("TOI", "tối", 59))
+    for bucket, label, row_number in shift_rows:
+        quantity = _normal_number(quantities[bucket])
+        price = unit_prices[bucket]
+        amount = vnd_half_up(quantities[bucket] * Decimal(price))
+        reconcile[f"A{row_number}"] = (
+            f"·                 Số suất ăn {label} từ ngày {period_text} tổng số là "
+            f"{quantity} suất ăn, giá trị mỗi suất ăn là {_format_vnd(price)} VND/1 suất ăn. "
+            f"Giá trị thanh toán được tính như sau:"
+        )
+        reconcile[f"A{row_number + 1}"] = (
+            f"{_format_vnd(price)} VND/1 suất ăn x {quantity} suất = {_format_vnd(amount)} VNĐ"
+        )
+        reconcile[f"A{row_number + 2}"] = f"(Bằng chữ: {number_to_vietnamese(amount)}.)"
+    reconcile["A63"] = "Điều 2: Nội dung thanh toán hợp đồng:"
+    reconcile["A64"] = (
+        f"   Tổng giá trị của hợp đồng cung cấp cơm hộp phục vụ CBCNV {buyer} "
+        f"từ ngày {period_text} là:"
+    )
+    reconcile["A66"] = "TT"
+    reconcile["B66"] = "Nội dung"
+    reconcile["D66"] = "Thành tiền"
+    reconcile["A67"] = 1
+    reconcile["B67"] = "Giá trị thanh toán của hợp đồng"
+    reconcile["D67"] = summary["subtotal"]
+    reconcile["A68"] = 2
+    reconcile["B68"] = f"Thuế VAT {vat_label}"
+    reconcile["D68"] = summary["vat_amount"]
+    reconcile["A69"] = 3
+    reconcile["B69"] = "Tổng Thanh Toán"
+    reconcile["D69"] = summary["total"]
+    for row_number in (67, 68, 69):
+        reconcile[f"D{row_number}"].number_format = "#,##0"
+    reconcile["A71"] = f"(Bằng chữ: {number_to_vietnamese(summary['total'])}./.)"
+    reconcile["A72"] = "Điều 3: Điều khoản chung:"
+    reconcile["A73"] = (
+        "·                 Sau khi biên bản đối chiếu hợp đồng được 02 bên ký làm căn cứ "
+        "để bên B xuất hóa đơn cho bên A, và bên A thanh toán tiền cung cấp cơm hộp cho bên B."
+    )
+    reconcile["A74"] = (
+        "·       Biên bản đối chiếu hợp đồng được lập thành 04 bản, mỗi bên giữ 02 bản "
+        "có giá trị pháp lý như nhau."
+    )
+    reconcile["A76"] = "ĐẠI DIỆN BÊN A"
+    reconcile["D76"] = "ĐẠI DIỆN BÊN B"
+
+    # Detailed daily meal sheet.
+    attendance["A1"] = seller.upper()
+    attendance["A2"] = profile["issuer_address"]
+    attendance["A4"] = f"MST: {profile['issuer_tax_code']}"
+    attendance["A5"] = "BẢNG KÊ CHI TIẾT SUẤT ĂN CƠM HÀNG NGÀY"
+    attendance["A6"] = f"Số: {date_from.month:02d}-{date_from.year}/BKCT-HATRAN BOT"
+    attendance["A7"] = f"Từ {date_from.strftime('%d/%m/%Y')}-{date_to.strftime('%d/%m/%Y')}"
+    for cell, value in {
+        "A8": "STT", "B8": "Ngày-tháng", "C8": "Bữa sáng",
+        "D8": "Bữa trưa", "E8": "Bữa tối", "F8": "Ghi chú",
+    }.items():
+        attendance[cell] = value
+    for offset in range(31):
+        target_row = 9 + offset
+        source_row = 19 + offset
+        if offset < day_count:
+            attendance[f"A{target_row}"] = offset + 1
+            attendance[f"B{target_row}"] = f"='BBĐC'!B{source_row}"
+            attendance[f"B{target_row}"].number_format = "dd/mm/yyyy"
+            for target_column, source_column in (("C", "C"), ("D", "D"), ("E", "E")):
+                attendance[f"{target_column}{target_row}"] = f"='BBĐC'!{source_column}{source_row}"
+        else:
+            for column in range(1, 7):
+                attendance.cell(target_row, column, None)
+    attendance["B40"] = "Tổng"
+    for column in ("C", "D", "E"):
+        attendance[f"{column}40"] = f"=SUM({column}9:{column}39)"
+    attendance["A41"] = "Tổng cộng suất ăn ca"
+    attendance["E41"] = "=SUM(C40:E40)"
+    attendance["A42"] = "Giá trị trước thuế"
+    attendance["E42"] = (
+        f"=C40*{unit_prices['SANG']}+D40*{unit_prices['TRUA']}+E40*{unit_prices['TOI']}"
+    )
+    attendance["A43"] = f"Thuế GTGT {vat_label}"
+    attendance["E43"] = f"=ROUND(E42*{float(Decimal(summary['vat_rate']) / Decimal('100'))},0)"
+    attendance["A44"] = "Tổng cộng tiền thanh toán"
+    attendance["E44"] = "=E42+E43"
+    for row_number in (42, 43, 44):
+        attendance[f"E{row_number}"].number_format = "#,##0"
+    attendance["A46"] = buyer.upper()
+    attendance["D46"] = seller.upper()
+
+    # Official payment request sheet.
+    payment["A1"] = seller.upper()
+    payment["E1"] = "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập – Tự do – Hạnh phúc"
+    payment["A2"] = f"Số: {date_from.month:02d}-{date_from.year}/DNTT-HATRAN"
+    payment["E2"] = "--------------------"
+    payment["A3"] = f"V/v: Đề nghị thanh toán hợp đồng\nsố {contract_text}"
+    payment["E3"] = f"Hải Phòng, ngày {issue.day:02d} tháng {issue.month:02d} năm {issue.year}"
+    payment["A5"] = "ĐỀ NGHỊ THANH TOÁN"
+    payment["A6"] = f"Kính gửi: {buyer.upper()}"
+    payment["A7"] = f"        Căn cứ hợp đồng {contract_text} giữa {seller} và {buyer}."
+    payment["A8"] = (
+        f"       Chúng tôi làm công văn này đề nghị Quý công ty thanh toán số tiền cung cấp "
+        f"cơm hộp từ ngày {period_text} của hợp đồng số {contract_text} như sau:"
+    )
+    payment["A9"] = (
+        f"- Tổng số tiền theo nghiệm thu thực tế: {_format_vnd(summary['total'])} VNĐ "
+        f"(Bằng chữ: {number_to_vietnamese(summary['total'])})"
+    )
+    payment["A10"] = "Chi tiết:"
+    for cell, value in {
+        "B12": "STT", "C12": "Nội dung", "D12": "Số suất ăn",
+        "E12": "Đơn giá", "F12": "Thành tiền", "G12": "Ghi chú",
+    }.items():
+        payment[cell] = value
+    payment_buckets = (("SANG", "sáng", "C"), ("TRUA", "trưa", "D"), ("TOI", "tối", "E"))
+    for offset, (bucket, label, source_column) in enumerate(payment_buckets, start=13):
+        payment[f"B{offset}"] = offset - 12
+        payment[f"C{offset}"] = f"Suất ăn {label} (từ ngày {period_text})"
+        payment[f"D{offset}"] = f"='BBĐC'!{source_column}50"
+        payment[f"E{offset}"] = unit_prices[bucket]
+        payment[f"F{offset}"] = f"=D{offset}*E{offset}"
+        payment[f"E{offset}"].number_format = "#,##0"
+        payment[f"F{offset}"].number_format = "#,##0"
+    payment["B16"] = "Tổng"
+    payment["F16"] = "=SUM(F13:F15)"
+    payment["B17"] = f"Thuế GTGT {vat_label}"
+    payment["F17"] = f"=ROUND(F16*{float(Decimal(summary['vat_rate']) / Decimal('100'))},0)"
+    payment["B18"] = "Tổng Cộng"
+    payment["F18"] = "=F16+F17"
+    for row_number in (16, 17, 18):
+        payment[f"F{row_number}"].number_format = "#,##0"
+    payment["B19"] = f"(Bằng chữ: {number_to_vietnamese(summary['total'])}./.)"
+    payment["A21"] = (
+        f"       Bằng công văn này, công ty chúng tôi đề nghị Quý công ty thanh toán "
+        f"{_format_vnd(summary['total'])} VNĐ (Bằng chữ: {number_to_vietnamese(summary['total'])}./.) "
+        "theo thông tin tài khoản sau:"
+    )
+    payment["A22"] = f"        Tên tài khoản: {profile['beneficiary_name']}"
+    payment["A23"] = f"        Số tài khoản: {profile['bank_account']} tại Ngân hàng {profile['bank_name']}"
+    payment["A24"] = "        Rất mong nhận được sự hợp tác từ quý công ty!"
+    payment["A25"] = "        Trân trọng cảm ơn!"
+    payment["A27"] = "Nơi nhận"
+    payment["E27"] = "ĐẠI DIỆN CÔNG TY"
+    payment["A28"] = "- Như trên;"
+    payment["E28"] = "(Ký, họ tên, đóng dấu)"
+    payment["A29"] = "- Lưu VP,"
+
+    for sheet, area in ((reconcile, "A1:F78"), (payment, "A1:H29"), (attendance, "A1:F49")):
+        sheet.print_area = area
+        sheet.sheet_view.showGridLines = False
+    workbook.calculation.fullCalcOnLoad = True
+    workbook.calculation.forceFullCalc = True
+    workbook.calculation.calcMode = "auto"
+    fixed_datetime = datetime.combine(issue, datetime.min.time())
+    workbook.properties.creator = "Thành Đạt Phát"
+    workbook.properties.lastModifiedBy = "Thành Đạt Phát"
+    workbook.properties.created = fixed_datetime
+    workbook.properties.modified = fixed_datetime
+    workbook.properties.title = (
+        f"Hồ sơ suất ăn BOT {summary['profile_code']} "
+        f"{summary['date_from']} {summary['date_to']}"
+    )
+    stream = io.BytesIO()
+    workbook.save(stream)
+    workbook.close()
     return _canonicalize_office_zip(stream.getvalue())
 
 

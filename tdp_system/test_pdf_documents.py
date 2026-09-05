@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from pypdf import PdfReader
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, A5
 
 from tdp_system.pdf_documents import (
     PdfDocumentError,
@@ -160,6 +160,25 @@ class PdfDocumentsTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), original)
             leftovers = list(target.parent.glob(f".{target.name}.*.tmp"))
             self.assertEqual(leftovers, [])
+
+    def test_a5_bundle_uses_a5_pages_and_verification_contract(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tdp_pdf_a5_") as temp_dir:
+            pdf_path = Path(temp_dir) / "chung_tu_khac_a5.pdf"
+            manifest = build_pdf_bundle(
+                self._sections(row_count=3)[1:],
+                pdf_path,
+                paper="A5",
+                generated_at="2026-09-01 10:00:00",
+            )
+
+            self.assertEqual(manifest["paper"], "A5")
+            verified = verify_pdf(pdf_path, paper="A5", minimum_pages=2)
+            self.assertEqual(verified["paper"], "A5")
+            for page in PdfReader(str(pdf_path)).pages:
+                self.assertAlmostEqual(float(page.mediabox.width), A5[0], delta=1.0)
+                self.assertAlmostEqual(float(page.mediabox.height), A5[1], delta=1.0)
+            with self.assertRaisesRegex(PdfDocumentError, "không đúng khổ A4"):
+                verify_pdf(pdf_path, paper="A4")
 
     def test_verify_rejects_corrupt_pdf_and_missing_required_text(self) -> None:
         with tempfile.TemporaryDirectory(prefix="tdp_pdf_verify_") as temp_dir:

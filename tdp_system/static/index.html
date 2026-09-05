@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Thành Đạt Phát · Hệ thống vận hành</title>
   <link rel="stylesheet" href="/shared/styles.css">
-  <link rel="stylesheet" href="/static/real.css">
+  <link rel="stylesheet" href="/static/real.css?v=20260905-4">
 </head>
 <body>
   <div class="app-shell">
@@ -15,32 +15,31 @@
         <div><strong>THÀNH ĐẠT PHÁT</strong><span>Hệ thống vận hành</span></div>
       </div>
       <nav id="nav">
-        <button class="nav-item active" data-view="home"><span>⌂</span> Tổng quan</button>
-        <button class="nav-item" data-view="orders"><span>▤</span> Nhập & kiểm tra đơn</button>
-        <button class="nav-item" data-view="purchases"><span>⇄</span> Đặt hàng NCC</button>
-        <button class="nav-item" data-view="deliveries"><span>▣</span> Phiếu giao</button>
+        <button class="nav-item active" data-view="home"><span>⌂</span> Công việc hằng ngày</button>
+        <button class="nav-item" data-view="orders"><span>▤</span> Nhập & sửa đơn</button>
+        <button class="nav-item" data-view="purchases"><span>⇄</span> Đặt hàng nhà cung cấp</button>
+        <button class="nav-item" data-view="physical"><span>▦</span> Kho thực tế</button>
         <button class="nav-item" data-view="quotes"><span>₫</span> Báo giá</button>
-        <button class="nav-item" data-view="reports"><span>↗</span> Báo cáo & công nợ</button>
+        <button class="nav-item" data-view="reports"><span>↗</span> Báo cáo tổng hợp</button>
+        <button class="nav-item" data-view="debts"><span>▤</span> Công nợ</button>
         <button class="nav-item" data-view="documents"><span>✓</span> Bảng kê & hóa đơn</button>
-        <button class="nav-item" data-view="inventory"><span>▦</span> Kho hóa đơn</button>
-        <button class="nav-item" data-view="msmi"><span>⇩</span> Hóa đơn đầu vào</button>
-        <button class="nav-item" data-view="kitchen"><span>♨</span> Xưởng cơm / PO</button>
-        <button class="nav-item" data-view="payroll"><span>◷</span> Chấm công & lương</button>
-        <button class="nav-item" data-view="printing"><span>▣</span> Duyệt & in</button>
+        <button class="nav-item" data-view="inventory"><span>▦</span> Báo cáo vật tư hàng hóa</button>
+        <button class="nav-item" data-view="msmi"><span>⇄</span> Hóa đơn đầu vào + đầu ra</button>
+        <button class="nav-item" data-view="printing"><span>▣</span> In giấy tờ</button>
         <button class="nav-item" data-view="settings"><span>⚙</span> Danh mục & sao lưu</button>
       </nav>
       <div class="sidebar-foot">
         <div class="online-dot"></div>
-        <div><strong>Đang lưu dữ liệu</strong><span>SQLite · dùng chung mạng LAN</span></div>
+        <div><strong>Dữ liệu lưu sau khi xác nhận</strong><span>Sao lưu tự động khi phần mềm đang mở</span></div>
       </div>
     </aside>
 
     <main class="main">
       <header class="topbar">
         <button class="menu-button" id="menuButton" aria-label="Mở menu">☰</button>
-        <div><p class="eyebrow">BẢN VẬN HÀNH THẬT</p><h1 id="pageTitle">Tổng quan hôm nay</h1></div>
+        <div><p class="eyebrow">HỆ THỐNG QUẢN LÝ</p><h1 id="pageTitle">Công việc hằng ngày</h1></div>
         <div class="top-actions">
-          <select class="select batch-select" id="batchSelect" aria-label="Chọn phiên đơn"></select>
+          <select class="select batch-select" id="batchSelect" aria-label="Chọn ngày làm việc"></select>
           <button class="user-chip" title="Hai người có thể cùng sử dụng">VT</button>
         </div>
       </header>
@@ -57,7 +56,10 @@
   <input type="file" id="kitchenWorkbookInput" accept=".xlsx,.xlsm" hidden>
   <input type="file" id="mealAttendanceInput" accept=".xlsx,.xlsm" hidden>
   <input type="file" id="openingWorkbookInput" accept=".xlsx,.xlsm" hidden>
+  <input type="file" id="bkWorkbookInput" accept=".xlsx" hidden>
   <input type="file" id="payablesWorkbookInput" accept=".xlsx,.xlsm" hidden>
+  <input type="file" id="purchaseOrderInput" accept=".xlsx,.xlsm" hidden>
+  <input type="file" id="quoteWorkbookInput" accept=".xlsx,.xlsm" hidden>
   <div class="modal-backdrop" id="modalBackdrop" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-head"><div><p class="eyebrow">CẬP NHẬT DỮ LIỆU</p><h2 id="modalTitle">Dòng đơn hàng</h2></div><button class="icon-button" data-action="close-modal">×</button></div>
@@ -65,6 +67,8 @@
     </div>
   </div>
   <div class="toast" id="toast" role="status"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/invoice-workbench.js?v=20260905-1"></script>
+  <script src="/static/document-preview.js?v=20260905-4"></script>
+  <script src="/static/app.js?v=20260905-4"></script>
 </body>
 </html>

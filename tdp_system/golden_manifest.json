@@ -1,0 +1,1615 @@
+{
+  "artifacts": [
+    {
+      "id": "em_thanh",
+      "path": "C:\\Users\\DELL\\Downloads\\TDP_FULL_TRANSFER_20260901_200101\\Em Thành.xlsx",
+      "role": "output_golden",
+      "sha256": "66808cd910f63f4d543a72cc51ddaeba1c60b147e0457feafc5bad65ead26ad3",
+      "size_bytes": 862068,
+      "topology": {
+        "external_link_count": 1,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 12,
+        "sheets": [
+          {
+            "formula_count": 40,
+            "merged_ranges": [],
+            "name": "CCCD",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:G41",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [
+              "B1:C1",
+              "F31:H31"
+            ],
+            "name": "T.chiếu",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:H33",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [],
+            "name": "danh mục hàng hóa",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:F13328",
+            "view": {}
+          },
+          {
+            "formula_count": 8074,
+            "merged_ranges": [],
+            "name": "BÁO GIÁ",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "10"
+            },
+            "print_area": "'BÁO GIÁ'!#REF!",
+            "state": "visible",
+            "used_range": "A1:BK904",
+            "view": {}
+          },
+          {
+            "formula_count": 2056,
+            "merged_ranges": [],
+            "name": "danh mục nhà cc",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "10"
+            },
+            "print_area": "'danh mục nhà cc'!#REF!",
+            "state": "visible",
+            "used_range": "A1:AT2972",
+            "view": {}
+          },
+          {
+            "formula_count": 1931,
+            "merged_ranges": [],
+            "name": "gộp đơn",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "state": "visible",
+            "used_range": "A1:V1655",
+            "view": {}
+          },
+          {
+            "formula_count": 4865,
+            "merged_ranges": [
+              "U2:V2"
+            ],
+            "name": "đơn hàng27.08 ",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "state": "visible",
+            "used_range": "A1:V327",
+            "view": {}
+          },
+          {
+            "formula_count": 728,
+            "merged_ranges": [
+              "C263:E263",
+              "M1:M2",
+              "N1:N2",
+              "O1:O2"
+            ],
+            "name": "đặt hàng",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.699305555555556",
+              "right": "0.699305555555556",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "59"
+            },
+            "print_area": "'đặt hàng'!$A$1:$K$252",
+            "state": "visible",
+            "used_range": "A1:Q263",
+            "view": {}
+          },
+          {
+            "formula_count": 38,
+            "merged_ranges": [
+              "C4:J4",
+              "C5:F5",
+              "H5:I5",
+              "C27:H27"
+            ],
+            "name": "đơn hàng đi giao",
+            "page_margins": {
+              "bottom": "0",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0",
+              "right": "0",
+              "top": "1"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "76"
+            },
+            "print_area": "'đơn hàng đi giao'!$C$1:$J$27",
+            "state": "visible",
+            "used_range": "B1:K37",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [
+              "A1:J1",
+              "A2:J2",
+              "G3:H3",
+              "A4:J4",
+              "A6:G6",
+              "B8:D8",
+              "E8:I8",
+              "A32:E32",
+              "A35:C35",
+              "H35:J35",
+              "B36:C36",
+              "A37:C37",
+              "H37:J37",
+              "A8:A9",
+              "J8:J9"
+            ],
+            "name": "bảng kê tổng",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:J50",
+            "view": {}
+          },
+          {
+            "formula_count": 43,
+            "merged_ranges": [
+              "C1:G1",
+              "C2:G2",
+              "C3:G3",
+              "C4:G4",
+              "C5:G5",
+              "D10:E10",
+              "D11:E11",
+              "D12:E12",
+              "C22:E22",
+              "E27:G27",
+              "E32:G32"
+            ],
+            "name": "biên nhận",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:I38",
+            "view": {}
+          },
+          {
+            "formula_count": 12,
+            "merged_ranges": [],
+            "name": "báo cáo tổng hợp",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A2:G28",
+            "view": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "daily_order_2026_09_01",
+      "path": "C:\\Users\\DELL\\Downloads\\Đơn hàng 01.09.2026.xlsx",
+      "role": "input_contract",
+      "sha256": "4c6462cd75178926a9ca3b6406a372cfa0254621fc1df4a58c64ed5eac7e44cf",
+      "size_bytes": 792695,
+      "topology": {
+        "external_link_count": 0,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 8,
+        "sheets": [
+          {
+            "formula_count": 40,
+            "merged_ranges": [],
+            "name": "CCCD",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:G41",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [
+              "B1:C1",
+              "F31:H31"
+            ],
+            "name": "T.chiếu",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:H33",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [],
+            "name": "danh mục hàng hóa",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:G12668",
+            "view": {}
+          },
+          {
+            "formula_count": 8074,
+            "merged_ranges": [],
+            "name": "BÁO GIÁ",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "10"
+            },
+            "print_area": "'BÁO GIÁ'!#REF!",
+            "state": "visible",
+            "used_range": "A1:BK902",
+            "view": {}
+          },
+          {
+            "formula_count": 2056,
+            "merged_ranges": [],
+            "name": "danh mục nhà cc",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "10"
+            },
+            "print_area": "'danh mục nhà cc'!#REF!",
+            "state": "visible",
+            "used_range": "A1:AS2966",
+            "view": {}
+          },
+          {
+            "formula_count": 1931,
+            "merged_ranges": [],
+            "name": "gộp đơn",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "state": "visible",
+            "used_range": "A1:V330",
+            "view": {}
+          },
+          {
+            "formula_count": 4865,
+            "merged_ranges": [
+              "U2:V2"
+            ],
+            "name": "01.09",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "state": "visible",
+            "used_range": "A1:V325",
+            "view": {}
+          },
+          {
+            "formula_count": 986,
+            "merged_ranges": [
+              "S1:S2",
+              "T1:T2",
+              "U1:U2"
+            ],
+            "name": "đặt hàng",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.699305555555556",
+              "right": "0.699305555555556",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "59"
+            },
+            "print_area": "'đặt hàng'!$A$1:$Q$252",
+            "state": "visible",
+            "used_range": "A1:W261",
+            "view": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "toyota_quote_2026_09",
+      "path": "C:\\Users\\DELL\\Downloads\\BÁO GIÁ TOYOTA T09-2026.xlsx",
+      "role": "output_golden",
+      "sha256": "c3c16615f8da1ab80843de3dd611cb8a472b401b8c7b93b177781edeb203e148",
+      "size_bytes": 41030,
+      "topology": {
+        "external_link_count": 0,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 1,
+        "sheets": [
+          {
+            "formula_count": 0,
+            "merged_ranges": [
+              "A1:F1",
+              "A3:C3",
+              "A4:F4",
+              "A5:F5",
+              "A6:F6",
+              "A539:C539"
+            ],
+            "name": "all",
+            "page_margins": {
+              "bottom": "0.24",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.2",
+              "right": "0.2",
+              "top": "0.23"
+            },
+            "page_setup": {
+              "fitToHeight": "0",
+              "orientation": "landscape",
+              "paperSize": "9",
+              "scale": "87"
+            },
+            "print_titles": "all!$8:$8",
+            "state": "visible",
+            "used_range": "A1:F542",
+            "view": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "work_notes_2026_09_02",
+      "path": "C:\\Users\\DELL\\Downloads\\Note công việc.docx",
+      "role": "requirements_reference",
+      "sha256": "ba239a43c35422ca40780c74a0c854df14b57d312b5ce14421a469d80fc230b2",
+      "size_bytes": 1197480,
+      "topology": {
+        "embedded_media_count": 15,
+        "embedded_media_extensions": [
+          ".png"
+        ],
+        "external_relationship_count": 0,
+        "kind": "docx",
+        "paragraph_count": 36,
+        "table_count": 0
+      }
+    },
+    {
+      "id": "payment_request_official_2026_09_03",
+      "path": "C:\\Users\\DELL\\Downloads\\Đề nghị Thanh toán TĐP (T04.26).xlsx",
+      "role": "output_golden",
+      "sha256": "64dc5fd8e062a6b3cfc4056f51be9faf11f4927a5378287f39c59ca8925c34a2",
+      "size_bytes": 189496,
+      "topology": {
+        "external_link_count": 1,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 21,
+        "sheets": [
+          {
+            "formula_count": 33,
+            "merged_ranges": [],
+            "name": "TH",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {},
+            "state": "hidden",
+            "used_range": "A3:F20",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [],
+            "name": "DS cấm sửa",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "1"
+            },
+            "state": "visible",
+            "used_range": "A1:Z119",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [],
+            "name": "Setup",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "1"
+            },
+            "state": "visible",
+            "used_range": "A1:B4",
+            "view": {}
+          },
+          {
+            "formula_count": 295,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "L8:S8",
+              "D47:F47",
+              "C48:D48",
+              "E48:J48",
+              "C49:J49",
+              "C50:J50",
+              "C51:J51",
+              "C52:J52",
+              "C53:J53",
+              "C55:F55",
+              "G55:J55",
+              "C56:F56",
+              "G56:J56",
+              "C57:F57",
+              "G57:J57"
+            ],
+            "name": "Bia HP",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_titles": "'Bia HP'!$10:$10",
+            "state": "hidden",
+            "used_range": "A1:S59",
+            "view": {}
+          },
+          {
+            "formula_count": 215,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D37:F37",
+              "C38:D38",
+              "E38:J38",
+              "C39:J39",
+              "C40:J40",
+              "C41:J41",
+              "C42:J42",
+              "C43:J43",
+              "C45:F45",
+              "G45:J45",
+              "C46:F46",
+              "G46:J46",
+              "C47:F47",
+              "G47:J47"
+            ],
+            "name": "Hà Trân",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_titles": "'Hà Trân'!$10:$10",
+            "state": "hidden",
+            "used_range": "A1:K47",
+            "view": {}
+          },
+          {
+            "formula_count": 294,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D47:F47",
+              "C48:D48",
+              "E48:J48",
+              "C49:J49",
+              "C50:J50",
+              "C51:J51",
+              "C52:J52",
+              "C53:J53",
+              "C55:F55",
+              "G55:J55",
+              "C56:F56",
+              "G56:J56",
+              "C57:F57",
+              "G57:J57"
+            ],
+            "name": "ATV",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_area": "ATV!$C$1:$I$57",
+            "print_titles": "ATV!$10:$10",
+            "state": "visible",
+            "used_range": "A1:J57",
+            "view": {}
+          },
+          {
+            "formula_count": 294,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D47:F47",
+              "C48:D48",
+              "E48:J48",
+              "C49:J49",
+              "C50:J50",
+              "C51:J51",
+              "C52:J52",
+              "C53:J53",
+              "C55:F55",
+              "G55:J55",
+              "C56:F56",
+              "G56:J56",
+              "C57:F57",
+              "G57:J57"
+            ],
+            "name": "Toyota",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_area": "Toyota!$C$1:$I$57",
+            "print_titles": "Toyota!$10:$10",
+            "state": "visible",
+            "used_range": "A1:J57",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [
+              "A1:D1",
+              "E1:H1",
+              "A2:D2",
+              "E2:H2",
+              "A3:D3",
+              "E3:H3",
+              "A5:H5",
+              "A6:H6",
+              "A7:H7",
+              "A8:H8",
+              "B47:D47",
+              "A48:B48",
+              "C48:H48",
+              "A49:H49",
+              "A50:H50",
+              "A51:H51",
+              "A52:H52",
+              "A53:H53",
+              "A55:D55",
+              "E55:H55",
+              "A56:D56",
+              "E56:H56",
+              "A57:D57",
+              "E57:H57"
+            ],
+            "name": "Toyota in",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_titles": "'Toyota in'!$10:$10",
+            "state": "hidden",
+            "used_range": "A1:H57",
+            "view": {}
+          },
+          {
+            "formula_count": 158,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D30:F30",
+              "C31:D31",
+              "E31:J31",
+              "C32:J32",
+              "C33:J33",
+              "C34:J34",
+              "C35:J35",
+              "C36:J36",
+              "C38:F38",
+              "G38:J38",
+              "C39:F39",
+              "G39:J39",
+              "C40:F40",
+              "G40:J40"
+            ],
+            "name": "Nguyễn Gia",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_area": "'Nguyễn Gia'!$C$1:$I$40",
+            "print_titles": "'Nguyễn Gia'!$10:$10",
+            "state": "visible",
+            "used_range": "A1:M40",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [
+              "A1:D1",
+              "E1:H1",
+              "A2:D2",
+              "E2:H2",
+              "A3:D3",
+              "E3:H3",
+              "A5:H5",
+              "A6:H6",
+              "A7:H7",
+              "A8:H8",
+              "B30:D30",
+              "A31:B31",
+              "C31:H31",
+              "A32:H32",
+              "A33:H33",
+              "A34:H34",
+              "A35:H35",
+              "A36:H36",
+              "A38:D38",
+              "E38:H38",
+              "A39:D39",
+              "E39:H39",
+              "A40:D40",
+              "E40:H40"
+            ],
+            "name": "Nguyễn Gia in",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_titles": "'Nguyễn Gia in'!$10:$10",
+            "state": "hidden",
+            "used_range": "A1:K40",
+            "view": {}
+          },
+          {
+            "formula_count": 46,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D16:F16",
+              "C17:D17",
+              "E17:J17",
+              "C18:J18",
+              "C19:J19",
+              "C20:J20",
+              "C21:J21",
+              "C22:J22",
+              "C24:F24",
+              "G24:J24",
+              "C25:F25",
+              "G25:J25",
+              "C26:F26",
+              "G26:J26"
+            ],
+            "name": "Yjilink Hàn",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_titles": "'Yjilink Hàn'!$10:$10",
+            "state": "visible",
+            "used_range": "A1:J26",
+            "view": {}
+          },
+          {
+            "formula_count": 134,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D29:F29",
+              "C30:D30",
+              "E30:J30",
+              "C31:J31",
+              "C32:J32",
+              "C33:J33",
+              "C34:J34",
+              "C35:J35",
+              "C37:F37",
+              "G37:J37",
+              "C38:F38",
+              "G38:J38",
+              "C39:F39",
+              "G39:J39"
+            ],
+            "name": "Suppy",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_area": "Suppy!$C$1:$J$40",
+            "print_titles": "Suppy!$10:$10",
+            "state": "visible",
+            "used_range": "A1:M39",
+            "view": {}
+          },
+          {
+            "formula_count": 286,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D46:F46",
+              "C47:D47",
+              "E47:J47",
+              "C48:J48",
+              "C49:J49",
+              "C50:J50",
+              "C51:J51",
+              "C52:J52",
+              "C54:F54",
+              "G54:J54",
+              "C55:F55",
+              "G55:J55",
+              "C56:F56",
+              "G56:J56"
+            ],
+            "name": "A Hòa",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_area": "'A Hòa'!$C$1:$J$56",
+            "print_titles": "'A Hòa'!$10:$10",
+            "state": "visible",
+            "used_range": "A1:M56",
+            "view": {}
+          },
+          {
+            "formula_count": 127,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D26:F26",
+              "C27:D27",
+              "E27:J27",
+              "C28:J28",
+              "C29:J29",
+              "C30:J30",
+              "C31:J31",
+              "C32:J32",
+              "C34:F34",
+              "G34:J34",
+              "C35:F35",
+              "G35:J35",
+              "C36:F36",
+              "G36:J36"
+            ],
+            "name": "Sông Cấm",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_titles": "'Sông Cấm'!$10:$10",
+            "state": "hidden",
+            "used_range": "A1:K36",
+            "view": {}
+          },
+          {
+            "formula_count": 227,
+            "merged_ranges": [
+              "A1:J1",
+              "A2:J2",
+              "A3:J3",
+              "A4:J4",
+              "A5:J5",
+              "A6:J6",
+              "A7:J7",
+              "A8:J8",
+              "A9:D9",
+              "A64:B64",
+              "C64:H64",
+              "E65:H65",
+              "A66:D66",
+              "E66:H66"
+            ],
+            "name": "BK-BiaHP",
+            "page_margins": {
+              "bottom": "0.24",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.24",
+              "right": "0.21",
+              "top": "0.4"
+            },
+            "page_setup": {
+              "fitToHeight": "0",
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "89"
+            },
+            "print_titles": "'BK-BiaHP'!$10:$10",
+            "state": "hidden",
+            "used_range": "A1:L74",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D46:F46",
+              "C47:D47",
+              "E47:J47",
+              "C48:J48",
+              "C49:J49",
+              "C50:J50",
+              "C51:J51",
+              "C52:J52",
+              "C54:F54",
+              "G54:J54",
+              "C55:F55",
+              "G55:J55",
+              "C56:F56",
+              "G56:J56"
+            ],
+            "name": "A Hòa in",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_titles": "'A Hòa in'!$10:$10",
+            "state": "hidden",
+            "used_range": "A1:K56",
+            "view": {}
+          },
+          {
+            "formula_count": 294,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D48:F48",
+              "C49:D49",
+              "E49:J49",
+              "C50:I50",
+              "C51:J51",
+              "C52:J52",
+              "C53:J53",
+              "C54:J54",
+              "C56:F56",
+              "G56:J56",
+              "C57:F57",
+              "G57:J57",
+              "C58:F58",
+              "G58:J58"
+            ],
+            "name": "Nhựa",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_area": "Nhựa!$C$1:$J$59",
+            "print_titles": "Nhựa!$10:$10",
+            "state": "visible",
+            "used_range": "A1:M58",
+            "view": {}
+          },
+          {
+            "formula_count": 294,
+            "merged_ranges": [
+              "C1:F1",
+              "G1:J1",
+              "C2:F2",
+              "G2:J2",
+              "C3:F3",
+              "G3:J3",
+              "C5:J5",
+              "C6:J6",
+              "C7:J7",
+              "C8:J8",
+              "D48:F48",
+              "C49:D49",
+              "E49:J49",
+              "C50:I50",
+              "C51:J51",
+              "C52:J52",
+              "C53:J53",
+              "C54:J54",
+              "C56:F56",
+              "G56:J56",
+              "C57:F57",
+              "G57:J57",
+              "C58:F58",
+              "G58:J58"
+            ],
+            "name": "HKY",
+            "page_margins": {
+              "bottom": "0.49",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.56",
+              "right": "0.42",
+              "top": "0.57"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "print_area": "HKY!$A$1:$J$58",
+            "print_titles": "HKY!$10:$10",
+            "state": "hidden",
+            "used_range": "A1:N58",
+            "view": {}
+          },
+          {
+            "formula_count": 118,
+            "merged_ranges": [
+              "A1:F1",
+              "A2:I2",
+              "A3:D3",
+              "A4:D4",
+              "A5:I5",
+              "A6:I6",
+              "A7:H7",
+              "A8:I8",
+              "A9:H9",
+              "A118:B118",
+              "B119:I119",
+              "E120:I120",
+              "A121:C121",
+              "E121:I121"
+            ],
+            "name": "BK-Yjilink",
+            "page_margins": {
+              "bottom": "0.43",
+              "footer": "0.56",
+              "header": "0.69",
+              "left": "0.32",
+              "right": "0.25",
+              "top": "0.58"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "82"
+            },
+            "print_area": "'BK-Yjilink'!$A$1:$I$121",
+            "state": "visible",
+            "used_range": "A1:M121",
+            "view": {}
+          },
+          {
+            "formula_count": 243,
+            "merged_ranges": [
+              "A1:G1",
+              "A2:J2",
+              "A3:E3",
+              "A4:E4",
+              "A5:J5",
+              "A6:J6",
+              "A7:I7",
+              "A8:J8",
+              "A9:I9",
+              "A247:C247",
+              "C248:J248",
+              "F249:J249",
+              "A250:D250",
+              "F250:J250"
+            ],
+            "name": "BK-Suppy",
+            "page_margins": {
+              "bottom": "0.43",
+              "footer": "0.56",
+              "header": "0.69",
+              "left": "0.32",
+              "right": "0.25",
+              "top": "0.58"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "82"
+            },
+            "print_area": "'BK-Suppy'!$A$1:$J$250",
+            "state": "visible",
+            "used_range": "A1:M250",
+            "view": {}
+          },
+          {
+            "formula_count": 500,
+            "merged_ranges": [
+              "A1:G1",
+              "A2:J2",
+              "A3:E3",
+              "A4:E4",
+              "A5:J5",
+              "A6:J6",
+              "A7:I7",
+              "A8:J8",
+              "A9:I9",
+              "A504:C504",
+              "A505:B505",
+              "C505:J505",
+              "F506:J506",
+              "A507:D507",
+              "F507:J507"
+            ],
+            "name": "BK-Toyota",
+            "page_margins": {
+              "bottom": "0.43",
+              "footer": "0.56",
+              "header": "0.69",
+              "left": "0.32",
+              "right": "0.25",
+              "top": "0.58"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9",
+              "scale": "82"
+            },
+            "print_area": "'BK-Toyota'!$A$1:$J$507",
+            "state": "visible",
+            "used_range": "A1:M507",
+            "view": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "tax_kkknt",
+      "path": "C:\\Users\\DELL\\Downloads\\TDP_FULL_TRANSFER_20260901_200101\\bosung.30.8.26\\thue 0.xlsx",
+      "role": "output_golden",
+      "sha256": "82642c993bf26e52b54762e397ed5a1c3f5886f308834582dbcd01c4fbea0619",
+      "size_bytes": 15438,
+      "topology": {
+        "external_link_count": 0,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 3,
+        "sheets": [
+          {
+            "formula_count": 27,
+            "merged_ranges": [],
+            "name": "Sheet2",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "9"
+            },
+            "state": "visible",
+            "used_range": "A1:M10",
+            "view": {}
+          },
+          {
+            "formula_count": 21,
+            "merged_ranges": [],
+            "name": "Sheet3",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "B4:F24",
+            "view": {}
+          },
+          {
+            "formula_count": 0,
+            "merged_ranges": [],
+            "name": "Sheet1",
+            "page_margins": {
+              "bottom": "1",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "1"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "I3:M96",
+            "view": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "tax_vat_8",
+      "path": "C:\\Users\\DELL\\Downloads\\TDP_FULL_TRANSFER_20260901_200101\\bosung.30.8.26\\thue 8.xlsx",
+      "role": "output_golden",
+      "sha256": "892c57a688e28afaddb58e2070e122945a926fb6ef1dc417714a004885d4c573",
+      "size_bytes": 10649,
+      "topology": {
+        "external_link_count": 0,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 1,
+        "sheets": [
+          {
+            "formula_count": 48,
+            "merged_ranges": [],
+            "name": "Sheet 1 (2)",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:M13",
+            "view": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "tax_vat_10",
+      "path": "C:\\Users\\DELL\\Downloads\\TDP_FULL_TRANSFER_20260901_200101\\bosung.30.8.26\\thue 10.xlsx",
+      "role": "output_golden",
+      "sha256": "d4548d308cdd236a854972a629db63b4cea2fe1b65816eaff6aebe57040d0de9",
+      "size_bytes": 9566,
+      "topology": {
+        "external_link_count": 0,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 1,
+        "sheets": [
+          {
+            "formula_count": 8,
+            "merged_ranges": [],
+            "name": "Sheet 1 (2)",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:M4",
+            "view": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "tax_vat_10_promotion",
+      "path": "C:\\Users\\DELL\\Downloads\\TDP_FULL_TRANSFER_20260901_200101\\bosung.30.8.26\\thue 10 có khuyến mại.xlsx",
+      "role": "output_golden",
+      "sha256": "243ec60b25c3235f447a7c773e66c7948f36b3aa5be3f3afd0a4f06a78f0691b",
+      "size_bytes": 9706,
+      "topology": {
+        "external_link_count": 0,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 1,
+        "sheets": [
+          {
+            "formula_count": 8,
+            "merged_ranges": [],
+            "name": "Sheet 1 (2)",
+            "page_margins": {
+              "bottom": "0.75",
+              "footer": "0.3",
+              "header": "0.3",
+              "left": "0.7",
+              "right": "0.7",
+              "top": "0.75"
+            },
+            "page_setup": {},
+            "state": "visible",
+            "used_range": "A1:M5",
+            "view": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "historical_payables",
+      "path": "C:\\Users\\DELL\\Downloads\\TDP_FULL_TRANSFER_20260901_200101\\bosung.30.8.26\\Công nợ phải trả Thành Đạt Phát.xlsx",
+      "role": "historical_input",
+      "sha256": "bc54c62e7b7141ba1846eb5bd7eec9e11b9cc8da68fb138d0ea0f0cdd7baf473",
+      "size_bytes": 1387804,
+      "topology": {
+        "external_link_count": 0,
+        "has_vba": false,
+        "kind": "xlsx",
+        "sheet_count": 1,
+        "sheets": [
+          {
+            "formula_count": 49946,
+            "merged_ranges": [
+              "C1:D1"
+            ],
+            "name": "2026 chuẩn",
+            "page_margins": {
+              "bottom": "0",
+              "footer": "0.5",
+              "header": "0.5",
+              "left": "0.75",
+              "right": "0.75",
+              "top": "0"
+            },
+            "page_setup": {
+              "orientation": "portrait",
+              "paperSize": "1",
+              "scale": "73"
+            },
+            "print_area": "'2026 chuẩn'!$C$1:$N$4343",
+            "state": "visible",
+            "used_range": "A1:W9978",
+            "view": {}
+          }
+        ]
+      }
+    }
+  ],
+  "privacy": "metadata_only_no_cell_values_no_document_text",
+  "schema_version": 1
+}

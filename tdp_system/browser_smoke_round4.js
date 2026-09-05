@@ -1,0 +1,71 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs');
+async function main(){
+ const appSource=fs.readFileSync(require('node:path').join(__dirname,'static/app.js'),'utf8');
+ const formatMoney=Function('n','return function(value){'+appSource.match(/function money\(value\) \{([\s\S]*?)\n  }/)[1]+'}')(Number);
+ const examples=[[42500,'42,500'],[42000,'42,000'],[152000.994706,'152,001'],[5208,'5,208'],[29629.665,'29,630'],[9196.25149,'9,196'],[29629.633328,'29,630'],[26465.5,'26,466'],[44500,'44,500'],[30962.967143,'30,963'],[167832,'167,832'],[741,'741'],[440000,'440,000'],[-26464.5,'-26,465']];
+ examples.forEach(([source,expected])=>assert.equal(formatMoney(source),expected+' đ'));
+ const page=await fetch('http://127.0.0.1:19317/json/new?about:blank',{method:'PUT'}).then(r=>r.json());
+ const ws=new WebSocket(page.webSocketDebuggerUrl);
+ await new Promise((yes,no)=>{ws.onopen=yes;ws.onerror=no;});
+ let seq=0;const pending=new Map(),errors=[];
+ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails);if(pending.has(m.id)){const [yes,no]=pending.get(m.id);pending.delete(m.id);m.error?no(Error(m.error.message)):yes(m.result);}};
+ const call=(method,params={})=>new Promise((yes,no)=>{const id=++seq;pending.set(id,[yes,no]);ws.send(JSON.stringify({id,method,params}));});
+ const ev=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+ const wait=async expression=>{const until=Date.now()+40000;while(Date.now()<until){if(await ev(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout: '+expression+'\n'+await ev('document.querySelector("#content")?.innerText'));};
+ const click=async s=>{await wait(`document.querySelector(${JSON.stringify(s)})`);await ev(`document.querySelector(${JSON.stringify(s)}).click()`);};
+ const set=async(s,v)=>ev(`(()=>{const e=document.querySelector(${JSON.stringify(s)});e.value=${JSON.stringify(v)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+ try{
+  await call('Runtime.enable');await call('Page.enable');await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+  await call('Page.navigate',{url:'http://127.0.0.1:18807'});
+  await wait(`document.querySelector('[data-view="deliveries"]')&&!document.querySelector('.loading-panel')`);
+  await click('[data-view="deliveries"]');await wait(`document.querySelector('#deliveryDocumentPreview .document-sheet')`);
+  assert.match(await ev(`document.querySelector('.document-sheet').textContent`),/TỔNG CỘNG/);
+  assert.match(await ev(`document.querySelector('.document-sheet').textContent`),/Chả cá loại ngon/);
+  assert.match(await ev(`document.querySelector('.document-sheet').textContent`),/kg/);
+  assert.match(await ev(`document.querySelector('.document-sheet').textContent`),/cái/);
+  assert.equal(await ev(`performance.getEntriesByType('resource').filter(r=>r.name.includes('/export')||r.name.includes('/excel')||r.name.includes('/pdf')).length`),0,'No download/print merely by opening');
+  assert.equal(await ev(`document.querySelectorAll('[data-sheet]').length`),2);
+  await click('[data-doc="none"]');assert.equal(await ev(`document.querySelector('[data-doc="print"]').disabled`),true);
+  await click('[data-sheet="1"]');assert.equal(await ev(`document.querySelector('[data-doc="print"]').disabled`),false);
+  await click('[data-open-sheet="1"]');assert.match(await ev(`document.querySelector('.document-sheet').textContent`),/Bếp mới/);
+  await set('.document-zoom','1.25');assert.equal(await ev(`document.querySelector('.document-scroll').style.zoom`),'1.25');
+  await set('.document-zoom','1');
+  const layout=await ev(`(()=>{const box=document.querySelector('.document-scroll');box.scrollTop=500;const header=box.querySelector('.document-header-row td');return {sticky:getComputedStyle(header).position,background:getComputedStyle(header).backgroundColor,overflow:document.documentElement.scrollWidth>innerWidth};})()`);
+  assert.equal(layout.sticky,'sticky');assert.equal(layout.background,'rgb(255, 255, 255)');assert.equal(layout.overflow,false);
+  await ev(`document.querySelector('.document-scroll').scrollTop=0;new Promise(r=>setTimeout(r,700))`);
+  fs.writeFileSync('D:/TDP_ROUND4/delivery-browser.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await click('[data-view="printing"]');await wait(`document.querySelectorAll('.print-batch-select').length===2`);
+  assert.match(await ev(`document.querySelector('#printingSelectedCount').textContent`),/Đang lọc 2 · Đã chọn 2/);
+  await set('#printingCustomer','K2');await wait(`document.querySelectorAll('.print-batch-select').length===1`);
+  await click('[data-action="preview-print-row"]');await wait(`document.querySelector('#printingPreview .document-sheet')`);
+  assert.equal(await ev(`document.querySelectorAll('#printingPreview [data-sheet]').length`),1);
+  assert.match(await ev(`document.querySelector('#printingPreview .document-sheet').textContent`),/Bếp mới/);
+  await set('#printingCustomer','');await wait(`document.querySelectorAll('.print-batch-select').length===2`);
+  await click('.print-batch-select');
+  await click('[data-action="preview-selected-documents"]');await wait(`document.querySelector('#printingPreview .document-sheet')`);
+  assert.equal(await ev(`document.querySelectorAll('#printingPreview [data-sheet]').length`),1);
+  // A fake PDF failure verifies the one-click print request stays in the list and is actionable.
+  await ev(`window.__originalFetch=window.fetch;window.__pdfCalls=0;window.fetch=(...a)=>{if(String(a[0]).includes('/pdf?')){window.__pdfCalls++;return new Promise(resolve=>{window.__finishPDF=()=>resolve(new Response(JSON.stringify({error:'Máy kiểm thử chưa có máy in'}),{status:503,headers:{'Content-Type':'application/json'}}));});}return window.__originalFetch(...a);};`);
+  await click('[data-action="print-selected-documents"]');await wait(`window.__pdfCalls===1`);
+  assert.equal(await ev(`Array.from(document.querySelectorAll('#printingPreview [data-sheet],#printingPreview [data-doc="none"],#printingPreview [data-doc="refresh"]')).every(e=>e.disabled)`),true,'Selection locked while output is pending');
+  await ev(`window.__finishPDF()`);
+  await wait(`document.querySelector('#printingPreview .document-error')?.textContent.includes('Máy kiểm thử')`);
+  assert.equal(await ev(`document.querySelector('.nav-item.active').dataset.view`),'printing');
+  // Changing the outer selection while a PDF is pending must discard that stale result.
+  await click('#printingPreview [data-doc="print"]');await wait(`window.__pdfCalls===2`);
+  await click('[data-action="preview-selected-documents"]');
+  await wait(`document.querySelector('#printingPreview [data-doc="print"]')?.disabled===false`);
+  await ev(`window.__finishPDF();new Promise(r=>setTimeout(r,300))`);
+  assert.equal(await ev(`document.querySelector('#printingPreview .document-error').textContent`),'');
+  assert.equal(await ev(`document.querySelectorAll('#printingPreview iframe').length`),0);
+  await ev(`window.fetch=window.__originalFetch`);
+  await call('Emulation.setDeviceMetricsOverride',{width:1024,height:900,deviceScaleFactor:1,mobile:false});
+  assert.equal(await ev('document.documentElement.scrollWidth>innerWidth'),false);
+  await ev('new Promise(r=>setTimeout(r,600))');
+  fs.writeFileSync('D:/TDP_ROUND4/printing-browser.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  assert.deepEqual(errors,[]);
+  console.log('Round 4 browser PASS: inline sheets, selection, filters, white sticky headers, zoom, one-click print, no navigation, 1440/1024.');
+ }finally{ws.close();}
+}
+main().catch(e=>{console.error(e);process.exitCode=1;});

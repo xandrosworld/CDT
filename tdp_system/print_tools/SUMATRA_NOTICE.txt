@@ -1,0 +1,11 @@
+SumatraPDF 3.6.1 (64-bit portable) is used as a separate command-line PDF
+printing program. It is not used as the system PDF viewer and does not change
+Windows file associations.
+
+Project: https://www.sumatrapdfreader.org/
+Source: https://github.com/sumatrapdfreader/sumatrapdf/tree/3.6.1
+License: GNU General Public License version 3 (GPLv3)
+
+The unmodified portable executable is distributed as a separate program and
+is invoked only for deterministic Windows printing with an explicit printer
+and paper size.

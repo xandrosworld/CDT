@@ -5,7 +5,6 @@ import unittest
 import zipfile
 
 from docx import Document
-from docx.oxml.ns import qn
 from openpyxl import load_workbook
 
 try:
@@ -268,7 +267,7 @@ class XcomPaymentDocumentTests(unittest.TestCase):
         self.assertEqual(other_result["actual_count"], 12)
         self.assertEqual(other_result["subtotal"], 240)
 
-    def test_docx_is_deterministic_and_repeats_table_header(self):
+    def test_docx_is_deterministic_and_preserves_customer_payment_form(self):
         self._insert_scope_data(self.simple_profile)
         self._insert_attendance()
         upsert_meal_tariff(self.conn, "SIMPLE", "2026-08", "Sáng", 25_000, now_iso=FIXED_NOW)
@@ -279,13 +278,17 @@ class XcomPaymentDocumentTests(unittest.TestCase):
 
         self.assertEqual(hashlib.sha256(first).digest(), hashlib.sha256(second).digest())
         document = Document(io.BytesIO(first))
-        self.assertIn("ĐỀ NGHỊ THANH TOÁN", "\n".join(p.text for p in document.paragraphs))
-        header_row = document.tables[1].rows[0]
-        self.assertIsNotNone(header_row._tr.get_or_add_trPr().find(qn("w:tblHeader")))
-        all_text = "\n".join(
+        paragraph_text = "\n".join(p.text for p in document.paragraphs)
+        self.assertIn("GIẤY ĐỀ NGHỊ THANH TOÁN", paragraph_text)
+        self.assertIn("Số tiền: 27.500 VNĐ", paragraph_text)
+        self.assertIn("từ 01/08/2026 đến 31/08/2026", paragraph_text)
+        self.assertEqual(len(document.tables), 2)
+        self.assertEqual(len(document.tables[0].columns), 2)
+        self.assertEqual(len(document.tables[1].columns), 3)
+        all_text = paragraph_text + "\n" + "\n".join(
             cell.text for table in document.tables for row in table.rows for cell in row.cells
         )
-        self.assertIn("1", all_text)
+        self.assertIn(self.simple_profile["bank_account"], all_text)
         self.assertNotIn("999", all_text)
 
     def test_bot_bundle_is_deterministic_formula_backed_and_reconciled(self):
@@ -307,38 +310,33 @@ class XcomPaymentDocumentTests(unittest.TestCase):
         workbook = load_workbook(io.BytesIO(first["payload"]), data_only=False)
         self.assertEqual(
             workbook.sheetnames,
-            ["Bảng chấm suất", "Tổng hợp", "Đề nghị thanh toán", "Đối chiếu"],
+            ["BBĐC", "ĐNTT", "suất ăn"],
         )
-        attendance = workbook["Bảng chấm suất"]
-        self.assertEqual(attendance["G5"].value, 2)
-        self.assertEqual(attendance["I5"].value, "=ROUND(G5*H5,0)")
-        self.assertNotEqual(attendance["G5"].value, 700)
-        self.assertTrue(str(workbook["Tổng hợp"]["C4"].value).startswith("=SUMIFS("))
-        self.assertEqual(workbook["Đối chiếu"]["E4"].value, '=IF(ABS(D4)<0.000001,"KHỚP","LỆCH")')
+        reconcile = workbook["BBĐC"]
+        self.assertEqual(reconcile["C19"].value, 2)
+        self.assertEqual(reconcile["D20"].value, 3)
+        self.assertNotEqual(reconcile["C19"].value, 700)
+        self.assertEqual(workbook["suất ăn"]["C9"].value, "='BBĐC'!C19")
+        self.assertEqual(workbook["ĐNTT"]["D13"].value, "='BBĐC'!C50")
+        self.assertEqual(workbook["ĐNTT"]["F18"].value, "=F16+F17")
         self.assertEqual(first["summary"]["subtotal"], 155_000)
         self.assertEqual(first["summary"]["vat_amount"], 15_500)
         self.assertEqual(first["summary"]["total"], 170_500)
         with zipfile.ZipFile(io.BytesIO(first["payload"])) as archive:
             self.assertTrue(all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist()))
 
-    def test_bot_bundle_summary_formula_filters_both_period_and_shift(self):
+    def test_bot_bundle_blocks_cross_month_period_that_cannot_fit_customer_form(self):
         self._insert_scope_data(self.bot_profile, "KITCHEN", "BEP-A")
         self._insert_attendance(work_date="2026-08-31", shift="Sáng", actual=2)
         self._insert_attendance(work_date="2026-09-01", shift="Sáng", actual=3)
         upsert_meal_tariff(self.conn, "BOT", "2026-08", "Sáng", 25_000, now_iso=FIXED_NOW)
         upsert_meal_tariff(self.conn, "BOT", "2026-09", "Sáng", 30_000, now_iso=FIXED_NOW)
 
-        result = create_payment_document(
-            self.conn, "BOT", "2026-08-31", "2026-09-01", "2026-09-02"
-        )
-        self.assertEqual([line["actual_count"] for line in result["summary"]["summary_lines"]], [2, 3])
-        workbook = load_workbook(io.BytesIO(result["payload"]), data_only=False)
-        formula_august = workbook["Tổng hợp"]["C4"].value
-        formula_september = workbook["Tổng hợp"]["C5"].value
-        self.assertIn("$C$5:$C$6,A4", formula_august)
-        self.assertIn("$F$5:$F$6,B4", formula_august)
-        self.assertIn("$C$5:$C$6,A5", formula_september)
-        self.assertEqual(result["summary"]["subtotal"], 140_000)
+        with self.assertRaises(XcomPaymentError) as caught:
+            create_payment_document(
+                self.conn, "BOT", "2026-08-31", "2026-09-01", "2026-09-02"
+            )
+        self.assertEqual(caught.exception.code, "invalid_bot_period")
 
 
 if __name__ == "__main__":
