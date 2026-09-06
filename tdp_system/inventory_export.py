@@ -81,6 +81,7 @@ def _add_unit_totals(workbook, model):
     values = {field: {r['unit']: r['quantity'] for r in rows} for field, rows in grouped.items()}
     for unit in units:
         sheet.append([unit, *[values[field].get(unit, 0) for field in fields]])
+        _put(sheet, f'A{sheet.max_row}', unit)
     for row in sheet:
         for cell in row:
             cell.font = Font(name='Times New Roman', size=11, bold=cell.row == 1)

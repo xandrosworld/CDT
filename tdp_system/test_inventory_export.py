@@ -370,6 +370,17 @@ class InventoryExportTests(unittest.TestCase):
             ).status_code,
         )
 
+    def test_unit_summary_preserves_source_text_as_literal(self):
+        model = self._model()
+        second = dict(model['items'][0], product_code='P-002', unit='=1+1')
+        model['items'].append(second)
+        for kind in EXPORT_KINDS:
+            book = load_workbook(io.BytesIO(inventory_workbook_bytes(model, kind, template_path=OPENING_TEMPLATE)))
+            unit_cells = list(book['Tổng ĐVT']['A'])[1:]
+            literal = next(cell for cell in unit_cells if cell.value == "'=1+1")
+            self.assertEqual('s', literal.data_type)
+            book.close()
+
     def test_missing_invoice_line_trace_is_blocked_not_fabricated(self):
         self.conn.execute("DELETE FROM msmi_invoice_items WHERE id=?", (self.input_line_id,))
         with self.assertRaisesRegex(InventoryExportError, "thiếu dòng hóa đơn nguồn") as raised:

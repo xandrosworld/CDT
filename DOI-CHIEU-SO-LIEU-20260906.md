@@ -45,6 +45,7 @@ Các thao tác ghi/hoàn tác, ghi kho/chuyển kỳ, đối chiếu mẫu và l
 
 - `numeric-regression-01`: 576/576 test đạt trước thay đổi mới ở file kho.
 - `numeric-inventory-export-01`: 6/6 đạt, có tình huống nhiều ĐVT, lượng âm, tổng cần kiểm tra và giữ tiền gốc. `numeric-affected-01`: định giá 6/6, chốt kỳ 8/8, chứng từ 22/22 đạt sau sửa file kho. Không cộng các lượt trùng thành số test độc lập.
+- Rà cuối sheet ĐVT: dùng cùng bộ ghi chuỗi an toàn với các ô nguồn của file kho, không biến tên ĐVT thành công thức. `numeric-inventory-export-03` **7/7 đạt**, gồm trường hợp chuỗi bắt đầu bằng dấu `=`; lượt 02 lưu lại lỗi do dùng bộ ghi thiếu bước chuyển chuỗi sang text an toàn.
 - `numeric-red-worksheet-03`: browser đạt; kiểm tra màu pixel của dòng lỗi và dòng chỉ có cảnh báo, hết đỏ sau xác nhận sửa; gõ/dán lượng lẻ, mạng lỗi, thử lại, xung đột, mở/đóng không tự ghi. Đã xem ảnh trực tiếp.
 - `numeric-inventory-browser-01`: browser nghiệp vụ hóa đơn/kho và tổng cố định đạt.
 - Bộ đối chiếu tái chạy: `python -m tdp_system.qa_numeric_reconciliation --snapshot BAN_SAO.sqlite3 --output THU_MUC_MOI`. Báo cáo ghi riêng phép so đạt và phạm vi bị chặn do dữ liệu. Không dùng HTTP 409/422 như bằng chứng đã xuất được chứng từ.
