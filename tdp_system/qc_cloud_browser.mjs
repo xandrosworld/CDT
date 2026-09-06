@@ -92,6 +92,12 @@ try {
       await click('[data-action="bulk-edit-orders"]');
       await wait(`document.querySelector('.tdp-sheet-status')?.textContent.match(/Đã tải|Chỉ xem/)`);
       await wait(`document.querySelector('canvas[id^="univer-sheet-main"]')?.width>1000`);
+      if(boot.data.orders.some(row=>row.errors.length)) {
+        await sleep(300);
+        const red=await evaluate(`(()=>{const c=document.querySelector('canvas[id^="univer-sheet-main"]');const p=c.getContext('2d').getImageData(75,45,1000,20).data;let n=0;for(let i=0;i<p.length;i+=4)if(p[i]===254&&p[i+1]===226&&p[i+2]===226)n++;return n;})()`);
+        assert.ok(red>500,'Hosted worksheet error row must be visibly red');
+        report.checks.push('hosted_worksheet_full_red_error_row');
+      }
       await shot('worksheet-orders');
       await click('.tdp-sheet-close'); await wait(`!document.querySelector('.tdp-sheet-shell')`);
       report.checks.push('hosted_order_worksheet_read_only_smoke');
@@ -100,6 +106,7 @@ try {
       await wait(`document.querySelector('[data-action="view-inventory-worksheet"]')`);
       for(const width of [1680,1366,1024]) {
         await call('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
+        assert.ok(await evaluate(`document.querySelector('.inventory-quantity-card').getBoundingClientRect().height<70`),'Quantity summary must stay compact');
         const layout=await evaluate(`(()=>{const box=document.querySelector('.inventory-nxt-scroll');box.scrollIntoView({block:'center'});box.scrollTop=box.scrollHeight/2;box.scrollLeft=0;const footer=box.querySelector('tfoot');return {height:footer.getBoundingClientRect().height,viewport:box.clientHeight,sticky:getComputedStyle(footer.querySelector('td')).position,money:Array.from(footer.querySelectorAll('.num-cell')).every(cell=>getComputedStyle(cell).whiteSpace==='nowrap')};})()`);
         assert.ok(layout.height<=64 && layout.viewport-layout.height>200,JSON.stringify(layout));
         assert.equal(layout.sticky,'sticky');assert.equal(layout.money,true);

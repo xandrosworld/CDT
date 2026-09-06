@@ -7,6 +7,7 @@ import './worksheet.css';
 let opened = null;
 const make = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text || ''; if (cls) el.className = cls; return el; };
 const textValue = value => Array.isArray(value) ? value.join(' · ') : value ?? '';
+const needsReview = row => !!(row?.errors?.length || row?.warnings?.length || row?.worksheet_issue);
 
 async function open(options) {
   if (opened) return;
@@ -42,10 +43,11 @@ async function open(options) {
   const pending = new Map();
   const columns = options.columns;
   const setStatus = (message, error = false) => { status.textContent = message; status.classList.toggle('is-error', error); };
-  const cell = (value, col, header = false) => ({ v: textValue(value), t: typeof value === 'number' ? 2 : 1,
+  const cell = (value, col, header = false, row = null) => ({ v: textValue(value), t: typeof value === 'number' ? 2 : 1,
     s: { ff: 'Arial', fs: 11, ht: col.numeric ? 3 : 1, vt: 2,
       bd: { b: { s: 1, cl: { rgb: '#dfe5e8' } }, r: { s: 1, cl: { rgb: '#dfe5e8' } } },
-      bg: { rgb: header ? '#e9eef0' : col.editable && options.editable ? '#ffffff' : '#f4f6f7' },
+      bg: { rgb: header ? '#e9eef0' : needsReview(row) ? '#fee2e2' : col.editable && options.editable ? '#ffffff' : '#f4f6f7' },
+      cl: { rgb: !header && needsReview(row) ? '#991b1b' : '#172b3a' },
       // Preserve literal quantity input until our decimal parser runs. The SDK's
       // English number parser otherwise turns the Vietnamese input 0,855 into 855.
       bl: header ? 1 : 0, ...(!header ? { n: { pattern: col.editable && options.editable && !col.money ? '@' :
@@ -115,8 +117,8 @@ async function open(options) {
         muting = true;
         rows = rows.map(row => byId.get(row.id) || row);
         const acknowledged = {};
-        rows.forEach((row, r) => acknowledged[r + 1] = Object.fromEntries(columns.map((col, c) => [c, cell(row[col.key], col)])));
-        newer.forEach(entry => acknowledged[entry.r + 1][entry.c] = cell(entry.value, columns[entry.c]));
+        rows.forEach((row, r) => acknowledged[r + 1] = Object.fromEntries(columns.map((col, c) => [c, cell(row[col.key], col, false, row)])));
+        newer.forEach(entry => acknowledged[entry.r + 1][entry.c] = cell(entry.value, columns[entry.c], false, rows[entry.r]));
         // Server acknowledgements also refresh protected computed cells. A model mutation
         // avoids routing these trusted values through the user's protected-cell editor.
         api.syncExecuteCommand('sheet.mutation.set-range-values', { unitId: book.getId(), subUnitId: 'data', cellValue: acknowledged });
@@ -148,8 +150,8 @@ async function open(options) {
   window.addEventListener('beforeunload', guard);
   if (options.editable) {
     const retry = make('button', 'Thử lưu lại'); retry.onclick = () => flush(true); controls.append(retry);
-    const nextError = make('button', 'Tới dòng lỗi'); let errorRow = -1;
-    nextError.onclick = () => { const candidates = rows.map((row, index) => row.errors?.length ? index : -1).filter(index => index >= 0); errorRow = candidates.find(index => index > errorRow) ?? candidates[0] ?? -1; if (errorRow >= 0) { sheet.setActiveRange(sheet.getRange(errorRow + 1, columns.length - 2)); sheet.scrollToCell(errorRow + 1, columns.length - 2); } };
+    const nextError = make('button', 'Tới dòng lỗi / cảnh báo'); let errorRow = -1;
+    nextError.onclick = () => { const candidates = rows.map((row, index) => needsReview(row) ? index : -1).filter(index => index >= 0); errorRow = candidates.find(index => index > errorRow) ?? candidates[0] ?? -1; if (errorRow >= 0) { sheet.setActiveRange(sheet.getRange(errorRow + 1, columns.length - 2)); sheet.scrollToCell(errorRow + 1, columns.length - 2); } };
     controls.append(nextError);
     const recover = make('button', 'Đọc lại / đối chiếu');
     recover.onclick = async () => {
@@ -177,7 +179,7 @@ async function open(options) {
       presets: [UniverSheetsCorePreset({ container: host, header: true, toolbar: false, formulaBar: true, contextMenu: false,
         footer: { sheetBar: false, statisticBar: true, menus: false, zoomSlider: true } })] }));
     const cellData = { 0: Object.fromEntries(columns.map((col, c) => [c, cell(col.title, col, true)])) };
-    rows.forEach((row, r) => cellData[r + 1] = Object.fromEntries(columns.map((col, c) => [c, cell(row[col.key], col)])));
+    rows.forEach((row, r) => cellData[r + 1] = Object.fromEntries(columns.map((col, c) => [c, cell(row[col.key], col, false, row)])));
     book = api.createWorkbook({ id: crypto.randomUUID(), name: options.title, sheetOrder: ['data'],
       sheets: { data: { id: 'data', name: 'Dữ liệu', rowCount: Math.max(rows.length + 1, 2), columnCount: columns.length,
         showGridlines: 1, defaultRowHeight: 27, defaultColumnWidth: 120, cellData, columnData: Object.fromEntries(columns.map((col, c) => [c, { w: col.width || 120 }])) } } });
@@ -224,7 +226,7 @@ async function open(options) {
         if (rows.some(row => row.worksheet_revision !== byId.get(row.id).worksheet_revision)) {
           rows = rows.map(row => byId.get(row.id));
           const cellValue = {};
-          rows.forEach((row, r) => cellValue[r + 1] = Object.fromEntries(columns.map((col, c) => [c, cell(row[col.key], col)])));
+          rows.forEach((row, r) => cellValue[r + 1] = Object.fromEntries(columns.map((col, c) => [c, cell(row[col.key], col, false, row)])));
           muting = true;
           api.syncExecuteCommand('sheet.mutation.set-range-values', { unitId: book.getId(), subUnitId: 'data', cellValue });
           muting = false; options.onSaved?.(payload); updateNotice(); setStatus('Đã đồng bộ dữ liệu mới');

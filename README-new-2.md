@@ -1,5 +1,10 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Đối chiếu số liệu và màu cảnh báo 06/09/2026:** bảng Excel tô đỏ cả dòng
+> lỗi/cảnh báo và hết đỏ sau khi sửa hợp lệ. Đã đối chiếu nguồn–API–Excel trên
+> bản sao Railway, sửa tổng lượng nhiều ĐVT và trạng thái tổng file kho.
+> Còn dữ liệu chưa đủ điều kiện chốt; xem **13.21** và báo cáo đối chiếu riêng.
+
 > **Rà soát máy tính 06/09/2026:** phát hiện và sửa lỗi nhập lượng `0,855` trong
 > bảng Excel bị hiểu thành `855`, cùng hướng dẫn in/sao lưu chưa đúng bản web.
 > Phạm vi từng màn và kết quả tại **13.20**; không kết luận “100% không lỗi”.
@@ -906,3 +911,14 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Bộ hồi quy trước các sửa mới đạt **576/576**. Sau sửa, **135/135** bài nhóm chịu ảnh hưởng đạt; không cộng thành số bài độc lập. Năm lượt browser nghiệp vụ đạt sau cập nhật bài lượt 2 theo bảng Excel mới. Browser báo giá, sửa giá/lịch sử và phân bổ thiếu hàng cũng đạt; các lần dừng do kỳ vọng giao diện cũ được giữ trong báo cáo.
 - Source sản phẩm cuối `7afd5b9efd9cef69fa769d5f9452a63896d370c1` đã deploy **SUCCESS**, deployment `12a4a94e-9efa-4333-be61-0621907c9b83`. Browser Railway cuối `inventory-footer-hosted-02` đạt **30 mục/48 ảnh**, gồm 12 màn máy tính, tổng NXT cố định, bảng tổng 21 ĐVT, Excel NXT toàn màn hình và phiếu giao Excel/PDF. Không có JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi. Đã sửa thêm độ tương phản tiêu đề bảng ĐVT sau khi xem ảnh hosted; browser riêng `inventory-footer-browser-03` và hosted cuối đều qua kiểm tra mới này.
 - Bằng chứng dưới `D:\TDP_RAILWAY_PRIVATE\evidence\full-audit-*` và `inventory-footer-*`. Kiểm tra ghi nghiệp vụ dùng DB riêng; trên Railway chặn request ghi ngoài phạm vi xem trước ngay tại giao thức trình duyệt. Snapshot `full-audit-hosted-after` được lấy **sau khi browser cuối kết thúc**; đối chiếu với `full-audit-hosted-before` cho **80/80 bảng nguyên nội dung và schema**, hai DB toàn vẹn `ok` (`full-preservation.json`). Lượt này không làm thay đổi dữ liệu nghiệp vụ production; không dùng kết quả kiểm tra giao diện để tuyên bố khớp toàn bộ kho/thuế hoặc mọi tình huống tương lai đều không lỗi.
+
+### 13.21. Đối chiếu số liệu và tô đỏ toàn dòng trong Excel — 06/09/2026
+
+- Theo yêu cầu chủ dự án: kiểm tra số liệu mọi màn và file, chỉ tập trung máy tính; không kết luận đúng toàn bộ chỉ từ thao tác mở màn. Ma trận nguồn, phép đối chiếu và phần bị chặn: [DOI-CHIEU-SO-LIEU-20260906.md](DOI-CHIEU-SO-LIEU-20260906.md).
+- Bảng Excel đơn tô đỏ toàn dòng có lỗi **hoặc cảnh báo**, cả cột chỉ xem. Phản hồi lưu/đồng bộ xác nhận đã hết vấn đề mới bỏ đỏ. Thử bằng browser màu pixel của cả dòng lỗi và dòng chỉ cảnh báo; sửa lượng hợp lệ hết đỏ, mở/đóng không tự ghi và các tình huống mạng/xung đột đều đạt (`numeric-red-worksheet-03`). NXT và viewer HTML giữ dấu hiệu cảnh báo khi mở Excel.
+- Thẻ tổng lượng NXT thu gọn thành nút xem theo ĐVT. Giữ footer cố định gọn. Phát hiện bốn file kho còn tổng cộng lẫn ĐVT và NXT luôn ghi `KHỚP`; đã tách sheet `Tổng ĐVT`, giữ trạng thái `CẦN KIỂM TRA` khi có mã lỗi. Tiền/đơn giá định dạng nguyên đồng, giữ lượng lẻ và tiền nghiệp vụ gốc.
+- Bộ đối chiếu trên snapshot production riêng `numeric-real-copy-06` đạt **17 nhóm**, nguồn snapshot không đổi. Đối chiếu 233 dòng đơn/NCC/phiếu giao; 266 đầu vào/1.107 dòng và 251 đầu ra/1.163 dòng tháng 8; 334 mã NXT ở hai kỳ cùng bốn file kho; báo cáo tháng, phải thu/phải trả chi tiết và công nợ tổng; báo giá và các sheet chứng từ đủ điều kiện. Không tự ghi mapping, kho, thu/trả hoặc phát hành hóa đơn trên production.
+- Tổng đầu vào tháng 8 **919.234.874 đồng**; tập đầu ra đang lưu **174.950.392 đồng**. NXT giá trị gốc **2.419.360.717,75 đồng**, hiển thị nguyên đồng **2.419.360.718 đồng**. Tổng lịch sử phải trả đầu kỳ **2.327.247.387 đồng** vẫn tồn tại; bộ lọc phát sinh kỳ này 0 dòng không có nghĩa đã hết nợ cũ.
+- Dữ liệu còn mở: **45 dòng đơn lỗi/15 cảnh báo; 1.104 dòng đầu vào cần xử lý; 232 hóa đơn đầu ra cần kiểm tra/18 cần ghép; 4 mã tồn đầu âm; 1.253 mã kho thực tế chưa khai tồn**. Bảy báo giá tháng chưa có phiên bản xác nhận; bảng kê mua thiếu giá/hồ sơ người bán; hồ sơ VAT chưa có phạm vi hóa đơn hợp lệ. Không tự bổ sung số liệu để vượt chặn và không ghi nghiệm thu các phần này.
+- Hồi quy `numeric-regression-01`: **576/576 đạt** trước sửa mới file kho. Sau sửa file kho: xuất kho **6/6**, định giá **6/6**, chốt kỳ **8/8**, chứng từ **22/22** đạt; browser nghiệp vụ hóa đơn/kho `numeric-inventory-browser-01` đạt. Các lần thử bộ đối chiếu trước lượt 06 lưu riêng chẩn đoán/kỳ vọng của công cụ; không xóa kết quả chưa đạt.
+- Trạng thái tại lúc lưu source: đang triển khai qua `origin/main` lên Railway; kết quả hosted và đối chiếu DB sau toàn lượt sẽ được bổ sung sau khi kiểm tra xong.

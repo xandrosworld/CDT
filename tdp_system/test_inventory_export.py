@@ -298,6 +298,30 @@ class InventoryExportTests(unittest.TestCase):
         self.assertNotIn("Q-005", row["A2"].value)
         nxt.close()
 
+    def test_mixed_units_are_separate_and_review_is_not_reported_as_matched(self):
+        self.conn.execute("INSERT INTO products(code,name,unit) VALUES('P-002','Hàng thứ hai','cái')")
+        self.conn.execute("""INSERT INTO inventory_transactions(
+            txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,
+            source_line,status,note,created_at,updated_at)
+            VALUES('2026-08-01','P-002',-3,0,100.5,'OPENING','2026-08','P-002','posted','fixture',?,?)""", (NOW,NOW))
+        model = self._model()
+        for kind in ('opening','input','output','nxt'):
+            payload = inventory_workbook_bytes(model, kind, template_path=OPENING_TEMPLATE)
+            wb = load_workbook(io.BytesIO(payload))
+            self.assertIn('Tổng ĐVT', wb.sheetnames)
+            units = {r[0]: r[1:] for r in wb['Tổng ĐVT'].iter_rows(min_row=2, values_only=True)}
+            self.assertEqual(units, {'cái':(-3,0,0,-3),'kg':(10,5,3,12)})
+            if kind == 'opening':
+                self.assertEqual(wb.active['G4'].value, '2 ĐVT · xem Tổng ĐVT')
+                self.assertEqual(wb.active['I4'].number_format, '#,##0')
+            if kind == 'nxt':
+                last = wb.active.max_row
+                self.assertEqual(wb.active.cell(last,7).value, '2 ĐVT · xem Tổng ĐVT')
+                self.assertEqual(wb.active.cell(last,19).value, 'CẦN KIỂM TRA')
+                self.assertEqual(wb.active['I7'].value, -301.5)
+                self.assertEqual(wb.active['I7'].number_format, '#,##0')
+            wb.close()
+
     def test_archive_and_read_only_routes_return_exactly_four_workbooks(self):
         model = self._model()
         archive = inventory_archive_bytes(model, template_path=OPENING_TEMPLATE)

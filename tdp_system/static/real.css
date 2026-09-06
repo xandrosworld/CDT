@@ -221,6 +221,8 @@ body { min-width: 320px; }
 .inventory-nxt-scroll td:first-child { min-width:0; }
 .inventory-total-button { padding:5px 8px; border:1px solid #b8c8ce; border-radius:5px; background:#fff; color:#145e56; font:inherit; font-weight:700; white-space:nowrap; cursor:pointer; }
 .inventory-total-button:hover { background:#eaf5f2; }
+.inventory-quantity-card { margin:18px 0 12px; }
+.inventory-quantity-card .inventory-total-button { font-size:24px; padding:8px 12px; }
 .inventory-totals-dialog { width:min(850px,90vw); max-height:85vh; padding:0; border:1px solid #b8c8ce; border-radius:10px; color:#172b3a; background:#fff; box-shadow:0 18px 60px #0003; }
 .inventory-totals-dialog::backdrop { background:#132c4566; }
 .inventory-totals-heading { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:18px 22px; border-bottom:1px solid #d1d8dd; }

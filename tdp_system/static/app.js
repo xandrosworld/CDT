@@ -2787,7 +2787,7 @@
       errorPanel,
       '<div class="stats-grid">',
       statCard("Mặt hàng phát sinh", stockQty(items.length), dateVN(state.inventoryFrom) + " → " + dateVN(state.inventoryTo), "▦"),
-      statCard("Tổng lượng tồn cuối", stockQuantitySummary(items, "closing_qty"), "Cộng riêng từng ĐVT · Tồn đầu + Nhập − Xuất", "∑"),
+      '<div class="stat-card"><div class="stat-head"><span class="label">Tổng lượng tồn cuối</span></div><div class="inventory-quantity-card">', compactInventoryQuantity(items, "closing_qty"), '</div><div class="sub">Bấm để xem lượng từng ĐVT · Tồn đầu + Nhập − Xuất</div></div>',
       statCard("Giá trị tồn đầu", stockMoney(totals.opening_value), "Kỳ tồn: " + esc(valuation.opening_period || "chưa có"), "Σ"),
       statCard("Nhập / Xuất", stockMoney(totals.input_value) + " / " + stockMoney(totals.output_value), "Theo sổ vật tư", "⇄"),
       statCard("Giá trị tồn cuối", stockMoney(totals.closing_value), "Tồn đầu + Nhập − Xuất", "✓"),
@@ -6621,13 +6621,14 @@
         ['closing_qty','Tồn cuối',105,1],['closing_value','Giá trị tồn',130,1,1],
         ['average_unit_cost','Giá bình quân',135,1,1],['valuation_status','Đối chiếu',170]];
       window.TDPWorksheet.open({title:'Nhập – xuất – tồn · '+dateVN(state.inventoryFrom)+' → '+dateVN(state.inventoryTo),editable:false,
-        rows:(state.inventoryValuation.items||[]).map(function(row){return Object.assign({},row,{valuation_status:row.valuation_status==='ok'?'Khớp':'Cần kiểm tra'});}),columns:nxtFields.map(function(d){return {key:d[0],title:d[1],width:d[2],numeric:!!d[3],money:!!d[4]};})});
+        rows:(state.inventoryValuation.items||[]).map(function(row){return Object.assign({},row,{worksheet_issue:row.valuation_status!=='ok',valuation_status:row.valuation_status==='ok'?'Khớp':'Cần kiểm tra'});}),columns:nxtFields.map(function(d){return {key:d[0],title:d[1],width:d[2],numeric:!!d[3],money:!!d[4]};})});
       return;
     }
     // Expand merged cells into sheet coordinates, including multi-level headers.
-    var matrix=[], maxColumns=0;
+    var matrix=[], issueRows=[], maxColumns=0;
     Array.from(table.rows).filter(function(row) { return !row.hidden && getComputedStyle(row).display !== 'none'; }).forEach(function(row,r) {
       matrix[r]=matrix[r]||[]; var c=0;
+      issueRows[r]=row.dataset.issue==='1' || !!row.querySelector('.tag-warn,.tag-red,.tag-error,.tag-danger,.field-error,.field-warning') || row.matches('.row-error,.row-warning,.has-error');
       Array.from(row.cells).forEach(function(cell) {
         while(matrix[r][c] !== undefined) c++;
         var input=cell.querySelector('input,select');
@@ -6642,11 +6643,11 @@
       maxColumns=Math.max(maxColumns,c,matrix[r].length);
     });
     if(!matrix.length) return;
-    var headings=matrix.shift();
+    var headings=matrix.shift(); issueRows.shift();
     var title=document.getElementById('pageTitle');
     window.TDPWorksheet.open({ title:((table.caption && table.caption.innerText) || (title && title.innerText) || 'Bảng dữ liệu')+' · phần đang hiển thị', editable:false,
       columns:Array.from({length:maxColumns},function(_,c) { return { key:'c'+c,title:headings[c]||String.fromCharCode(65+c),width:c===1?230:150 }; }),
-      rows:matrix.map(function(row) { var obj={}; row.forEach(function(value,c) { obj['c'+c]=value; }); return obj; }) });
+      rows:matrix.map(function(row,r) { var obj={worksheet_issue:issueRows[r]}; row.forEach(function(value,c) { obj['c'+c]=value; }); return obj; }) });
   }
 
   var sheetEnhanceTimer;

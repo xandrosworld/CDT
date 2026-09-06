@@ -26,6 +26,7 @@ from openpyxl.worksheet.views import Selection
 
 try:
     from invoice_valuation import InvoiceValuationError, moving_average_report
+    from document_totals import quantity_totals
     from template_workbook import (
         TemplateWorkbookError,
         assert_workbook_safe,
@@ -36,6 +37,7 @@ try:
     )
 except ImportError:  # pragma: no cover - package invocation
     from .invoice_valuation import InvoiceValuationError, moving_average_report
+    from .document_totals import quantity_totals
     from .template_workbook import (
         TemplateWorkbookError,
         assert_workbook_safe,
@@ -59,6 +61,35 @@ PALE_GREEN = "E2F0D9"
 PALE_YELLOW = "FFF2CC"
 WHITE = "FFFFFF"
 GRID = Side(style="thin", color="808080")
+
+
+def _quantity_total(model, field):
+    groups = [r for r in quantity_totals(model['items'], field) if abs(r['quantity']) > float(EPSILON)]
+    if not groups:
+        return 0
+    return groups[0]['quantity'] if len(groups) == 1 else f"{len(groups)} ĐVT · xem Tổng ĐVT"
+
+
+def _add_unit_totals(workbook, model):
+    fields = ('opening_qty', 'input_qty', 'output_qty', 'closing_qty')
+    grouped = {field: quantity_totals(model['items'], field) for field in fields}
+    units = sorted({r['unit'] for rows in grouped.values() for r in rows if abs(r['quantity']) > float(EPSILON)})
+    if len(units) < 2:
+        return
+    sheet = workbook.create_sheet('Tổng ĐVT')
+    sheet.append(['ĐVT', 'Tồn đầu', 'Nhập', 'Xuất', 'Tồn cuối'])
+    values = {field: {r['unit']: r['quantity'] for r in rows} for field, rows in grouped.items()}
+    for unit in units:
+        sheet.append([unit, *[values[field].get(unit, 0) for field in fields]])
+    for row in sheet:
+        for cell in row:
+            cell.font = Font(name='Times New Roman', size=11, bold=cell.row == 1)
+            cell.border = Border(bottom=GRID)
+            cell.alignment = Alignment(horizontal='left' if cell.column == 1 else 'right')
+            if cell.column > 1 and cell.row > 1: cell.number_format = '#,##0.######'
+    for col in 'ABCDE': sheet.column_dimensions[col].width = 22
+    sheet.freeze_panes = 'B2'
+    _configure_print(sheet, last_row=sheet.max_row, last_column='E', title_rows='$1:$1')
 
 
 class InventoryExportError(ValueError):
@@ -485,8 +516,11 @@ def build_opening_workbook(
         sheet["A2"].font = Font(name="Times New Roman", size=11, italic=True)
         sheet["A2"].alignment = Alignment(horizontal="center")
         _put(sheet, "F4", "TỔNG")
-        _put(sheet, "G4", model["totals"]["opening_qty"])
+        _put(sheet, "G4", _quantity_total(model, "opening_qty"))
         _put(sheet, "I4", model["totals"]["opening_value"])
+        sheet['G4'].alignment = Alignment(wrap_text=True, vertical='center')
+        sheet.row_dimensions[4].height = 42
+        sheet['I4'].number_format = '#,##0'
         for coordinate in ("F4", "G4", "I4"):
             sheet[coordinate].font = Font(name="Times New Roman", size=12, bold=True)
         _put(sheet, "A5", "MÃ TĐP")
@@ -525,8 +559,8 @@ def build_opening_workbook(
             for column, value in enumerate(values, start=1):
                 _put(sheet, f"{chr(64 + column)}{row}", value)
             sheet[f"G{row}"].number_format = "#,##0.######"
-            sheet[f"H{row}"].number_format = "#,##0.######"
-            sheet[f"I{row}"].number_format = "#,##0.00"
+            sheet[f"H{row}"].number_format = "#,##0"
+            sheet[f"I{row}"].number_format = "#,##0"
         last_row = max(6, 6 + len(rows))
         # The customer TĐK sheet was frozen at I43 and carries four pane
         # selections.  Assigning A7 directly leaves stale/duplicate selections
@@ -537,6 +571,7 @@ def build_opening_workbook(
         sheet.freeze_panes = "A7"
         _configure_print(sheet, last_row=last_row, last_column="I", title_rows="$5:$6")
         _set_core_properties(workbook, model, "Tồn đầu kỳ")
+        _add_unit_totals(workbook, model)
         _add_control_sheet(workbook, model, "opening")
         workbook.active = 0
         assert_workbook_safe(workbook)
@@ -602,8 +637,8 @@ def build_movement_workbook(model: Mapping[str, Any], *, direction: str) -> Any:
             cell.alignment = Alignment(vertical="top", wrap_text=column in {6, 8, 9})
         sheet.cell(row, 2).number_format = "dd/mm/yyyy"
         sheet.cell(row, 11).number_format = "#,##0.######"
-        sheet.cell(row, 12).number_format = "#,##0.######"
-        sheet.cell(row, 13).number_format = "#,##0.00"
+        sheet.cell(row, 12).number_format = "#,##0"
+        sheet.cell(row, 13).number_format = "#,##0"
         if item["movement_label"].startswith("Hoàn tác"):
             for column in range(1, 15):
                 sheet.cell(row, column).fill = PatternFill("solid", fgColor=PALE_YELLOW)
@@ -613,7 +648,9 @@ def build_movement_workbook(model: Mapping[str, Any], *, direction: str) -> Any:
     sheet.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=10)
     quantity_field = "input_qty" if is_input else "output_qty"
     value_field = "input_value" if is_input else "output_value"
-    _put(sheet, f"K{total_row}", model["totals"][quantity_field])
+    _put(sheet, f"K{total_row}", _quantity_total(model, quantity_field))
+    sheet[f'K{total_row}'].alignment = Alignment(wrap_text=True, vertical='center')
+    sheet.row_dimensions[total_row].height = 42
     _put(sheet, f"M{total_row}", model["totals"][value_field])
     for column in range(1, 15):
         cell = sheet.cell(total_row, column)
@@ -621,13 +658,14 @@ def build_movement_workbook(model: Mapping[str, Any], *, direction: str) -> Any:
         cell.fill = PatternFill("solid", fgColor=PALE_GREEN)
         cell.border = Border(left=GRID, right=GRID, top=GRID, bottom=GRID)
     sheet[f"K{total_row}"].number_format = "#,##0.######"
-    sheet[f"M{total_row}"].number_format = "#,##0.00"
+    sheet[f"M{total_row}"].number_format = "#,##0"
     widths = (6, 12, 13, 12, 16, 28, 14, 28, 32, 11, 14, 16, 18, 16)
     for column, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + column)].width = width
     sheet.freeze_panes = "A5"
     sheet.auto_filter.ref = f"A4:N{max(4, total_row - 1)}"
     _configure_print(sheet, last_row=total_row, last_column="N", title_rows="$1:$4")
+    _add_unit_totals(workbook, model)
     _add_control_sheet(workbook, model, direction)
     workbook.active = 0
     assert_workbook_safe(workbook)
@@ -700,9 +738,9 @@ def build_nxt_workbook(model: Mapping[str, Any]) -> Any:
         for column in (7, 10, 13, 16):
             sheet.cell(row, column).number_format = "#,##0.######"
         for column in (8, 11, 14, 17):
-            sheet.cell(row, column).number_format = "#,##0.######"
+            sheet.cell(row, column).number_format = "#,##0"
         for column in (9, 12, 15, 18):
-            sheet.cell(row, column).number_format = "#,##0.00"
+            sheet.cell(row, column).number_format = "#,##0"
         if status != "OK":
             for column in range(1, 20):
                 sheet.cell(row, column).fill = PatternFill("solid", fgColor=PALE_YELLOW)
@@ -715,8 +753,10 @@ def build_nxt_workbook(model: Mapping[str, Any]) -> Any:
         13: "output_qty", 15: "output_value", 16: "closing_qty", 18: "closing_value",
     }
     for column, field in total_columns.items():
-        _put(sheet, f"{chr(64 + column)}{total_row}", model["totals"][field])
-    _put(sheet, f"S{total_row}", "KHỚP")
+        _put(sheet, f"{chr(64 + column)}{total_row}", _quantity_total(model, field) if field.endswith('_qty') else model["totals"][field])
+        sheet.cell(total_row,column).alignment = Alignment(wrap_text=True, vertical='center')
+    sheet.row_dimensions[total_row].height = 42
+    _put(sheet, f"S{total_row}", "CẦN KIỂM TRA" if any(r['valuation_status'] != 'ok' for r in model['items']) else "KHỚP")
     for column in range(1, 20):
         cell = sheet.cell(total_row, column)
         cell.font = Font(name="Times New Roman", size=10, bold=True)
@@ -725,7 +765,7 @@ def build_nxt_workbook(model: Mapping[str, Any]) -> Any:
     for column in (7, 10, 13, 16):
         sheet.cell(total_row, column).number_format = "#,##0.######"
     for column in (9, 12, 15, 18):
-        sheet.cell(total_row, column).number_format = "#,##0.00"
+        sheet.cell(total_row, column).number_format = "#,##0"
     widths = (
         14, 25, 28, 13, 10, 10,
         13, 13, 17, 13, 13, 17, 13, 13, 17, 13, 13, 17, 15,
@@ -736,6 +776,7 @@ def build_nxt_workbook(model: Mapping[str, Any]) -> Any:
     sheet.auto_filter.ref = f"A5:S{max(5, total_row - 1)}"
     _configure_print(sheet, last_row=total_row, last_column="S", title_rows="$1:$5")
     _set_core_properties(workbook, model, "Bảng Nhập – Xuất – Tồn")
+    _add_unit_totals(workbook, model)
     _add_control_sheet(workbook, model, "nxt")
     workbook.active = 0
     assert_workbook_safe(workbook)
