@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Nhập kho theo nhóm — 07/09/2026:** đã triển khai nhãn **Đã đủ mã · Chưa nhập kho**,
+> nút kiểm tra lượng/tiền và nhập nhiều hóa đơn sau một lần xác nhận. Giữ thao tác
+> từng hóa đơn; kiểm tra Railway chỉ xem/hủy, không ghi kho thay khách. Xem **13.35**.
+
 > **Quy đổi bánh đa nem — 07/09/2026:** đã lưu trên Railway đúng mã
 > **M000002**, **1 Tệp = 50 Lá** từ 01/08/2026, không đặt ngày hết hiệu lực.
 > Dòng hóa đơn 5435 thành **450 lá / 370đ**, tiền **166.500đ** giữ nguyên.
@@ -1161,3 +1165,7 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Kiểm thử liên quan **64 bài / 8 nhóm đạt**, thêm **34 bài / 5 nhóm** sau cập nhật kỳ vọng asset. Sáu bài mới kiểm tra xem trước chỉ đọc, tách ĐVT, chọn phần, dấu vết cũ bị chặn, lỗi giữa nhóm rollback, khác tenant/nguồn lỗi, gửi lại và hai người đồng thời. Lượt đầu test đồng thời chưa đóng kết nối SQLite trước dọn thư mục Windows; sửa công cụ và chạy lại đạt.
 - Browser fixture cuối `receipt-bulk-browser-05` đạt toàn luồng hóa đơn/kho, hủy/nhập riêng, nhập nhóm bỏ chọn rồi nhập tiếp phần còn lại và đối chiếu bút toán. Các lượt trước phát hiện cột thao tác chưa tới mép phải, thanh mới chiếm chiều cao và đóng/mở nhanh gặp dialog cũ; đã sửa sản phẩm. Lượt 04 dừng phần thử nhóm do bộ lọc fixture còn ngày 28 trong khi hóa đơn mới ngày 30; sửa đúng bộ lọc, không bỏ kiểm tra phạm vi.
 - Bản sao Railway mới `receipt-bulk-before`: xem trước **230 hóa đơn tháng 8**, 230 đạt kiểm tra nhập, khoảng **0,59 giây**, file nguồn giữ nguyên hash. Đây chỉ là xem trước trên bản sao, chưa ghi kho production. Bằng chứng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/receipt-bulk-*`. Trạng thái deployment và hosted sẽ bổ sung sau kiểm tra.
+
+- Source chức năng **`bda9a51ff69096e3b6f7c32ea42cd753869a8cc3`** deploy **`9028c77d-b4b5-4ba1-9648-99dfba7c4e5e`**, SUCCESS. Browser Railway `receipt-bulk-hosted-01` đạt **43 mục / 60 ảnh**, có bản xem trước 230 hóa đơn/963 dòng; thử chọn/bỏ chọn và hủy, không POST nhập kho. Màn hình, bảng ghép mã, Ctrl+F, các màn máy tính và phiếu giao Excel/PDF đều đạt; không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi.
+- Xem ảnh hosted phát hiện tiêu đề bảng chọn hóa đơn nhạt và cuộn ngang thừa; sửa màu chữ, độ rộng bốn cột và giữ nút xác nhận trong vùng nhìn thấy. Source cuối **`f7a3d94deffa1d32059de4cf462a7dbd2746ffc1`**, deployment **`3af1a6c8-d06d-419d-97ec-ced93d8b120d`**, SUCCESS. Browser bổ sung `receipt-bulk-hosted-02` đạt tại **1920×900, 1440×800, 1280×640, 1024×560**, mở cả chi tiết/lượng, tiêu đề đủ tương phản, bảng không tràn ngang và nút xác nhận hiện đủ. Đã xem ảnh 1024px. Nhóm kiểm tra asset chịu ảnh hưởng chạy lại **10/10 đạt**; không cộng lượt chạy lại thành bài mới.
+- Snapshot `receipt-bulk-after` lấy sau khi browser cuối kết thúc: so `receipt-bulk-before`, **80/80 bảng nguyên nội dung và schema**, hai SQLite toàn vẹn `ok` (`full-preservation.json`). Không nhập kho/thu trả/phát hành hóa đơn trên production trong lượt này. Kiểm thử ghi và rollback chỉ dùng fixture riêng. Google Sheet đã thêm mục **RECEIPT-BULK**, tổng 32 mục; giữ cột khách xác nhận/ý kiến, cập nhật ghi chú mục đầu vào. Hướng dẫn tại `NGHIEM-THU-RAILWAY.md`.
