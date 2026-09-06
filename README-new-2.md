@@ -2,7 +2,7 @@
 
 > **Bổ sung cột Đơn giá — 06/09/2026:** đã thêm giá nguồn giữa Số lượng nguồn
 > và Tiền dòng trong bảng ghép mã, gồm chế độ toàn màn hình và Excel đúng bộ lọc.
-> Kiểm thử đạt; trạng thái triển khai và bằng chứng tại **13.29**.
+> **Đã triển khai và kiểm tra trực tiếp Railway**; bằng chứng tại **13.29**.
 
 > **Sửa diện tích bảng ghép mã — 06/09/2026:** toàn màn hình đã dành phần lớn
 > chiều cao cho bảng, thu gọn hướng dẫn/tổng và giữ cột thao tác ở mép phải.
@@ -1049,5 +1049,7 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Theo ảnh và yêu cầu mới của khách, thêm cột **Đơn giá** ngay giữa **Số lượng nguồn** và **Tiền dòng (chưa thuế)**. Áp dụng bảng đầu vào/đầu ra, chế độ thường và toàn màn hình; giá chỉ xem, lấy `unit_price` của dòng hóa đơn nguồn, không tính ngược từ tiền/lượng hoặc lấy giá đã quy đổi.
 - Hiển thị nguyên đồng như cột tiền; nguồn không có chi tiết giá hiện dấu gạch, giá 0 vẫn hiển thị 0. File **Excel đúng bộ lọc** thêm cùng cột, giữ giá trị gốc và định dạng `#,##0`; không cộng đơn giá ở dòng tổng. Tổng tiền, lượng theo ĐVT, bộ lọc và quy tắc ghi kho giữ nguyên.
 - Điều chỉnh độ rộng chín cột, giữ ô ghép mã/Ghi nhớ cùng hàng và cột thao tác ở mép phải. Trên màn hẹp dùng thanh cuộn ngang.
-- **42/42 bài đạt** trong sáu nhóm chịu ảnh hưởng (`unit-price-tests-01`). Kiểm tra Excel có giá nguồn khác tiền/lượng và có phần lẻ; giữ giá gốc, đúng định dạng và tổng tiền sau khi dịch cột. Browser `unit-price-browser-01` đạt luồng hóa đơn/kho, đối chiếu giá từng dòng đầu vào/đầu ra với API, ô giá chỉ xem và toàn màn hình ở bốn khổ máy tính. Đã xem ảnh 1440px; cú pháp JS và `git diff --check` đạt.
-- Snapshot trước triển khai `unit-price-before` toàn vẹn `ok`. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/unit-price-*`; trạng thái Railway và kiểm tra trực tiếp sẽ bổ sung sau khi có kết quả.
+- **42/42 bài đạt** trong sáu nhóm chịu ảnh hưởng (`unit-price-tests-01`). Kiểm tra Excel có giá nguồn khác tiền/lượng và có phần lẻ; giữ giá gốc, đúng định dạng và tổng tiền sau khi dịch cột. Browser `unit-price-browser-01` đạt luồng hóa đơn/kho, đối chiếu giá từng dòng đầu vào/đầu ra với API, ô giá chỉ xem và toàn màn hình ở bốn khổ máy tính. Đã xem ảnh 1440/1024px; cú pháp JS và `git diff --check` đạt.
+- Source **`9e83d68725c61b9365a811ef8fc52c97a7eb6246`** đã triển khai từ `xandrosworld/CDT/main`, deployment **`55a147be-95c3-48c4-9b1c-53d8d25de949`**, trạng thái **SUCCESS**. Browser Railway `unit-price-hosted-01` đạt **37 mục / 54 ảnh**, đối chiếu giá từng dòng đang lọc với API, kiểm tra bốn khổ máy tính và thao tác mở/đóng bảng; không JavaScript exception, HTTP 5xx hoặc yêu cầu ghi ngoài phạm vi. Đã xem ảnh `mapping-space-1440.png`; dòng Chả lụa hiển thị đơn giá 83.000đ đúng nguồn.
+- Tải Excel trực tiếp từ Railway, đối chiếu **1.107 dòng đầu vào / 1.163 dòng đầu ra** tháng 8: từng đơn giá và tiền dòng khớp API, định dạng tiền và dòng tổng đúng (`unit-price-exports-01/result.json`).
+- Snapshot `unit-price-after` lấy sau khi browser và tải Excel kết thúc; so với `unit-price-before`: **80/80 bảng giữ nguyên nội dung/schema**, hai DB toàn vẹn `ok` (`unit-price-after/full-preservation.json`). Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/unit-price-*`. Khách tải lại trang để thấy cột mới; đây là bổ sung hiển thị, không xác nhận mọi hóa đơn đã đủ điều kiện ghi kho.
