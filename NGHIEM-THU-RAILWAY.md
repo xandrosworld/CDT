@@ -18,7 +18,7 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 | 4. Xem chứng từ | Mở phiếu giao, bảng kê/biên nhận, báo giá, hồ sơ thanh toán. Xem trực tiếp, đổi sheet, cuộn và thu/phóng. | Lượt 4; xuất Excel và PDF phiếu giao thật trên Railway. |
 | 5. Chọn và in nhiều | Lọc bếp/ngày, chọn một hoặc nhiều phiếu, bỏ chọn, xem trước và in. Chỉ những sheet được chọn mới xuất. | Lượt 4; kiểm tra riêng bộ chuyển PDF Linux. |
 | 6. Nội dung phiếu | Đối chiếu đơn vị, thông tin đơn vị mua/bán, địa chỉ, người nhận, chữ ký và tổng tiền làm tròn. | Kiểm thử mẫu chứng từ; PDF A4 và ảnh từng trang. |
-| 7. Hóa đơn đầu vào | Chọn 01–31/08/2026, tải nguồn. Tổng là 266 hóa đơn; ngày đúng kỳ, dòng chưa gán mã được ưu tiên hiển thị. | Nguồn mSMI thật và màn hình Railway đều trả 266; tải lại trên bản sao không trùng. |
+| 7. Hóa đơn đầu vào | Chọn 01–31/08/2026, tải nguồn. Tổng là 266 hóa đơn; ngày đúng kỳ, dòng chưa gán mã được ưu tiên hiển thị. Có thể đối chiếu bảng kê nhập cũ và xác nhận riêng các mã khớp chắc chắn trước khi ghi kho. | Nguồn mSMI thật và màn hình Railway đều trả 266; tải lại trên bản sao không trùng. Luồng đối chiếu file cũ đã thử bằng đúng file tháng 8 trên bản sao DB. |
 | 8. Hóa đơn đầu ra | Dùng tài khoản hiện tại theo lựa chọn của chủ dự án ngày 06/09, chọn đúng kỳ, tải M-Invoice; khi báo còn dữ liệu, tải tiếp. Chỉ xác nhận xuất kho khi hóa đơn đủ điều kiện. | Phân trang, trạng thái và chống trùng đạt trên dữ liệu thử. Tài khoản hiện tại được cho phép sử dụng; hệ thống vẫn hiển thị đúng môi trường nhà cung cấp. |
 | 9. Tồn hóa đơn | Với bộ thử thiếu hàng: phân bổ phần có, giữ phần thiếu cho vòng sau, kiểm tra không âm tồn. | Lượt 1 và các bài kiểm thử kho/phân bổ. |
 | 10. Chốt tháng | Chốt, kiểm tra tồn chuyển kỳ sau; mở lại rồi chốt lại. Không sinh bản chuyển tồn trùng. | Lượt 1; kiểm thử chốt/mở/chốt và khóa kỳ. |
@@ -26,6 +26,17 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 | 12. Phải trả NCC | Kiểm tra bảng 14 cột, xuất file, ghi trả một phần/đủ, hoàn tác; kiểm tra số dư và lịch sử. | Lượt 3; các bài kiểm thử sổ phải trả và phân bổ thanh toán. |
 | 13. Phải thu | Lọc nhà thầu/bếp/tháng, kiểm tra tổng, ghi nhận thu và lịch sử trên bộ thử. | Lượt 3; kiểm thử sổ phải thu và chống ghi trùng. |
 | 14. Lưu và sao lưu | Lưu thay đổi, tải lại trang, kiểm tra trạng thái sao lưu; tải bản sao lưu và kiểm tra khả năng đọc. | Lượt 5; sao lưu SQLite thật trước/sau triển khai đều kiểm tra toàn vẹn đạt. |
+
+## Ghép mã hóa đơn đầu vào tháng 8
+
+1. Vào **Hóa đơn đầu vào + đầu ra**, chọn **Hóa đơn đầu vào**, từ ngày 01/08/2026 đến 31/08/2026.
+2. Mở **Đối chiếu mã từ bảng kê nhập của phần mềm cũ**, chọn file `nhập T8.2026 (1).xlsm`, rồi bấm **Xem trước mã từ file cũ**.
+3. Kiểm tra bảng xem trước. Hệ thống chỉ nhận dòng khớp đồng thời MST, số hóa đơn, tên hàng, số lượng, thành tiền, mã có trong danh mục và cùng đơn vị. Dòng thiếu mã, khác đơn vị hoặc không khớp duy nhất được bỏ qua và nêu số lượng.
+4. Bấm **Xác nhận ghi nhớ các mã khớp chắc chắn**. Màn hình phải nói rõ số dòng trong kỳ và tổng số dòng cùng nguồn ở các kỳ chưa ghi kho sẽ được cập nhật. Bước này chỉ ghép mã, chưa làm tăng tồn.
+5. Bấm **Kiểm tra ghép mã trùng khớp** để xử lý tiếp các tên hàng còn lại khớp duy nhất với danh mục và cùng đơn vị. Xem số ảnh hưởng rồi mới xác nhận.
+6. Các dòng còn lại xử lý trực tiếp từng dòng; dòng khác đơn vị phải khai hệ số quy đổi. Chỉ bấm **Xác nhận nhập cả hóa đơn** sau khi người phụ trách đã kiểm tra đúng mã, lượng và giá trị.
+
+Trên bản sao dữ liệu Railway ban đầu, file cũ đối chiếu trực tiếp được 876 dòng theo 99 quy tắc; các quy tắc áp dụng cho 892 dòng trong tháng 8. Bước khớp tên danh mục tiếp theo xử lý thêm 49 dòng. Kết quả mô phỏng là **941/1.104 dòng đã ghép, 171/264 hóa đơn sẵn sàng, còn 163 dòng thuộc 93 hóa đơn cần xử lý**. Đây là kết quả trên bản sao; production chưa tự ghi các mapping này và chưa ghi kho.
 
 ## Lập hồ sơ thanh toán từ hóa đơn VAT
 
@@ -46,7 +57,7 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 
 ## Bằng chứng và tái kiểm tra
 
-Chi tiết sửa và kết quả mới nhất ở mục **13.15 của README-new-2.md**. Bằng chứng riêng nằm trong `D:\TDP_RAILWAY_PRIVATE\evidence`; không đưa dữ liệu hóa đơn, bản sao DB hoặc thông tin đăng nhập vào Git.
+Chi tiết sửa và kết quả mới nhất ở mục **13.17 của README-new-2.md**. Bằng chứng riêng nằm trong `D:\TDP_RAILWAY_PRIVATE\evidence`; không đưa dữ liệu hóa đơn, bản sao DB hoặc thông tin đăng nhập vào Git.
 
 ```powershell
 python -m tdp_system.qa_railway_acceptance --output THU_MUC_MOI

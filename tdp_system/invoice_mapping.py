@@ -94,6 +94,16 @@ def _mapping_status(source_unit: Any, target_unit: Any) -> str:
     return "confirmed" if source and target and source == target else "unit_review"
 
 
+def mapping_units_match(source_unit: Any, target_unit: Any) -> bool:
+    """Use the same strict unit rule for previews and confirmed mappings."""
+    return _mapping_status(source_unit, target_unit) == "confirmed"
+
+
+def mapping_scope_key(source_code: Any, source_name: Any, source_unit: Any) -> str:
+    """Expose the persisted mapping identity without duplicating its normalization."""
+    return _scope_key(source_code, source_name, source_unit)
+
+
 def _stock_values(qty: Any, amount: Any, factor: float | None) -> tuple[float, float]:
     if factor is None:
         return 0.0, 0.0
@@ -179,6 +189,7 @@ def _matching_line_ids(conn, direction: str, context, scope_key: str) -> list[tu
                       i.invoice_date
                FROM msmi_invoice_items li JOIN msmi_invoices i ON i.id=li.invoice_id
                WHERE i.tenant=? AND i.invoice_type=? AND COALESCE(i.seller_tax_code,'')=?
+                 AND i.sync_status='synced'
                  AND i.receipt_status NOT IN ('posted','blocked') AND li.inventory_eligible=1""",
             (context["tenant"], INPUT_INVOICE, context["partner_key"]),
         ).fetchall()
@@ -189,6 +200,7 @@ def _matching_line_ids(conn, direction: str, context, scope_key: str) -> list[tu
                FROM outgoing_source_invoice_items li
                JOIN outgoing_source_invoices i ON i.id=li.invoice_id
                WHERE i.tenant=? AND i.source=? AND COALESCE(i.buyer_tax_code,'')=?
+                 AND i.sync_status='synced' AND i.source_status_class='issued'
                  AND i.stock_status NOT IN ('posted','reversal_required','reversed') AND li.inventory_eligible=1""",
             (context["tenant"], context["mapping_source"], context["partner_key"]),
         ).fetchall()
@@ -503,6 +515,18 @@ def save_mapping(
             code="not_inventory",
             status=409,
         )
+    if context["parent_sync_status"] != "synced":
+        raise InvoiceMappingError(
+            "Nguồn hóa đơn đang lỗi hoặc đã thay đổi; cần đồng bộ và đối chiếu trước khi ghép mã",
+            code="source_not_safe",
+            status=409,
+        )
+    if safe_direction == "output" and context["source_status_class"] != "issued":
+        raise InvoiceMappingError(
+            "Chỉ hóa đơn đầu ra đã phát hành hợp lệ mới được ghép mã kho",
+            code="source_not_issued",
+            status=409,
+        )
     if context["parent_status"] in {"posted", "reversal_required", "reversed"}:
         raise InvoiceMappingError(
             "Hóa đơn đã ghi kho hoặc đang chờ hoàn tác xuất kho; không được đổi ghép mã",
@@ -609,6 +633,18 @@ def save_conversion(
         raise InvoiceMappingError("Không tìm thấy dòng hóa đơn", code="not_found", status=404)
     if not context["inventory_eligible"]:
         raise InvoiceMappingError("Dòng này không ảnh hưởng kho", code="not_inventory", status=409)
+    if context["parent_sync_status"] != "synced":
+        raise InvoiceMappingError(
+            "Nguồn hóa đơn đang lỗi hoặc đã thay đổi; cần đồng bộ và đối chiếu trước khi quy đổi",
+            code="source_not_safe",
+            status=409,
+        )
+    if safe_direction == "output" and context["source_status_class"] != "issued":
+        raise InvoiceMappingError(
+            "Chỉ hóa đơn đầu ra đã phát hành hợp lệ mới được quy đổi đơn vị kho",
+            code="source_not_issued",
+            status=409,
+        )
     if context["parent_status"] in {"posted", "reversal_required", "reversed"}:
         raise InvoiceMappingError(
             "Hóa đơn đã ghi kho hoặc đang chờ hoàn tác xuất kho; không được đổi quy đổi",

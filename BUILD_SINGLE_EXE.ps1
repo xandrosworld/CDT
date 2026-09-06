@@ -37,6 +37,7 @@ $requiredSourceFiles = @(
   "tdp_system\invoice_workbench.py",
   "tdp_system\invoice_workbench_listing.py",
   "tdp_system\invoice_date_migration.py",
+  "tdp_system\legacy_invoice_mapping.py",
   "tdp_system\physical_inventory.py",
   "tdp_system\document_totals.py",
   "tdp_system\round3_documents.py",
@@ -144,6 +145,7 @@ try {
     --hidden-import invoice_workbench `
     --hidden-import invoice_workbench_listing `
     --hidden-import invoice_date_migration `
+    --hidden-import legacy_invoice_mapping `
     --hidden-import physical_inventory `
     --hidden-import document_totals `
     --hidden-import round3_documents `

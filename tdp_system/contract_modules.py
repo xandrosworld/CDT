@@ -577,6 +577,8 @@ MAPPING_IMPORT_MAX_ROWS = 10_000
 MAPPING_IMPORT_TTL_SECONDS = 30 * 60
 PENDING_MAPPING_IMPORTS = {}
 MAPPING_IMPORT_LOCK = threading.Lock()
+PENDING_LEGACY_INVOICE_MAPPING_IMPORTS = {}
+LEGACY_INVOICE_MAPPING_IMPORT_LOCK = threading.Lock()
 PENDING_CATALOG_IMPORTS = {}
 CATALOG_IMPORT_LOCK = threading.Lock()
 PENDING_KITCHEN_IMPORTS = {}
@@ -4866,6 +4868,101 @@ def unique_product_name_suggestions(conn) -> dict[str, dict]:
     return {key: rows[0] for key, rows in grouped.items() if len(rows) == 1}
 
 
+def safe_input_mapping_suggestion_plan(conn, *, tenant: str, date_from: str, date_to: str) -> dict:
+    """Preview exact-name, same-unit mappings without changing invoice or stock data."""
+    try:
+        from invoice_mapping import mapping_scope_key, mapping_units_match
+        from invoice_workbench import validate_date_range
+    except ImportError:  # pragma: no cover - package invocation
+        from .invoice_mapping import mapping_scope_key, mapping_units_match
+        from .invoice_workbench import validate_date_range
+
+    start, end = validate_date_range(date_from, date_to)
+    safe_tenant = str(tenant or "TDP").strip() or "TDP"
+    suggestions = unique_product_name_suggestions(conn)
+    products = {
+        str(row["code"]): dict(row)
+        for row in conn.execute("SELECT code,name,COALESCE(unit,'') unit FROM products")
+    }
+    rows = conn.execute(
+        """SELECT li.id,li.invoice_id,li.source_item_code,li.source_item_name,li.source_unit,
+                  i.seller_tax_code
+             FROM msmi_invoice_items li
+             JOIN msmi_invoices i ON i.id=li.invoice_id
+            WHERE i.tenant=? AND i.invoice_type='INPUT_ELECTRONIC_INVOICE'
+              AND i.invoice_date>=? AND i.invoice_date<=? AND i.sync_status='synced'
+              AND i.receipt_status NOT IN ('posted','blocked')
+              AND li.inventory_eligible=1 AND li.mapping_status!='mapped'
+            ORDER BY li.id""",
+        (safe_tenant, start, end),
+    ).fetchall()
+
+    representatives = {}
+    safe_line_ids = set()
+    exact_name_unit_review = 0
+    no_unique_name_match = 0
+    for row in rows:
+        suggestion = suggestions.get(mapping_key(row["source_item_name"]))
+        product = products.get(str(suggestion["code"])) if suggestion else None
+        if not product:
+            no_unique_name_match += 1
+            continue
+        if not mapping_units_match(row["source_unit"], product["unit"]):
+            exact_name_unit_review += 1
+            continue
+        scope = mapping_scope_key(row["source_item_code"], row["source_item_name"], row["source_unit"])
+        key = (str(row["seller_tax_code"] or ""), scope)
+        representatives.setdefault(key, {"item_id": int(row["id"]), "product_code": str(product["code"])})
+        safe_line_ids.add(int(row["id"]))
+
+    # save_mapping deliberately remembers one confirmed rule for all still-editable
+    # invoices of the same supplier/source identity. Show that full impact before POST.
+    affected_line_ids = set()
+    if representatives:
+        for row in conn.execute(
+            """SELECT li.id,li.source_item_code,li.source_item_name,li.source_unit,i.seller_tax_code
+                 FROM msmi_invoice_items li
+                 JOIN msmi_invoices i ON i.id=li.invoice_id
+                WHERE i.tenant=? AND i.invoice_type='INPUT_ELECTRONIC_INVOICE'
+                  AND i.sync_status='synced' AND i.receipt_status NOT IN ('posted','blocked')
+                  AND li.inventory_eligible=1 AND li.mapping_status!='mapped'""",
+            (safe_tenant,),
+        ):
+            scope = mapping_scope_key(row["source_item_code"], row["source_item_name"], row["source_unit"])
+            if (str(row["seller_tax_code"] or ""), scope) in representatives:
+                affected_line_ids.add(int(row["id"]))
+
+    remaining_by_invoice = defaultdict(set)
+    for row in rows:
+        remaining_by_invoice[int(row["invoice_id"])].add(int(row["id"]))
+    ready_after = sum(bool(ids) and ids.issubset(safe_line_ids) for ids in remaining_by_invoice.values())
+    snapshot_data = {
+        "tenant": safe_tenant,
+        "date_from": start,
+        "date_to": end,
+        "rules": sorted((partner, scope, item["product_code"]) for (partner, scope), item in representatives.items()),
+        "selected_line_ids": sorted(safe_line_ids),
+        "affected_line_ids": sorted(affected_line_ids),
+    }
+    snapshot = hashlib.sha256(
+        json.dumps(snapshot_data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "tenant": safe_tenant,
+        "date_from": start,
+        "date_to": end,
+        "safe_lines_in_period": len(safe_line_ids),
+        "safe_rules": len(representatives),
+        "invoices_with_safe_lines": len({int(row["invoice_id"]) for row in rows if int(row["id"]) in safe_line_ids}),
+        "invoices_ready_after": ready_after,
+        "affected_lines_all_periods": len(affected_line_ids),
+        "exact_name_needing_unit_review": exact_name_unit_review,
+        "lines_without_unique_name": no_unique_name_match,
+        "snapshot": snapshot,
+        "_representatives": list(representatives.values()),
+    }
+
+
 def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now: str) -> tuple[int, bool]:
     data = normalize_invoice(remote, invoice_type, now)
     existing = conn.execute("SELECT * FROM msmi_invoices WHERE remote_id=?", (data["remote_id"],)).fetchone()
@@ -7247,6 +7344,294 @@ def register_contract_routes(app, ctx):
                 **result,
                 "invoice": invoice_payload(conn, 1, item["invoice_id"])[0],
             })
+
+    @app.get("/api/msmi/suggested-mappings/preview")
+    def api_msmi_safe_suggestions_preview():
+        with db_factory() as conn:
+            try:
+                plan = safe_input_mapping_suggestion_plan(
+                    conn,
+                    tenant=setting_get(conn, "tenant_code", "TDP"),
+                    date_from=request.args.get("from"),
+                    date_to=request.args.get("to"),
+                )
+            except ValueError as error:
+                return jsonify({"ok": False, "error": str(error), "code": "invalid_period"}), 400
+            return jsonify({"ok": True, **{key: value for key, value in plan.items() if not key.startswith("_")}})
+
+    @app.post("/api/msmi/suggested-mappings")
+    def api_msmi_safe_suggestions_apply():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({
+                "ok": False,
+                "error": "Cần xác nhận rõ trước khi ghi nhớ mã hàng khớp chắc chắn",
+                "code": "confirmation_required",
+            }), 400
+        try:
+            from invoice_mapping import InvoiceMappingError, save_mapping
+        except ImportError:  # pragma: no cover - package invocation
+            from .invoice_mapping import InvoiceMappingError, save_mapping
+        with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                plan = safe_input_mapping_suggestion_plan(
+                    conn,
+                    tenant=setting_get(conn, "tenant_code", "TDP"),
+                    date_from=body.get("from"),
+                    date_to=body.get("to"),
+                )
+            except ValueError as error:
+                return jsonify({"ok": False, "error": str(error), "code": "invalid_period"}), 400
+            if not plan["safe_rules"]:
+                return jsonify({
+                    "ok": False,
+                    "error": "Không còn dòng nào khớp duy nhất cả tên hàng và đơn vị trong kỳ đã chọn",
+                    "code": "no_safe_suggestions",
+                }), 400
+            if str(body.get("snapshot") or "") != plan["snapshot"]:
+                return jsonify({
+                    "ok": False,
+                    "error": "Dữ liệu ghép mã đã thay đổi sau lúc kiểm tra; hãy kiểm tra lại trước khi xác nhận",
+                    "code": "stale_suggestion_preview",
+                }), 409
+
+            conn.execute("SAVEPOINT safe_suggestion_bulk")
+            applied_rules = 0
+            applied_lines_all_periods = 0
+            try:
+                for item in plan["_representatives"]:
+                    result = save_mapping(
+                        conn,
+                        direction="input",
+                        item_id=item["item_id"],
+                        product_code=item["product_code"],
+                        now_iso=now_iso,
+                    )
+                    if result["requires_unit_conversion"]:
+                        raise InvoiceMappingError(
+                            "Đơn vị nguồn đã thay đổi; hãy kiểm tra lại trước khi ghép mã hàng loạt",
+                            code="stale_suggestion_preview",
+                            status=409,
+                        )
+                    applied_rules += 1
+                    applied_lines_all_periods += int(result["applied_lines"])
+            except Exception as error:
+                conn.execute("ROLLBACK TO safe_suggestion_bulk")
+                conn.execute("RELEASE safe_suggestion_bulk")
+                status = error.status if isinstance(error, InvoiceMappingError) else 409
+                code = error.code if isinstance(error, InvoiceMappingError) else "bulk_mapping_failed"
+                return jsonify({"ok": False, "error": str(error), "code": code}), status
+            conn.execute("RELEASE safe_suggestion_bulk")
+            status_counts = conn.execute(
+                """SELECT receipt_status,COUNT(*) count FROM msmi_invoices
+                    WHERE tenant=? AND invoice_type='INPUT_ELECTRONIC_INVOICE'
+                      AND invoice_date>=? AND invoice_date<=?
+                    GROUP BY receipt_status""",
+                (plan["tenant"], plan["date_from"], plan["date_to"]),
+            ).fetchall()
+            counts = {str(row["receipt_status"]): int(row["count"]) for row in status_counts}
+            audit(
+                conn, now_iso, "msmi.mapping_suggestions_bulk", "ok",
+                entity_type="invoice_period", entity_id=f'{plan["date_from"]}:{plan["date_to"]}',
+                metadata={
+                    "safe_rules": applied_rules,
+                    "safe_lines_in_period": plan["safe_lines_in_period"],
+                    "applied_lines_all_periods": applied_lines_all_periods,
+                    "ready_invoices_in_period": counts.get("ready", 0),
+                },
+            )
+            return jsonify({
+                "ok": True,
+                "applied_rules": applied_rules,
+                "mapped_lines_in_period": plan["safe_lines_in_period"],
+                "mapped_lines_all_periods": applied_lines_all_periods,
+                "ready_invoices_in_period": counts.get("ready", 0),
+                "pending_invoices_in_period": counts.get("pending_mapping", 0),
+                "stock_changed": False,
+            })
+
+    @app.post("/api/msmi/legacy-mappings/preview")
+    def api_msmi_legacy_mappings_preview():
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return jsonify({"ok": False, "error": "Chưa chọn file bảng kê nhập của phần mềm cũ"}), 400
+        filename = Path(upload.filename).name
+        if Path(filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            return jsonify({"ok": False, "error": "Chỉ nhận file .xlsx hoặc .xlsm"}), 400
+        payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+        if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+            return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                expanded_size = sum(item.file_size for item in entries)
+                if len(entries) > 2_000 or expanded_size > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                    return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn để đọc an toàn"}), 413
+        except zipfile.BadZipFile:
+            return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
+        try:
+            try:
+                from legacy_invoice_mapping import legacy_input_mapping_plan
+            except ImportError:  # pragma: no cover - package invocation
+                from .legacy_invoice_mapping import legacy_input_mapping_plan
+            workbook = load_workbook(
+                io.BytesIO(payload), read_only=True, data_only=True, keep_links=False,
+            )
+            with db_factory() as conn:
+                plan = legacy_input_mapping_plan(
+                    conn,
+                    workbook,
+                    tenant=setting_get(conn, "tenant_code", "TDP"),
+                    date_from=request.form.get("from"),
+                    date_to=request.form.get("to"),
+                )
+        except ValueError as error:
+            return jsonify({"ok": False, "error": str(error), "code": "invalid_legacy_mapping_file"}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Không đọc được bảng kê nhập; hãy kiểm tra lại file"}), 400
+        finally:
+            if "workbook" in locals():
+                workbook.close()
+
+        cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
+        with LEGACY_INVOICE_MAPPING_IMPORT_LOCK:
+            for old_token, item in list(PENDING_LEGACY_INVOICE_MAPPING_IMPORTS.items()):
+                if item["created"] < cutoff:
+                    PENDING_LEGACY_INVOICE_MAPPING_IMPORTS.pop(old_token, None)
+            token = uuid.uuid4().hex
+            PENDING_LEGACY_INVOICE_MAPPING_IMPORTS[token] = {
+                "created": time.time(),
+                "filename": filename,
+                "payload": payload,
+                "date_from": plan["date_from"],
+                "date_to": plan["date_to"],
+                "snapshot": plan["snapshot"],
+            }
+        return jsonify({
+            "ok": True,
+            "token": token,
+            "filename": filename,
+            "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            **{key: value for key, value in plan.items() if not key.startswith("_")},
+        })
+
+    @app.post("/api/msmi/legacy-mappings/confirm")
+    def api_msmi_legacy_mappings_confirm():
+        body = request.get_json(force=True) or {}
+        if body.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi nhớ mã từ bảng kê cũ"}), 400
+        token = clean_text(body.get("token"))
+        with LEGACY_INVOICE_MAPPING_IMPORT_LOCK:
+            pending = PENDING_LEGACY_INVOICE_MAPPING_IMPORTS.pop(token, None)
+        if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
+            return jsonify({"ok": False, "error": "Bản xem trước đã hết hạn; hãy chọn lại file"}), 410
+        try:
+            try:
+                from legacy_invoice_mapping import legacy_input_mapping_plan
+                from invoice_mapping import InvoiceMappingError, save_mapping
+            except ImportError:  # pragma: no cover - package invocation
+                from .legacy_invoice_mapping import legacy_input_mapping_plan
+                from .invoice_mapping import InvoiceMappingError, save_mapping
+            workbook = load_workbook(
+                io.BytesIO(pending["payload"]), read_only=True, data_only=True, keep_links=False,
+            )
+            with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                plan = legacy_input_mapping_plan(
+                    conn,
+                    workbook,
+                    tenant=setting_get(conn, "tenant_code", "TDP"),
+                    date_from=pending["date_from"],
+                    date_to=pending["date_to"],
+                )
+                if plan["snapshot"] != pending["snapshot"]:
+                    raise ValueError(
+                        "Dữ liệu hóa đơn hoặc danh mục đã thay đổi sau lúc xem trước; hãy chọn lại file"
+                    )
+                if not plan["can_confirm"]:
+                    raise ValueError("Không có quy tắc khớp chắc chắn nào để xác nhận")
+                mapped_before_period = conn.execute(
+                    """SELECT COUNT(*) FROM msmi_invoice_items li
+                        JOIN msmi_invoices i ON i.id=li.invoice_id
+                        WHERE i.tenant=? AND i.invoice_type='INPUT_ELECTRONIC_INVOICE'
+                          AND i.invoice_date>=? AND i.invoice_date<=?
+                          AND li.inventory_eligible=1 AND li.mapping_status='mapped'""",
+                    (plan["tenant"], plan["date_from"], plan["date_to"]),
+                ).fetchone()[0]
+                conn.execute("SAVEPOINT legacy_mapping_bulk")
+                applied_rules = 0
+                applied_lines_all_periods = 0
+                try:
+                    for item in plan["_representatives"]:
+                        result = save_mapping(
+                            conn,
+                            direction="input",
+                            item_id=item["item_id"],
+                            product_code=item["product_code"],
+                            now_iso=now_iso,
+                        )
+                        if result["requires_unit_conversion"]:
+                            raise InvoiceMappingError(
+                                "Đơn vị đã thay đổi sau lúc xem trước",
+                                code="stale_legacy_mapping_preview",
+                                status=409,
+                            )
+                        applied_rules += 1
+                        applied_lines_all_periods += int(result["applied_lines"])
+                except Exception:
+                    conn.execute("ROLLBACK TO legacy_mapping_bulk")
+                    conn.execute("RELEASE legacy_mapping_bulk")
+                    raise
+                conn.execute("RELEASE legacy_mapping_bulk")
+                status_counts = conn.execute(
+                    """SELECT receipt_status,COUNT(*) count FROM msmi_invoices
+                        WHERE tenant=? AND invoice_type='INPUT_ELECTRONIC_INVOICE'
+                          AND invoice_date>=? AND invoice_date<=?
+                        GROUP BY receipt_status""",
+                    (plan["tenant"], plan["date_from"], plan["date_to"]),
+                ).fetchall()
+                counts = {str(row["receipt_status"]): int(row["count"]) for row in status_counts}
+                mapped_after_period = conn.execute(
+                    """SELECT COUNT(*) FROM msmi_invoice_items li
+                        JOIN msmi_invoices i ON i.id=li.invoice_id
+                        WHERE i.tenant=? AND i.invoice_type='INPUT_ELECTRONIC_INVOICE'
+                          AND i.invoice_date>=? AND i.invoice_date<=?
+                          AND li.inventory_eligible=1 AND li.mapping_status='mapped'""",
+                    (plan["tenant"], plan["date_from"], plan["date_to"]),
+                ).fetchone()[0]
+                audit(
+                    conn, now_iso, "msmi.legacy_mapping_import", "ok",
+                    entity_type="invoice_period", entity_id=f'{plan["date_from"]}:{plan["date_to"]}',
+                    metadata={
+                        "filename": pending["filename"],
+                        "safe_rules": applied_rules,
+                        "safe_lines_in_period": plan["safe_lines_in_period"],
+                        "applied_lines_all_periods": applied_lines_all_periods,
+                    },
+                )
+        except InvoiceMappingError as error:
+            return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
+        except ValueError as error:
+            return jsonify({"ok": False, "error": str(error), "code": "stale_legacy_mapping_preview"}), 409
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Không thể ghi nhớ mã từ bảng kê cũ; dữ liệu chưa được thay đổi",
+                "code": "legacy_mapping_failed",
+            }), 409
+        finally:
+            if "workbook" in locals():
+                workbook.close()
+        return jsonify({
+            "ok": True,
+            "applied_rules": applied_rules,
+            "mapped_lines_in_period": int(mapped_after_period) - int(mapped_before_period),
+            "mapped_lines_all_periods": applied_lines_all_periods,
+            "ready_invoices_in_period": counts.get("ready", 0),
+            "pending_invoices_in_period": counts.get("pending_mapping", 0),
+            "stock_changed": False,
+        })
 
     @app.post("/api/msmi/invoices/<int:invoice_id>/suggested-mappings")
     def api_msmi_suggested_mappings(invoice_id):
