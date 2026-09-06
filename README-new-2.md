@@ -1,7 +1,7 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
 > **Sửa tìm mã Chả lụa — 06/09/2026:** đã sửa ô ghép mã để tìm tên/mã
-> trong danh mục kể cả khi có nhiều gợi ý; đang triển khai và kiểm tra Railway.
+> trong danh mục kể cả khi có nhiều gợi ý; đã deploy và kiểm tra trên Railway.
 > Bằng chứng và trạng thái mới nhất tại **13.30**.
 
 > **Bổ sung cột Đơn giá — 06/09/2026:** đã thêm giá nguồn giữa Số lượng nguồn
@@ -1070,3 +1070,7 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 
 - Kiểm tra sâu thêm phát hiện hộp gợi ý mặc định trình duyệt không chọn ổn định bằng mũi tên/Enter (`catalog-mapping-browser-02`). Đã thay bằng danh sách gợi ý ngay trong bảng, hỗ trợ click chuột, ↑/↓ rồi Enter để chọn; Enter tiếp hoặc Ghi nhớ mới lưu. Escape đóng gợi ý và giữ toàn màn hình; danh sách tự nằm trong khung máy tính. Không lọc thêm theo cách riêng của hộp gợi ý trình duyệt nên tìm tên không dấu vẫn hiển thị kết quả API.
 - Lượt browser-03 phát hiện cuộn phát sinh khi focus ô làm hủy tìm kiếm đang chờ. Đã chỉ đóng khi danh sách đang hiện; `catalog-mapping-browser-04` chạy lại toàn luồng đạt, gồm chọn bằng phím thật, click chuột thật ở 1440/1024px, tìm không có kết quả và Escape. Đã xem ảnh `catalog-search-1440.png`, `catalog-search-1024.png`. Bộ chín module chạy lại sau thay đổi cuối **67/67 đạt** (`catalog-mapping-tests-04`). Bản đầu `2707680` đã triển khai; đang triển khai bản hoàn thiện danh sách gợi ý trước khi kiểm tra hosted cuối.
+
+- Source cuối **`8d98824e388f91d86ab23c44bef8ccd83fe16b13`**, deployment **`093ea666-cb66-498e-888e-9079d75d3027`** từ `xandrosworld/CDT/main`, trạng thái **SUCCESS**. `/health` báo DB/schema sẵn sàng, toàn vẹn ok. Browser Railway `catalog-mapping-hosted-01` đạt **38 mục / 55 ảnh**; chính dòng Chả lụa có hai gợi ý F000005/F000006 tìm được **F000009 — Chả lụa heo** bằng tên và mã. Đã xem ảnh `cha-lua-catalog-search.png`. Không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi; không tự lưu mapping khi tìm. Phép dò asset trước browser có một lần timeout lúc chuyển deployment; browser cuối và health sau đó đạt.
+- Snapshot `catalog-mapping-after` lấy sau khi browser kết thúc: hai DB toàn vẹn ok, schema giữ nguyên, **73/80 bảng nguyên nội dung**. Có **bảy lượt xác nhận mapping lúc 22:52:39–22:54:24**, trong khoảng người dùng khác có thể thao tác; browser QA chặn ghi tại giao thức và không phát sinh request lưu. Các thay đổi gồm bảy mapping/bảy audit/sáu phiên, áp dụng 44 dòng nguồn, đổi trạng thái tám hóa đơn và bộ đếm ba lần tải. Không đổi lượng/giá/tiền nguồn, đơn, kho, công nợ hoặc lịch sử cũ; hai dòng Chả lụa 82717/82855 giữ nguyên. Giữ các thay đổi vận hành ngoài lượt QA, không phục hồi DB cũ. Bằng chứng `full-preservation.json`, `concurrent-mapping-changes.json` trong thư mục snapshot sau.
+- Khách tải lại trang, mở bảng ghép mã, gõ **Chả lụa** hoặc **F000009**; chọn mã đúng hàng thực tế rồi **Ghi nhớ** hoặc Enter để lưu. Đã cập nhật hướng dẫn. Đây là sửa khả năng tìm/chọn mã, không xác nhận F000009 là lựa chọn nghiệp vụ đúng cho mọi dòng Chả lụa; không thay cấu hình tài khoản M-Invoice.
