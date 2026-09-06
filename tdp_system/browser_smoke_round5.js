@@ -47,6 +47,18 @@ async function main() {
       await call('Emulation.setDeviceMetricsOverride',{width,height:950,deviceScaleFactor:1,mobile:false});
       assert.equal(await ev(`document.documentElement.scrollWidth>innerWidth`),false);
     }
+    // Emulate only the hosted capability in a disposable fixture; verify the desktop web flow.
+    await call('Page.addScriptToEvaluateOnNewDocument',{source:`const originalFetch=window.fetch;window.fetch=async(...args)=>{const response=await originalFetch(...args);if(new URL(String(args[0]),location.href).pathname==='/api/bootstrap'){const data=await response.json();data.hosted=true;return new Response(JSON.stringify(data),{status:response.status,headers:{'Content-Type':'application/json'}});}return response;};`});
+    await call('Page.reload',{ignoreCache:true});
+    await wait(`document.querySelector('#nav [data-view="printing"]') && !document.querySelector('.loading-panel')`);
+    await click('#nav [data-view="printing"]');
+    await wait(`document.querySelector('[data-action="print-selected-documents"]')`);
+    assert.equal(await ev(`!!document.querySelector('[data-action="run-print"],#printSettingsForm')`),false);
+    assert.match(await ev(`document.querySelector('#content').textContent`),/hộp thoại in của trình duyệt/);
+    await click('#nav [data-view="settings"]');
+    assert.match(await ev(`document.querySelector('#content').textContent`),/kể cả khi đã đóng trình duyệt/);
+    assert.doesNotMatch(await ev(`document.querySelector('#content').textContent`),/Máy thứ hai cùng mạng Wi-Fi/);
+    fs.writeFileSync('D:/TDP_ROUND5/hosted-settings-browser.png', Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     assert.deepEqual(errors,[]);
     console.log('Round 5 browser PASS: compact menu, delivery still reachable, legacy calculations absent, backup success/error, mixed receipts warning, no automatic export, 1440/1024.');
   } finally {socket.close();}

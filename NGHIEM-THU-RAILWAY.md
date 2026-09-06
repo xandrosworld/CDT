@@ -37,6 +37,13 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 4. Mở **Sửa nhanh cả bảng** hoặc **Mở bảng Excel · tự lưu**: chọn ô, sửa rồi Enter/Tab; có thể dán nhiều ô. Đợi **Đã lưu**. Sửa giá bán cần người sửa và lý do ở thanh trên.
 5. Mạng lỗi: giữ bảng đang mở, bấm **Thử lưu lại**. Nếu người khác đã sửa cùng dòng, dùng **Đọc lại / đối chiếu** để tải phần chưa lưu rồi mở bản mới nhất. X chỉ đóng sau khi lưu được.
 6. Bảng báo cáo có nút xem toàn màn hình và X quay lại. Đơn hàng và nhập–xuất–tồn lấy toàn bộ dòng trong phạm vi; bảng khác ghi **phần đang hiển thị**, cần chọn bộ lọc/trang ở màn gốc. Ghi kho, thanh toán, duyệt, chốt và in vẫn dùng màn nghiệp vụ.
+7. Số lượng nhận dấu phẩy hoặc dấu chấm thập phân, ví dụ **0,855** hoặc **0.855**. Khi dán nhiều dòng cũng giữ lượng lẻ. Đợi **Đã lưu** rồi đối chiếu lại dòng nếu vừa nhập lượng quan trọng.
+
+## Dùng bản web trên máy tính
+
+- Tại **In giấy tờ**, chọn phiếu rồi bấm **In phần đã chọn**. Chọn máy in và số bản trong hộp thoại của trình duyệt/PDF. Nếu hộp thoại chưa bật, dùng nút máy in trên PDF hoặc tải PDF về máy để in.
+- Dữ liệu nằm trên hệ thống trực tuyến. Đóng trình duyệt không dừng lịch sao lưu của dịch vụ đang chạy. Mở cùng địa chỉ và đăng nhập trên máy tính khác để tiếp tục.
+- Kết quả rà từng màn, lỗi tìm được và giới hạn kiểm chứng được lưu tại [KIEM-TRA-MAY-TINH-20260906.md](KIEM-TRA-MAY-TINH-20260906.md). Các thao tác ghi nghiệp vụ trong đợt rà dùng dữ liệu thử riêng.
 
 ## Ghép mã hóa đơn đầu vào tháng 8
 

@@ -126,17 +126,15 @@ async function main() {
     await evaluate(client, 'document.querySelector(\'[data-action="cancel-quote-import"]\').click()');
     await waitFor(client, '!document.querySelector(".quote-import-preview")', "cancel conflict preview");
     await upload(client, cleanFile);
-    await waitFor(client,
-      'document.querySelector(\'[data-action="confirm-quote-import"]\')', "clean preview");
-    const cleanPreview = await evaluate(client, 'document.querySelector(".quote-import-preview").innerText');
-    assert(cleanPreview.includes("Đủ điều kiện xác nhận"));
-    assert(cleanPreview.includes("TOYOTA · cột Q → TOYOTA"));
-    await evaluate(client, 'document.querySelector(\'[data-action="confirm-quote-import"]\').click()');
+    // A valid later file is applied automatically; conflicts above still block all writes.
     await waitFor(client, 'document.body.innerText.includes("Phiên bản 1 · nhóm TOYOTA")', "confirmed version");
+    if (!await evaluate(client, '!!document.querySelector(".quote-detail-panel")')) {
+      await evaluate(client, 'document.querySelector(\'[data-action="toggle-quote-details"]\').click()');
+    }
+    await evaluate(client, 'document.querySelector(\'[data-action="toggle-quote-history"]\').click()');
 
     const quoteText = await evaluate(client, 'document.getElementById("content").innerText');
-    assert(quoteText.includes("2 dòng xuất"));
-    assert(quoteText.includes("2 dòng X/rỗng đã loại"));
+    assert.deepEqual(await evaluate(client, 'Array.from(document.querySelectorAll(".quote-detail-panel .compact-summary strong")).map(e=>e.textContent)'), ['2','0','2']);
     assert(quoteText.includes("P1"));
     assert(quoteText.includes("0 · giữ để xác nhận"));
     assert(quoteText.includes("P2"));
@@ -181,7 +179,7 @@ async function main() {
       'document.body.innerText.includes("Phiên bản 1 · nhóm ATV") && document.body.innerText.includes("Kính gửi: CÔNG TY CỔ PHẦN SUẤT ĂN CÔNG NGHIỆP ATV")',
       "ATV isolated quotation");
     const atvText = await evaluate(client, 'document.getElementById("content").innerText');
-    assert(atvText.includes("10.000"));
+    assert(atvText.includes("10,000"));
     assert(!atvText.includes("0 · giữ để xác nhận"));
     const atvExportHref = await evaluate(client,
       'document.querySelector(\'a[href^="/api/export/quote/ATV"]\').getAttribute("href")');

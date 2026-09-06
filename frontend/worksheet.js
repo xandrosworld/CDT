@@ -46,7 +46,10 @@ async function open(options) {
     s: { ff: 'Arial', fs: 11, ht: col.numeric ? 3 : 1, vt: 2,
       bd: { b: { s: 1, cl: { rgb: '#dfe5e8' } }, r: { s: 1, cl: { rgb: '#dfe5e8' } } },
       bg: { rgb: header ? '#e9eef0' : col.editable && options.editable ? '#ffffff' : '#f4f6f7' },
-      bl: header ? 1 : 0, ...(col.numeric && !header ? { n: { pattern: col.money || Number.isInteger(value) ? '#,##0' : '#,##0.######' } } : {}) } });
+      // Preserve literal quantity input until our decimal parser runs. The SDK's
+      // English number parser otherwise turns the Vietnamese input 0,855 into 855.
+      bl: header ? 1 : 0, ...(!header ? { n: { pattern: col.editable && options.editable && !col.money ? '@' :
+        col.numeric ? (col.money || Number.isInteger(value) ? '#,##0' : '#,##0.######') : '@' } } : {}) } });
   function valuesFor(row) { return columns.map(col => textValue(row[col.key])); }
   function changed() {
     if (muting || disposed || !options.editable) return;

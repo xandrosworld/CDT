@@ -3038,6 +3038,7 @@
   function renderPrinting() {
     var o = state.operations;
     if (!o) { loadOperations(); return; }
+    var directPrinting = o.printer.supported && !state.data.hosted;
     var listKey = [state.printingDocument,state.printingFrom,state.printingTo,state.printingCustomer].join("|");
     if (state.printingListKey !== listKey || state.printingRows === null) {
       loadPrintingRows();
@@ -3134,7 +3135,8 @@
       '</th><th>Số dòng</th><th>Trạng thái</th><th>Xem</th></tr></thead><tbody>',
       batchRows || '<tr><td colspan="5"><div class="empty">' + esc(state.printingListError || 'Khoảng ngày này chưa có giấy tờ phù hợp.') + '</div></td></tr>',
       '</tbody></table></div></div><div id="printingPreview"></div>',
-      '<details class="operation-details fade-in"><summary>In trực tiếp trọn bộ của ngày đang chọn</summary><div class="operation-details-body">',
+      '<details class="operation-details fade-in"><summary>', directPrinting ? 'In trực tiếp trọn bộ của ngày đang chọn' : 'Cách in trên máy tính và lịch sử in', '</summary><div class="operation-details-body">',
+      directPrinting ? html([
       '<div class="toolbar"><div class="status-bar">Dùng khi muốn gửi thẳng bộ giấy của đơn đang chọn sang máy in</div><div class="compact-controls">',
       '<button class="btn btn-outline" data-action="prepare-print" ', state.batchId ? '' : 'disabled', '>1. Tạo bản xem trước</button>',
       '<button class="btn btn-outline" data-action="approve-print" ', state.batchId ? '' : 'disabled', '>2. Xác nhận bộ giấy</button>',
@@ -3148,7 +3150,8 @@
       '<div class="form-field"><label>Giấy tờ khác</label><select name="other_paper">',
       '<option value="A5" ', (o.printer.other_paper || o.printer.paper) === "A5" ? 'selected' : '', '>A5</option>',
       '<option value="A4" ', (o.printer.other_paper || o.printer.paper) === "A4" ? 'selected' : '', '>A4</option></select></div>',
-      '<button class="btn btn-outline" type="submit">Lưu</button></form></div></div>',
+      '<button class="btn btn-outline" type="submit">Lưu</button></form></div></div>'
+      ]) : '<div class="code-note">Chọn phiếu ở danh sách phía trên rồi bấm <strong>In phần đã chọn</strong>. Bản PDF mở ngay tại màn này; chọn máy in và số bản trong hộp thoại in của trình duyệt. Nếu trình duyệt chưa mở hộp thoại in, dùng nút in trên bản PDF hoặc tải PDF về để in.</div>',
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Lịch sử gửi in</h3><p>Đơn hàng đang chọn</p></div></div>',
       '<div class="table-wrap"><table><thead><tr><th>Giấy tờ</th><th>Khổ</th><th>Trạng thái</th><th>Trang</th><th>Xác nhận lúc</th><th>Gửi in lúc</th><th>Lỗi</th></tr></thead><tbody>',
       rows || '<tr><td colspan="7"><div class="empty">Chưa có lần in nào.</div></td></tr>',
@@ -3174,6 +3177,12 @@
 
   function renderSettings() {
     var d = state.data;
+    var backupLocation = d.hosted
+      ? '<strong>Dữ liệu được lưu trên hệ thống trực tuyến.</strong> Đăng nhập cùng địa chỉ web trên máy tính khác để tiếp tục làm việc.'
+      : '<strong>Dữ liệu lưu tại máy chạy hệ thống.</strong> Máy thứ hai cùng mạng Wi-Fi hoặc mạng nội bộ có thể dùng chung khi máy chính đang mở.';
+    var backupSchedule = d.hosted
+      ? 'Hệ thống tự sao lưu mỗi 30 phút khi dịch vụ đang chạy, kể cả khi đã đóng trình duyệt; giữ bản mới nhất của 14 ngày có sao lưu.'
+      : 'Tự sao lưu mỗi 30 phút khi phần mềm đang mở, giữ bản mới nhất của 14 ngày có sao lưu.';
     var synced = d.master.settings.master_synced_at || "Chưa đồng bộ";
     var m = state.minvoiceStatus;
     var minvoiceTitle = m && m.connected ? "Đã kết nối M-Invoice" : "Kiểm tra kết nối M-Invoice";
@@ -3203,8 +3212,8 @@
       '<div class="form-actions"><button class="btn btn-outline" data-action="sync-master">Đồng bộ lại từ Em Thành.xlsx</button>',
       '<button class="btn btn-primary" data-action="choose-catalog-workbook">Nạp danh mục khách chốt</button></div></div></div>',
       '<div class="card"><div class="card-head"><div><h3>Sao lưu dữ liệu</h3><p>Tải toàn bộ đơn, công nợ và thanh toán về máy</p></div></div>',
-      '<div class="card-body"><div class="code-note"><strong>Dữ liệu lưu tại máy chạy hệ thống.</strong> Máy thứ hai cùng mạng Wi-Fi hoặc mạng nội bộ có thể dùng chung khi máy chính đang mở.</div>',
-      '<p>Tự sao lưu mỗi 30 phút khi phần mềm đang mở, giữ bản mới nhất của 14 ngày có sao lưu. Trước nâng cấp luôn tạo bản sao riêng. Bấm Lưu/Xác nhận để ghi thay đổi; ô đang gõ chưa xác nhận chưa được lưu.</p>',
+      '<div class="card-body"><div class="code-note">', backupLocation, '</div>',
+      '<p>', backupSchedule, ' Trước nâng cấp luôn tạo bản sao riêng. Bấm Lưu/Xác nhận để ghi thay đổi; với bảng Excel, chờ trạng thái Đã lưu. Ô đang gõ chưa xác nhận chưa được lưu.</p>',
       '<div id="automaticBackupStatus" class="code-note" role="status">Đang kiểm tra lần sao lưu gần nhất…</div>',
       '<p>Nên tải thêm một bản sang ổ khác trước khi chuyển máy. Sao lưu trên cùng ổ không bảo vệ được khi ổ đĩa hỏng.</p>',
       '<div class="form-actions"><a class="btn btn-primary" href="/api/backup">Tải bản sao lưu dữ liệu</a></div></div></div></div>',

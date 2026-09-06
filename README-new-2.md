@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Rà soát máy tính 06/09/2026:** phát hiện và sửa lỗi nhập lượng `0,855` trong
+> bảng Excel bị hiểu thành `855`, cùng hướng dẫn in/sao lưu chưa đúng bản web.
+> Phạm vi từng màn và kết quả tại **13.20**; không kết luận “100% không lỗi”.
+
 > **Nhập đơn nhiều lần trong ngày và bảng Excel trên web — 06/09/2026:**
 > đã triển khai và kiểm tra trên Railway. File đầu được lưu nháp
 > dù còn thiếu; file mới hợp lệ cùng ngày/phạm vi cập nhật bản đang dùng, có lịch sử.
@@ -892,3 +896,11 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Đã đổi sang `getRawValues()`, thêm chặn backend nếu giá trị gửi không thay đổi. Browser riêng `worksheet-13` kiểm tra mở/đóng không có yêu cầu lưu và dữ liệu giữ nguyên, rồi chạy lại các tình huống sửa/dán/mất mạng/xung đột đạt. Nhóm backend 21 lượt test đạt. Bộ hosted bổ sung chặn mọi PUT/PATCH/DELETE ngoài ý định trước khi gửi và khẳng định không phát sinh yêu cầu sửa.
 - **Khắc phục dữ liệu:** sau khi bản sửa `bea78ae` chạy SUCCESS tại deployment `db95897a-d8a2-4bba-869a-a842cd4f4739`, đã sao lưu riêng và kiểm tra từng phiên dòng cùng hai mã lần lưu trước khi phục hồi 224 dòng về đúng bản trước QA. Phục hồi giá trị sổ phải trả dòng 64 bằng phiên lịch sử thứ ba; giữ phiên sai thứ hai và thêm audit `qa.worksheet.restore`, không xóa dấu vết. Không thay thế toàn bộ DB hoặc ghi đè thay đổi ngoài phạm vi đã đối chiếu. Script/bằng chứng riêng: `worksheet-restore-script.py`, `worksheet-restore-result.log` dưới evidence.
 - **Kết quả sau khắc phục:** `worksheet-hosted-04` đạt 23 mục/17 ảnh, gồm mở/đóng không gửi yêu cầu sửa, không có JavaScript exception, phiếu giao Excel/PDF, đăng xuất và bố cục 1024/390. Snapshot `worksheet-restored` toàn vẹn; 233 dòng đơn khớp đầy đủ bản trước, tám bảng kiểm tra khớp, giá trị nghiệp vụ sổ phải trả khớp; chỉ giữ thêm lịch sử QA/khắc phục. Đối chiếu mở rộng tại `worksheet-restored/full-preservation.json`. Không dùng kết quả này thay nghiệm thu toàn bộ nghiệp vụ thuế.
+
+### 13.20. Rà từng màn và chức năng trên máy tính — 06/09/2026
+
+- Chủ dự án yêu cầu kiểm tra kỹ toàn bộ màn/chức năng; chỉ tập trung máy tính. Phạm vi, ma trận từng màn và giới hạn: [KIEM-TRA-MAY-TINH-20260906.md](KIEM-TRA-MAY-TINH-20260906.md).
+- Phát hiện bằng browser trên DB thử: nhập `0,855` ở ô số lượng của bảng Excel bị thư viện đọc thành `855`. Đã giữ nguyên chuỗi nhập trước bước đọc thập phân; tiền vẫn giữ định dạng đã chốt. Browser sau sửa kiểm chứng gõ dấu phẩy/dấu chấm và dán nhiều dòng lượng lẻ, cùng mất mạng/thử lại/xung đột hai người/mở đóng không tự ghi; không sửa số lượng production theo phỏng đoán.
+- Sửa bản hosted để không hiện các nút gửi máy in Windows trên máy chủ. Người dùng in từ PDF và hộp thoại trình duyệt của máy tính; lịch sử in vẫn tra cứu được. Hướng dẫn sao lưu nêu đúng dữ liệu trực tuyến và lịch vẫn chạy khi đóng trình duyệt.
+- Bộ hồi quy trước các sửa mới đạt **576/576**. Sau sửa, **135/135** bài nhóm chịu ảnh hưởng đạt; không cộng thành số bài độc lập. Năm lượt browser nghiệp vụ đạt sau cập nhật bài lượt 2 theo bảng Excel mới. Browser báo giá, sửa giá/lịch sử và phân bổ thiếu hàng cũng đạt; các lần dừng do kỳ vọng giao diện cũ được giữ trong báo cáo.
+- Bằng chứng dưới `D:\TDP_RAILWAY_PRIVATE\evidence\full-audit-*`. Kiểm tra ghi nghiệp vụ dùng DB riêng; trên Railway chặn request ghi ngoài phạm vi xem trước ngay tại giao thức trình duyệt, rồi đối chiếu snapshot trước/sau. Chưa dùng kết quả source để xác nhận bản sửa đã triển khai; kết quả hosted cuối lượt bổ sung sau khi chạy xong.

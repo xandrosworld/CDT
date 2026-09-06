@@ -2442,6 +2442,7 @@ def api_minvoice_series():
 def api_bootstrap():
     with db() as conn:
         payload = batch_payload(conn, request.args.get("batch_id", type=int))
+        payload["hosted"] = bool(app.config.get("TDP_CLOUD_ADMIN_USER"))
         payload["batches"] = rows_dict(conn.execute(
             """SELECT b.*,
                       (SELECT COUNT(*) FROM orders o WHERE o.batch_id=b.id) AS line_count,

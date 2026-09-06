@@ -87,7 +87,7 @@ async function main() {
       input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));return true;
     })()`);
     await waitFor(client,
-      'document.querySelector(".quick-sell-price") && document.querySelector(".quick-sell-price").value==="15000" && document.body.innerText.includes("Giá override · v2")',
+      'document.querySelector(".quick-sell-price") && document.querySelector(".quick-sell-price").value==="15000" && document.body.innerText.includes("Giá sửa tay · lần 2")',
       "Enter saves one override");
 
     await setInput(client, "priceOverrideReason", "Bulk button confirmation");
@@ -97,7 +97,7 @@ async function main() {
       document.querySelector('[data-action="save-price-overrides"]').click();return true;
     })()`);
     await waitFor(client,
-      'document.querySelector(".quick-sell-price") && document.querySelector(".quick-sell-price").value==="16000" && document.body.innerText.includes("Giá override · v3")',
+      'document.querySelector(".quick-sell-price") && document.querySelector(".quick-sell-price").value==="16000" && document.body.innerText.includes("Giá sửa tay · lần 3")',
       "bulk button saves changed prices");
     const result = await evaluate(client, `Promise.all([
       fetch('/api/bootstrap').then(r=>r.json()),

@@ -42,9 +42,11 @@ async function main() {
     const sticky=await evaluate(`(()=>{const box=document.querySelector('#orderTable');box.scrollTop=500;box.scrollLeft=200;const th=box.querySelector('th');return {position:getComputedStyle(th).position,top:Math.abs(th.getBoundingClientRect().top-box.getBoundingClientRect().top),horizontal:box.scrollWidth>box.clientWidth};})()`);
     assert.equal(sticky.position,'sticky');assert.ok(sticky.top<4);assert.ok(sticky.horizontal);
     await click('[data-action="bulk-edit-orders"]');
-    assert.equal(await evaluate(`document.querySelector('[data-bulk-field="qty"]').step`),'any');
-    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.bulk-grid th')).color`),'rgb(255, 255, 255)');
-    await click('[data-action="close-modal"]');
+    await wait(`document.querySelector('.tdp-sheet-status')?.textContent.includes('Đã tải')`);
+    await wait(`document.querySelector('canvas[id^="univer-sheet-main"]')?.width>1000`);
+    assert.equal(await evaluate(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.some(row=>row.qty===0.855))`),true);
+    await click('.tdp-sheet-close');
+    await wait(`!document.querySelector('.tdp-sheet-shell')`);
     await click('[data-view="purchases"]');
     await wait(`document.querySelectorAll('.supplier-order-card').length===2`);
     await click('.supplier-lines summary');

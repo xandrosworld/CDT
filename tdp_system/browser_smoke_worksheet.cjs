@@ -11,7 +11,7 @@ const output=process.argv[2];
  const call=(method,params={})=>new Promise((yes,no)=>{const id=++sequence;pending.set(id,[yes,no]);ws.send(JSON.stringify({id,method,params}));setTimeout(()=>{if(pending.delete(id))no(Error('CDP timeout '+method));},25000).unref();});
  const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
  const wait=async expression=>{const until=Date.now()+25000;while(Date.now()<until){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression+' status '+await evaluate("document.querySelector('.tdp-sheet-status')?.textContent"));};
- const click=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+ const click=selector=>wait(`(()=>{const button=document.querySelector(${JSON.stringify(selector)});if(!button)return false;button.click();return true;})()`);
  const screenshot=async name=>fs.writeFileSync(path.join(output,name+'.png'),Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
  const editQty=async value=>{
    const top=await evaluate(`document.querySelector('canvas[id^="univer-sheet-main"]').getBoundingClientRect().top`);
@@ -46,6 +46,12 @@ const output=process.argv[2];
  await new Promise(r=>setTimeout(r,300));
  const beforeRows=await evaluate(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.slice().sort((a,b)=>Number(!!b.errors.length)-Number(!!a.errors.length)||a.id-b.id))`);
  const before=beforeRows[0];
+ await editQty('0,855');
+ await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
+ assert.equal(await evaluate(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty)`),0.855,'Decimal comma quantity must remain fractional');
+ await editQty('0.0056');
+ await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
+ assert.equal(await evaluate(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty)`),0.0056,'Decimal point quantity must remain fractional');
  await editQty('7');
  await wait(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty===7)`);
  await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
@@ -66,13 +72,13 @@ const output=process.argv[2];
  await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
  assert.equal(await evaluate(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty)`),9);
  await call('Browser.grantPermissions',{origin:'http://127.0.0.1:18803',permissions:['clipboardReadWrite','clipboardSanitizedWrite']});
- await call('Runtime.evaluate',{expression:`navigator.clipboard.writeText('11\\n12')`,awaitPromise:true,userGesture:true});
+ await call('Runtime.evaluate',{expression:`navigator.clipboard.writeText('0,625\\n2,5')`,awaitPromise:true,userGesture:true});
  const gridTop=await evaluate(`document.querySelector('canvas[id^="univer-sheet-main"]').getBoundingClientRect().top`);
  await call('Input.dispatchMouseEvent',{type:'mousePressed',x:555,y:gridTop+60,button:'left',clickCount:1});
  await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:555,y:gridTop+60,button:'left',clickCount:1});
  await call('Input.dispatchKeyEvent',{type:'keyDown',key:'v',code:'KeyV',windowsVirtualKeyCode:86,modifiers:2});
  await call('Input.dispatchKeyEvent',{type:'keyUp',key:'v',code:'KeyV',windowsVirtualKeyCode:86,modifiers:2});
- await wait(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty===11 && p.orders.find(r=>r.id===${beforeRows[1].id}).qty===12)`);
+ await wait(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty===0.625 && p.orders.find(r=>r.id===${beforeRows[1].id}).qty===2.5)`);
  await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
  await screenshot('worksheet-saved');
  // Another client writes; idle polling must refresh, then stale local edits must stop.
@@ -91,11 +97,13 @@ const output=process.argv[2];
  fs.writeFileSync(path.join(output,'dom.txt'),await evaluate(`document.querySelector('.tdp-sheet-shell').outerHTML`));
  assert.equal(await evaluate(`document.querySelector('.tdp-sheet-shell').getBoundingClientRect().width`),1440);
  await click('.tdp-sheet-close');await wait(`!document.querySelector('.tdp-sheet-shell')`);
- // Shared table reader and narrower viewports preserve a reachable close button.
+ // Open a different, read-only business table rather than accidentally reopening Orders.
+ await click('#nav [data-view="physical"]');
+ await wait(`document.querySelector('#physicalFilterForm') && document.querySelector('.tdp-open-sheet')`);
  await wait(`document.querySelector('.tdp-open-sheet')`);
  await click('.tdp-open-sheet');
- await wait(`document.querySelector('.tdp-sheet-status')?.textContent.match(/Chỉ xem|Đã tải/)`);
- for (const width of [1024,390]) {
+ await wait(`document.querySelector('.tdp-sheet-status')?.textContent==='Chỉ xem'`);
+ for (const width of [1024,1366]) {
    await call('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
    await new Promise(r=>setTimeout(r,300));
    assert.equal(await evaluate(`document.querySelector('.tdp-sheet-shell').getBoundingClientRect().width`),width);
