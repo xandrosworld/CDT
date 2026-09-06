@@ -1,5 +1,7 @@
 # Rà soát bản web trên máy tính — 06/09/2026
 
+Bổ sung sau lượt rà giao diện: đã kiểm tra số liệu nguồn–màn hình–file, sửa màu đỏ toàn dòng Excel và tổng lượng/định dạng/trạng thái file kho. Kết quả mới và các dữ liệu còn chưa thể chốt tại [DOI-CHIEU-SO-LIEU-20260906.md](DOI-CHIEU-SO-LIEU-20260906.md), README mục 13.21. Kết quả phía dưới giữ phạm vi của lượt 13.20.
+
 Phạm vi theo chỉ đạo mới: máy tính, cửa sổ rộng 1024/1366/1440/1680px. Không triển khai thay đổi điện thoại trong lượt này. Kiểm tra giao diện bằng Chrome; bảng sửa đơn được kiểm tra thêm trên Edge. Các thao tác nhập/sửa, thanh toán, ghi kho và chốt kỳ dùng DB thử riêng. Kiểm tra Railway chỉ xem, tải chứng từ và đối chiếu dữ liệu.
 
 ## Lỗi phát hiện và cách sửa

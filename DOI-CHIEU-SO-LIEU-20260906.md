@@ -48,6 +48,10 @@ Các thao tác ghi/hoàn tác, ghi kho/chuyển kỳ, đối chiếu mẫu và l
 - `numeric-red-worksheet-03`: browser đạt; kiểm tra màu pixel của dòng lỗi và dòng chỉ có cảnh báo, hết đỏ sau xác nhận sửa; gõ/dán lượng lẻ, mạng lỗi, thử lại, xung đột, mở/đóng không tự ghi. Đã xem ảnh trực tiếp.
 - `numeric-inventory-browser-01`: browser nghiệp vụ hóa đơn/kho và tổng cố định đạt.
 - Bộ đối chiếu tái chạy: `python -m tdp_system.qa_numeric_reconciliation --snapshot BAN_SAO.sqlite3 --output THU_MUC_MOI`. Báo cáo ghi riêng phép so đạt và phạm vi bị chặn do dữ liệu. Không dùng HTTP 409/422 như bằng chứng đã xuất được chứng từ.
+- `numeric-real-copy-06`: **17 nhóm đạt**, bao gồm **22 sheet** so nội dung ô/ô gộp giữa bản xem và file tải; source snapshot nguyên vẹn. Các nhóm có phạm vi bị chặn được ghi rõ ở bảng trên.
+- Source `7603431` chạy Railway **SUCCESS** tại deployment `f654a792-05ee-44aa-8339-11641c2f11e3`. Browser `numeric-hosted-01` đạt **31 mục/48 ảnh**, không lỗi JavaScript/HTTP 5xx/yêu cầu ghi ngoài phạm vi. Đã xem ảnh dòng đỏ thật và tổng NXT.
+- `numeric-hosted-exports-01`: bốn file kho tải trực tiếp từ Railway, **11.070 ô / 8 sheet hiển thị** khớp giá trị và định dạng số với kết quả bản sao. Phiếu giao PDF A4 hosted kiểm tra 3 dòng lượng khớp Excel; phiếu ẩn giá, không coi đây là kiểm tra mọi số tiền PDF.
+- `numeric-audit-after/full-preservation.json`: snapshot lấy sau toàn lượt hosted; **80/80 bảng** giữ nguyên nội dung/schema so trước lượt, toàn vẹn hai DB `ok`.
 - Các lượt `numeric-real-copy-01` đến `05` giữ nguyên chẩn đoán: sửa cách bộ kiểm tra đọc thuế dạng 0,08, tên trạng thái phải trả, điều kiện phiên bản giá và lựa chọn bếp. Phép so bản xem so nội dung ô/ô gộp, không so nguyên chuỗi CSS có thể đổi sau vòng lưu XML. Các lần này không phải thay đổi dữ liệu nghiệp vụ.
 
 Bằng chứng chi tiết và file có dữ liệu khách nằm riêng tại `D:\TDP_RAILWAY_PRIVATE\evidence`, không đưa vào Git. Trạng thái triển khai và kết quả đối chiếu production sau lượt kiểm tra được ghi tại README mục 13.21.

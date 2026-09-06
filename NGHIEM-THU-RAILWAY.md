@@ -38,6 +38,11 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 5. Mạng lỗi: giữ bảng đang mở, bấm **Thử lưu lại**. Nếu người khác đã sửa cùng dòng, dùng **Đọc lại / đối chiếu** để tải phần chưa lưu rồi mở bản mới nhất. X chỉ đóng sau khi lưu được.
 6. Bảng báo cáo có nút xem toàn màn hình và X quay lại. Đơn hàng và nhập–xuất–tồn lấy toàn bộ dòng trong phạm vi; bảng khác ghi **phần đang hiển thị**, cần chọn bộ lọc/trang ở màn gốc. Ghi kho, thanh toán, duyệt, chốt và in vẫn dùng màn nghiệp vụ.
 7. Số lượng nhận dấu phẩy hoặc dấu chấm thập phân, ví dụ **0,855** hoặc **0.855**. Khi dán nhiều dòng cũng giữ lượng lẻ. Đợi **Đã lưu** rồi đối chiếu lại dòng nếu vừa nhập lượng quan trọng.
+8. Dòng có lỗi hoặc cảnh báo được **tô đỏ cả dòng**. Bấm **Tới dòng lỗi / cảnh báo** để đến vị trí cần kiểm tra. Sau khi sửa và lưu hợp lệ, dòng tự hết đỏ; nếu còn vấn đề khác thì vẫn đỏ.
+
+Tại **Báo cáo vật tư hàng hóa**, bấm số ĐVT trên thẻ tổng lượng hoặc dòng tổng cố định để xem lượng tách theo đơn vị. File kho có nhiều ĐVT cũng có sheet **Tổng ĐVT**. Ô **CẦN KIỂM TRA** phải được đối chiếu trước khi chốt; không tự thay số âm thành 0.
+
+Kết quả đối chiếu số liệu từng màn/file và phần dữ liệu còn mở ngày 06/09: [DOI-CHIEU-SO-LIEU-20260906.md](DOI-CHIEU-SO-LIEU-20260906.md).
 
 ## Dùng bản web trên máy tính
 
