@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Sửa diện tích bảng ghép mã — 06/09/2026:** toàn màn hình đã dành phần lớn
+> chiều cao cho bảng, thu gọn hướng dẫn/tổng và giữ cột thao tác ở mép phải.
+> Đã deploy, kiểm tra trực tiếp Railway ở bốn khổ máy tính; xem **13.28**.
+
 > **Sửa lỗi khóa ô khi ghép mã — 06/09/2026:** nút toàn màn hình của bảng
 > hóa đơn đã mở đúng bảng ghép mã/quy đổi có thể thao tác, thay cho bản Excel
 > chỉ xem. Đã deploy và kiểm tra trên Railway; xem **13.27**.
@@ -1023,3 +1027,15 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Source **`f93fc3fcd8bb3acf6d78cd698d71518715e8d438`**, deployment **`47985032-1a39-4a04-832c-0e51e80fbeac`** từ `xandrosworld/CDT/main`, trạng thái **SUCCESS**. Browser Railway `mapping-edit-hosted-01` đạt **35 mục / 50 ảnh**, có kiểm tra mở đúng ô ghép mã có thể thao tác, đóng toàn màn hình và tab khả năng xuất đơn 04/09. Đã xem ảnh `invoice-mapping-fullscreen.png`; không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi xem trước.
 - Snapshot `mapping-edit-after` lấy sau browser, so với `mapping-edit-before`: **80/80 bảng nguyên nội dung và schema**, hai DB toàn vẹn `ok` (`full-preservation.json`). Thử lưu mã/quy đổi chỉ chạy trên fixture riêng; production không bị ghi mapping, đổi đơn, ghi kho, thanh toán hoặc phát hành hóa đơn trong lượt này. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/mapping-edit-*`.
 - Khách đóng hộp thoại/bảng cũ, tải lại trang, mở **Ghép mã / Quy đổi · toàn màn hình**, nhập/chọn mã rồi Enter hoặc **Ghi nhớ**. Hướng dẫn đã cập nhật tại `NGHIEM-THU-RAILWAY.md`.
+
+
+### 13.28. Dành diện tích cho bảng ghép mã toàn màn hình — 06/09/2026
+
+- Theo ảnh chủ dự án: chế độ toàn màn hình tại 13.27 giữ được ô sửa nhưng vẫn mang theo tiêu đề, hướng dẫn và tổng quá cao, khiến vùng dữ liệu chỉ thấy khoảng một dòng. Đây là lỗi bố cục phía phần mềm; không phải thiếu quyền hoặc khách mở sai màn.
+- Bảng toàn màn hình phủ hết vùng nội dung trình duyệt, dùng phần chiều cao còn lại cho các dòng hàng. Thanh trên thu gọn; hướng dẫn và ghép từ file cũ mở khi cần. Dòng tổng một hàng, nhiều ĐVT chuyển thành nút xem bảng tổng riêng, tiền không xuống dòng. Giữ tiêu đề, cột nhận diện và cột **Thao tác cả hóa đơn** khi cuộn; nút xác nhận nhập kho nằm ở mép phải. Khổ hẹp có thanh kéo ngang cho các cột giữa.
+- Giữ chính ô nhập mã/quy đổi đang thao tác, Enter/Ghi nhớ và API hiện có. Đóng/mở toàn màn hình giữ ô chưa lưu; lưu mã xong bảng tiếp tục toàn màn hình. Không tự ghi kho khi mở bảng hoặc bấm xem tổng ĐVT; không thay lượng, giá, tiền, quy tắc ghép mã hay khóa nghiệp vụ.
+- Nhóm chịu ảnh hưởng **54/54 bài đạt** trong 7 module (`mapping-space-tests-01`). Browser fixture cuối `mapping-space-browser-04` đạt toàn luồng hóa đơn/kho: mã sai bị chặn, Enter ghép mã, quy đổi, hủy/xác nhận nhập, tra cứu, chống trùng, đầu ra và chốt/mở/chốt lại. Lượt browser-01 dừng vì kiểm tra cũ bắt bảng 1440px phải tràn ngang; đã chuyển kiểm tra thanh kéo sang 1024px và chạy lại toàn luồng. Các lượt 02–04 đạt; không đổi nghiệp vụ để vượt test.
+- Đo trên 266 hóa đơn giả lập/285 dòng ở 1920×900, 1440×800, 1280×640 và 1024×560: bảng chiếm **71–82% chiều cao**, dòng tổng **45,3px**; kiểm tra cuộn đầu/giữa/cuối, ngang và vị trí cột thao tác đều đạt. Bảng tổng ĐVT khớp bộ lọc, Escape đóng bảng tổng rồi vẫn giữ toàn màn hình. Đã xem ảnh 1440/1280/1024; sửa thêm tiêu đề xuống dòng và bố trí ô mã/Ghi nhớ cùng hàng. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/mapping-space-*`.
+- Source **`9c3308057d6b6384cab2846d3e0189cfb1337b1e`** đã deploy từ `xandrosworld/CDT/main`, deployment **`557e3a6f-1255-4fd2-87d8-cd8f9bda9765`**, trạng thái **SUCCESS**. `/health` báo database/schema sẵn sàng, toàn vẹn `ok`. Browser Railway `mapping-space-hosted-01` đạt **36 mục / 54 ảnh**, gồm bốn khổ màn ghép mã với tỷ lệ chiều cao trên, mở ô ghép mã, bảng khả năng xuất đơn 04/09, các màn máy tính và phiếu giao Excel/PDF. Không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi. Đã xem các ảnh `mapping-space-1440.png`, `mapping-space-1280.png`, `mapping-space-1024.png`.
+- Snapshot `mapping-space-after` lấy sau khi browser kết thúc: đối chiếu `mapping-space-before`, hai DB toàn vẹn `ok`, **73/80 bảng nguyên nội dung**, schema giữ nguyên. Có **hai lượt xác nhận mapping lúc 21:56:20 và 21:56:39**, trước browser QA bắt đầu lúc **21:56:49**; thêm hai mapping/hai phiên/hai audit, áp dụng 576 dòng nguồn, cập nhật trạng thái 28 hóa đơn và bộ đếm ba lần tải. Không đổi lượng/tiền nguồn, đơn, kho hoặc công nợ. Đây là thay đổi vận hành ngoài lượt browser chỉ đọc, được giữ nguyên; không phục hồi DB cũ và không tuyên bố cả 80 bảng không đổi. Bằng chứng `mapping-space-after/full-preservation.json`, `concurrent-mapping-changes.json`.
+- Khách tải lại trang, mở **Ghép mã / Quy đổi · toàn màn hình** để nhận bố cục mới. Hướng dẫn thao tác đã cập nhật tại `NGHIEM-THU-RAILWAY.md`; đây là sửa diện tích/thao tác màn hình, không phải kết luận mọi dòng hóa đơn đã đủ điều kiện nhập kho.
