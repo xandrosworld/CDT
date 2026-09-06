@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Tìm mã trong bảng Excel — 07/09/2026:** đã bổ sung Ctrl+F, tìm tiếp/lùi,
+> số ô khớp và cuộn tới ô ngoài vùng nhìn thấy; dùng cả bảng ghép mã hóa đơn.
+> Đã deploy và kiểm tra Railway, dữ liệu 80/80 bảng giữ nguyên; xem **13.33**.
+
 > **Tài khoản M-Invoice chính thức — 07/09/2026:** đã chuyển Railway sang
 > portal MST **0202265016**, tải **89 hóa đơn / 1.953 dòng tháng 8**, tổng
 > **2.157.268.585 đồng**. Giữ 459 bản từ kết nối thử trong lịch sử riêng.
@@ -1125,3 +1129,6 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Browser `search-worksheet-05` đạt tìm/các luồng sửa cũ; lượt 06 bổ sung cột rộng và Ctrl+F lúc gõ lượng đạt các phép kiểm tra nhưng xem ảnh phát hiện ô xa còn khuất. Đã sửa cuộn theo kích thước; lượt 07 đạt và ảnh thấy đúng ô D301. Lượt 01–04 giữ chẩn đoán lỗi controller; không xóa kết quả chưa đạt. Kiểm tra cuối và Railway sẽ ghi sau khi có bằng chứng.
 
 - Lượt cuối `search-worksheet-08` đạt: 300 dòng, mã lặp/quay vòng, Enter/Shift+Enter/F3/nút mũi tên, tên không dấu, mã có số 0 đầu, bảng trống/không tìm thấy, Escape giữ bảng và nhả Ctrl+F sau đóng. Có đo viền chọn bằng pixel để xác nhận ô ở cột xa đã hiện trong vùng nhìn thấy. Chạy tiếp toàn bộ tình huống sửa/dán, lượng lẻ, lưu chậm, mất mạng/thử lại, đồng bộ/xung đột và bảng chỉ xem; không JavaScript exception. Tìm kiếm không sửa dữ liệu không phát sinh PUT. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/search-*`.
+
+- Source **`8ba67d2c4d943b8a22b08e443e75afa35729fc69`** đã deploy từ `xandrosworld/CDT/main`, deployment **`16d22446-a338-4c1d-8252-17f923ed265a`**, trạng thái **SUCCESS**. `/health` báo DB/schema sẵn sàng, toàn vẹn `ok`. Browser `search-hosted-01` đạt **42 mục / 58 ảnh**: Ctrl+F → tìm mã/tên → Escape trên đơn và ghép mã thật, bốn khổ máy tính giữ diện tích bảng, các màn và phiếu giao Excel/PDF. Không JavaScript exception, HTTP 5xx hay yêu cầu ghi ngoài phạm vi. Đã xem ảnh `orders-search.png`, `mapping-search.png` và ảnh cột xa trên fixture.
+- Snapshot `search-after` lấy sau khi browser kết thúc, đối chiếu `search-before`: **80/80 bảng giữ nguyên nội dung và schema**, cả hai SQLite toàn vẹn `ok` (`search-after/full-preservation.json`). Kiểm thử gõ/sửa/lưu dùng DB riêng; Railway chỉ tìm/xem. Khách tải lại trang rồi Ctrl+F, nhập mã/tên và Enter; đây là hoàn thiện tìm kiếm trong bảng, không phải nghiệm thu mọi nghiệp vụ.
