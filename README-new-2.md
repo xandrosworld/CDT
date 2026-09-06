@@ -1,7 +1,7 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
 > **Hồ sơ người bán — 06/09/2026:** khách xác nhận **Đoàn Văn Giang** là
-> hồ sơ đúng trong hai người bị loại trước đây. Đã sửa source để mở lại Giang;
+> hồ sơ đúng trong hai người bị loại trước đây. **Đã mở lại Giang trên Railway**;
 > **Nguyễn Văn Toại vẫn bị loại** khỏi bảng kê/biên nhận mới. Kết quả kiểm tra
 > và trạng thái triển khai tại **13.25**; thay quyết định loại cả hai ở 6.1/10.2.
 
@@ -989,5 +989,6 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Không cần sửa hồ sơ hoặc dữ liệu nghiệp vụ Railway vì hồ sơ Giang hiện tại đã khớp. Không đổi danh mục nguồn, đơn hàng, kho, công nợ hoặc lịch sử. Màn chọn người bán nêu rõ Giang được mở lại, Toại còn bị loại; nạp lại danh mục không đưa Toại trở lại lựa chọn.
 - **105 lượt test đạt** trong 10 nhóm chịu ảnh hưởng (`giang-tests-01`, `giang-tests-02`): gồm 9 bài danh mục/định danh, 29 bài hoàn thiện và 67 bài chứng từ/giao diện liên quan. Bộ 52 hồ sơ nguồn xuất đúng 51 người, chặn Toại; kiểm tra các ô D9–D12 của từng biên nhận, giữ hồ sơ/đơn lịch sử và chặn trùng giữa người bán còn được phép sử dụng.
 - `giang-real-copy-01` dùng kết nối chỉ đọc tới snapshot Railway mới, hồ sơ thật và dòng hàng kiểm thử trong bộ nhớ: xuất riêng Giang, bộ có Giang–Toại chỉ xuất Giang, bộ chỉ Toại bị chặn. Excel giữ số giấy tờ dạng text có số 0 đầu và bốn ô hồ sơ khớp nguồn; snapshot không đổi. Các chứng từ này là mẫu kiểm thử, không dùng thanh toán.
-- Browser `giang-browser-02` đạt luồng chọn/xem bảng kê, có Giang và cảnh báo loại Toại, menu/sao lưu và khổ 1440/1024px; không JavaScript exception. Lượt 03 bổ sung mở đúng biên nhận Giang để chụp nội dung. Bằng chứng nằm dưới `D:\TDP_RAILWAY_PRIVATE\evidence\giang-*`.
-- **Trạng thái:** đã sửa và kiểm tra source; đang triển khai Railway. Chỉ ghi đã mở trên web sau khi kiểm tra bản hosted thành công.
+- Browser `giang-browser-03` đạt luồng chọn/xem bảng kê, mở đúng biên nhận Giang và cảnh báo loại Toại, menu/sao lưu và khổ 1440/1024px; không JavaScript exception. Đã xem ảnh `round5/giang-receipts-browser.png`: tên, địa chỉ, số giấy tờ, ngày/nơi cấp đúng hồ sơ. Lượt 01–02 cũng đạt phạm vi trước khi bổ sung ảnh biên nhận riêng. Bằng chứng nằm dưới `D:\TDP_RAILWAY_PRIVATE\evidence\giang-*`.
+- Source **`868e2c1b12c44d07230ba9e2ed29754b2f47ac97`** đã deploy từ `xandrosworld/CDT/main` tại deployment **`4f4c5ad0-52ba-4c24-b550-570619700c32`**, trạng thái **SUCCESS**. `/health` báo DB/schema sẵn sàng, toàn vẹn `ok`. Browser `giang-hosted-01` đạt **33 mục/49 ảnh**, xác nhận Giang có trong lựa chọn và chỉ Toại bị loại; các màn máy tính, bảng Excel, phiếu giao Excel/PDF và đăng xuất đạt. Không JavaScript exception, HTTP 5xx hoặc yêu cầu ghi ngoài ý định.
+- Snapshot `giang-after` lấy sau khi browser kết thúc, so với `giang-predeploy`: **80/80 bảng giữ nguyên nội dung và schema**, hai DB toàn vẹn `ok` (`giang-after/full-preservation.json`). Dữ liệu đơn khách nhập thêm trước đợt triển khai được giữ nguyên; không thay DB bằng snapshot cũ. **Giang đã được mở lại trên web**, không cần nhập lại hồ sơ. Kiểm tra xuất biên nhận Giang dùng dòng hàng thử và hồ sơ thật trên snapshot; không tạo đơn, công nợ hoặc chứng từ thanh toán thật trên production trong lượt này.
