@@ -50,7 +50,7 @@ async function open(options) {
   function valuesFor(row) { return columns.map(col => textValue(row[col.key])); }
   function changed() {
     if (muting || disposed || !options.editable) return;
-    const matrix = sheet.getRange(1, 0, rows.length, columns.length).getValues();
+    const matrix = sheet.getRange(1, 0, rows.length, columns.length).getRawValues();
     rows.forEach((row, r) => columns.forEach((col, c) => {
       if (!col.editable) return;
       const value = matrix[r]?.[c] ?? '';
@@ -101,7 +101,7 @@ async function open(options) {
         if (response.status >= 500) sent.uncertain = true;
         const payload = await response.json();
         if (!response.ok || !payload.ok) throw new Error(payload.error || 'Không lưu được dữ liệu');
-        const current = sheet.getRange(1, 0, rows.length, columns.length).getValues();
+        const current = sheet.getRange(1, 0, rows.length, columns.length).getRawValues();
         const byId = new Map(payload.orders.map(row => [row.id, row]));
         // Keep edits made while the request was in flight; only acknowledge sent values.
         const newer = new Map();

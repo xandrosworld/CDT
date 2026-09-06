@@ -94,6 +94,8 @@ def register(app, h):
                         elif not isinstance(value, str) or len(value) > 4000:
                             raise EditError('Nội dung ô không hợp lệ hoặc quá dài')
                         current[field] = value
+                    if all(current[field] == raw[field] for field in values):
+                        continue
                     changed_price = float(current['sell_price']) != float(raw['sell_price'])
                     if changed_price and (not actor or len(actor) > 120 or not reason or len(reason) > 500):
                         raise EditError('Điền người sửa giá và lý do ở thanh trên để tự lưu giá bán')
@@ -114,6 +116,8 @@ def register(app, h):
                     if 0 < selected_price < current['buy_price'] and current['invoice_nature'] != '2':
                         resolved['warnings'].append(loss_warning)
                     prepared.append((raw, current, resolved, changed_price))
+                if not prepared:
+                    return jsonify(ok=True, updated=0, **h['batch_payload'](conn, batch_id))
                 timestamp = h['now_iso']()
                 h['clear_batch_derived_inventory'](conn, batch_id)
                 fields = h['ORDER_FIELDS']

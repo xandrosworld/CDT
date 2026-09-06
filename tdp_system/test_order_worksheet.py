@@ -7,6 +7,17 @@ from . import server
 
 
 class WorksheetTests(OrderPriceOverrideTests):
+    def test_unchanged_cell_does_not_revalidate_or_mutate_orders(self):
+        batch, ident = self.create_order()
+        with server.db() as conn:
+            before = dict(conn.execute('SELECT * FROM orders WHERE id=?', (ident,)).fetchone())
+        with patch.object(server, 'resolve_order', side_effect=AssertionError('No edit to resolve')):
+            result = self.send(self.request_for(batch, ident, {'buy_price': before['buy_price']}))
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json['updated'], 0)
+        with server.db() as conn:
+            self.assertEqual(dict(conn.execute('SELECT * FROM orders WHERE id=?', (ident,)).fetchone()), before)
+
     def test_unfinished_zero_price_keeps_error_when_resolver_finds_a_quote(self):
         batch, ident = self.create_order()
         with server.db() as conn:

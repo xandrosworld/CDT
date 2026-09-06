@@ -42,6 +42,8 @@ try {
   await wait('document.querySelector("#nav") && !document.querySelector(".loading-panel")');
   report.checks.push('browser_login_success');
   const boot=await api('/api/bootstrap');assert.equal(boot.status,200);
+  // This hosted smoke is read-only. Block any accidental edit before it reaches production.
+  await evaluate(`window.__qaWrites=[];window.__qaFetch=fetch;window.fetch=(...args)=>{if(['PUT','PATCH','DELETE'].includes(args[1]?.method)){window.__qaWrites.push(String(args[0]));return Promise.resolve(new Response(JSON.stringify({ok:false,error:'Hosted read-only check blocked an edit'}),{status:409,headers:{'Content-Type':'application/json'}}));}return window.__qaFetch(...args);}`);
   for(const [index,view] of ['home','orders','purchases','physical','quotes','reports','debts','documents','inventory','msmi','printing','settings'].entries()){
     await click(`[data-view="${view}"]`);await sleep(1100);await wait('!document.querySelector(".loading-panel")');
     if(view==='msmi')await wait('document.querySelector("#invoice-list-count")');
@@ -105,6 +107,7 @@ try {
   assert.equal((await api('/api/bootstrap')).status,401);
   report.checks.push('logout_blocks_data_again');
   assert.deepEqual(report.errors,[]);
+  assert.deepEqual(await evaluate('window.__qaWrites'),[],'Opening/closing views must not request edits');
   report.ok=true;
 }catch(error){report.ok=false;report.failure=error.message;process.exitCode=1;}
 finally{
