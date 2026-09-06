@@ -45,7 +45,9 @@ Tất cả thư mục sau nằm tại `D:\TDP_RAILWAY_PRIVATE\evidence`, ngoài 
 - `inventory-footer-browser-02`: đạt toàn lượt hóa đơn/kho và tình huống 240 mã/24 ĐVT của footer; `inventory-footer-tests-01`: **45/45** bài kho/xuất file/hợp đồng UI đạt. Không cộng các lần chạy lại thành số bài độc lập.
 - `full-audit-hosted-before`: snapshot trước rà; toàn vẹn SQLite đạt. Lượt hosted ban đầu `full-audit-hosted-01` không có yêu cầu ghi ngoài ý định hay lỗi máy chủ; chưa dùng lượt này để xác nhận bản sửa mới đã triển khai.
 
-Kết quả triển khai và đối chiếu cuối lượt được bổ sung sau khi kiểm tra xong.
+Source sản phẩm cuối lượt `7afd5b9efd9cef69fa769d5f9452a63896d370c1` đã chạy trên Railway tại deployment `12a4a94e-9efa-4333-be61-0621907c9b83`, trạng thái **SUCCESS**. Browser `inventory-footer-hosted-02` đạt **30 mục/48 ảnh**, gồm 12 màn máy tính, ba phần công nợ, xem Excel đơn/NXT, tổng NXT cố định, tổng lượng 21 ĐVT, phiếu giao Excel/PDF và đăng xuất. Không có JavaScript exception, lỗi HTTP 5xx hoặc yêu cầu ghi ngoài phạm vi. Đã xem lại ảnh NXT/chi tiết ĐVT ở các khổ máy tính. Lượt `inventory-footer-hosted-01` phát hiện bằng xem ảnh màu tiêu đề bảng ĐVT bị ảnh hưởng CSS cũ; đã sửa và bổ sung kiểm tra màu/chống cố định nhầm tiêu đề dòng, browser riêng `inventory-footer-browser-03` và hosted cuối đều đạt.
+
+Snapshot **full-audit-hosted-after** được lấy sau khi browser cuối kết thúc. So với **full-audit-hosted-before**, toàn bộ **80 bảng** giữ nguyên nội dung và schema, cả hai bản toàn vẹn SQLite `ok`; bằng chứng `full-audit-hosted-after/full-preservation.json`. Vì vậy các lượt rà và sửa giao diện này không làm thay đổi dữ liệu nghiệp vụ production. Bằng chứng này không bao gồm hay xóa lịch sử sự cố QA worksheet đã được ghi riêng ở README mục 13.19.
 
 ## Điều chưa được chứng minh bằng lượt rà này
 
