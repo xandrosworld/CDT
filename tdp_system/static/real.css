@@ -669,3 +669,7 @@ body { min-width: 320px; }
 .invoice-product-options [role="option"]:hover, .invoice-product-options [aria-selected="true"] { background: #e5f0f4; }
 .invoice-product-hint { padding: 8px 12px; font-size: 12px; line-height: 1.4; }
 @media print { .invoice-product-options { display: none; } }
+
+.invoice-receipt-summary-dialog { width: min(1100px, 96vw); max-width: 96vw; }
+.invoice-receipt-summary-dialog table { min-width: 850px; width: 100%; }
+.invoice-receipt-summary-dialog .num-cell { white-space: nowrap; }

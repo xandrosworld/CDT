@@ -57,6 +57,11 @@ def main():
                 sync_input_batch(conn, DateBoundedMsmi([remote]), batch['id'], now_iso)
                 item = conn.execute("SELECT id FROM msmi_invoice_items WHERE source_item_code='AUTO-3333'").fetchone()
             return {'ok':True, 'item_id':item['id']}
+        @server.app.post("/fixture/promotion")
+        def promotion():
+            from .test_invoice_receipt_summary import seed_promotion
+            with server.db() as conn:
+                return {"ok": True, **seed_promotion(conn, mapped=False)}
         print("ROUND1_SYNTHETIC_READY", flush=True)
         serve(server.app, host="127.0.0.1", port=18801, threads=4)
 

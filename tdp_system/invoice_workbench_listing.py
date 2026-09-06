@@ -1,7 +1,7 @@
 """Read-only, date-scoped invoice rows shared by the screen and its Excel export."""
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 
 try:
@@ -56,6 +56,39 @@ def line_issue(item, invoice, status):
     if item.get("inventory_eligible") and item.get("mapping_status") != "mapped":
         return "Cần quy đổi đơn vị" if item.get("mapping_status") == "unit_review" else "Chưa ghép đúng mã hàng"
     return ""
+
+
+def input_receipt_summary(invoice):
+    """Group saved mappings across the WHOLE invoice, never the visible rows."""
+    groups, pending = {}, 0
+    for item in invoice.get("items", []):
+        if not item.get("inventory_eligible"):
+            continue
+        try:
+            qty = Decimal(str(item.get("stock_qty")))
+            amount = Decimal(str(item.get("amount")))
+            valid = qty.is_finite() and amount.is_finite() and qty > 0 and amount >= 0
+        except (InvalidOperation, TypeError, ValueError):
+            valid = False
+        if not valid or item.get("mapping_status") != "mapped" or not item.get("product_code") or not item.get("product_unit"):
+            pending += 1
+            continue
+        key = (item["product_code"], item["product_unit"])
+        group = groups.setdefault(key, {"product_code": key[0], "product_name": item.get("product_name", ""),
+                                        "unit": key[1], "qty": Decimal(0), "amount": Decimal(0),
+                                        "zero_amount_qty": Decimal(0), "line_count": 0})
+        group["qty"] += qty
+        group["amount"] += amount
+        group["line_count"] += 1
+        if amount == 0:
+            group["zero_amount_qty"] += qty
+    rows = []
+    for key in sorted(groups):
+        group = groups[key]
+        rows.append({**group, "qty": float(group["qty"]), "amount": float(group["amount"]),
+                     "zero_amount_qty": float(group["zero_amount_qty"]),
+                     "average_unit_cost": float(group["amount"] / group["qty"])})
+    return {"items": rows, "pending_lines": pending, "scope": "whole_invoice_saved_mappings"}
 
 
 def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, status="all", line_filter="all"):
@@ -123,6 +156,8 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
                 qty_by_unit[unit] = qty_by_unit.get(unit, Decimal(0)) + Decimal(str(item.get("qty") or 0))
                 line_amount += Decimal(str(item.get("amount") or 0))
         if selected:
+            if direction == "input":
+                invoice["receipt_summary"] = input_receipt_summary(invoice)
             visible_invoices.append(invoice)
             lines.extend(selected)
             invoice_amount += Decimal(str(invoice.get("total_amount") or 0))
@@ -194,6 +229,34 @@ def range_workbook(payload):
         ))
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = width
+    if payload["direction"] == "input":
+        summary = wb.create_sheet("Tong nhap theo ma")
+        summary.append(["TỔNG NHẬP THEO MÃ TRONG TỪNG HÓA ĐƠN · Đủ các dòng đã ghép, không phụ thuộc lọc dòng"])
+        summary.append(["Ngày", "Hóa đơn", "Mã kho", "Tên hàng", "ĐVT", "Tổng lượng nhập",
+                        "Trong đó lượng 0đ", "Tổng tiền chưa thuế", "Giá nhập bình quân", "Lưu ý"])
+        for invoice in payload["items"]:
+            data = invoice.get("receipt_summary") or input_receipt_summary(invoice)
+            note = (f"Còn {data['pending_lines']} dòng chưa đủ mã/quy đổi; tổng chưa đầy đủ. " if data["pending_lines"] else "")
+            note += STATUS_LABELS[invoice["workbench_status"]] + "; giá bình quân riêng hóa đơn, chưa gồm tồn cũ."
+            for row in data["items"] or [{}]:
+                summary.append([invoice["invoice_date"], invoice["invoice_series"] + " / " + invoice["invoice_number"],
+                                row.get("product_code"), row.get("product_name"), row.get("unit"), row.get("qty"),
+                                row.get("zero_amount_qty"), row.get("amount"), row.get("average_unit_cost"), note])
+        for cells in summary:
+            for cell in cells:
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
+                cell.font = Font(name="Arial", size=10, bold=cell.row <= 2)
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+                cell.border = border
+                if cell.column in {6, 7}:
+                    cell.number_format = "#,##0.######"
+                elif cell.column in {8, 9}:
+                    cell.number_format = "#,##0"
+        for col, width in zip("ABCDEFGHIJ", (13, 24, 15, 38, 10, 18, 18, 23, 23, 65)):
+            summary.column_dimensions[col].width = width
+        summary.freeze_panes = "F3"
+        summary.auto_filter.ref = f"A2:J{summary.max_row}"
     repair = payload.get("date_repair") or {}
     if repair.get("blocked_count"):
         review = wb.create_sheet("Ngay can doi chieu")

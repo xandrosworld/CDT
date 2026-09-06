@@ -29,7 +29,7 @@ async function main() {
     const fixture=(await request('/fixture/ids')).body;
     const initial=(await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body;
     const checkPrices=async (direction,payload)=>{
-      assert.equal(await evaluate(`document.querySelector('.invoice-lines-card thead th:nth-child(6)').textContent`),'Đơn giá');
+      assert.equal(await evaluate(`document.querySelector('.invoice-lines-card thead th:nth-child(7)').textContent`),'Đơn giá');
       for(const line of payload.lines) {
         const cell=await evaluate(`(()=>{const cell=document.querySelector('#invoice-line-${direction}-${line.id} .invoice-unit-price');return {text:cell.textContent,editable:!!cell.querySelector('input,select,textarea,[contenteditable=true]'),align:getComputedStyle(cell).textAlign};})()`);
         assert.equal(Number(cell.text.replace(/[^0-9-]/g,'')),Math.sign(line.unit_price)*Math.floor(Math.abs(line.unit_price)+0.5));
@@ -249,6 +249,52 @@ async function main() {
     await wait(`!document.querySelector('[data-action="apply-msmi-safe-suggestions"]').disabled`);
     assert.equal(await evaluate('window.__autoConfirms'),0);
     fs.writeFileSync('D:/TDP_ROUND1/automatic-mapping-browser.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    // Paid and free source rows stay separate; saved mappings produce one receipt total.
+    await evaluate(`window.confirm=()=>true`);
+    await click('[data-view="inventory"]');
+    await wait(`document.querySelector('[data-action="reopen-inventory-month"]')`);
+    await evaluate(`document.getElementById('inventoryCloseActor').value='Người kiểm thử lượt 1'`);
+    await click('[data-action="reopen-inventory-month"]');
+    await wait(`document.querySelector('[data-action="close-inventory-month"]')`);
+    const promoResponse=await request('/fixture/promotion','POST',{});
+    assert.equal(promoResponse.status,200);
+    const promo=promoResponse.body;
+    await click('[data-view="msmi"]');
+    await change('invoiceFrom','2026-08-28');await change('invoiceTo','2026-08-28');
+    await wait(`document.getElementById('map_input_${promo.promotion_lines['QA-OIL-PAID']}')`);
+    await click('.invoice-lines-card .tdp-open-sheet');
+    for(const [code,id] of Object.entries(promo.promotion_lines)) {
+      const product=code.includes('OIL')?'QA-OIL':'QA-CHILI';
+      await evaluate(`document.getElementById('map_input_${id}').value=${JSON.stringify(product)}`);
+      await click(`[data-action="save-invoice-mapping"][data-id="${id}"]`);
+      await wait(`!document.getElementById('map_input_${id}')`);
+    }
+    const promoPayload=(await request('/api/invoice-workbench/invoices?from=2026-08-28&to=2026-08-28')).body;
+    for(const line of promoPayload.lines.filter(r=>r.invoice_id===promo.promotion_invoice)) {
+      const cells=await evaluate(`(()=>{const row=document.getElementById('invoice-line-input-${line.id}');return [row.querySelector('.invoice-source-qty').textContent,row.querySelector('.invoice-source-unit').textContent];})()`);
+      assert.deepEqual(cells,[String(line.qty),'Can']);
+    }
+    await click(`[data-action="view-invoice-receipt-summary"][data-id="${promo.promotion_invoice}"]`);
+    await wait(`document.querySelector('.invoice-receipt-summary-dialog[open]')`);
+    const oilCells=await evaluate(`Array.from(document.querySelectorAll('.invoice-receipt-summary-dialog tbody tr')).find(r=>r.cells[0].textContent.includes('QA-OIL')).textContent`);
+    assert.ok(oilCells.includes('1,288,889'));assert.ok(oilCells.includes('42,963'));
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.invoice-receipt-summary-dialog tbody tr')).find(r=>r.cells[0].textContent.includes('QA-OIL')).cells[2].textContent`),'30');
+    for(const width of [1440,1024]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
+      assert.ok(await evaluate(`document.querySelector('.invoice-receipt-summary-dialog').getBoundingClientRect().right<=innerWidth+1`));
+      fs.writeFileSync('D:/TDP_ROUND1/promotion-summary-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    }
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await wait(`!document.querySelector('.invoice-receipt-summary-dialog')`);
+    assert.ok(await evaluate(`!!document.querySelector('.invoice-mapping-fullscreen-bar')`));
+    await click(`[data-action="create-msmi-receipt"][data-id="${promo.promotion_invoice}"]`);
+    await wait(`document.querySelector('[data-action="view-invoice-stock"][data-id="${promo.promotion_invoice}"]')`);
+    assert.equal((await request(`/api/msmi/invoices/${promo.promotion_invoice}/receipt`,'POST',{})).status,200);
+    const oilStock=(await request('/api/invoice-valuation?from=2026-08-01&to=2026-08-31')).body.items.find(r=>r.product_code==='QA-OIL');
+    assert.equal(oilStock.closing_qty,30);assert.equal(oilStock.closing_value,1288889);
+    assert.ok(Math.abs(oilStock.average_unit_cost-1288889/30)<0.000001);
+    await click('.invoice-mapping-fullscreen-bar button');
     // Many units used to turn the sticky total into a panel covering the rows.
     // Replace only this GET response in the isolated browser, leaving the DB intact.
     await evaluate(`(()=>{const original=window.fetch;window.fetch=async function(input,init){const response=await original(input,init);if(String(input).startsWith('/api/invoice-valuation?')){const data=await response.json();data.items=Array.from({length:240},(_,i)=>({product_code:'LAYOUT-'+i,product_name:'Long inventory item '+i,unit:'unit '+(i%24),opening_qty:1000.855,input_qty:2,output_qty:1,closing_qty:1001.855,opening_value:10000000,input_value:20000,output_value:10000,closing_value:10010000,average_unit_cost:10000,valuation_status:'ok'}));return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});}return response;};})()`);

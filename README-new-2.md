@@ -1,5 +1,7 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Tách ĐVT và tổng hàng khuyến mại — 06/09/2026:** đã sửa source, kiểm thử trên DB riêng; đang triển khai Railway. Xem **13.31**.
+
 > **Sửa tìm mã Chả lụa — 06/09/2026:** đã sửa ô ghép mã để tìm tên/mã
 > trong danh mục kể cả khi có nhiều gợi ý; đã deploy và kiểm tra trên Railway.
 > Bằng chứng và trạng thái mới nhất tại **13.30**.
@@ -1074,3 +1076,12 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Source cuối **`8d98824e388f91d86ab23c44bef8ccd83fe16b13`**, deployment **`093ea666-cb66-498e-888e-9079d75d3027`** từ `xandrosworld/CDT/main`, trạng thái **SUCCESS**. `/health` báo DB/schema sẵn sàng, toàn vẹn ok. Browser Railway `catalog-mapping-hosted-01` đạt **38 mục / 55 ảnh**; chính dòng Chả lụa có hai gợi ý F000005/F000006 tìm được **F000009 — Chả lụa heo** bằng tên và mã. Đã xem ảnh `cha-lua-catalog-search.png`. Không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi; không tự lưu mapping khi tìm. Phép dò asset trước browser có một lần timeout lúc chuyển deployment; browser cuối và health sau đó đạt.
 - Snapshot `catalog-mapping-after` lấy sau khi browser kết thúc: hai DB toàn vẹn ok, schema giữ nguyên, **73/80 bảng nguyên nội dung**. Có **bảy lượt xác nhận mapping lúc 22:52:39–22:54:24**, trong khoảng người dùng khác có thể thao tác; browser QA chặn ghi tại giao thức và không phát sinh request lưu. Các thay đổi gồm bảy mapping/bảy audit/sáu phiên, áp dụng 44 dòng nguồn, đổi trạng thái tám hóa đơn và bộ đếm ba lần tải. Không đổi lượng/giá/tiền nguồn, đơn, kho, công nợ hoặc lịch sử cũ; hai dòng Chả lụa 82717/82855 giữ nguyên. Giữ các thay đổi vận hành ngoài lượt QA, không phục hồi DB cũ. Bằng chứng `full-preservation.json`, `concurrent-mapping-changes.json` trong thư mục snapshot sau.
 - Khách tải lại trang, mở bảng ghép mã, gõ **Chả lụa** hoặc **F000009**; chọn mã đúng hàng thực tế rồi **Ghi nhớ** hoặc Enter để lưu. Đã cập nhật hướng dẫn. Đây là sửa khả năng tìm/chọn mã, không xác nhận F000009 là lựa chọn nghiệp vụ đúng cho mọi dòng Chả lụa; không thay cấu hình tài khoản M-Invoice.
+
+### 13.31. Tách cột ĐVT và xem tổng nhập/giá bình quân theo mã — 06/09/2026
+
+- Theo yêu cầu chủ dự án và ảnh khách: tách **Số lượng nguồn** và **ĐVT** thành hai cột trên bảng hóa đơn đầu vào/đầu ra, kể cả toàn màn hình. Cột **Đơn giá** giữ giá từng dòng hóa đơn nguồn.
+- Thêm **Tổng nhập / Giá bình quân** tại từng hóa đơn đầu vào, mở bảng tổng theo mã kho và ĐVT sau quy đổi. Cộng cả lượng hàng có tiền và hàng 0đ vào cùng mã đã lưu, giữ tổng tiền nguồn; giá bình quân = tổng tiền chưa thuế / tổng lượng. Không làm tròn giá trị nghiệp vụ để tính lại tiền. Đây là bình quân riêng hóa đơn, chưa gồm tồn cũ.
+- Lấy đủ các dòng của hóa đơn dù bộ lọc đang ẩn một phần. Chỉ dùng mapping đã lưu; còn thiếu mã/quy đổi thì báo rõ tổng chưa đầy đủ. Mở bảng chỉ đọc, xác nhận ghi kho vẫn riêng. Excel đúng bộ lọc thêm sheet **Tong nhap theo ma**, cùng nguồn và định dạng tiền nguyên đồng; giữ nguồn từng dòng, không gộp/xóa dòng khuyến mại.
+- **80/80 bài đạt** trong 11 module chịu ảnh hưởng (`promotion-regression-01`). Năm bài mới gồm 24 can mua + 6 can 0đ = **30 can / 1.288.889đ / bình quân 42.962,966667đ**, hiển thị **42.963đ**; tương ớt 86 + 21 = **107 can / 3.264.815đ**; nhập lại không trùng; tồn cũ được tính riêng trong bình quân kho; tổng không mất dòng do lọc; quy đổi và tách ĐVT; API/Excel chỉ đọc. Lượt `promotion-tests-01` có một lỗi công cụ truy vấn cột raw_json không tồn tại ở bảng chi tiết, sửa truy vấn và lượt 02 đạt đủ năm bài.
+- Browser fixture `promotion-browser-01` đạt toàn luồng hóa đơn/kho trước đây và ca mới: ghép bốn dòng bằng ô/nút Ghi nhớ, xem đúng tổng 30 can và 42.963đ, Escape quay lại bảng toàn màn hình, xác nhận nhập rồi gửi lại không trùng, báo cáo kho đúng lượng/giá trị. Đã xem ảnh `promotion-summary-1024.png`; kiểm tra bảng tổng ở 1440/1024px đạt. Chỉ thử ghi trên DB cô lập.
+- Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/promotion-*`. Đang triển khai, sẽ bổ sung source/deployment và kết quả hosted sau kiểm tra. Không tự ghép mã hoặc ghi kho hóa đơn khách trong lượt QA.

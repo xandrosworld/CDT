@@ -58,6 +58,10 @@ Chọn Giang ở dòng cần lập bảng kê, mở **Xem bảng kê và biên n
 
 ## Ghép mã hóa đơn đầu vào tháng 8
 
+**Số lượng nguồn** và **ĐVT** đã tách thành hai cột riêng. **Đơn giá** vẫn là giá trên dòng hóa đơn nguồn.
+
+Với hàng mua và hàng khuyến mại cùng loại, ghép cả hai dòng vào cùng mã kho, đúng ĐVT/quy đổi. Bấm **Tổng nhập / Giá bình quân** tại hóa đơn để xem tổng theo mã: ví dụ 24 can mua + 6 can 0đ = **30 can**, tiền **1.288.889đ**, giá nhập bình quân hiển thị **42.963đ/can**. Bảng tổng lấy đủ dòng đã ghép trong hóa đơn, kể cả dòng bị bộ lọc ẩn; nếu còn thiếu mã/quy đổi sẽ báo tổng chưa đầy đủ. Đây là bình quân riêng hóa đơn; giá bình quân kho còn tính tồn cũ. **Excel đúng bộ lọc** có thêm sheet **Tong nhap theo ma** cùng số liệu. Xem tổng không ghi kho; đóng bảng rồi **Xác nhận nhập cả hóa đơn** khi đã kiểm tra xong.
+
 Ô ghép mã cho phép **tìm tên hoặc mã trong danh mục**, kể cả dòng có nhiều mã gợi ý. Ví dụ gõ **Chả lụa** để xem các mã, hoặc gõ **F000009** để tìm **Chả lụa heo**. Bấm mã trong danh sách, hoặc dùng **↑/↓ rồi Enter** để chọn. Sau đó nhấn **Enter** lần nữa hoặc **Ghi nhớ** để lưu; chỉ tìm/chọn chưa ghi dữ liệu. **Escape** đóng gợi ý và giữ bảng đang mở. Giá giống nhau không tự xác định mã đúng. Nếu chưa thấy kết quả, gõ thêm tên hoặc mã cụ thể.
 
 1. Vào **Hóa đơn đầu vào + đầu ra**, chọn **Hóa đơn đầu vào**, từ ngày 01/08/2026 đến 31/08/2026.
