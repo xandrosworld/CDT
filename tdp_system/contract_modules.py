@@ -7345,6 +7345,45 @@ def register_contract_routes(app, ctx):
                 "invoice": invoice_payload(conn, 1, item["invoice_id"])[0],
             })
 
+    @app.post("/api/msmi/auto-mappings")
+    def api_msmi_auto_mappings():
+        try:
+            from automatic_invoice_mapping import apply_automatic_input_mappings
+            from invoice_workbench import validate_date_range
+        except ImportError:
+            from .automatic_invoice_mapping import apply_automatic_input_mappings
+            from .invoice_workbench import validate_date_range
+        workbook = None
+        try:
+            body = request.form if request.mimetype == "multipart/form-data" else (request.get_json(silent=True) or {})
+            start, end = validate_date_range(body.get("from"), body.get("to"))
+            if request.mimetype == "multipart/form-data":
+                upload = request.files.get("file")
+                if not upload or Path(upload.filename or "").suffix.lower() not in {".xlsx", ".xlsm"}:
+                    return jsonify({"ok": False, "error": "Hãy chọn bảng kê nhập .xlsx hoặc .xlsm"}), 400
+                payload = upload.read(MAPPING_IMPORT_MAX_BYTES + 1)
+                if len(payload) > MAPPING_IMPORT_MAX_BYTES:
+                    return jsonify({"ok": False, "error": "File Excel vượt quá giới hạn 10 MB"}), 413
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    entries = archive.infolist()
+                    if len(entries) > 2000 or sum(item.file_size for item in entries) > MAPPING_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                        return jsonify({"ok": False, "error": "File Excel có cấu trúc quá lớn"}), 413
+                workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True, keep_links=False)
+            with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                result = apply_automatic_input_mappings(
+                    conn, tenant=setting_get(conn, "tenant_code", "TDP"),
+                    date_from=start, date_to=end, now_iso=now_iso, workbook=workbook,
+                )
+            return jsonify({"ok": True, **result})
+        except (ValueError, zipfile.BadZipFile) as error:
+            return jsonify({"ok": False, "error": str(error), "code": "automatic_mapping_invalid"}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Chưa tự ghép được mã; dữ liệu lượt này đã hoàn tác", "code": "automatic_mapping_failed"}), 409
+        finally:
+            if workbook is not None:
+                workbook.close()
+
     @app.get("/api/msmi/suggested-mappings/preview")
     def api_msmi_safe_suggestions_preview():
         with db_factory() as conn:

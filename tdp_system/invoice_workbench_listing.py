@@ -113,7 +113,10 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
             )
             if not visible:
                 continue
-            line = {**item, "invoice_id": invoice["id"], "issue": issue}
+            # Confirmation is a next action, not a validation error/red row.
+            action_rank = 0 if issue else 1 if state == "ready" else 2
+            line = {**item, "invoice_id": invoice["id"], "issue": issue,
+                    "action_rank": action_rank, "needs_confirmation": state == "ready"}
             selected.append(line)
             unit = str(item.get("source_unit") or "Không có ĐVT")
             if item.get("id") is not None:
@@ -124,7 +127,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
             lines.extend(selected)
             invoice_amount += Decimal(str(invoice.get("total_amount") or 0))
     # Stable within the original date/invoice order; ALL troublesome lines first.
-    lines.sort(key=lambda item: (not bool(item["issue"]), item.get("mapping_status") != "unmapped"))
+    lines.sort(key=lambda item: (item["action_rank"], item.get("mapping_status") != "unmapped"))
     return {
         "direction": direction, "source": source, "date_from": start, "date_to": end,
         "status": status, "line_filter": line_filter, "items": visible_invoices,

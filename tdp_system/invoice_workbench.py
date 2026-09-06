@@ -599,6 +599,17 @@ def register_invoice_workbench_routes(app, ctx) -> None:
                     result = sync_input_batch(
                         conn, create_msmi_client(), batch_id, now_iso, **common
                     )
+                    try:
+                        from automatic_invoice_mapping import apply_automatic_input_mappings
+                    except ImportError:
+                        from .automatic_invoice_mapping import apply_automatic_input_mappings
+                    scope = conn.execute("SELECT tenant,date_from,date_to FROM invoice_sync_batches WHERE id=?", (batch_id,)).fetchone()
+                    result["automatic_mapping"] = apply_automatic_input_mappings(
+                        conn, tenant=scope["tenant"], date_from=scope["date_from"],
+                        date_to=scope["date_to"], now_iso=now_iso,
+                    )
+                    updated = conn.execute("SELECT status,needs_mapping_count,ready_count,posted_count,error_count FROM invoice_sync_batches WHERE id=?", (batch_id,)).fetchone()
+                    result.update(dict(updated))
                 else:
                     if batch["source"] != "minvoice" or create_minvoice_client is None:
                         raise InvoiceWorkbenchError("Connector M-Invoice đầu ra chưa được cấu hình")

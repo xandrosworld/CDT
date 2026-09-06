@@ -749,7 +749,8 @@
         await Promise.all([loadOperations(true), loadInvoiceWorkbench(true)]);
         render();
         showToast("Đầu vào: " + synced.new_invoices + " hóa đơn mới, " + synced.known_invoices +
-          " hóa đơn đã có" + (synced.more_history ? " · bấm tiếp để tải phần còn lại" : ""));
+          " hóa đơn đã có · tự ghép " + ((synced.automatic_mapping || {}).mapped_lines_in_period || 0) +
+          " dòng trùng khớp" + (synced.more_history ? " · bấm tiếp để tải phần còn lại" : ""));
       } else {
         await loadInvoiceWorkbench(true);
         render();
@@ -6291,117 +6292,36 @@
       }
       return;
     }
-    if (action === "preview-msmi-legacy-mappings") {
-      var legacyFileInput = document.getElementById("legacyInvoiceMappingFile");
-      if (!legacyFileInput || !legacyFileInput.files || !legacyFileInput.files[0]) {
-        showToast("Hãy chọn file bảng kê nhập .xlsx hoặc .xlsm của phần mềm cũ", true);
-        return;
+    if (action === "preview-msmi-legacy-mappings" || action === "apply-msmi-safe-suggestions") {
+      var autoFrom = state.invoiceFrom, autoTo = state.invoiceTo;
+      var autoOptions = {method: "POST"};
+      if (action === "preview-msmi-legacy-mappings") {
+        var autoFile = document.getElementById("legacyInvoiceMappingFile");
+        if (!autoFile?.files?.[0]) { showToast("Hãy chọn bảng kê nhập .xlsx hoặc .xlsm", true); return; }
+        var autoForm = new FormData();
+        autoForm.append("file", autoFile.files[0]);
+        autoForm.append("from", autoFrom);
+        autoForm.append("to", autoTo);
+        autoOptions.body = autoForm;
+      } else {
+        autoOptions.headers = {"Content-Type": "application/json"};
+        autoOptions.body = JSON.stringify({from: autoFrom, to: autoTo});
       }
-      var legacyForm = new FormData();
-      legacyForm.append("file", legacyFileInput.files[0]);
-      legacyForm.append("from", state.invoiceFrom);
-      legacyForm.append("to", state.invoiceTo);
+      var autoLabel = button.textContent;
       try {
         button.disabled = true;
-        button.textContent = "Đang đối chiếu…";
-        state.legacyInvoiceMappingPreview = await api("/api/msmi/legacy-mappings/preview", {
-          method: "POST",
-          body: legacyForm
-        });
-        render();
-        showToast(
-          "Đã đối chiếu: " + state.legacyInvoiceMappingPreview.safe_lines_in_period +
-          " dòng đủ điều kiện · chưa ghi mã, chưa ghi kho"
-        );
-      } catch (error) {
-        showToast(error.message, true);
-        button.disabled = false;
-        button.textContent = "Xem trước mã từ file cũ";
-      }
-      return;
-    }
-    if (action === "confirm-msmi-legacy-mappings") {
-      var legacyPreview = state.legacyInvoiceMappingPreview;
-      if (!legacyPreview) return;
-      var legacyImpact = "Xác nhận " + legacyPreview.safe_rules + " quy tắc đã đối chiếu trực tiếp từ " + legacyPreview.safe_lines_in_period + " dòng? ";
-      legacyImpact += "Các quy tắc sẽ cập nhật " + legacyPreview.affected_lines_in_period + " dòng cùng nguồn trong kỳ và " + legacyPreview.affected_lines_all_periods + " dòng ở mọi kỳ chưa ghi kho. Thao tác này chưa ghi kho.";
-      if (!window.confirm(legacyImpact)) return;
-      try {
-        button.disabled = true;
-        var legacyResult = await api("/api/msmi/legacy-mappings/confirm", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({token: legacyPreview.token, confirmed: true})
-        });
+        button.textContent = "Đang tự ghép mã…";
+        var autoResult = await api("/api/msmi/auto-mappings", autoOptions);
         state.legacyInvoiceMappingPreview = null;
         await loadInvoiceWorkbench(true);
         render();
-        showToast(
-          "Đã ghép " + legacyResult.mapped_lines_in_period + " dòng từ bảng kê cũ · " +
-          legacyResult.ready_invoices_in_period + " hóa đơn sẵn sàng. Chưa ghi kho."
-        );
+        showToast("Đã tự ghép " + autoResult.mapped_lines_in_period + " dòng trong kỳ " + dateVN(autoFrom) + " → " + dateVN(autoTo) + ". Dòng còn cần xử lý nằm trên cùng; " + autoResult.ready_invoices_in_period + " hóa đơn đủ mã, chờ nhập kho.");
       } catch (error) {
         showToast(error.message, true);
         button.disabled = false;
+        button.textContent = autoLabel;
       }
       return;
-    }
-    if (action === "cancel-msmi-legacy-mappings") {
-      state.legacyInvoiceMappingPreview = null;
-      render();
-      return;
-    }
-    if (action === "apply-msmi-safe-suggestions") {
-      var safeSuggestionFrom = state.invoiceFrom;
-      var safeSuggestionTo = state.invoiceTo;
-      try {
-        button.disabled = true;
-        button.textContent = "Đang kiểm tra…";
-        var safePreview = await api(
-          "/api/msmi/suggested-mappings/preview?from=" + encodeURIComponent(safeSuggestionFrom) +
-          "&to=" + encodeURIComponent(safeSuggestionTo)
-        );
-        if (!safePreview.safe_lines_in_period) {
-          showToast("Không có dòng nào khớp duy nhất cả tên hàng và đơn vị trong kỳ này");
-          button.disabled = false;
-          button.textContent = "Kiểm tra ghép mã trùng khớp";
-          return;
-        }
-        var impactText = "Có " + safePreview.safe_lines_in_period + " dòng trong kỳ khớp duy nhất cả tên hàng và đơn vị, theo " + safePreview.safe_rules + " quy tắc nhà cung cấp/tên/đơn vị. ";
-        impactText += "Dự kiến " + safePreview.invoices_ready_after + " hóa đơn sẽ đủ mã. ";
-        impactText += "Ghi nhớ các quy tắc này cũng cập nhật " + safePreview.affected_lines_all_periods + " dòng cùng nguồn chưa ghi kho ở các kỳ. Kho chưa bị thay đổi. Xác nhận tiếp tục?";
-        if (!window.confirm(impactText)) {
-          button.disabled = false;
-          button.textContent = "Kiểm tra ghép mã trùng khớp";
-          return;
-        }
-        var safeResult = await api("/api/msmi/suggested-mappings", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            from: safeSuggestionFrom,
-            to: safeSuggestionTo,
-            confirmed: true,
-            snapshot: safePreview.snapshot
-          })
-        });
-        await loadInvoiceWorkbench(true);
-        render();
-        showToast(
-          "Đã ghép " + safeResult.mapped_lines_in_period + " dòng trong kỳ · " +
-          safeResult.ready_invoices_in_period + " hóa đơn sẵn sàng. Chưa ghi kho."
-        );
-      } catch (error) {
-        showToast(error.message, true);
-        button.disabled = false;
-        button.textContent = "Kiểm tra ghép mã trùng khớp";
-      }
-      return;
-    }
-    if (action === "apply-msmi-suggestions") {
-      var suggestionCount = Number(button.dataset.count || 0);
-      if (!window.confirm("Xác nhận " + suggestionCount + " mã có tên khớp duy nhất trong danh mục TĐP?")) return;
-      jsonWrite("/api/msmi/invoices/" + button.dataset.id + "/suggested-mappings", "POST", {}, "Đã xác nhận các mã gợi ý");
     }
     if (action === "download-outgoing-shortages") {
       var exportFrom = document.getElementById("outgoingShortageFrom");

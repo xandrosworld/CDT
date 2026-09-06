@@ -130,6 +130,25 @@ async function main() {
     await call('Emulation.setDeviceMetricsOverride',{width:1024,height:900,deviceScaleFactor:1,mobile:false});
     assert.ok(await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1'));
     assert.ok(await evaluate("(()=>{const box=document.querySelector('.invoice-lines-card .invoice-lines-scroll');return box.scrollWidth > box.clientWidth;})()"));
+    // One click performs exact mapping; no human confirmation for a proven match.
+    const autoFixture = (await request('/fixture/automatic-mapping','POST',{})).body;
+    await change('invoiceStatus','all');
+    await wait(`document.getElementById('map_input_${autoFixture.item_id}')`);
+    await evaluate(`window.__autoConfirms=0;window.confirm=()=>{window.__autoConfirms++;return false;}`);
+    await click('[data-action="apply-msmi-safe-suggestions"]');
+    await wait(`!document.getElementById('map_input_${autoFixture.item_id}') && !document.querySelector('[data-action="apply-msmi-safe-suggestions"]').disabled`);
+    assert.equal(await evaluate('window.__autoConfirms'),0);
+    const autoListing = (await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body;
+    const ranks = autoListing.lines.map(row=>row.action_rank);
+    assert.deepEqual(ranks,[...ranks].sort());
+    assert.equal(autoListing.lines.find(row=>row.id===autoFixture.item_id).mapping_status,'mapped');
+    const displayed = await evaluate(`Array.from(document.querySelectorAll('.invoice-lines-card tbody tr[data-issue]')).map(row=>Number(row.id.replace('invoice-line-input-','')))`);
+    assert.deepEqual(displayed,autoListing.lines.map(row=>row.id));
+    assert.equal(await evaluate(`document.getElementById('invoice-line-input-${autoFixture.item_id}').dataset.issue`),'0');
+    await click('[data-action="apply-msmi-safe-suggestions"]');
+    await wait(`!document.querySelector('[data-action="apply-msmi-safe-suggestions"]').disabled`);
+    assert.equal(await evaluate('window.__autoConfirms'),0);
+    fs.writeFileSync('D:/TDP_ROUND1/automatic-mapping-browser.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     // Many units used to turn the sticky total into a panel covering the rows.
     // Replace only this GET response in the isolated browser, leaving the DB intact.
     await evaluate(`(()=>{const original=window.fetch;window.fetch=async function(input,init){const response=await original(input,init);if(String(input).startsWith('/api/invoice-valuation?')){const data=await response.json();data.items=Array.from({length:240},(_,i)=>({product_code:'LAYOUT-'+i,product_name:'Long inventory item '+i,unit:'unit '+(i%24),opening_qty:1000.855,input_qty:2,output_qty:1,closing_qty:1001.855,opening_value:10000000,input_value:20000,output_value:10000,closing_value:10010000,average_unit_cost:10000,valuation_status:'ok'}));return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});}return response;};})()`);
