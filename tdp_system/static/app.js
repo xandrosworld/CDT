@@ -6537,6 +6537,7 @@
   }
 
   function openTableWorksheet(table) {
+    if (table.closest('.invoice-lines-card')) { openInvoiceMappingFullscreen(); return; }
     if (!window.TDPWorksheet) return;
     if (table.closest('.inventory-nxt-scroll') && state.inventoryValuation) {
       var nxtFields=[['product_code','Mã hàng',120],['product_name','Tên hàng',230],['unit','ĐVT',70],
@@ -6577,8 +6578,40 @@
       rows:matrix.map(function(row,r) { var obj={worksheet_error:issueRows[r]}; row.forEach(function(value,c) { obj['c'+c]=value; }); return obj; }) });
   }
 
+  var invoiceMappingFullscreen = false;
+  var invoiceMappingPreviousOverflow = '';
+  function closeInvoiceMappingFullscreen() {
+    invoiceMappingFullscreen = false;
+    content.classList.remove('invoice-mapping-fullscreen');
+    document.body.style.overflow = invoiceMappingPreviousOverflow;
+    var bar = content.querySelector('.invoice-mapping-fullscreen-bar');
+    if (bar) bar.remove();
+  }
+  function syncInvoiceMappingFullscreen() {
+    if (!invoiceMappingFullscreen) return;
+    var card = content.querySelector('.invoice-lines-card');
+    if (!card) { closeInvoiceMappingFullscreen(); return; }
+    if (card.querySelector('.invoice-mapping-fullscreen-bar')) return;
+    var bar = document.createElement('div'); bar.className = 'invoice-mapping-fullscreen-bar';
+    var help = document.createElement('span');
+    help.textContent = 'Ghép mã / Quy đổi · nhập mã rồi Enter hoặc bấm Lưu. Số liệu hóa đơn nguồn chỉ xem.';
+    var close = document.createElement('button'); close.type = 'button'; close.className = 'btn btn-outline';
+    close.textContent = 'Đóng toàn màn hình'; close.onclick = closeInvoiceMappingFullscreen;
+    bar.appendChild(help); bar.appendChild(close); card.insertBefore(bar, card.firstChild);
+  }
+  function openInvoiceMappingFullscreen() {
+    if (!invoiceMappingFullscreen) invoiceMappingPreviousOverflow = document.body.style.overflow;
+    invoiceMappingFullscreen = true;
+    content.classList.add('invoice-mapping-fullscreen');
+    document.body.style.overflow = 'hidden';
+    syncInvoiceMappingFullscreen();
+  }
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape' && invoiceMappingFullscreen && backdrop.hidden) closeInvoiceMappingFullscreen();
+  });
   var sheetEnhanceTimer;
   function addWorksheetButtons() {
+    syncInvoiceMappingFullscreen();
     content.querySelectorAll('table').forEach(function(table) {
       if(table.closest('.inventory-nxt-scroll')) return;
       if(table.dataset.worksheetReady) return;
@@ -6586,7 +6619,8 @@
       var wrap=table.closest('.table-wrap,.invoice-lines-scroll')||table;
       var button=document.createElement('button'); button.type='button'; button.className='tdp-open-sheet';
       var isOrders=Boolean(table.closest('#orderTable'));
-      button.textContent=isOrders?'Mở bảng Excel · tự lưu':'Mở bảng Excel toàn màn hình';
+      var isMapping=Boolean(table.closest('.invoice-lines-card'));
+      button.textContent=isMapping?'Ghép mã / Quy đổi · toàn màn hình':isOrders?'Mở bảng Excel · tự lưu':'Xem bảng Excel toàn màn hình · chỉ xem';
       button.onclick=function(){if(isOrders) openOrderWorksheet(); else openTableWorksheet(table);};
       wrap.parentNode.insertBefore(button,wrap);
     });

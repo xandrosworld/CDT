@@ -46,19 +46,38 @@ async function main() {
     await change('invoiceLineFilter','all');
     // Invalid mapping stays visible and MUST NOT create any stock movement.
     const mappingId=`map_input_${fixture.line_b}`;
-    await evaluate(`document.getElementById('${mappingId}').value='NO-SUCH-CODE'`);
+    await click('.invoice-lines-card .tdp-open-sheet');
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
+    assert.equal(await evaluate(`!!document.querySelector('.tdp-sheet-shell')`),false);
+    await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
+    await call('Input.insertText',{text:'NO-SUCH-CODE'});
+    await click('.invoice-mapping-fullscreen-bar button');
+    assert.equal(await evaluate(`document.getElementById('${mappingId}').value`),'NO-SUCH-CODE');
+    await click('.invoice-lines-card .tdp-open-sheet');
     await click(`[data-action="save-invoice-mapping"][data-id="${fixture.line_b}"]`);
     await wait(`document.querySelector('#toast').textContent.length > 0 && !document.querySelector('[data-action="save-invoice-mapping"][data-id="${fixture.line_b}"]').disabled`);
     assert.equal((await request(`/api/invoice-inventory/source/input/${fixture.input_ids['2']}`)).body.events.length,0);
     // Enter saves mapping; a differing unit still needs an explicit positive factor.
     await evaluate(`document.getElementById('${mappingId}').value='R1-KG';document.getElementById('${mappingId}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`);
     await wait(`!document.getElementById('${mappingId}')`);
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
+    assert.ok(await evaluate(`document.querySelector('#content').classList.contains('invoice-mapping-fullscreen')`));
+    for(const width of [1440,1024]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});
+      assert.ok(await evaluate(`(()=>{const r=document.querySelector('.invoice-lines-card').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;})()`));
+    }
+    const mappingPicture=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    fs.writeFileSync('D:/TDP_ROUND1/mapping-fullscreen-browser.png',Buffer.from(mappingPicture.data,'base64'));
     const conv=`conversion_input_${fixture.line_box}`;
     await evaluate(`document.getElementById('${conv}').value='0'`);
     await click(`[data-action="save-invoice-conversion"][data-id="${fixture.line_box}"]`);
     assert.ok(await evaluate(`document.getElementById('${conv}') !== null`));
     await evaluate(`document.getElementById('${conv}').value='12';document.getElementById('${conv}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`);
     await wait(`!document.getElementById('${conv}')`);
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
+    await click('.invoice-mapping-fullscreen-bar button');
+    assert.equal(await evaluate(`document.body.style.overflow`),'');
+    await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
     await change('invoiceStatus','ready');
     await wait(`document.querySelector('[data-action="create-msmi-receipt"][data-id="${fixture.input_ids['2']}"]')`);
     // Cancelling confirmation must leave zero stock entries.

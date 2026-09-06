@@ -61,7 +61,18 @@ try {
   await evaluate(`window.__qaWrites=[];window.__qaFetch=fetch;window.fetch=(...args)=>{if(['PUT','PATCH','DELETE'].includes(args[1]?.method)){window.__qaWrites.push(String(args[0]));return Promise.resolve(new Response(JSON.stringify({ok:false,error:'Hosted read-only check blocked an edit'}),{status:409,headers:{'Content-Type':'application/json'}}));}return window.__qaFetch(...args);}`);
   for(const [index,view] of ['home','orders','purchases','physical','quotes','reports','debts','documents','inventory','msmi','printing','settings'].entries()){
     await click(`[data-view="${view}"]`);await sleep(1100);await wait('!document.querySelector(".loading-panel")');
-    if(view==='msmi')await wait('document.querySelector("#invoice-list-count")');
+    if(view==='msmi') {
+      await wait('document.querySelector("#invoice-list-count")');
+      await click('.invoice-lines-card .tdp-open-sheet');
+      await wait('document.querySelector(".invoice-mapping-fullscreen-bar")');
+      assert.equal(await evaluate('!!document.querySelector(".tdp-sheet-shell")'),false);
+      assert.ok(await evaluate('!!document.querySelector(".invoice-lines-card .invoice-mapping-input:not(:disabled)")'));
+      await evaluate('document.querySelector(".invoice-lines-card .invoice-mapping-input").scrollIntoView({block:"center",inline:"center"})');
+      await shot('invoice-mapping-fullscreen');
+      await click('.invoice-mapping-fullscreen-bar button');
+      assert.equal(await evaluate('document.querySelector("#content").classList.contains("invoice-mapping-fullscreen")'),false);
+      report.checks.push('invoice_mapping_fullscreen_uses_live_editors');
+    }
     if(view==='documents') {
       await wait('document.querySelector(".invoice-readiness") && !document.querySelector(".invoice-readiness .loading-inline")');
       assert.equal(await evaluate('!!document.querySelector(".invoice-readiness .error-summary")'),false,'Selected batch readiness must render without a catalog error');

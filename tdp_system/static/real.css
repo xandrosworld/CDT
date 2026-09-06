@@ -620,3 +620,16 @@ body { min-width: 320px; }
   .document-preview,.document-scroll { border:0; overflow:visible; max-height:none; }
   .document-sheet td { background:#fff !important; color:#000 !important; }
 }
+/* Keep the live mapping controls and their delegated save handlers in #content. */
+.invoice-mapping-fullscreen .invoice-lines-card {
+  position: fixed; inset: 8px; z-index: 90; margin: 0; background: white;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.invoice-mapping-fullscreen-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px 16px; border-bottom: 1px solid #dfe5e8; flex: 0 0 auto;
+  background: white; color: #172b3a;
+}
+.invoice-mapping-fullscreen .invoice-lines-card > .tdp-open-sheet { display: none; }
+.invoice-mapping-fullscreen .invoice-lines-scroll { flex: 1 1 auto; min-height: 0; max-height: none; }
+.invoice-mapping-fullscreen .invoice-lines-card .card-head { flex: 0 0 auto; }
