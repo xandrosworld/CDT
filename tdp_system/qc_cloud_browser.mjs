@@ -109,6 +109,7 @@ try {
       await click('[data-action="view-inventory-unit-totals"]');
       await wait(`document.querySelector('.inventory-totals-dialog[open] tbody tr')`);
       report.inventory_unit_rows=await evaluate(`document.querySelectorAll('.inventory-totals-dialog tbody tr').length`);
+      assert.ok(await evaluate(`getComputedStyle(document.querySelector('.inventory-totals-dialog thead th')).color==='rgb(23, 43, 58)' && getComputedStyle(document.querySelector('.inventory-totals-dialog tbody th')).position==='static'`));
       await shot('inventory-unit-totals');
       await click('.inventory-totals-dialog button');
       await call('Emulation.setDeviceMetricsOverride',{width:1680,height:1050,deviceScaleFactor:1,mobile:false});

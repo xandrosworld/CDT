@@ -7,6 +7,7 @@ Phạm vi theo chỉ đạo mới: máy tính, cửa sổ rộng 1024/1366/1440/
 1. **Số lượng `0,855` trong bảng Excel bị lưu thành `855`.** Đã tái hiện trên DB thử bằng thao tác gõ ô. Bộ đọc số tiếng Anh của thư viện hiểu dấu phẩy là phân cách hàng nghìn trước khi dữ liệu đến hàm kiểm tra. Đã giữ nguyên nội dung nhập ở các cột số lượng để bộ đọc thập phân của ứng dụng xử lý; tiền vẫn theo định dạng tiền đã chốt. Kiểm tra gõ `0,855`, `0.0056`, dán `0,625`/`2,5`, đối chiếu giá trị API đã lưu. Không sửa số lượng có sẵn trong DB production theo phỏng đoán.
 2. **Màn in trên Railway còn hiện máy in Windows của máy chủ.** Bản hosted dùng luồng chọn phiếu → PDF → hộp thoại in trên máy tính người dùng. Đã bỏ các nút gửi máy in Windows khỏi giao diện hosted, giữ lịch sử in cũ để tra cứu.
 3. **Hướng dẫn sao lưu còn nói phải mở máy chính/cùng Wi-Fi.** Đã phân biệt bản hosted và bản cục bộ. Bản web nói rõ dữ liệu trực tuyến và lịch sao lưu vẫn chạy khi đóng trình duyệt.
+4. **Dòng tổng NXT cố định quá cao, che dữ liệu.** Giữ footer 52px, tiền trên một dòng; lượng nhiều đơn vị hiện nút mở bảng tổng theo ĐVT. Nút **Xem bằng Excel · toàn màn hình** ở ngay tiêu đề chi tiết. Browser kiểm tra 240 mã/24 ĐVT, tổng tiền 2,4 tỷ, cuộn giữa/cuối và ngang tại 1680/1366/1024px; tổng lượng trong hộp chi tiết được đối chiếu từng ô. Không thay nguồn số liệu hay cách xuất Excel.
 
 Các bài browser cũ về hộp sửa đơn, xác nhận báo giá và nhãn giá sửa tay còn kỳ vọng giao diện trước đây. Đã cập nhật theo hành vi hiện tại, giữ đối chiếu dữ liệu, tiền, lịch sử và file tải; không đổi sản phẩm để đáp ứng nhãn cũ.
 
@@ -39,6 +40,9 @@ Tất cả thư mục sau nằm tại `D:\TDP_RAILWAY_PRIVATE\evidence`, ngoài 
 - `full-audit-extra-02/order_price` và `outgoing_readiness` đạt; `full-audit-quote-03/quote_ui` đạt. Các lượt trước lưu nguyên kết quả không đạt do kỳ vọng UI cũ.
 - `full-audit-worksheet-02`: bằng chứng tái hiện lỗi `0,855 → 855`. `full-audit-worksheet-04`: đạt sau sửa, gồm nhập/dán lượng lẻ và các tình huống mạng/xung đột; không có JavaScript exception. Lượt 03 qua phần số lượng nhưng dừng do công cụ bấm nút đúng lúc màn gốc đang vẽ lại; đã sửa cách chờ/bấm trong cùng bước.
 - `full-audit-hosted-ui-02/round5`: kiểm tra giao diện hosted trên DB thử, có hướng dẫn backup đúng và không hiện điều khiển máy in Windows.
+- `full-audit-worksheet-edge-01`: bảng sửa đơn đạt trên Edge, gồm các tình huống lưu/xung đột và lượng lẻ.
+- `full-audit-targeted-03`: **135/135** bài chịu ảnh hưởng đạt sau sửa giao diện hosted và nhập lượng.
+- `inventory-footer-browser-02`: đạt toàn lượt hóa đơn/kho và tình huống 240 mã/24 ĐVT của footer; `inventory-footer-tests-01`: **45/45** bài kho/xuất file/hợp đồng UI đạt. Không cộng các lần chạy lại thành số bài độc lập.
 - `full-audit-hosted-before`: snapshot trước rà; toàn vẹn SQLite đạt. Lượt hosted ban đầu `full-audit-hosted-01` không có yêu cầu ghi ngoài ý định hay lỗi máy chủ; chưa dùng lượt này để xác nhận bản sửa mới đã triển khai.
 
 Kết quả triển khai và đối chiếu cuối lượt được bổ sung sau khi kiểm tra xong.

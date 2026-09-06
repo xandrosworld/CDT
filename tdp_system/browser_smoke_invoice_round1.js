@@ -149,6 +149,7 @@ async function main() {
     }
     await click('[data-action="view-inventory-unit-totals"]');
     assert.equal(await evaluate(`document.querySelectorAll('.inventory-totals-dialog tbody tr').length`),24);
+    assert.ok(await evaluate(`getComputedStyle(document.querySelector('.inventory-totals-dialog thead th')).color==='rgb(23, 43, 58)' && getComputedStyle(document.querySelector('.inventory-totals-dialog tbody th')).position==='static'`));
     assert.ok(await evaluate(`Array.from(document.querySelectorAll('.inventory-totals-dialog tbody tr')).every(row=>row.cells[1].textContent==='10.008,55' && row.cells[2].textContent==='20' && row.cells[3].textContent==='10' && row.cells[4].textContent==='10.018,55')`));
     await click('.inventory-totals-dialog button');
     await click('[data-action="view-inventory-worksheet"]');
