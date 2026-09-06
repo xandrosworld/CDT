@@ -29,7 +29,7 @@ class PayableUiStaticContractTests(unittest.TestCase):
         self.assertNotIn('<option value="payment">Trả nhà cung cấp</option>', script)
         self.assertIn("payable-line-select:disabled", css)
         self.assertIn("payable-payment-form", css)
-        self.assertIn("/static/app.js?v=20260906-6", page)
+        self.assertIn("/static/app.js?v=20260906-7", page)
         self.assertIn("/static/real.css?v=20260906-6", page)
 
 

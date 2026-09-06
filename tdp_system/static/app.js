@@ -818,7 +818,7 @@
     var visibleRows = preview.rows.slice(0, 200).map(function (item) {
       var messages = item.errors.concat(item.warnings);
       var tagClass = item.errors.length ? "tag-red" : item.status === "new" ? "tag-ok" : "tag-warn";
-      return '<tr><td>' + item.source_row + '</td><td><strong>' + esc(item.resolved_code || item.source_code) +
+      return '<tr class="' + (item.errors.length ? 'row-error' : item.warnings.length ? 'row-warning' : '') + '"><td>' + item.source_row + '</td><td><strong>' + esc(item.resolved_code || item.source_code) +
         '</strong><div class="muted">' + esc(item.resolved_name || item.source_name) + '</div></td><td>' +
         esc(item.current_value || "—") + '</td><td><strong>' + esc(item.target_value || "—") +
         '</strong></td><td><span class="tag ' + tagClass + '">' + esc(statusNames[item.status] || item.status) +
@@ -849,7 +849,7 @@
       var messages = item.errors.concat(item.warnings);
       var status = item.errors.length ? "error" : item.product_status;
       var tagClass = status === "error" ? "tag-red" : status === "new" ? "tag-ok" : "tag-warn";
-      return '<tr><td>' + item.source_row + '</td><td><strong>' + esc(item.product_code) +
+      return '<tr class="' + (item.errors.length ? 'row-error' : item.warnings.length ? 'row-warning' : '') + '"><td>' + item.source_row + '</td><td><strong>' + esc(item.product_code) +
         '</strong><div class="muted">' + esc(item.product_group || "—") + '</div></td><td><strong>' +
         esc(item.product_name) + '</strong><div class="muted">' + esc(item.unit) + ' · ' +
         esc(taxText(item.tax)) + '</div></td><td>' + esc(item.invoice_name || "—") +
@@ -942,7 +942,7 @@
       var messages = item.errors.concat(item.warnings);
       var tagClass = item.errors.length ? "tag-red" : item.warnings.length ? "tag-warn" : "tag-ok";
       var statusText = item.status === "new" ? "Thêm" : item.status === "update" ? "Cập nhật" : "Không đổi";
-      return '<tr><td>' + dateVN(item.work_date) + '</td><td><strong>' + esc(item.kitchen) +
+      return '<tr class="' + (item.errors.length ? 'row-error' : item.warnings.length ? 'row-warning' : '') + '"><td>' + dateVN(item.work_date) + '</td><td><strong>' + esc(item.kitchen) +
         '</strong></td><td>' + esc(item.shift) + '</td><td class="num-cell"><strong>' +
         num(item.actual_count) + '</strong></td><td class="num-cell">' +
         (item.ordered_count ? num(item.ordered_count) : "—") + '</td><td><span class="tag ' +
@@ -1000,7 +1000,7 @@
       var statusText = item.errors.length ? "Lỗi" : item.status === "update" ? "Cập nhật" : "Thêm tồn";
       if (item.create_product) statusText += " + mã mới";
       var tagClass = item.errors.length ? "tag-red" : item.warnings.length ? "tag-warn" : "tag-ok";
-      return '<tr><td><strong>' + esc(item.product_code || "—") + '</strong><div class="muted">' +
+      return '<tr class="' + (item.errors.length ? 'row-error' : item.warnings.length ? 'row-warning' : '') + '"><td><strong>' + esc(item.product_code || "—") + '</strong><div class="muted">' +
         esc(item.product_name) + '</div></td><td>' + esc(item.source_rows.join(", ")) +
         '<div class="muted">' + esc(item.warehouse_codes.join(", ") || "Không có mã kho") +
         '</div></td><td class="num-cell"><strong>' + num(item.qty) + '</strong> ' + esc(item.unit) +
@@ -1035,7 +1035,7 @@
       var messages = (item.errors || []).concat(item.warnings || []);
       var tagClass = item.errors.length ? "tag-red" : item.warnings.length ? "tag-warn" : "tag-ok";
       var statusText = item.errors.length ? "Lỗi" : "Sẵn sàng nhập";
-      return '<tr><td>' + item.sourceRow + '</td><td>' + dateVN(item.documentDate) +
+      return '<tr class="' + (item.errors.length ? 'row-error' : item.warnings.length ? 'row-warning' : '') + '"><td>' + item.sourceRow + '</td><td>' + dateVN(item.documentDate) +
         '<div class="muted">' + esc(item.sourceType) + ' · ' + esc(item.sourceReference) +
         ' · dòng ' + num(item.sourceLine) + '</div></td><td><strong>' + esc(item.productCode || "—") +
         '</strong><div class="muted">' + esc(item.productName) + '</div></td><td class="num-cell">' +
@@ -1096,7 +1096,7 @@
     var visibleRows = previewRows.slice(0, 120).map(function (item) {
       var messages = item.errors.concat(item.warnings);
       var tagClass = item.errors.length ? "tag-red" : item.warnings.length ? "tag-warn" : "tag-ok";
-      return '<tr><td>' + item.source_row + '</td><td>' + dateVN(item.purchase_date) +
+      return '<tr class="' + (item.errors.length ? 'row-error' : item.warnings.length ? 'row-warning' : '') + '"><td>' + item.source_row + '</td><td>' + dateVN(item.purchase_date) +
         '</td><td><strong>' + esc(item.supplier || "—") + '</strong><div class="muted">' +
         esc(item.kitchen) + '</div></td><td>' + esc(item.item_name) + '</td><td class="num-cell">' +
         num(item.actual_qty) + ' ' + esc(item.unit) + '</td><td class="num-cell"><strong>' +
@@ -6621,14 +6621,16 @@
         ['closing_qty','Tồn cuối',105,1],['closing_value','Giá trị tồn',130,1,1],
         ['average_unit_cost','Giá bình quân',135,1,1],['valuation_status','Đối chiếu',170]];
       window.TDPWorksheet.open({title:'Nhập – xuất – tồn · '+dateVN(state.inventoryFrom)+' → '+dateVN(state.inventoryTo),editable:false,
-        rows:(state.inventoryValuation.items||[]).map(function(row){return Object.assign({},row,{worksheet_issue:row.valuation_status!=='ok',valuation_status:row.valuation_status==='ok'?'Khớp':'Cần kiểm tra'});}),columns:nxtFields.map(function(d){return {key:d[0],title:d[1],width:d[2],numeric:!!d[3],money:!!d[4]};})});
+        rows:(state.inventoryValuation.items||[]).map(function(row){return Object.assign({},row,{valuation_status:row.valuation_status==='ok'?'Khớp':'Cần kiểm tra'});}),columns:nxtFields.map(function(d){return {key:d[0],title:d[1],width:d[2],numeric:!!d[3],money:!!d[4]};})});
       return;
     }
     // Expand merged cells into sheet coordinates, including multi-level headers.
     var matrix=[], issueRows=[], maxColumns=0;
     Array.from(table.rows).filter(function(row) { return !row.hidden && getComputedStyle(row).display !== 'none'; }).forEach(function(row,r) {
       matrix[r]=matrix[r]||[]; var c=0;
-      issueRows[r]=row.dataset.issue==='1' || !!row.querySelector('.tag-warn,.tag-red,.tag-error,.tag-danger,.field-error,.field-warning') || row.matches('.row-error,.row-warning,.has-error');
+      // Invoice data-issue denotes a blocking source/mapping validation failure.
+      // Warning/status badge colors alone are not row errors.
+      issueRows[r]=row.dataset.error==='1' || row.dataset.issue==='1' || !!row.querySelector('.field-error') || row.matches('.row-error,.has-error');
       Array.from(row.cells).forEach(function(cell) {
         while(matrix[r][c] !== undefined) c++;
         var input=cell.querySelector('input,select');
@@ -6647,7 +6649,7 @@
     var title=document.getElementById('pageTitle');
     window.TDPWorksheet.open({ title:((table.caption && table.caption.innerText) || (title && title.innerText) || 'Bảng dữ liệu')+' · phần đang hiển thị', editable:false,
       columns:Array.from({length:maxColumns},function(_,c) { return { key:'c'+c,title:headings[c]||String.fromCharCode(65+c),width:c===1?230:150 }; }),
-      rows:matrix.map(function(row,r) { var obj={worksheet_issue:issueRows[r]}; row.forEach(function(value,c) { obj['c'+c]=value; }); return obj; }) });
+      rows:matrix.map(function(row,r) { var obj={worksheet_error:issueRows[r]}; row.forEach(function(value,c) { obj['c'+c]=value; }); return obj; }) });
   }
 
   var sheetEnhanceTimer;

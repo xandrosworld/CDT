@@ -4,7 +4,7 @@
 
 ## Các lỗi sửa trong lượt này
 
-- Bảng Excel trên web tô đỏ **toàn bộ ô của dòng có lỗi hoặc cảnh báo**, gồm cả cột tính toán. Chỉ hết đỏ khi phản hồi đã lưu/đồng bộ xác nhận dòng không còn vấn đề; lỗi lưu không được tự xóa cảnh báo. Nút tới dòng cần sửa bao gồm cả cảnh báo.
+- Quyết định mới của chủ dự án (sau lượt đối chiếu này): bảng Excel chỉ tô đỏ **toàn bộ ô của dòng có lỗi**, gồm cả cột tính toán. Hết đỏ khi phản hồi lưu/đồng bộ xác nhận không còn lỗi; cảnh báo vẫn hiện riêng. Nút **Tới dòng lỗi** chỉ đến dòng lỗi. Bằng chứng màu cảnh báo đỏ bên dưới là lịch sử của quy tắc cũ, được thay bởi mục 13.22 trong README-new-2.md.
 - Bảng Excel NXT giữ dấu hiệu cần kiểm tra. Viewer bảng HTML giữ màu cảnh báo khi chuyển sang Excel chỉ xem.
 - Thẻ tổng lượng NXT thu gọn thành nút mở bảng theo ĐVT; không còn chuỗi 21 đơn vị kéo thẻ dài hết màn hình. Footer vẫn cố định một hàng.
 - Các file Tồn đầu/Nhập/Xuất/NXT không còn cộng chung kg, cái, chai… thành một tổng lượng. Ô tổng nhiều đơn vị dẫn tới sheet **Tổng ĐVT**, có đủ bốn cột đầu/nhập/xuất/cuối theo từng đơn vị.

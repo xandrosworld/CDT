@@ -38,7 +38,7 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 5. Mạng lỗi: giữ bảng đang mở, bấm **Thử lưu lại**. Nếu người khác đã sửa cùng dòng, dùng **Đọc lại / đối chiếu** để tải phần chưa lưu rồi mở bản mới nhất. X chỉ đóng sau khi lưu được.
 6. Bảng báo cáo có nút xem toàn màn hình và X quay lại. Đơn hàng và nhập–xuất–tồn lấy toàn bộ dòng trong phạm vi; bảng khác ghi **phần đang hiển thị**, cần chọn bộ lọc/trang ở màn gốc. Ghi kho, thanh toán, duyệt, chốt và in vẫn dùng màn nghiệp vụ.
 7. Số lượng nhận dấu phẩy hoặc dấu chấm thập phân, ví dụ **0,855** hoặc **0.855**. Khi dán nhiều dòng cũng giữ lượng lẻ. Đợi **Đã lưu** rồi đối chiếu lại dòng nếu vừa nhập lượng quan trọng.
-8. Dòng có lỗi hoặc cảnh báo được **tô đỏ cả dòng**. Bấm **Tới dòng lỗi / cảnh báo** để đến vị trí cần kiểm tra. Sau khi sửa và lưu hợp lệ, dòng tự hết đỏ; nếu còn vấn đề khác thì vẫn đỏ.
+8. **Chỉ dòng có lỗi được tô đỏ cả dòng**, áp dụng chung cho các file. Bấm **Tới dòng lỗi** để đến vị trí cần sửa. Sau khi lưu xác nhận đã hết lỗi, dòng tự hết đỏ; dòng chỉ có cảnh báo vẫn hiện nội dung cảnh báo riêng và không tô đỏ.
 
 Tại **Báo cáo vật tư hàng hóa**, bấm số ĐVT trên thẻ tổng lượng hoặc dòng tổng cố định để xem lượng tách theo đơn vị. File kho có nhiều ĐVT cũng có sheet **Tổng ĐVT**. Ô **CẦN KIỂM TRA** phải được đối chiếu trước khi chốt; không tự thay số âm thành 0.
 
@@ -73,7 +73,7 @@ Trên bản sao dữ liệu Railway ban đầu, file cũ đối chiếu trực t
 ## Dữ liệu cần người phụ trách xác nhận
 
 - **Quyết định ngày 06/09: chủ dự án chỉ dùng tài khoản M-Invoice hiện tại.** Giữ nguyên URL/tài khoản, cho phép sử dụng qua `MINVOICE_ALLOW_TEST_ENVIRONMENT=true`; không còn yêu cầu đổi tài khoản như điều kiện bàn giao. Máy chủ `0106026495-999.minvoice.site` vẫn được nhận diện là môi trường kiểm thử của nhà cung cấp; lựa chọn này không thay đổi môi trường thực tế hoặc tự xác nhận tính hợp lệ của từng hóa đơn.
-- File `Đơn hàng  03.09.2026.xlsx`: dòng đặt hàng **157** (dưa hấu) và **158** (nhãn) có lượng **−1**; dòng 158 còn thiếu mã. Cần xác nhận đó là hàng trả hay nhập nhầm và cung cấp dữ liệu đúng. Phần mềm giữ chặn các dòng này.
+- File `Đơn hàng  03.09.2026.xlsx`: chủ dự án đã giải thích dòng đặt hàng **157** (dưa hấu) và **158** (nhãn) là hàng bị hỏng, chị đi mua cho khách. Còn cần chốt khoản âm trừ công nợ NCC hay theo dõi khoản mua bù riêng; dòng 158 vẫn thiếu mã hàng. Chưa đổi dấu lượng/tiền hoặc ghi công nợ khi chưa rõ cách tính khoản này.
 - **Tổng đủ 266 hóa đơn đầu vào**, gồm **264 cần gán mã** và **2 không nhập tồn**. Có **1.107 dòng hàng**, **1.104 dòng cần xử lý**; đây là các bộ đếm khác nhau, không phải thiếu hai hóa đơn. Tải hóa đơn không đồng nghĩa đã xác nhận nhập kho. Người phụ trách cần đối chiếu mã hàng trước khi ghi kho.
 - Bản production tại lúc kiểm tra chưa có hồ sơ MST bên mua và chưa có hóa đơn đầu ra đã đồng bộ. Form hồ sơ độc lập đã được bổ sung; không tự đoán MST hoặc liên kết hóa đơn với nhà thầu.
 - Không thực hiện ký/phát hành hóa đơn thật hoặc ghi thanh toán thật trong lượt kiểm thử này.

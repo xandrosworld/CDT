@@ -7,7 +7,7 @@ import './worksheet.css';
 let opened = null;
 const make = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text || ''; if (cls) el.className = cls; return el; };
 const textValue = value => Array.isArray(value) ? value.join(' · ') : value ?? '';
-const needsReview = row => !!(row?.errors?.length || row?.warnings?.length || row?.worksheet_issue);
+const hasErrors = row => !!(row?.errors?.length || row?.worksheet_error);
 
 async function open(options) {
   if (opened) return;
@@ -46,8 +46,8 @@ async function open(options) {
   const cell = (value, col, header = false, row = null) => ({ v: textValue(value), t: typeof value === 'number' ? 2 : 1,
     s: { ff: 'Arial', fs: 11, ht: col.numeric ? 3 : 1, vt: 2,
       bd: { b: { s: 1, cl: { rgb: '#dfe5e8' } }, r: { s: 1, cl: { rgb: '#dfe5e8' } } },
-      bg: { rgb: header ? '#e9eef0' : needsReview(row) ? '#fee2e2' : col.editable && options.editable ? '#ffffff' : '#f4f6f7' },
-      cl: { rgb: !header && needsReview(row) ? '#991b1b' : '#172b3a' },
+      bg: { rgb: header ? '#e9eef0' : hasErrors(row) ? '#fee2e2' : col.editable && options.editable ? '#ffffff' : '#f4f6f7' },
+      cl: { rgb: !header && hasErrors(row) ? '#991b1b' : '#172b3a' },
       // Preserve literal quantity input until our decimal parser runs. The SDK's
       // English number parser otherwise turns the Vietnamese input 0,855 into 855.
       bl: header ? 1 : 0, ...(!header ? { n: { pattern: col.editable && options.editable && !col.money ? '@' :
@@ -150,8 +150,8 @@ async function open(options) {
   window.addEventListener('beforeunload', guard);
   if (options.editable) {
     const retry = make('button', 'Thử lưu lại'); retry.onclick = () => flush(true); controls.append(retry);
-    const nextError = make('button', 'Tới dòng lỗi / cảnh báo'); let errorRow = -1;
-    nextError.onclick = () => { const candidates = rows.map((row, index) => needsReview(row) ? index : -1).filter(index => index >= 0); errorRow = candidates.find(index => index > errorRow) ?? candidates[0] ?? -1; if (errorRow >= 0) { sheet.setActiveRange(sheet.getRange(errorRow + 1, columns.length - 2)); sheet.scrollToCell(errorRow + 1, columns.length - 2); } };
+    const nextError = make('button', 'Tới dòng lỗi'); let errorRow = -1;
+    nextError.onclick = () => { const candidates = rows.map((row, index) => hasErrors(row) ? index : -1).filter(index => index >= 0); errorRow = candidates.find(index => index > errorRow) ?? candidates[0] ?? -1; if (errorRow >= 0) { sheet.setActiveRange(sheet.getRange(errorRow + 1, columns.length - 2)); sheet.scrollToCell(errorRow + 1, columns.length - 2); } };
     controls.append(nextError);
     const recover = make('button', 'Đọc lại / đối chiếu');
     recover.onclick = async () => {

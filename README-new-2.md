@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Quyết định mới 06/09/2026:** chỉ dòng có **lỗi** mới tô đỏ cả dòng, áp dụng
+> chung mọi file; cảnh báo hiển thị riêng. Hai dòng âm đặt hàng 03/09 được giải thích
+> là hàng hỏng, chị đi mua cho khách; còn cần chốt ảnh hưởng công nợ. Xem **13.22**.
+
 > **Đối chiếu số liệu và màu cảnh báo 06/09/2026:** bảng Excel tô đỏ cả dòng
 > lỗi/cảnh báo và hết đỏ sau khi sửa hợp lệ. Đã đối chiếu nguồn–API–Excel trên
 > bản sao Railway, sửa tổng lượng nhiều ĐVT và trạng thái tổng file kho.
@@ -925,3 +929,11 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Bản xem và Excel tải theo lựa chọn trên DB sao chép khớp nội dung/ô gộp của **22 sheet chứng từ**. Tải bốn file kho trực tiếp từ Railway, so **11.070 ô trên 8 sheet hiển thị** với bản sao đã đối chiếu: giá trị và định dạng số khớp (`numeric-hosted-exports-01`). Phiếu giao PDF hosted một trang A4 có **3 dòng lượng khớp Excel** và tổng tách theo ĐVT; đã xem ảnh. Phiếu này ẩn giá, không dùng nó để kết luận mọi số tiền PDF đã kiểm tra (`numeric-hosted-01/pdf-quantity-reconciliation.json`).
 - Snapshot `numeric-audit-after` lấy sau khi kết thúc browser và tải file: so `numeric-audit-before`, **80/80 bảng giữ nguyên nội dung và schema**, hai DB toàn vẹn `ok`; bằng chứng `numeric-audit-after/full-preservation.json`. Giữ nguyên dữ liệu và các chặn nghiệp vụ còn mở. Bổ sung hướng dẫn dòng đỏ/ĐVT và sửa ghi chú sao lưu trên thanh menu thành `Sao lưu tự động theo lịch`, tránh hiểu phải giữ trình duyệt mở.
 - Rà cuối bộ xuất: sheet `Tổng ĐVT` dùng chung cách ghi text an toàn của file kho; tên đơn vị không trở thành công thức Excel. Nhóm xuất kho chạy lại **7/7 đạt** (`numeric-inventory-export-03`), thêm tình huống chuỗi bắt đầu bằng `=`. Không thay lượng/tiền; các báo cáo hosted phía trên giữ nguyên phạm vi tại commit đã ghi.
+
+### 13.22. Hàng hỏng ngày 03/09 và quy tắc chỉ tô đỏ lỗi — 06/09/2026
+
+- Chủ dự án giải thích hai dòng đặt hàng 157–158 là **hàng bị hỏng, chị đi mua cho khách**. Không còn ghi lý do là chưa biết hàng trả hay nhập nhầm. Chưa đủ thông tin để xác định khoản âm trừ tiền NCC Phong hay theo dõi tiền mua bù riêng; đã hỏi rõ ảnh hưởng công nợ. Dòng 158 vẫn thiếu mã hàng. Chưa đổi dấu, bỏ kiểm tra số âm/mã thiếu hoặc nhập hai dòng vào dữ liệu vận hành.
+- Quyết định màu mới thay quy tắc ở 13.21: **chỉ dòng có lỗi mới đỏ cả dòng**, áp dụng chung mọi file. Dòng chỉ có cảnh báo giữ nội dung cảnh báo riêng; hết lỗi sau lưu/đồng bộ thì hết đỏ. Nút `Tới dòng lỗi` chỉ đến dòng lỗi.
+- Đã sửa bảng Excel và đường mở các bảng HTML sang Excel: lấy dấu hiệu lỗi kiểm tra dữ liệu, không suy lỗi từ màu nhãn trạng thái. Các bản xem trước ghép mã, danh mục, tồn đầu, bảng kê và công nợ được đánh dấu lỗi/cảnh báo riêng; bảng đơn/đặt hàng giữ cách phân loại này. Cảnh báo đối chiếu NXT vẫn hiện chữ `Cần kiểm tra`, không tự coi là đã khớp.
+- Kiểm thử nhóm chịu ảnh hưởng: **69/69 lượt test đạt** (`error-only-tests-01`). Các bằng chứng mới nằm dưới `D:\TDP_RAILWAY_PRIVATE\evidence\error-only-*`; trạng thái browser và triển khai được ghi sau khi có kết quả.
+- Browser DB riêng `error-only-worksheet-03` đạt: đo màu dòng lỗi/cảnh báo khi mở và sau lưu; viewer chung phân biệt lỗi với nhãn trạng thái đã hoàn tác; nhập/dán lượng lẻ, lưu chậm, mất mạng/thử lại, đồng bộ/xung đột, mở/đóng không tự ghi. Không có JavaScript exception. Hai lượt trước dừng ở công cụ kiểm tra (bảng QA bị lần tải nền thay thế; vùng đo pixel lấn sang dòng bên cạnh), đã sửa và chạy lại toàn bộ. Snapshot production trước triển khai `error-only-before` toàn vẹn `ok`.
