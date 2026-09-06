@@ -13,8 +13,9 @@ from openpyxl import load_workbook
 CATALOG_FILENAME = "seller_identities_20260904.xlsx"
 VERSION_KEY = "seller_identity_catalog_version"
 HEADERS = ("STT", "Tên người bán", "Địa chỉ", "Số CMT nhân dân", "Ngày cấp", "Nơi cấp")
-# Explicit customer decision, 05/09/2026. Keep historical rows, never guess IDs.
-EXCLUDED_SELLERS = ("Đoàn Văn Giang", "Nguyễn Văn Toại")
+# Customer confirmed Giang's existing identity on 06/09/2026. Toai remains
+# excluded; retain both source records and all historical transactions.
+EXCLUDED_SELLERS = ("Nguyễn Văn Toại",)
 
 
 def name_key(value):
@@ -61,7 +62,8 @@ def sync_catalog(conn, path):
     """Apply once per source revision; caller owns transaction. Never touch orders.
 
     Duplicate IDs in the supplied source are retained for correction, but receipt
-    enrichment must refuse them. No personal values appear in errors or markers.
+    enrichment must refuse duplicates among eligible sellers. No personal values
+    appear in errors or markers.
     """
     path = Path(path)
     version = "1-" + hashlib.sha256(path.read_bytes()).hexdigest()

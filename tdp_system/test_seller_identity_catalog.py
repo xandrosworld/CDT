@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from openpyxl import Workbook
 
-from .seller_identity_catalog import CATALOG_FILENAME, HEADERS, VERSION_KEY, read_catalog, sync_catalog
+from .seller_identity_catalog import CATALOG_FILENAME, HEADERS, VERSION_KEY, read_catalog, sync_catalog, is_excluded_seller
 from .receipt_export import ReceiptExportError, enrich_receipt_identity_rows, build_purchase_documents_workbook
 from .test_receipt_export import receipt_row, GOLDEN
 
@@ -92,13 +92,12 @@ class SellerIdentityCatalogTests(unittest.TestCase):
         self.assertEqual(tuple(self.conn.execute("SELECT * FROM people").fetchone()), ("Người A", row[3], "03/02/2021", row[5], row[2]))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM people").fetchone()[0], 1)
 
-    def test_all_source_receipts_use_same_person_fields_and_block_two_conflicts(self):
+    def test_all_source_receipts_use_same_person_fields_and_only_toai_is_excluded(self):
         sync_catalog(self.conn, SEED)
-        counts = Counter(row[1] for row in read_catalog(SEED))
         exported = blocked = 0
         for name, identity, issued, place, address in read_catalog(SEED):
             rows = [receipt_row(seller=name, cccd=identity, address="Stale address")]
-            if counts[identity] > 1:
+            if is_excluded_seller(name):
                 with self.assertRaises(ReceiptExportError) as caught:
                     enrich_receipt_identity_rows(self.conn, rows)
                 self.assertNotIn(identity, str(caught.exception))
@@ -116,7 +115,23 @@ class SellerIdentityCatalogTests(unittest.TestCase):
             finally:
                 book.close()
             exported += 1
-        self.assertEqual((exported, blocked), (50, 2))
+        self.assertEqual((exported, blocked), (51, 1))
+
+    def test_confirmed_giang_preserves_history_but_another_eligible_duplicate_still_blocks(self):
+        sync_catalog(self.conn, SEED)
+        before = list(self.conn.iterdump())
+        person = self.conn.execute("SELECT * FROM people WHERE name=?", ("Đoàn Văn Giang",)).fetchone()
+        rows = [receipt_row(seller=person["name"], cccd=person["cccd"])]
+        self.assertFalse(is_excluded_seller(person["name"]))
+        self.assertTrue(is_excluded_seller("Nguyễn Văn Toại"))
+        enriched = enrich_receipt_identity_rows(self.conn, rows)
+        self.assertEqual(enriched[0]["address"], person["address"])
+        self.assertEqual(enriched[0]["issue_date"], person["issue_date"])
+        self.assertEqual(enriched[0]["issue_place"], person["issue_place"])
+        self.assertEqual(before, list(self.conn.iterdump()))
+        self.conn.execute("INSERT INTO people VALUES(?,?,?,?,?)", ("Người trùng kiểm thử", person["cccd"], person["issue_date"], person["issue_place"], person["address"]))
+        with self.assertRaises(ReceiptExportError):
+            enrich_receipt_identity_rows(self.conn, rows)
 
     def test_missing_or_unknown_person_cannot_use_stale_order_address(self):
         sync_catalog(self.conn, SEED)

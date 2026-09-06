@@ -3373,7 +3373,7 @@
       '>2 · Khuyến mại (giá bán 0)</option></select></div>',
       field("Người bán bảng kê", "seller", item.seller, "text", 'list="eligibleSellerList"'),
       '<datalist id="eligibleSellerList">', (state.data.master.eligible_sellers || []).map(function (name) { return '<option value="' + esc(name) + '"></option>'; }).join(''), '</datalist>',
-      '<div class="form-field span-4 muted">Đoàn Văn Giang và Nguyễn Văn Toại đã bị loại khỏi bảng kê/biên nhận mới. Dòng lịch sử vẫn được giữ, không xóa kho hay công nợ.</div>',
+      '<div class="form-field span-4 muted">Đoàn Văn Giang đã được khách xác nhận và được chọn lập bảng kê/biên nhận. Nguyễn Văn Toại vẫn bị loại khỏi chứng từ mới; dữ liệu lịch sử, kho và công nợ được giữ nguyên.</div>',
       field("CCCD", "cccd", item.cccd),
       '<div class="form-field"><label>Hàng bảng kê</label><label class="check-line"><input type="checkbox" name="purchase_list" value="1" ',
       item.purchase_list ? "checked" : "", "> Có lập bảng kê</label></div>",

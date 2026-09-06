@@ -185,7 +185,8 @@ class Round5IntegrationTests(SelectedDocumentExportTests):
             conn.execute("INSERT OR REPLACE INTO people(name,cccd,issue_date,issue_place,address) VALUES('Người hợp lệ kiểm thử','012345670000','01/01/2020','Nơi cấp kiểm thử','Thái Bình')")
             orders = conn.execute("SELECT id FROM orders ORDER BY id").fetchall()
             names = EXCLUDED_SELLERS if all_excluded else ("Người hợp lệ kiểm thử", EXCLUDED_SELLERS[0])
-            for row, name in zip(orders, names):
+            for index, row in enumerate(orders):
+                name = names[index % len(names)]
                 conn.execute("UPDATE orders SET purchase_list=1,seller=?,cccd=? WHERE id=?", (name, "012345670000", row["id"]))
 
     def test_excluded_sellers_never_appear_in_choices_even_after_master_reload(self):
@@ -193,6 +194,7 @@ class Round5IntegrationTests(SelectedDocumentExportTests):
         result = self.client.get('/api/bootstrap').get_json()['master']
         self.assertFalse(any(is_excluded_seller(name) for name in result['eligible_sellers']))
         self.assertEqual(list(EXCLUDED_SELLERS), result['excluded_sellers'])
+        self.assertIn('Đoàn Văn Giang', result['eligible_sellers'])
         with server.db() as conn:
             for name in EXCLUDED_SELLERS:
                 self.assertIsNotNone(conn.execute("SELECT name FROM people WHERE name=?", (name,)).fetchone())

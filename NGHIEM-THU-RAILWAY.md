@@ -50,6 +50,12 @@ Kết quả đối chiếu số liệu từng màn/file và phần dữ liệu c
 - Dữ liệu nằm trên hệ thống trực tuyến. Đóng trình duyệt không dừng lịch sao lưu của dịch vụ đang chạy. Mở cùng địa chỉ và đăng nhập trên máy tính khác để tiếp tục.
 - Kết quả rà từng màn, lỗi tìm được và giới hạn kiểm chứng được lưu tại [KIEM-TRA-MAY-TINH-20260906.md](KIEM-TRA-MAY-TINH-20260906.md). Các thao tác ghi nghiệp vụ trong đợt rà dùng dữ liệu thử riêng.
 
+## Hồ sơ người bán Đoàn Văn Giang
+
+Theo xác nhận khách ngày 06/09, mở lại **Đoàn Văn Giang** trong lựa chọn người bán và bảng kê/biên nhận; **Nguyễn Văn Toại vẫn bị loại** khỏi chứng từ mới. Trạng thái triển khai và bằng chứng tại [README-new-2.md, mục 13.25](README-new-2.md#1325-mở-lại-đoàn-văn-giang-theo-hồ-sơ-khách-xác-nhận--06092026).
+
+Chọn Giang ở dòng cần lập bảng kê, mở **Xem bảng kê và biên nhận**, rồi chọn sheet biên nhận để đối chiếu hồ sơ. Giữ số giấy tờ có số 0 đầu, ngày cấp 28/05/2018, nơi cấp Cục cảnh sát và địa chỉ đúng hồ sơ Giang. Bộ có cả Toại chỉ lập phần hợp lệ và báo phần bị loại; dữ liệu lịch sử của Toại vẫn còn. Giá mua, lượng và các điều kiện chứng từ khác vẫn phải hợp lệ.
+
 ## Ghép mã hóa đơn đầu vào tháng 8
 
 1. Vào **Hóa đơn đầu vào + đầu ra**, chọn **Hóa đơn đầu vào**, từ ngày 01/08/2026 đến 31/08/2026.

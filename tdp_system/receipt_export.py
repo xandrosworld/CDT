@@ -121,7 +121,9 @@ def enrich_receipt_identity_rows(
         person = _row_dict(source)
         people.setdefault(name_key(person.get("name")), []).append(person)
         identity = _identity(person.get("cccd"))
-        if identity:
+        # Excluded historical profiles cannot issue new documents. Their retained
+        # identity must not block the customer-confirmed, eligible seller.
+        if identity and not is_excluded_seller(person.get("name")):
             identities[identity] = identities.get(identity, 0) + 1
 
     invalid: list[str] = []

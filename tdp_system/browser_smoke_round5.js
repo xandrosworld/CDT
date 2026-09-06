@@ -40,8 +40,22 @@ async function main() {
     await ev(`document.querySelector('#content').insertAdjacentHTML('beforeend','<div id="acceptancePreview"></div>'); window.TDPDocuments.open({kind:'purchases',selections:[{batch_id:1}]},'acceptancePreview')`);
     await wait(`document.querySelector('#acceptancePreview .document-sheet')`);
     assert.match(await ev(`document.querySelector('#acceptancePreview [role="alert"]').textContent`),/Không lập bảng kê\/biên nhận cho 10 dòng/);
-    assert.doesNotMatch(await ev(`document.querySelector('#acceptancePreview .document-scroll').textContent`),/Đoàn Văn Giang|Nguyễn Văn Toại/);
+    assert.doesNotMatch(await ev(`document.querySelector('#acceptancePreview .document-scroll').textContent`),/Nguyễn Văn Toại/);
     assert.match(await ev(`document.querySelector('#acceptancePreview .document-scroll').textContent`),/Thái Bình/);
+    assert.match(await ev(`document.querySelector('#acceptancePreview .document-scroll').textContent`),/Đoàn Văn Giang/);
+    const master=await ev(`fetch('/api/bootstrap').then(r=>r.json()).then(r=>r.master)`);
+    assert.ok(master.eligible_sellers.includes('Đoàn Văn Giang'));
+    assert.deepEqual(master.excluded_sellers,['Nguyễn Văn Toại']);
+    let giangReceipt = false;
+    const sheetCount=await ev(`document.querySelectorAll('#acceptancePreview [data-open-sheet]').length`);
+    for(let index=1;index<sheetCount;index++) {
+      await click('#acceptancePreview [data-open-sheet="'+index+'"]');
+      const content=await ev(`document.querySelector('#acceptancePreview .document-scroll').textContent`);
+      if(content.includes('Đoàn Văn Giang')) { giangReceipt=true; break; }
+    }
+    assert.ok(giangReceipt,'Confirmed seller must have a separate receipt');
+    await ev(`document.querySelector('#acceptancePreview .document-scroll').scrollIntoView({block:'start'})`);
+    fs.writeFileSync('D:/TDP_ROUND5/giang-receipts-browser.png', Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     assert.equal(await ev(`performance.getEntriesByType('resource').filter(r=>r.name.includes('/excel?')||r.name.includes('/pdf?')).length`),0);
     for(const width of [1440,1024]){
       await call('Emulation.setDeviceMetricsOverride',{width,height:950,deviceScaleFactor:1,mobile:false});

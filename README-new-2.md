@@ -1,5 +1,10 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Hồ sơ người bán — 06/09/2026:** khách xác nhận **Đoàn Văn Giang** là
+> hồ sơ đúng trong hai người bị loại trước đây. Đã sửa source để mở lại Giang;
+> **Nguyễn Văn Toại vẫn bị loại** khỏi bảng kê/biên nhận mới. Kết quả kiểm tra
+> và trạng thái triển khai tại **13.25**; thay quyết định loại cả hai ở 6.1/10.2.
+
 > **Xử lý phần Phong — 06/09/2026:** hai khoản mua hộ do hàng hỏng ngày 03/09
 > được trừ **207.000 đồng vào công nợ Phong**, giữ doanh thu và lượng bán.
 > Đã deploy Railway và kiểm tra lại; kết quả và phạm vi tại **13.24**.
@@ -350,6 +355,8 @@ Kết quả rà và sửa riêng 3.1–3.2 ngày 05/09/2026 (source, chưa build
 
 ### 6.1. Giấy biên nhận
 
+**Cập nhật 06/09/2026:** khách đã xác nhận hồ sơ Đoàn Văn Giang; chỉ giữ loại Nguyễn Văn Toại. Quyết định và kết quả mới tại **13.25** thay quy tắc loại cả hai ngày 05/09 bên dưới.
+
 - Không dùng một địa chỉ/nơi cấp mặc định cho tất cả người bán.
 - Số CCCD, ngày cấp, nơi cấp và địa chỉ phải lấy cùng một hồ sơ người bán.
 - Trường hợp người bán ở Thái Bình không được tự hiện Hải Phòng.
@@ -443,7 +450,7 @@ Chỉ bàn giao bản mới khi chứng minh được đầy đủ các tình hu
 
 - Kho hóa đơn, được/chưa được xuất: đã rà/sửa và có kết quả test tại 3.1–3.2. Giữ các test hồi quy, không làm lại từ đầu.
 - Lượt 1 hóa đơn/tra cứu kho: đã sửa và kiểm tra source, xem bằng chứng ngay sau mục 3.5; chưa đưa vào EXE mới.
-- CCCD/địa chỉ: đã sửa theo 6.1. Quyết định mới là loại hai hồ sơ trùng khỏi chứng từ mới, không còn chờ khách trả lời.
+- CCCD/địa chỉ: đã sửa theo 6.1. Quyết định ngày 06/09 tại 13.25 mở lại Đoàn Văn Giang theo xác nhận khách; Nguyễn Văn Toại vẫn bị loại khỏi chứng từ mới.
 - Kho thực tế trừ ngay khi đặt hàng: khách đã chốt tại 2.1; đưa vào lượt 2, không còn ghi là chờ xác nhận thời điểm trừ.
 - Các lượt dưới đây là **cách gom phạm vi để triển khai**, không phải kết luận rằng mọi chức năng trong đó chưa có. Rà cái đang có rồi chỉ sửa phần thiếu/sai.
 
@@ -973,3 +980,14 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Snapshot `phong-after` lấy sau khi browser kết thúc: so với `phong-before`, **80/80 bảng giữ nguyên mọi cột và giá trị đã có**; hai bảng dòng mua/lịch sử chỉ thêm `line_kind` mặc định hàng hóa. Hai DB toàn vẹn `ok`; bằng chứng `phong-after/full-preservation.json`. Không diễn đạt schema giữ nguyên vì đã thêm hai cột có chủ đích.
 - Chưa tự nạp hoặc duyệt đơn 03/09 trên production; số 790.040đ ở trên là kết quả trên bản sao. Bốn mã tồn đầu âm và các dòng hóa đơn chưa đủ căn cứ giữ nguyên. Hướng dẫn thao tác đã cập nhật tại NGHIEM-THU-RAILWAY.md.
 - Hồi quy trước triển khai `phong-regression-01`: **78 module / 589 test đạt, 0 lỗi/0 thất bại/không bỏ qua bài nào**. Browser bản sao kiểm tra thêm tổng phát sinh tài khoản Phong ở `/api/debts` khớp 790.040đ; kiểm tra cú pháp JS và `git diff --check` đạt.
+
+### 13.25. Mở lại Đoàn Văn Giang theo hồ sơ khách xác nhận — 06/09/2026
+
+- Khách xác nhận ảnh hồ sơ **Đoàn Văn Giang** là đúng trong hai người từng bị loại; chủ dự án yêu cầu xử lý. Quyết định này thay việc loại cả Giang và Toại ở 6.1/10.2. **Nguyễn Văn Toại vẫn bị loại** khỏi lựa chọn và bảng kê/biên nhận mới.
+- Đối chiếu ảnh với danh mục nguồn và snapshot Railway mới `giang-before`: số giấy tờ 9 chữ số có số 0 đầu, ngày cấp 28/05/2018 và nơi cấp Cục cảnh sát khớp. Địa chỉ đã có trong đúng hồ sơ Giang là **Xã Khởi Nghĩa - Huyện Tiên Lãng - Hải Phòng**; ảnh không cung cấp địa chỉ mới. Không thêm số để biến thành CCCD 12 chữ số. Số giấy tờ đầy đủ và chứng từ thử được giữ ngoài Git.
+- Bỏ Giang khỏi danh sách loại theo tên. Khi kiểm tra trùng số giấy tờ để lập biên nhận mới, chỉ xét người bán được phép sử dụng; hồ sơ Toại vẫn được giữ để tra cứu, không làm chặn Giang đã được khách xác nhận. Hai người được phép sử dụng mà trùng số vẫn bị chặn; Toại không thể vượt chặn bằng cách đổi số giấy tờ.
+- Không cần sửa hồ sơ hoặc dữ liệu nghiệp vụ Railway vì hồ sơ Giang hiện tại đã khớp. Không đổi danh mục nguồn, đơn hàng, kho, công nợ hoặc lịch sử. Màn chọn người bán nêu rõ Giang được mở lại, Toại còn bị loại; nạp lại danh mục không đưa Toại trở lại lựa chọn.
+- **105 lượt test đạt** trong 10 nhóm chịu ảnh hưởng (`giang-tests-01`, `giang-tests-02`): gồm 9 bài danh mục/định danh, 29 bài hoàn thiện và 67 bài chứng từ/giao diện liên quan. Bộ 52 hồ sơ nguồn xuất đúng 51 người, chặn Toại; kiểm tra các ô D9–D12 của từng biên nhận, giữ hồ sơ/đơn lịch sử và chặn trùng giữa người bán còn được phép sử dụng.
+- `giang-real-copy-01` dùng kết nối chỉ đọc tới snapshot Railway mới, hồ sơ thật và dòng hàng kiểm thử trong bộ nhớ: xuất riêng Giang, bộ có Giang–Toại chỉ xuất Giang, bộ chỉ Toại bị chặn. Excel giữ số giấy tờ dạng text có số 0 đầu và bốn ô hồ sơ khớp nguồn; snapshot không đổi. Các chứng từ này là mẫu kiểm thử, không dùng thanh toán.
+- Browser `giang-browser-02` đạt luồng chọn/xem bảng kê, có Giang và cảnh báo loại Toại, menu/sao lưu và khổ 1440/1024px; không JavaScript exception. Lượt 03 bổ sung mở đúng biên nhận Giang để chụp nội dung. Bằng chứng nằm dưới `D:\TDP_RAILWAY_PRIVATE\evidence\giang-*`.
+- **Trạng thái:** đã sửa và kiểm tra source; đang triển khai Railway. Chỉ ghi đã mở trên web sau khi kiểm tra bản hosted thành công.

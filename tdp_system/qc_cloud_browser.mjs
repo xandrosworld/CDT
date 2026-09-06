@@ -51,6 +51,10 @@ try {
   await wait('document.querySelector("#nav") && !document.querySelector(".loading-panel")');
   report.checks.push('browser_login_success');
   const boot=await api('/api/bootstrap');assert.equal(boot.status,200);
+  assert.ok(boot.data.master.eligible_sellers.includes('Đoàn Văn Giang'));
+  assert.ok(!boot.data.master.eligible_sellers.includes('Nguyễn Văn Toại'));
+  assert.deepEqual(boot.data.master.excluded_sellers,['Nguyễn Văn Toại']);
+  report.checks.push('confirmed_giang_eligible_toai_excluded');
   // Protocol interception also protects forms, XHR and Request objects, not just fetch options.
   await call('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]});
   // This hosted smoke is read-only. Block any accidental edit before it reaches production.

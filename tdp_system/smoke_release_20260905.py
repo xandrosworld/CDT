@@ -81,7 +81,7 @@ def main():
                 assert 'data-view="physical"' in nav
                 script=request('/static/app.js').decode()
                 assert '/api/backup/status' in script and '&active_only=1' in script
-                assert 'Đoàn Văn Giang' not in bootstrap['master']['eligible_sellers']
+                assert 'Đoàn Văn Giang' in bootstrap['master']['eligible_sellers']
                 assert 'Nguyễn Văn Toại' not in bootstrap['master']['eligible_sellers']
                 status=get('/api/backup/status')
                 assert status['last_success'] and not status['error'], 'Packaged backup failed'
