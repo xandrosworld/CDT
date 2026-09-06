@@ -77,6 +77,30 @@ try {
         assert.equal(row.text,line.unit_price==null?'—':new Intl.NumberFormat('en-US',{maximumFractionDigits:0}).format(line.unit_price)+' đ');
       }
       report.checks.push('readonly_source_unit_price_matches_every_filtered_api_line');
+      const chaLua=priceSource.data.lines.find(line=>line.source_item_name==='Chả lụa' &&
+        line.mapping_status==='unmapped' && (line.candidate_products||[]).length>1);
+      if(chaLua) {
+        const editorId='map_input_'+chaLua.id;
+        assert.equal(await evaluate(`document.getElementById('${editorId}').tagName`),'INPUT');
+        const originalValue=await evaluate(`document.getElementById('${editorId}').value`);
+        report.catalog_search=[];
+        for(const term of ['Chả lụa','F000009']) {
+          await evaluate(`(()=>{const e=document.getElementById('${editorId}');e.scrollIntoView({block:'center',inline:'center'});e.focus();e.select();})()`);
+          await call('Input.insertText',{text:term});
+          await wait(`!!document.querySelector('#msmiProductOptions option[value="F000009"]')`);
+          const labels=await evaluate(`Array.from(document.querySelectorAll('#msmiProductOptions option')).map(o=>({code:o.value,label:o.label}))`);
+          assert.ok(labels.find(p=>p.code==='F000009').label.includes('Chả lụa heo'));
+          report.catalog_search.push({term,items:labels});
+        }
+        await shot('cha-lua-catalog-search');
+        // Restore the unsaved editor; selecting/searching must never write mapping.
+        await evaluate(`(()=>{const e=document.getElementById('${editorId}');e.value=${JSON.stringify(originalValue)};e.dispatchEvent(new Event('input',{bubbles:true}));e.blur();})()`);
+        const afterSearch=await api('/api/invoice-workbench/invoices'+priceQuery);
+        const afterLine=afterSearch.data.lines.find(line=>line.id===chaLua.id);
+        assert.equal(afterLine.product_code,chaLua.product_code);
+        assert.equal(afterLine.mapping_status,chaLua.mapping_status);
+        report.checks.push('cha_lua_search_finds_F000009_by_name_and_code_without_saving');
+      }
       assert.equal(await evaluate('!!document.querySelector(".tdp-sheet-shell")'),false);
       assert.ok(await evaluate('!!document.querySelector(".invoice-lines-card .invoice-mapping-input:not(:disabled)")'));
       await evaluate('document.querySelector(".invoice-lines-card .invoice-mapping-input").scrollIntoView({block:"center",inline:"center"})');

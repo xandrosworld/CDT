@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Sửa tìm mã Chả lụa — 06/09/2026:** đã sửa ô ghép mã để tìm tên/mã
+> trong danh mục kể cả khi có nhiều gợi ý; đang triển khai và kiểm tra Railway.
+> Bằng chứng và trạng thái mới nhất tại **13.30**.
+
 > **Bổ sung cột Đơn giá — 06/09/2026:** đã thêm giá nguồn giữa Số lượng nguồn
 > và Tiền dòng trong bảng ghép mã, gồm chế độ toàn màn hình và Excel đúng bộ lọc.
 > **Đã triển khai và kiểm tra trực tiếp Railway**; bằng chứng tại **13.29**.
@@ -1053,3 +1057,13 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Source **`9e83d68725c61b9365a811ef8fc52c97a7eb6246`** đã triển khai từ `xandrosworld/CDT/main`, deployment **`55a147be-95c3-48c4-9b1c-53d8d25de949`**, trạng thái **SUCCESS**. Browser Railway `unit-price-hosted-01` đạt **37 mục / 54 ảnh**, đối chiếu giá từng dòng đang lọc với API, kiểm tra bốn khổ máy tính và thao tác mở/đóng bảng; không JavaScript exception, HTTP 5xx hoặc yêu cầu ghi ngoài phạm vi. Đã xem ảnh `mapping-space-1440.png`; dòng Chả lụa hiển thị đơn giá 83.000đ đúng nguồn.
 - Tải Excel trực tiếp từ Railway, đối chiếu **1.107 dòng đầu vào / 1.163 dòng đầu ra** tháng 8: từng đơn giá và tiền dòng khớp API, định dạng tiền và dòng tổng đúng (`unit-price-exports-01/result.json`).
 - Snapshot `unit-price-after` lấy sau khi browser và tải Excel kết thúc; so với `unit-price-before`: **80/80 bảng giữ nguyên nội dung/schema**, hai DB toàn vẹn `ok` (`unit-price-after/full-preservation.json`). Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/unit-price-*`. Khách tải lại trang để thấy cột mới; đây là bổ sung hiển thị, không xác nhận mọi hóa đơn đã đủ điều kiện ghi kho.
+
+
+### 13.30. Tìm mã trong danh mục khi Chả lụa có nhiều gợi ý — 06/09/2026
+
+- Nguyên nhân: dòng có nhiều mã khớp tên được dựng thành danh sách chọn đóng, chỉ chứa các mã gợi ý chính xác. Nguồn “Chả lụa” gợi ý F000005/F000006 nên không có đường tìm F000009 — Chả lụa heo dù mã này tồn tại trong danh mục. Đây là lỗi giao diện, độc lập với tài khoản TESTVC của đầu ra.
+- Thay danh sách đóng bằng ô tìm tên/mã dùng chung cho mọi dòng chưa ghép đủ điều kiện sửa, cả đầu vào và đầu ra. Tìm trên danh mục qua API hiện có; có tên hàng, mã và ĐVT. Dòng nhiều gợi ý để trống lựa chọn, không tự chọn mã theo tên gần giống hoặc giá. Chọn mã rồi Enter/Ghi nhớ vẫn dùng API kiểm tra và lưu hiện có; khác ĐVT vẫn cần xác nhận quy đổi. Hóa đơn nguồn lỗi, đã ghi kho hoặc đầu ra chưa phát hành vẫn bị khóa.
+- Chặn kết quả tìm kiếm cũ ghi đè khi đổi từ khóa, chuyển dòng hoặc bảng được tải lại; xóa gợi ý cũ ngay khi gõ. Tìm kiếm/chọn mã không tự lưu hay ghi kho. Không thay quy tắc tự ghép chính xác hoặc dữ liệu danh mục để ép ra F000009.
+- Nhóm chịu ảnh hưởng gồm **67 bài** trong chín module: 64 bài cũ đạt, ba bài mới đạt sau sửa fixture thiếu trường updated_at bắt buộc. Bài mới kiểm tra hai gợi ý chính xác vẫn tìm được mã thứ ba bằng tên có/không dấu và mã; tìm kiếm chỉ đọc; nguồn bị khóa; phản hồi chậm/đổi dòng/tải lại không ghi đè kết quả. Bằng chứng `catalog-mapping-tests-01`, `catalog-mapping-tests-02`.
+- Browser fixture `catalog-mapping-browser-01` đạt: hai mã gợi ý vẫn cho nhập, tìm theo tên/mã rồi Enter chọn mã thứ ba ngoài gợi ý; tìm không ghi mapping; mã sai bị chặn, đóng/mở giữ ô đang gõ. Chạy tiếp toàn luồng quy đổi, xác nhận/hủy ghi kho, tra cứu, chống trùng, đầu ra và chốt/mở/chốt lại ở bốn khổ máy tính đạt. Mọi thao tác lưu thử dùng DB cô lập. Cú pháp JS và git diff --check đạt.
+- Snapshot trước triển khai `catalog-mapping-before` toàn vẹn ok. Trạng thái triển khai và kiểm tra Chả lụa trực tiếp trên Railway được bổ sung sau khi có kết quả; chưa tự ghép F000009 cho khách hoặc đổi tài khoản M-Invoice trong lượt này. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/catalog-mapping-*`.

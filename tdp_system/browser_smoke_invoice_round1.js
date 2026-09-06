@@ -61,6 +61,14 @@ async function main() {
     await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
     await checkPrices('input',(await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body);
     assert.equal(await evaluate(`!!document.querySelector('.tdp-sheet-shell')`),false);
+    const ambiguous = initial.lines.find(line=>line.id===fixture.line_b);
+    assert.deepEqual(ambiguous.candidate_products.map(p=>p.code).sort(),['R1-ALT-A','R1-ALT-B']);
+    assert.equal(await evaluate(`document.getElementById('${mappingId}').tagName`),'INPUT');
+    assert.equal(await evaluate(`document.getElementById('${mappingId}').value`),'');
+    await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
+    await call('Input.insertText',{text:'Hàng kiểm thử kg'});
+    await wait(`!!document.querySelector('#msmiProductOptions option[value="R1-KG"]')`);
+    assert.equal((await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.lines.find(line=>line.id===fixture.line_b).product_code,'');
     await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
     await call('Input.insertText',{text:'NO-SUCH-CODE'});
     await click('.invoice-mapping-fullscreen-bar button');
@@ -69,7 +77,11 @@ async function main() {
     await click(`[data-action="save-invoice-mapping"][data-id="${fixture.line_b}"]`);
     await wait(`document.querySelector('#toast').textContent.length > 0 && !document.querySelector('[data-action="save-invoice-mapping"][data-id="${fixture.line_b}"]').disabled`);
     assert.equal((await request(`/api/invoice-inventory/source/input/${fixture.input_ids['2']}`)).body.events.length,0);
-    // Enter saves mapping; a differing unit still needs an explicit positive factor.
+    // Search by code outside the exact-name candidates, then Enter saves it.
+    await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
+    await call('Input.insertText',{text:'R1-KG'});
+    await wait(`!!document.querySelector('#msmiProductOptions option[value="R1-KG"]')`);
+    // A differing unit still needs an explicit positive factor.
     await evaluate(`document.getElementById('${mappingId}').value='R1-KG';document.getElementById('${mappingId}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`);
     await wait(`!document.getElementById('${mappingId}')`);
     await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);

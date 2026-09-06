@@ -58,6 +58,8 @@ Chọn Giang ở dòng cần lập bảng kê, mở **Xem bảng kê và biên n
 
 ## Ghép mã hóa đơn đầu vào tháng 8
 
+Ô ghép mã cho phép **tìm tên hoặc mã trong danh mục**, kể cả dòng có nhiều mã gợi ý. Ví dụ gõ **Chả lụa** để xem các mã, hoặc gõ **F000009** để tìm **Chả lụa heo**. Chọn đúng mã theo hàng thực tế rồi Enter hoặc **Ghi nhớ**; chỉ tìm/chọn chưa ghi dữ liệu. Giá giống nhau không tự xác định mã đúng. Nếu chưa thấy kết quả, gõ thêm tên hoặc mã cụ thể.
+
 1. Vào **Hóa đơn đầu vào + đầu ra**, chọn **Hóa đơn đầu vào**, từ ngày 01/08/2026 đến 31/08/2026.
 2. Khi **Tải/tiếp tục đầu vào**, hệ thống tự ghép tên duy nhất và cùng ĐVT; không hỏi xác nhận lại mã khớp chắc chắn.
 3. Nếu có bảng kê nhập cũ: mở **Tự ghép mã từ bảng kê nhập cũ**, chọn file rồi bấm **Tự ghép từ file cũ**. Hệ thống đối chiếu MST, số hóa đơn, tên, lượng, tiền, mã và ĐVT; lưu phần đủ căn cứ rồi ghép tiếp theo danh mục trong cùng lần xử lý. Các mã/quy đổi đã chọn được giữ nguyên.

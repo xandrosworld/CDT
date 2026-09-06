@@ -187,6 +187,7 @@
   var orderForm = document.getElementById("orderForm");
   var toastTimer;
   var msmiProductSearchTimer;
+  var msmiProductSearchVersion = 0;
 
   function esc(value) {
     return String(value == null ? "" : value)
@@ -2863,18 +2864,28 @@
 
   async function loadMsmiProductOptions(input) {
     var productList = document.getElementById("msmiProductOptions");
-    if (!productList || !input) return;
+    if (!productList || !input || !input.isConnected || document.activeElement !== input) return;
+    var version = ++msmiProductSearchVersion;
+    var value = input.value;
     var term = input.value.trim() || input.dataset.sourceName || "";
+    productList.innerHTML = "";
+    function currentSearch() {
+      return version === msmiProductSearchVersion && input.isConnected &&
+        document.activeElement === input && input.value === value &&
+        document.getElementById("msmiProductOptions") === productList;
+    }
     if (term.length < 2) return;
     try {
       var result = await api("/api/products/search?q=" + encodeURIComponent(term));
+      if (!currentSearch()) return;
       productList.innerHTML = (result.items || []).map(function (product) {
         var label = product.code + " · " + product.name;
+        if (product.unit) label += " · " + product.unit;
         if (product.invoice_name && product.invoice_name !== product.name) label += " · Tên trên hóa đơn: " + product.invoice_name;
         return '<option value="' + esc(product.code) + '" label="' + esc(label) + '"></option>';
       }).join("");
     } catch (error) {
-      showToast(error.message, true);
+      if (currentSearch()) showToast(error.message, true);
     }
   }
 
@@ -5584,7 +5595,10 @@
 
   content.addEventListener("focusin", function (event) {
     var input = event.target.closest(".invoice-mapping-input");
-    if (input) loadMsmiProductOptions(input);
+    if (input) {
+      clearTimeout(msmiProductSearchTimer);
+      loadMsmiProductOptions(input);
+    }
   });
 
   content.addEventListener("input", function (event) {
@@ -5607,6 +5621,9 @@
     var input = event.target.closest(".invoice-mapping-input");
     if (!input) return;
     clearTimeout(msmiProductSearchTimer);
+    ++msmiProductSearchVersion;
+    var productList = document.getElementById("msmiProductOptions");
+    if (productList) productList.innerHTML = "";
     msmiProductSearchTimer = setTimeout(function () { loadMsmiProductOptions(input); }, 220);
   });
 

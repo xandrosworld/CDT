@@ -15,6 +15,10 @@ def main():
         server.init_database()
         with server.db() as conn:
             fixture = seed_round1(conn, extra_lines=18)
+            # Two exact-name suggestions must not prevent choosing a third catalog code.
+            name = conn.execute("SELECT source_item_name FROM msmi_invoice_items WHERE id=?", (fixture['line_b'],)).fetchone()[0]
+            conn.executemany("INSERT INTO products(code,name,unit) VALUES(?,?,?)",
+                             [('R1-ALT-A', name, 'kg'), ('R1-ALT-B', name, 'kg')])
         # Hard block every network connector route in this browser fixture.
         @server.app.before_request
         def prevent_remote_access():
