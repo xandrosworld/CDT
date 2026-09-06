@@ -147,11 +147,14 @@ async function main() {
     await change('invoiceStatus','ready');
     await wait(`document.querySelector('[data-action="create-msmi-receipt"][data-id="${fixture.input_ids['2']}"]')`);
     // Cancelling confirmation must leave zero stock entries.
-    await evaluate('window.confirm=()=>false');
     await click(`[data-action="create-msmi-receipt"][data-id="${fixture.input_ids['2']}"]`);
+    await wait(`document.querySelector('.receipt-cancel')`);
+    await click('.receipt-cancel');
     assert.equal((await request(`/api/invoice-inventory/source/input/${fixture.input_ids['2']}`)).body.events.length,0);
     await evaluate('window.confirm=()=>true');
     await click(`[data-action="create-msmi-receipt"][data-id="${fixture.input_ids['2']}"]`);
+    await wait(`document.querySelector('.receipt-confirm:not([disabled])')`);
+    await click('.receipt-confirm');
     await wait(`document.querySelector('#invoice-list-count')?.textContent.includes('0 / 3')`);
     await change('invoiceStatus','posted');
     await click(`[data-action="view-invoice-stock"][data-id="${fixture.input_ids['2']}"]`);
@@ -304,12 +307,41 @@ async function main() {
     await wait(`!document.querySelector('.invoice-receipt-summary-dialog')`);
     assert.ok(await evaluate(`!!document.querySelector('.invoice-mapping-fullscreen-bar')`));
     await click(`[data-action="create-msmi-receipt"][data-id="${promo.promotion_invoice}"]`);
+    await wait(`document.querySelector('.receipt-confirm:not([disabled])')`);
+    await click('.receipt-confirm');
     await wait(`document.querySelector('[data-action="view-invoice-stock"][data-id="${promo.promotion_invoice}"]')`);
     assert.equal((await request(`/api/msmi/invoices/${promo.promotion_invoice}/receipt`,'POST',{})).status,200);
     const oilStock=(await request('/api/invoice-valuation?from=2026-08-01&to=2026-08-31')).body.items.find(r=>r.product_code==='QA-OIL');
     assert.equal(oilStock.closing_qty,30);assert.equal(oilStock.closing_value,1288889);
     assert.ok(Math.abs(oilStock.average_unit_cost-1288889/30)<0.000001);
     await click('.invoice-mapping-fullscreen-bar > button');
+    const bulk=(await request('/fixture/bulk-receipts','POST',{})).body;
+    assert.equal(bulk.ok,true);
+    await change('invoiceTo','2026-08-30');
+    await change('invoiceFrom','2026-08-30');
+    await change('invoiceStatus','ready');
+    await wait(`document.querySelector('[data-action="review-input-receipts"]:not([disabled])')`);
+    await click('[data-action="review-input-receipts"]');
+    await wait(`document.querySelectorAll('.receipt-choice').length>=2`);
+    assert.equal(await evaluate(`document.querySelector('.receipt-selection-details').open`),false);
+    await evaluate(`document.querySelector('.receipt-selection-details').open=true`);
+    await click('.receipt-select-all input');
+    assert.equal(await evaluate(`document.querySelector('.receipt-confirm').disabled`),true);
+    await click('.receipt-select-all input');
+    await evaluate(`document.querySelectorAll('.receipt-choice')[1].click()`);
+    const chosen=await evaluate(`Array.from(document.querySelectorAll('.receipt-choice')).filter(c=>c.checked).length`);
+    assert.ok(chosen>=1);
+    fs.writeFileSync('D:/TDP_ROUND1/bulk-receipt-review.png',Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
+    await click('.receipt-confirm');
+    await wait(`!document.querySelector('.receipt-review-dialog')`);
+    await wait(`document.querySelector('.receipt-posted-group')`);
+    const traces=await Promise.all(bulk.ids.map(id=>request('/api/invoice-inventory/source/input/'+id)));
+    assert.equal(traces.filter(r=>r.body.events.length>0).length,1);
+    await click('[data-action="review-input-receipts"]');
+    await wait(`document.querySelector('.receipt-confirm:not([disabled])')`);
+    await click('.receipt-confirm');
+    await wait(`!document.querySelector('.receipt-review-dialog')`);
+    for(const id of bulk.ids) assert.equal((await request('/api/invoice-inventory/source/input/'+id)).body.events.length,1);
     // Many units used to turn the sticky total into a panel covering the rows.
     // Replace only this GET response in the isolated browser, leaving the DB intact.
     await evaluate(`(()=>{const original=window.fetch;window.fetch=async function(input,init){const response=await original(input,init);if(String(input).startsWith('/api/invoice-valuation?')){const data=await response.json();data.items=Array.from({length:240},(_,i)=>({product_code:'LAYOUT-'+i,product_name:'Long inventory item '+i,unit:'unit '+(i%24),opening_qty:1000.855,input_qty:2,output_qty:1,closing_qty:1001.855,opening_value:10000000,input_value:20000,output_value:10000,closing_value:10010000,average_unit_cost:10000,valuation_status:'ok'}));return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});}return response;};})()`);

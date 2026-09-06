@@ -60,7 +60,7 @@ Chọn Giang ở dòng cần lập bảng kê, mở **Xem bảng kê và biên n
 
 **Số lượng nguồn** và **ĐVT** đã tách thành hai cột riêng. **Đơn giá** vẫn là giá trên dòng hóa đơn nguồn.
 
-Với hàng mua và hàng khuyến mại cùng loại, ghép cả hai dòng vào cùng mã kho, đúng ĐVT/quy đổi. Bấm **Tổng nhập / Giá bình quân** tại hóa đơn để xem tổng theo mã: ví dụ 24 can mua + 6 can 0đ = **30 can**, tiền **1.288.889đ**, giá nhập bình quân hiển thị **42.963đ/can**. Bảng tổng lấy đủ dòng đã ghép trong hóa đơn, kể cả dòng bị bộ lọc ẩn; nếu còn thiếu mã/quy đổi sẽ báo tổng chưa đầy đủ. Đây là bình quân riêng hóa đơn; giá bình quân kho còn tính tồn cũ. **Excel đúng bộ lọc** có thêm sheet **Tong nhap theo ma** cùng số liệu. Xem tổng không ghi kho; đóng bảng rồi **Xác nhận nhập cả hóa đơn** khi đã kiểm tra xong.
+Với hàng mua và hàng khuyến mại cùng loại, ghép cả hai dòng vào cùng mã kho, đúng ĐVT/quy đổi. Bấm **Kiểm tra lượng & tiền** tại hóa đơn để xem tổng theo mã: ví dụ 24 can mua + 6 can 0đ = **30 can**, tiền **1.288.889đ**, giá nhập bình quân hiển thị **42.963đ/can**. Bảng tổng lấy đủ dòng đã ghép trong hóa đơn, kể cả dòng bị bộ lọc ẩn; nếu còn thiếu mã/quy đổi sẽ báo tổng chưa đầy đủ. Đây là bình quân riêng hóa đơn; giá bình quân kho còn tính tồn cũ. **Excel đúng bộ lọc** có thêm sheet **Tong nhap theo ma** cùng số liệu. Xem tổng không ghi kho; đóng bảng rồi **Nhập kho hóa đơn này** khi đã kiểm tra xong.
 
 Ô ghép mã cho phép **tìm tên hoặc mã trong danh mục**, kể cả dòng có nhiều mã gợi ý. Ví dụ gõ **Chả lụa** để xem các mã, hoặc gõ **F000009** để tìm **Chả lụa heo**. Bấm mã trong danh sách, hoặc dùng **↑/↓ rồi Enter** để chọn. Sau đó nhấn **Enter** lần nữa hoặc **Ghi nhớ** để lưu; chỉ tìm/chọn chưa ghi dữ liệu. **Escape** đóng gợi ý và giữ bảng đang mở. Giá giống nhau không tự xác định mã đúng. Nếu chưa thấy kết quả, gõ thêm tên hoặc mã cụ thể.
 
@@ -68,11 +68,11 @@ Với hàng mua và hàng khuyến mại cùng loại, ghép cả hai dòng vào
 2. Khi **Tải/tiếp tục đầu vào**, hệ thống tự ghép tên duy nhất và cùng ĐVT; không hỏi xác nhận lại mã khớp chắc chắn.
 3. Nếu có bảng kê nhập cũ: mở **Tự ghép mã từ bảng kê nhập cũ**, chọn file rồi bấm **Tự ghép từ file cũ**. Hệ thống đối chiếu MST, số hóa đơn, tên, lượng, tiền, mã và ĐVT; lưu phần đủ căn cứ rồi ghép tiếp theo danh mục trong cùng lần xử lý. Các mã/quy đổi đã chọn được giữ nguyên.
 4. **Tự ghép mã trùng khớp** dùng khi muốn xử lý tiếp sau khi bổ sung danh mục. Bấm lại không tạo thêm mapping hay lịch sử nếu không có gì mới. Các quy tắc được nhớ cho cùng NCC/mã nguồn/tên/ĐVT ở những kỳ chưa ghi kho.
-5. Chỉ phần không khớp duy nhất, thiếu mã hoặc cần hệ số quy đổi mới để người dùng xử lý trên đầu bảng. Tiếp theo là hóa đơn đủ mã chờ **Xác nhận nhập cả hóa đơn**; phần đã xử lý xong nằm dưới. Xác nhận nhập kho là bước ghi sổ riêng, không phải xác nhận lại từng mã đã tự ghép.
+5. Chỉ phần không khớp duy nhất, thiếu mã hoặc cần hệ số quy đổi mới để người dùng xử lý trên đầu bảng. Tiếp theo là hóa đơn đủ mã chờ **Nhập kho hóa đơn này**; phần đã xử lý xong nằm dưới. Xác nhận nhập kho là bước ghi sổ riêng, không phải xác nhận lại từng mã đã tự ghép.
 
 Để sửa mã trên màn hình lớn, bấm **Ghép mã / Quy đổi · toàn màn hình** ngay trên bảng hóa đơn. Nhập ở cột **Ghép mã / Quy đổi**, nhấn **Enter** hoặc **Ghi nhớ** (mã hàng), nút lưu quy đổi (hệ số); đơn vị khác nhau vẫn cần hệ số quy đổi hợp lệ. Bảng tiếp tục mở sau khi lưu. **Đóng toàn màn hình** hoặc Escape quay lại; ô mới gõ chưa Enter/bấm lưu vẫn là phần chưa lưu. Cột **Đơn giá** nằm giữa **Số lượng nguồn** và **Tiền dòng (chưa thuế)**, lấy giá của dòng hóa đơn nguồn và hiển thị nguyên đồng; cũng có trong **Excel đúng bộ lọc**. Số lượng, đơn giá và tiền hóa đơn nguồn chỉ xem. Nếu còn mở bản Excel cũ và gặp thông báo “The range is protected”, đóng bảng cũ rồi tải lại trang để dùng nút mới.
 
-Trong chế độ toàn màn hình, bảng dùng hết phần chiều cao còn lại của trình duyệt. **Hướng dẫn / Ghép từ file cũ** được thu gọn, bấm khi cần. Cột **Thao tác cả hóa đơn** giữ ở mép phải khi kéo ngang; hóa đơn đủ điều kiện hiện nút **Xác nhận nhập cả hóa đơn**. Dòng tổng gọn phía dưới; bấm số **ĐVT** để xem tổng lượng riêng từng đơn vị. Màn hình hẹp có thanh kéo ngang để xem các cột giữa.
+Trong chế độ toàn màn hình, bảng dùng hết phần chiều cao còn lại của trình duyệt. **Hướng dẫn / Ghép từ file cũ** được thu gọn, bấm khi cần. Cột **Thao tác cả hóa đơn** giữ ở mép phải khi kéo ngang; hóa đơn đủ điều kiện hiện nút **Nhập kho hóa đơn này**. Dòng tổng gọn phía dưới; bấm số **ĐVT** để xem tổng lượng riêng từng đơn vị. Màn hình hẹp có thanh kéo ngang để xem các cột giữa.
 
 
 Ngày 06/09 đã áp dụng trên Railway: **941/1.104 dòng đã ghép, 171/264 hóa đơn sẵn sàng, còn 163 dòng thuộc 93 hóa đơn cần xử lý**. Khách không phải chạy lại phần này. 111 quy tắc đã ghép tổng cộng 9.193 dòng cùng nguồn ở các kỳ chưa ghi kho. Có sao lưu trước/sau, kết quả mapping khớp bản sao đã kiểm chứng; tổng 266 hóa đơn và 919.234.874 đồng giữ nguyên. Chưa ghi kho trong lượt tự ghép.
@@ -135,3 +135,14 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 - **Enter / F3 / ↓** tới kết quả tiếp; **Shift+Enter / Shift+F3 / ↑** về kết quả trước. Bộ đếm cho biết vị trí và số ô khớp. Không thấy thì kiểm tra từ khóa và phạm vi ngày/trạng thái/trang đang mở.
 - **Escape** khi đang ở thanh tìm xóa từ khóa, giữ bảng mở. Nút đóng bảng vẫn dùng như trước. Tìm trong phạm vi bảng đang mở; bản xem chỉ một trang không tìm dữ liệu các trang khác.
 - Bảng Excel chọn và cuộn tới đúng ô. Đang gõ ô rồi Ctrl+F thì ô được kết thúc nhập theo cơ chế tự lưu. Riêng ô ghép mã hóa đơn vẫn cần Enter ở ô mã hoặc Ghi nhớ mới lưu; Enter ở ô tìm chỉ tìm kiếm.
+
+
+### Nhập kho nhiều hóa đơn — cập nhật 07/09/2026
+
+- **Đã đủ mã · Chưa nhập kho** nghĩa là đã ghép mã/quy đổi; khách vẫn cần xác nhận nhập kho.
+- Đầu bảng có **Nhập kho … hóa đơn** theo bộ lọc đang xem. Bấm để phần mềm kiểm tra lại, xem số hóa đơn/số dòng và **tiền hàng nhập chưa thuế**. Đây không phải tổng thanh toán hóa đơn gồm thuế/dịch vụ.
+- Mặc định chọn toàn bộ phần đủ điều kiện. Khi cần, mở **Xem chi tiết / Bỏ chọn hóa đơn** hoặc **Xem tổng lượng theo đơn vị**. Bấm **Xác nhận nhập kho** một lần cho cả nhóm. Hóa đơn bị chặn có lý do trong bảng xem trước.
+- Dữ liệu thay đổi trước xác nhận thì dừng và yêu cầu mở lại bảng kiểm tra; lỗi giữa nhóm hoàn tác cả nhóm. Mất kết nối có thể gửi lại cùng lựa chọn, không nhập trùng. Đóng/Quay lại không ghi kho.
+- Sau nhập có **Xem hàng vừa nhập** để mở từng hóa đơn. Hóa đơn còn thiếu mã/quy đổi tiếp tục chờ. Vẫn có **Kiểm tra lượng & tiền** và **Nhập kho hóa đơn này** tại từng hóa đơn.
+- **Tự ghép mã trùng khớp**, **Đến dòng cần sửa đầu tiên**, **Excel đúng bộ lọc** nằm trong **Thao tác khác** ở đầu bảng. Cột ghép mã và thao tác hóa đơn cùng giữ bên phải; kéo ngang để xem cột nguồn.
+- Bộ lọc ngày hóa đơn độc lập với đơn hàng đang chọn phía trên. Nhập nhóm chỉ áp dụng hóa đơn đầu vào; không tự phát hành hóa đơn đầu ra hoặc ghi nhận thanh toán.

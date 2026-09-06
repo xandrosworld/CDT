@@ -62,6 +62,26 @@ def main():
             from .test_invoice_receipt_summary import seed_promotion
             with server.db() as conn:
                 return {"ok": True, **seed_promotion(conn, mapped=False)}
+        @server.app.post('/fixture/bulk-receipts')
+        def bulk_receipts():
+            from .test_invoice_workbench_listing import prepare
+            from .test_invoice_input_sync import DateBoundedMsmi, now_iso
+            from .test_msmi_sync import remote_invoice
+            from .invoice_input_sync import sync_input_batch
+            from .invoice_mapping import save_mapping
+            with server.db() as conn:
+                rows=[]
+                for number in (8001,8002,8003):
+                    row=remote_invoice(number);row['tdlap']='2026-08-30'
+                    rows.append(row)
+                batch=prepare(conn)
+                sync_input_batch(conn,DateBoundedMsmi(rows),batch['id'],now_iso)
+                ids=[]
+                for number in (8001,8002):
+                    item=conn.execute('SELECT * FROM msmi_invoice_items WHERE source_item_code=?',(f'SRC-{number:03d}',)).fetchone()
+                    save_mapping(conn,direction='input',item_id=item['id'],product_code='R1-KG',now_iso=now_iso)
+                    ids.append(item['invoice_id'])
+            return {'ok':True,'ids':ids}
         print("ROUND1_SYNTHETIC_READY", flush=True)
         serve(server.app, host="127.0.0.1", port=18801, threads=4)
 

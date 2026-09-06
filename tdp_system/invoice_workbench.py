@@ -509,6 +509,32 @@ def register_invoice_workbench_routes(app, ctx) -> None:
     def tenant_code(conn) -> str:
         return str(setting_get(conn, "tenant_code", "TDP") or "TDP")
 
+    @app.route("/api/invoice-workbench/input-receipts", methods=["GET", "POST"])
+    def api_input_receipts():
+        try:
+            from .invoice_receipt_bulk import preview_receipts, post_receipts, InvoiceReceiptError
+            from .invoice_workbench_listing import invoice_range_payload
+        except ImportError:
+            from invoice_receipt_bulk import preview_receipts, post_receipts, InvoiceReceiptError
+            from invoice_workbench_listing import invoice_range_payload
+        try:
+            with db_factory() as conn:
+                if request.method == 'POST':
+                    conn.execute('BEGIN IMMEDIATE')
+                    body = request.get_json(silent=True)
+                    result = post_receipts(conn, body.get('items') if isinstance(body, dict) else None, tenant_code(conn), now_iso)
+                else:
+                    conn.execute('BEGIN')
+                    payload = invoice_range_payload(conn, tenant=tenant_code(conn), invoice_type='input',
+                        date_from=request.args.get('from'), date_to=request.args.get('to'),
+                        status=request.args.get('status', 'all'), line_filter=request.args.get('line_filter', 'all'))
+                    wanted = request.args.get('id', type=int)
+                    ids = [r['id'] for r in payload['items'] if r['workbench_status'] == 'ready' and (wanted is None or r['id'] == wanted)]
+                    result = preview_receipts(conn, ids, tenant_code(conn), now_iso) if ids else {'items': [], 'blocked': []}
+                return jsonify({'ok': True, **result})
+        except (InvoiceReceiptError, InvoiceWorkbenchError) as error:
+            return jsonify({'ok': False, 'error': str(error), 'code': getattr(error, 'code', 'invalid')}), getattr(error, 'status', 400)
+
     @app.get("/api/invoice-workbench/invoices")
     @app.get("/api/invoice-workbench/invoices/export")
     def api_invoice_range_rows():

@@ -1,5 +1,10 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Quy đổi bánh đa nem — 07/09/2026:** đã lưu trên Railway đúng mã
+> **M000002**, **1 Tệp = 50 Lá** từ 01/08/2026, không đặt ngày hết hiệu lực.
+> Dòng hóa đơn 5435 thành **450 lá / 370đ**, tiền **166.500đ** giữ nguyên.
+> Năm hóa đơn tháng 1–7 giữ nguyên, chưa tự ghi kho; xem **13.34**.
+
 > **Tìm mã trong bảng Excel — 07/09/2026:** đã bổ sung Ctrl+F, tìm tiếp/lùi,
 > số ô khớp và cuộn tới ô ngoài vùng nhìn thấy; dùng cả bảng ghép mã hóa đơn.
 > Đã deploy và kiểm tra Railway, dữ liệu 80/80 bảng giữ nguyên; xem **13.33**.
@@ -1132,3 +1137,27 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 
 - Source **`8ba67d2c4d943b8a22b08e443e75afa35729fc69`** đã deploy từ `xandrosworld/CDT/main`, deployment **`16d22446-a338-4c1d-8252-17f923ed265a`**, trạng thái **SUCCESS**. `/health` báo DB/schema sẵn sàng, toàn vẹn `ok`. Browser `search-hosted-01` đạt **42 mục / 58 ảnh**: Ctrl+F → tìm mã/tên → Escape trên đơn và ghép mã thật, bốn khổ máy tính giữ diện tích bảng, các màn và phiếu giao Excel/PDF. Không JavaScript exception, HTTP 5xx hay yêu cầu ghi ngoài phạm vi. Đã xem ảnh `orders-search.png`, `mapping-search.png` và ảnh cột xa trên fixture.
 - Snapshot `search-after` lấy sau khi browser kết thúc, đối chiếu `search-before`: **80/80 bảng giữ nguyên nội dung và schema**, cả hai SQLite toàn vẹn `ok` (`search-after/full-preservation.json`). Kiểm thử gõ/sửa/lưu dùng DB riêng; Railway chỉ tìm/xem. Khách tải lại trang rồi Ctrl+F, nhập mã/tên và Enter; đây là hoàn thiện tìm kiếm trong bảng, không phải nghiệm thu mọi nghiệp vụ.
+
+
+### 13.34. Quy đổi bánh đa nem Thổ Hà 50 lá/Tệp — 07/09/2026
+
+- Chủ dự án yêu cầu xử lý phần bánh đa nem sau khi cập nhật Google Sheet. Khách đã nêu quy cách **1 Tệp = 50 Lá**. Dòng 82876, hóa đơn **C26TSM/5435 ngày 27/08/2026**, NCC B2B Sen Vàng, có **9 Tệp × 18.500đ = 166.500đ chưa thuế**. Đối chiếu file khách `nhập T8.2026 (1).xlsm`, sheet `weekend` dòng 1196, khớp mã **M000002 — Bánh đa nem Thổ Hà**, **450 Lá / 370đ**, tiền giữ nguyên. Không chọn mã loại dày hoặc áp dụng 50 cho mọi hàng có ĐVT Tệp.
+- Đã lưu quy tắc từ **01/08/2026, không đặt ngày hết hiệu lực**, để dùng tiếp cho đúng NCC/tên nguồn/mã nguồn/ĐVT cùng quy cách. Đây không phải giới hạn chỉ tháng 8. **Năm hóa đơn cũ tháng 1–7 giữ nguyên**; chưa chốt phạm vi thì không tự áp dụng hồi tố. Không sửa đơn giá nguồn 18.500đ/Tệp, tiền/thuế, giá danh mục hoặc giá bán đơn hàng.
+- Dùng chức năng mapping/quy đổi hiện có, không thay code sản phẩm hoặc cần deploy lại. Chạy hai hàm lưu trong cùng giao dịch khóa ghi; kiểm tra fingerprint nguồn, danh mục và quy tắc trước thao tác, đối chiếu phạm vi trước commit. Đã có snapshot riêng trước thao tác và backup trên volume `/data/manual_mapping_backups/banh_da_nem_20260907_before.sqlite3`; giữ lịch sử xác nhận mã, quy đổi và audit phạm vi yêu cầu.
+- Bản sao mới `banh-da-nem-before-apply`: kiểm chứng áp dụng đúng **1 dòng**, 450 Lá / 370đ; các dòng khác và năm hóa đơn cũ không đổi. Thử nguồn mới ở ngày tháng 9 nhận quy tắc, ngày tháng 7 không nhận. Lượt công cụ đầu thử đổi ngày trên dòng đã ghép nên vướng cơ chế giữ mapping lịch sử; sửa fixture thành dòng mới chưa ghép rồi kiểm tra đạt, không sửa sản phẩm để vượt kiểm tra. Báo cáo `banh-da-nem-copy-apply.json`.
+- **Đã áp dụng thành công trên Railway** đang chạy source `5d14b95d3b30317695bf952771e92c025e1fb84c` (sản phẩm `8ba67d2`), không restart/redeploy. Dòng 82876 đổi đúng năm trường mapping/quy đổi; **9 Tệp nguồn → 450 Lá kho, 370đ/Lá**, giữ tiền 166.500đ. Giao dịch xác nhận mọi dòng khác nguyên vẹn, toàn bộ tiêu đề hóa đơn giữ nguyên. Hóa đơn 5435 vẫn `pending_mapping` vì còn **một dòng khác** chưa đủ mã/quy đổi; chưa xác nhận nhập kho.
+- Browser Railway `banh-da-nem-hosted-02` đạt **6 kiểm tra**, gồm đăng nhập, API nguồn/quy đổi, dòng ghép mã và bảng tổng đúng 450/370/166.500; không JavaScript exception, HTTP 5xx hoặc yêu cầu ghi nghiệp vụ. Đã xem ảnh `banh-da-nem-summary.png`. Lượt 01 dừng do công cụ đọc nhầm khóa `invoices` thay `items`; sửa công cụ và chạy lại. Excel tải trực tiếp: dòng nguồn trên `Hoa don` và tổng quy đổi trên `Tong nhap theo ma` khớp API; bằng chứng `excel-verification.json`. Lượt kiểm tra Excel đầu gặp mã hóa chữ Lá của shell, chạy lại với UTF-8 đạt.
+- Snapshot sau browser `banh-da-nem-after-apply`: **74/80 bảng nguyên nội dung, schema giữ nguyên**, cả hai SQLite toàn vẹn `ok`. Chỉ thêm 1 mapping, 1 phiên, 3 audit; cập nhật bộ đếm lần tải, sequence và đúng dòng 82876. Mọi lượng/giá/tiền/thuế nguồn, 5 hóa đơn cũ, đơn, danh mục, kho và công nợ nguyên vẹn. Bằng chứng `preservation.json`; script/báo cáo riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/banh-da-nem-*`.
+- Khách tải lại trang để thấy quy đổi đã lưu, không cần nhập lại 50. Chỉ xác nhận nhập kho khi toàn bộ hóa đơn đủ điều kiện. Google Sheet mục `CONVERT-50` được cập nhật theo kết quả này; phạm vi 5 hóa đơn cũ vẫn chờ, không dùng trạng thái đã quy đổi dòng tháng 8 làm xác nhận hồi tố.
+
+
+### 13.35. Làm rõ trạng thái và nhập kho hóa đơn theo nhóm — 07/09/2026
+
+- Chủ dự án chốt giữ nút từng hóa đơn và thêm luồng nhập cả nhóm sau một lần xác nhận. Đổi nhãn đầu vào **Đã đủ mã · Chưa nhập kho**, **Kiểm tra lượng & tiền**, **Nhập kho hóa đơn này**. Bộ lọc hóa đơn có chú thích độc lập với đơn hàng phía trên.
+- Nút chính đầu bảng **Nhập kho N hóa đơn** lấy các hóa đơn đủ mã trong đúng bộ lọc; các thao tác tự ghép/đến lỗi/tải Excel được gom vào **Thao tác khác**. Khi mở, backend chạy kiểm tra nhập kho thật trên bản sao trong bộ nhớ; GET không ghi vào DB đang dùng. Tối đa 500 hóa đơn mỗi lượt, vượt thì yêu cầu thu hẹp bộ lọc.
+- Bản xem trước chọn sẵn phần đủ điều kiện, hiện số hóa đơn/số dòng/tiền hàng nhập **chưa thuế**, có chi tiết số/ngày/NCC, chọn/bỏ chọn và tổng lượng theo ĐVT. Hóa đơn bị chặn có lý do riêng. Nhập riêng cũng dùng bảng kiểm tra này; nút Quay lại/đóng không ghi kho.
+- Xác nhận gửi đúng tập ID và dấu vết dữ liệu đã xem. Khóa ghi, đối chiếu lại hóa đơn/dòng/đơn vị/quy tắc trước ghi, rồi dùng hàm nhập kho hiện có. Một hóa đơn lỗi thì hoàn tác toàn bộ nhóm; gửi lại/hai yêu cầu đồng thời không nhập trùng. Giữ các kiểm tra nguồn/quy đổi/kỳ kho. Có đường xem từng hóa đơn vừa nhập; không áp dụng luồng này sang phát hành đầu ra.
+- Thu cột thao tác còn 180px và giữ cột ghép mã 270px bên cạnh khi cuộn; tên hàng dùng phần chiều rộng còn lại. Bốn khổ máy tính vẫn đạt tiêu chí vùng bảng tối thiểu 70% chiều cao. Hộp kiểm tra chữ 16px, checkbox 22px, nút xác nhận tối thiểu 46px; mặc định focus Quay lại để tránh Enter ngoài ý định.
+- Kiểm thử liên quan **64 bài / 8 nhóm đạt**, thêm **34 bài / 5 nhóm** sau cập nhật kỳ vọng asset. Sáu bài mới kiểm tra xem trước chỉ đọc, tách ĐVT, chọn phần, dấu vết cũ bị chặn, lỗi giữa nhóm rollback, khác tenant/nguồn lỗi, gửi lại và hai người đồng thời. Lượt đầu test đồng thời chưa đóng kết nối SQLite trước dọn thư mục Windows; sửa công cụ và chạy lại đạt.
+- Browser fixture cuối `receipt-bulk-browser-05` đạt toàn luồng hóa đơn/kho, hủy/nhập riêng, nhập nhóm bỏ chọn rồi nhập tiếp phần còn lại và đối chiếu bút toán. Các lượt trước phát hiện cột thao tác chưa tới mép phải, thanh mới chiếm chiều cao và đóng/mở nhanh gặp dialog cũ; đã sửa sản phẩm. Lượt 04 dừng phần thử nhóm do bộ lọc fixture còn ngày 28 trong khi hóa đơn mới ngày 30; sửa đúng bộ lọc, không bỏ kiểm tra phạm vi.
+- Bản sao Railway mới `receipt-bulk-before`: xem trước **230 hóa đơn tháng 8**, 230 đạt kiểm tra nhập, khoảng **0,59 giây**, file nguồn giữ nguyên hash. Đây chỉ là xem trước trên bản sao, chưa ghi kho production. Bằng chứng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/receipt-bulk-*`. Trạng thái deployment và hosted sẽ bổ sung sau kiểm tra.

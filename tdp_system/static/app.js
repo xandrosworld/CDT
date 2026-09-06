@@ -298,13 +298,13 @@
     var summary = invoice.receipt_summary;
     var dialog = document.createElement('dialog');
     dialog.className = 'inventory-totals-dialog invoice-receipt-summary-dialog';
-    dialog.setAttribute('aria-label', 'Tổng nhập theo mã trong hóa đơn');
-    dialog.innerHTML = '<div class="inventory-totals-heading"><div><h3>Tổng nhập theo mã trong hóa đơn</h3><p>' + esc(invoice.invoice_series + ' / ' + invoice.invoice_number) + ' · ' + dateVN(invoice.invoice_date) + '</p></div><button type="button" class="icon-button" aria-label="Đóng tổng nhập">×</button></div>' +
-      '<p class="code-note">' + esc((state.invoiceListing.status_labels || {})[invoice.workbench_status] || '') + '. Tổng gồm cả lượng hàng 0đ cùng mã. Giá nhập bình quân = tổng tiền chưa thuế ÷ tổng lượng sau quy đổi; riêng hóa đơn này, chưa gồm tồn cũ.</p>' +
+    dialog.setAttribute('aria-label', 'Kiểm tra lượng & tiền');
+    dialog.innerHTML = '<div class="inventory-totals-heading"><div><h3>Kiểm tra lượng & tiền</h3><p>' + esc(invoice.invoice_series + ' / ' + invoice.invoice_number) + ' · ' + dateVN(invoice.invoice_date) + '</p></div><button type="button" class="icon-button" aria-label="Đóng tổng nhập">×</button></div>' +
+      '<p class="code-note">' + esc(invoice.workbench_status === 'ready' ? 'Đã đủ mã · Chưa nhập kho' : (state.invoiceListing.status_labels || {})[invoice.workbench_status] || '') + '. Tổng gồm cả lượng hàng 0đ cùng mã. Giá nhập bình quân = tổng tiền chưa thuế ÷ tổng lượng sau quy đổi; riêng hóa đơn này, chưa gồm tồn cũ.</p>' +
       (summary.pending_lines ? '<p class="warning-summary">Còn ' + num(summary.pending_lines) + ' dòng chưa đủ mã/quy đổi. Bảng chỉ cộng phần đã ghép, tổng chưa đầy đủ.</p>' : '') +
       '<div class="inventory-totals-body"><table><thead><tr><th>Mã / Tên hàng</th><th>ĐVT</th><th>Tổng lượng nhập</th><th>Trong đó lượng 0đ</th><th>Tổng tiền chưa thuế</th><th>Giá nhập bình quân</th></tr></thead><tbody>' + summary.items.map(function(row) {
         return '<tr><td><strong>' + esc(row.product_code) + '</strong><div>' + esc(row.product_name) + '</div></td><td>' + esc(row.unit) + '</td><td class="num-cell">' + stockQty(row.qty) + '</td><td class="num-cell">' + stockQty(row.zero_amount_qty) + '</td><td class="num-cell">' + stockMoney(row.amount) + '</td><td class="num-cell">' + stockMoney(row.average_unit_cost) + '</td></tr>';
-      }).join('') + (summary.items.length ? '' : '<tr><td colspan="6">Chưa có dòng đủ mã và quy đổi để cộng.</td></tr>') + '</tbody></table></div><p class="code-note">Lấy đủ các dòng đã ghép của hóa đơn, kể cả dòng đang ẩn bởi bộ lọc. Mở bảng này chỉ xem; đóng lại và bấm Xác nhận nhập cả hóa đơn khi sẵn sàng.</p>';
+      }).join('') + (summary.items.length ? '' : '<tr><td colspan="6">Chưa có dòng đủ mã và quy đổi để cộng.</td></tr>') + '</tbody></table></div><p class="code-note">Lấy đủ các dòng đã ghép của hóa đơn, kể cả dòng đang ẩn bởi bộ lọc. Mở bảng này chỉ xem; đóng lại và bấm Nhập kho hóa đơn này sau khi kiểm tra đúng.</p>';
     dialog.querySelector('button').onclick = function() { dialog.close(); };
     dialog.addEventListener('close', function() { dialog.remove(); });
     document.body.appendChild(dialog); dialog.showModal();
@@ -6522,20 +6522,19 @@
       }
     }
     if (action === "view-invoice-receipt-summary") { showInvoiceReceiptSummary(button.dataset.id); return; }
-    if (action === "create-msmi-receipt") {
-      if (!window.confirm("Tạo phiếu nhập kho từ hóa đơn này? Phần mềm sẽ không tạo lại nếu hóa đơn đã được nhập trước đó.")) return;
-      try {
-        button.disabled = true;
-        await api("/api/msmi/invoices/" + button.dataset.id + "/receipt", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
-        state.inventoryValuation = null;
-        state.inventoryMonthClose = null;
-        state.outgoingReadiness = null;
-        state.outgoingPeriodShortages = null;
-        state.invoiceLastPosted = {direction:"input", id:button.dataset.id};
-        await loadInvoiceWorkbench(true);
-        render();
-        showToast("Đã nhập kho. Bấm Xem hàng đã ghi kho tại hóa đơn để kiểm tra đúng các dòng vừa nhập.");
-      } catch (error) { showToast(error.message, true); button.disabled = false; }
+    if (action === "create-msmi-receipt" || action === "review-input-receipts") {
+      var receiptQuery = '?from=' + encodeURIComponent(state.invoiceListing.date_from) + '&to=' + encodeURIComponent(state.invoiceListing.date_to) + '&status=' + encodeURIComponent(state.invoiceStatus) + '&line_filter=' + encodeURIComponent(state.invoiceLineFilter);
+      if (action === "create-msmi-receipt") receiptQuery += '&id=' + encodeURIComponent(button.dataset.id);
+      await window.TdpReceiptReview({api:api, query:receiptQuery, esc:esc, money:stockMoney, qty:stockQty, date:dateVN,
+        onPosted: async function(result, rows) {
+          state.inventoryValuation = null; state.inventoryMonthClose = null;
+          state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
+          state.invoiceLastPosted = {direction:'input', id:rows[0].id};
+          state.invoiceLastPostedGroup = rows;
+          try { await loadInvoiceWorkbench(true); render(); }
+          catch(error) { showToast('Đã nhập kho. Chưa tải lại được bảng; hãy tải lại trang.', true); return; }
+          showToast('Đã nhập ' + result.posted_count + ' hóa đơn' + (result.already_posted_count ? ' · ' + result.already_posted_count + ' hóa đơn đã nhập trước đó' : '') + '. Phần chưa đủ điều kiện tiếp tục chờ.');
+        }});
       return;
     }
     if (action === "create-outgoing-drafts") {

@@ -624,7 +624,7 @@ body { min-width: 320px; }
 .invoice-lines-card .card-head { padding: 10px 14px; gap: 10px; }
 .invoice-lines-card .card-head .btn { padding: 7px 10px; font-size: 13px; border-radius: 6px; }
 .invoice-lines-card .invoice-lines-scroll { max-height: 65vh; }
-.invoice-lines-card .invoice-lines-scroll table { table-layout: fixed; width: 100%; min-width: 1360px; }
+.invoice-lines-card .invoice-lines-scroll table { table-layout: fixed; width: 100%; min-width: 1325px; }
 .invoice-lines-card .invoice-lines-scroll td,
 .invoice-lines-card .invoice-lines-scroll th { padding: 7px 9px; min-width: 0; max-width: none; font-size: 14px; }
 .invoice-lines-card .invoice-lines-scroll .num-cell { white-space: nowrap; overflow-wrap: normal; }
@@ -673,3 +673,33 @@ body { min-width: 320px; }
 .invoice-receipt-summary-dialog { width: min(1100px, 96vw); max-width: 96vw; }
 .invoice-receipt-summary-dialog table { min-width: 850px; width: 100%; }
 .invoice-receipt-summary-dialog .num-cell { white-space: nowrap; }
+
+/* Keep the editor beside compact invoice actions while source columns scroll. */
+.invoice-lines-card .invoice-lines-scroll tbody td:nth-child(9) { position:sticky; right:180px; z-index:2; box-shadow:-1px 0 #b8c2ca; }
+.invoice-lines-card .invoice-lines-scroll thead th:nth-child(9) { right:180px; z-index:5; }
+.invoice-lines-card .invoice-row-actions .btn { width:100%; min-height:40px; font-size:14px; }
+.invoice-lines-card .invoice-row-actions .tag { white-space:normal; font-size:13px; }
+.receipt-bulk-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid #d1d8dd; flex:0 0 auto; }
+.receipt-bulk-bar small { color:#526875; }
+.receipt-bulk-bar .btn { min-height:42px; }
+.receipt-review-dialog { width:min(940px,96vw); max-height:94vh; font-size:16px; }
+.receipt-review-body { padding:16px 20px; overflow:auto; }
+.receipt-review-body details { margin:14px 0; }
+.receipt-review-body summary { cursor:pointer; padding:8px 0; font-weight:600; }
+.receipt-selection-total { font-size:19px; font-weight:700; }
+.receipt-review-body .table-wrap { max-height:36vh; overflow:auto; }
+.receipt-review-body table { width:100%; }
+.receipt-review-body th { position:sticky; top:0; background:#f2f4f6; }
+.receipt-review-body td,.receipt-review-body th { padding:10px; text-align:left; border-bottom:1px solid #d1d8dd; }
+.receipt-review-body input[type=checkbox] { width:22px; height:22px; cursor:pointer; }
+.receipt-select-all { display:flex; gap:10px; align-items:center; padding:8px; }
+.receipt-review-footer { position:sticky; bottom:-16px; background:white; display:flex; justify-content:flex-end; gap:12px; padding:12px 0; border-top:1px solid #d1d8dd; }
+.receipt-review-footer .btn { min-height:46px; font-size:16px; }
+.receipt-review-error { color:#a02020; }
+@media(max-width:700px) { .receipt-bulk-bar { flex-wrap:wrap; } .receipt-review-body { padding:12px; } }
+
+.receipt-other-actions { position:relative; font-size:14px; }
+.receipt-other-actions > summary { cursor:pointer; padding:10px; }
+.receipt-other-menu { position:absolute; right:0; top:100%; z-index:15; width:250px; display:flex; flex-direction:column; gap:8px; padding:12px; background:white; border:1px solid #b8c2ca; box-shadow:0 4px 12px #0002; }
+.invoice-lines-card .card-head { flex-wrap:wrap; }
+.invoice-mapping-fullscreen .invoice-lines-card .card-head > .compact-controls { flex-wrap:nowrap; }
