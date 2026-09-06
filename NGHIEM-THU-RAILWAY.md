@@ -75,6 +75,8 @@ Trên bản sao dữ liệu Railway ban đầu, file cũ đối chiếu trực t
 
 ## Bằng chứng và tái kiểm tra
 
+Tại **Báo cáo vật tư hàng hóa → Chi tiết Nhập – Xuất – Tồn**, bấm **Xem bằng Excel · toàn màn hình** ngay cạnh tiêu đề để xem bảng rộng. Dòng **TỔNG** vẫn cố định khi cuộn; bấm nút số **ĐVT** để xem tổng tồn đầu, nhập, xuất, tồn cuối theo từng đơn vị. Tổng tiền nằm trên một dòng. Nút tải Excel theo kỳ vẫn ở phần đầu màn hình.
+
 Chi tiết sửa và kết quả mới nhất ở mục **13.17 của README-new-2.md**. Bằng chứng riêng nằm trong `D:\TDP_RAILWAY_PRIVATE\evidence`; không đưa dữ liệu hóa đơn, bản sao DB hoặc thông tin đăng nhập vào Git.
 
 ```powershell

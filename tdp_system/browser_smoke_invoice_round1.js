@@ -130,6 +130,29 @@ async function main() {
     await call('Emulation.setDeviceMetricsOverride',{width:1024,height:900,deviceScaleFactor:1,mobile:false});
     assert.ok(await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1'));
     assert.ok(await evaluate("(()=>{const box=document.querySelector('.invoice-lines-card .invoice-lines-scroll');return box.scrollWidth > box.clientWidth;})()"));
+    // Many units used to turn the sticky total into a panel covering the rows.
+    // Replace only this GET response in the isolated browser, leaving the DB intact.
+    await evaluate(`(()=>{const original=window.fetch;window.fetch=async function(input,init){const response=await original(input,init);if(String(input).startsWith('/api/invoice-valuation?')){const data=await response.json();data.items=Array.from({length:240},(_,i)=>({product_code:'LAYOUT-'+i,product_name:'Long inventory item '+i,unit:'unit '+(i%24),opening_qty:1000.855,input_qty:2,output_qty:1,closing_qty:1001.855,opening_value:10000000,input_value:20000,output_value:10000,closing_value:10010000,average_unit_cost:10000,valuation_status:'ok'}));return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});}return response;};})()`);
+    await click('[data-view="inventory"]');
+    await wait(`document.getElementById('inventoryFrom')`);
+    await evaluate(`document.getElementById('inventoryFrom').value='2026-08-02';document.getElementById('inventoryFrom').dispatchEvent(new Event('change',{bubbles:true}))`);
+    await wait(`document.querySelector('.inventory-nxt-scroll tbody')?.textContent.includes('LAYOUT-239')`);
+    for(const width of [1680,1366,1024]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
+      for(const fraction of [0.5,1]) {
+        const geometry=await evaluate(`(()=>{const box=document.querySelector('.inventory-nxt-scroll');box.scrollIntoView({block:'center'});box.scrollTop=box.scrollHeight*${fraction};box.scrollLeft=${fraction===1?'box.scrollWidth':'0'};const cell=box.querySelector('tfoot td');const rect=cell.getBoundingClientRect();return {height:rect.height,visible:box.clientHeight-rect.height,sticky:getComputedStyle(cell).position,bottom:rect.bottom,boxBottom:box.getBoundingClientRect().top+box.clientHeight,overflow:document.documentElement.scrollWidth>innerWidth+1};})()`);
+        assert.ok(geometry.height<=64,JSON.stringify(geometry));assert.ok(geometry.visible>200);assert.equal(geometry.sticky,'sticky');assert.ok(Math.abs(geometry.bottom-geometry.boxBottom)<4);assert.equal(geometry.overflow,false);
+      }
+      await evaluate(`document.querySelector('.inventory-nxt-scroll').scrollLeft=0`);
+      const image=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      fs.writeFileSync('D:/TDP_ROUND1/inventory-fixed-total-'+width+'.png',Buffer.from(image.data,'base64'));
+    }
+    await click('[data-action="view-inventory-unit-totals"]');
+    assert.equal(await evaluate(`document.querySelectorAll('.inventory-totals-dialog tbody tr').length`),24);
+    assert.ok(await evaluate(`Array.from(document.querySelectorAll('.inventory-totals-dialog tbody tr')).every(row=>row.cells[1].textContent==='10.008,55' && row.cells[2].textContent==='20' && row.cells[3].textContent==='10' && row.cells[4].textContent==='10.018,55')`));
+    await click('.inventory-totals-dialog button');
+    await click('[data-action="view-inventory-worksheet"]');
+    await wait(`document.querySelector('.tdp-sheet-status')?.textContent==='Ch\u1ec9 xem'`);
     await call('Emulation.clearDeviceMetricsOverride');
     assert.deepEqual(errors,[]);
     console.log('PASS: complete range (266 synthetic invoices / 285 rows), filters, global error order, sticky scroll, invalid code, Enter mapping/conversion, confirmation cancel/accept, exact stock trace, duplicate safety, outgoing post, monthly close/reopen/reclose and carryforward quantities/values. Synthetic isolated DB only.');

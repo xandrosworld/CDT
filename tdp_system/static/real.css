@@ -215,7 +215,23 @@ body { min-width: 320px; }
 .invoice-lines-card .invoice-lines-scroll tbody td:first-child { position:sticky; left:0; z-index:1; }
 .invoice-lines-card .invoice-lines-scroll thead th:first-child { left:0; z-index:4; }
 .invoice-lines-scroll tfoot td { position:sticky; bottom:0; z-index:2; background:#f2f4f6; }
-.inventory-nxt-scroll tfoot td { position:static; }
+.inventory-nxt-scroll table { table-layout:fixed; width:2124px; min-width:2124px; }
+.inventory-nxt-scroll tfoot td { position:sticky; bottom:0; white-space:nowrap; overflow-wrap:normal; height:52px; padding:8px 12px; border-top:2px solid #18364a; }
+.inventory-nxt-scroll tbody td:nth-child(2), .inventory-nxt-scroll thead th { white-space:nowrap; overflow-wrap:normal; }
+.inventory-nxt-scroll td:first-child { min-width:0; }
+.inventory-total-button { padding:5px 8px; border:1px solid #b8c8ce; border-radius:5px; background:#fff; color:#145e56; font:inherit; font-weight:700; white-space:nowrap; cursor:pointer; }
+.inventory-total-button:hover { background:#eaf5f2; }
+.inventory-totals-dialog { width:min(850px,90vw); max-height:85vh; padding:0; border:1px solid #b8c8ce; border-radius:10px; color:#172b3a; background:#fff; box-shadow:0 18px 60px #0003; }
+.inventory-totals-dialog::backdrop { background:#132c4566; }
+.inventory-totals-heading { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:18px 22px; border-bottom:1px solid #d1d8dd; }
+.inventory-totals-heading h3 { margin:0 0 6px; }
+.inventory-totals-heading p { margin:0; }
+.inventory-totals-body { overflow:auto; max-height:65vh; }
+.inventory-totals-body table { width:100%; border-collapse:separate; border-spacing:0; }
+.inventory-totals-body th,.inventory-totals-body td { padding:10px 18px; border-bottom:1px solid #d1d8dd; white-space:nowrap; }
+.inventory-totals-body thead th { position:sticky; top:0; background:#f2f4f6; }
+.inventory-totals-body th:first-child { text-align:left; }
+.inventory-totals-body td,.inventory-totals-body th:not(:first-child) { text-align:right; }
 .inventory-nxt-scroll tbody td.num-cell { white-space:nowrap; overflow-wrap:normal; }
 .inventory-nxt-scroll tbody td:first-child { min-width:48px; }
 .invoice-lines-scroll thead th { position:sticky; top:0; z-index:3; background:#f2f4f6; color:#172b3a; box-shadow:0 1px #9aabb8; }

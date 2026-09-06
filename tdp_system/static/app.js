@@ -212,6 +212,35 @@
     items.forEach(function (item) { var unit = (item.unit || "Không có ĐVT").trim().toLocaleLowerCase("vi-VN"); units[unit] = (units[unit] || 0) + n(item[field]); });
     return Object.keys(units).filter(function (unit) { return Math.abs(units[unit]) > 0.0000005; }).map(function (unit) { return stockQty(units[unit]) + " " + unit; }).join(" · ") || "0";
   }
+  function inventoryUnits(items) {
+    var groups = Object.create(null);
+    items.forEach(function(item) {
+      var unit = (item.unit || "Không có ĐVT").trim().toLocaleLowerCase("vi-VN");
+      if (!groups[unit]) groups[unit] = {unit:unit, opening_qty:0, input_qty:0, output_qty:0, closing_qty:0};
+      ["opening_qty","input_qty","output_qty","closing_qty"].forEach(function(field) { groups[unit][field] += n(item[field]); });
+    });
+    return Object.keys(groups).sort(function(a,b) { return a.localeCompare(b,"vi-VN"); }).map(function(unit) { return groups[unit]; });
+  }
+  function compactInventoryQuantity(items, field) {
+    var groups = inventoryUnits(items).filter(function(row) { return Math.abs(row[field]) > 0.0000005; });
+    if (!groups.length) return "0";
+    var label = groups.length === 1 ? stockQty(groups[0][field]) + " " + groups[0].unit : groups.length + " ĐVT";
+    return '<button type="button" class="inventory-total-button" data-action="view-inventory-unit-totals" title="Xem tổng lượng theo từng đơn vị">' + esc(label) + ' <span aria-hidden="true">↗</span></button>';
+  }
+  function showInventoryUnitTotals() {
+    var groups = inventoryUnits((state.inventoryValuation || {}).items || []);
+    var dialog = document.createElement("dialog");
+    dialog.className = "inventory-totals-dialog";
+    dialog.setAttribute("aria-labelledby", "inventoryTotalsTitle");
+    dialog.innerHTML = '<div class="inventory-totals-heading"><div><h3 id="inventoryTotalsTitle">Tổng lượng theo đơn vị</h3><p>' + dateVN(state.inventoryFrom) + ' → ' + dateVN(state.inventoryTo) + '</p></div><button type="button" class="icon-button" aria-label="Đóng tổng lượng">×</button></div>' +
+      '<div class="inventory-totals-body"><table><thead><tr><th>ĐVT</th><th>Tồn đầu</th><th>Nhập</th><th>Xuất</th><th>Tồn cuối</th></tr></thead><tbody>' + groups.map(function(row) {
+        return '<tr><th scope="row">' + esc(row.unit) + '</th>' + ["opening_qty","input_qty","output_qty","closing_qty"].map(function(field) { return '<td class="num-cell">' + stockQty(row[field]) + '</td>'; }).join("") + '</tr>';
+      }).join("") + '</tbody></table></div>';
+    dialog.querySelector("button").onclick = function() { dialog.close(); };
+    dialog.addEventListener("close", function() { dialog.remove(); });
+    document.body.appendChild(dialog);
+    dialog.showModal();
+  }
   function dateVN(value) {
     if (!value) return "";
     var parts = String(value).slice(0, 10).split("-");
@@ -2776,16 +2805,18 @@
       '<div class="form-field"><label>Lý do</label><input name="note" required></div>',
       '<button class="btn btn-outline" type="submit">Ghi điều chỉnh</button></form></div></div></div>',
       openingImportPreviewHtml(), bkImportPreviewHtml(), bkDocumentsHtml(),
-      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Chi tiết Nhập – Xuất – Tồn</h3><p>',
-      dateVN(state.inventoryFrom), ' → ', dateVN(state.inventoryTo), '</p></div></div>',
-      '<div class="table-wrap invoice-lines-scroll inventory-nxt-scroll"><table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>Đơn vị</th><th>Tồn đầu kỳ</th><th>Giá trị đầu kỳ</th><th>Số nhập</th><th>Giá trị nhập</th><th>Số xuất</th><th>Giá trị xuất</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th><th>Giá bình quân</th><th>Đối chiếu</th></tr></thead><tbody>',
+      '<div class="card inventory-nxt-card" style="margin-top:18px"><div class="card-head"><div><h3>Chi tiết Nhập – Xuất – Tồn</h3><p>',
+      dateVN(state.inventoryFrom), ' → ', dateVN(state.inventoryTo), '</p></div><button type="button" class="btn btn-primary" data-action="view-inventory-worksheet">Xem bằng Excel · toàn màn hình</button></div>',
+      '<div class="table-wrap invoice-lines-scroll inventory-nxt-scroll"><table><colgroup>',
+      [56,120,240,78,150,180,150,180,150,180,150,180,160,150].map(function(width) { return '<col style="width:' + width + 'px">'; }).join(''),
+      '</colgroup><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>Đơn vị</th><th>Tồn đầu kỳ</th><th>Giá trị đầu kỳ</th><th>Số nhập</th><th>Giá trị nhập</th><th>Số xuất</th><th>Giá trị xuất</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th><th>Giá bình quân</th><th>Đối chiếu</th></tr></thead><tbody>',
       rows || '<tr><td colspan="14"><div class="empty">Kỳ này chưa có tồn đầu hoặc phát sinh đã ghi sổ.</div></td></tr>',
       '</tbody><tfoot><tr class="table-total-row"><td colspan="4">TỔNG</td><td class="num-cell">',
-      esc(stockQuantitySummary(items, "opening_qty")), '</td><td class="num-cell">', stockMoney(totals.opening_value),
-      '</td><td class="num-cell">', esc(stockQuantitySummary(items, "input_qty")), '</td><td class="num-cell">',
-      stockMoney(totals.input_value), '</td><td class="num-cell">', esc(stockQuantitySummary(items, "output_qty")),
+      compactInventoryQuantity(items, "opening_qty"), '</td><td class="num-cell">', stockMoney(totals.opening_value),
+      '</td><td class="num-cell">', compactInventoryQuantity(items, "input_qty"), '</td><td class="num-cell">',
+      stockMoney(totals.input_value), '</td><td class="num-cell">', compactInventoryQuantity(items, "output_qty"),
       '</td><td class="num-cell">', stockMoney(totals.output_value), '</td><td class="num-cell">',
-      esc(stockQuantitySummary(items, "closing_qty")), '</td><td class="num-cell">', stockMoney(totals.closing_value),
+      compactInventoryQuantity(items, "closing_qty"), '</td><td class="num-cell">', stockMoney(totals.closing_value),
       '</td><td colspan="2"></td></tr></tfoot></table></div></div></div>'
     ]) : '';
     content.innerHTML = html([
@@ -6621,6 +6652,7 @@
   var sheetEnhanceTimer;
   function addWorksheetButtons() {
     content.querySelectorAll('table').forEach(function(table) {
+      if(table.closest('.inventory-nxt-scroll')) return;
       if(table.dataset.worksheetReady) return;
       table.dataset.worksheetReady='1';
       var wrap=table.closest('.table-wrap,.invoice-lines-scroll')||table;
@@ -6634,6 +6666,8 @@
   new MutationObserver(function() { clearTimeout(sheetEnhanceTimer); sheetEnhanceTimer=setTimeout(addWorksheetButtons,50); })
     .observe(content,{childList:true,subtree:true});
   content.addEventListener('click',function(event) {
+    if(event.target.closest('[data-action="view-inventory-unit-totals"]')) { showInventoryUnitTotals(); return; }
+    if(event.target.closest('[data-action="view-inventory-worksheet"]')) { openTableWorksheet(content.querySelector('.inventory-nxt-scroll table')); return; }
     var button=event.target.closest('[data-action="bulk-edit-orders"]');
     if(button && window.TDPWorksheet) {event.preventDefault();event.stopImmediatePropagation();openOrderWorksheet();}
   },true);

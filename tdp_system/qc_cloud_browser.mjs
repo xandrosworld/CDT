@@ -97,12 +97,27 @@ try {
       report.checks.push('hosted_order_worksheet_read_only_smoke');
     }
     if(view==='inventory') {
-      await wait(`document.querySelector('.inventory-nxt-scroll')?.previousElementSibling?.classList.contains('tdp-open-sheet')`);
-      await evaluate(`document.querySelector('.inventory-nxt-scroll').previousElementSibling.click()`);
+      await wait(`document.querySelector('[data-action="view-inventory-worksheet"]')`);
+      for(const width of [1680,1366,1024]) {
+        await call('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
+        const layout=await evaluate(`(()=>{const box=document.querySelector('.inventory-nxt-scroll');box.scrollIntoView({block:'center'});box.scrollTop=box.scrollHeight/2;box.scrollLeft=0;const footer=box.querySelector('tfoot');return {height:footer.getBoundingClientRect().height,viewport:box.clientHeight,sticky:getComputedStyle(footer.querySelector('td')).position,money:Array.from(footer.querySelectorAll('.num-cell')).every(cell=>getComputedStyle(cell).whiteSpace==='nowrap')};})()`);
+        assert.ok(layout.height<=64 && layout.viewport-layout.height>200,JSON.stringify(layout));
+        assert.equal(layout.sticky,'sticky');assert.equal(layout.money,true);
+        const r=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        const filename='inventory-fixed-total-'+width+'.png';fs.writeFileSync(path.join(output,filename),Buffer.from(r.data,'base64'));report.screens.push(filename);
+      }
+      await click('[data-action="view-inventory-unit-totals"]');
+      await wait(`document.querySelector('.inventory-totals-dialog[open] tbody tr')`);
+      report.inventory_unit_rows=await evaluate(`document.querySelectorAll('.inventory-totals-dialog tbody tr').length`);
+      await shot('inventory-unit-totals');
+      await click('.inventory-totals-dialog button');
+      await call('Emulation.setDeviceMetricsOverride',{width:1680,height:1050,deviceScaleFactor:1,mobile:false});
+      await click('[data-action="view-inventory-worksheet"]');
       await wait(`document.querySelector('.tdp-sheet-status')?.textContent==='Chỉ xem'`);
       await shot('worksheet-inventory');
       await click('.tdp-sheet-close'); await wait(`!document.querySelector('.tdp-sheet-shell')`);
       report.checks.push('hosted_inventory_worksheet');
+      report.checks.push('inventory_compact_sticky_total','inventory_quantities_by_unit');
     }
   }
   const invoices=await api('/api/invoice-workbench/invoices?invoice_type=input&from=2026-08-01&to=2026-08-31&status=all&line_filter=all');
