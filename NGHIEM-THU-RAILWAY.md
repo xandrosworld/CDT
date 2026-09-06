@@ -20,7 +20,7 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 | 4. Xem chứng từ | Mở phiếu giao, bảng kê/biên nhận, báo giá, hồ sơ thanh toán. Xem trực tiếp, đổi sheet, cuộn và thu/phóng. | Lượt 4; xuất Excel và PDF phiếu giao thật trên Railway. |
 | 5. Chọn và in nhiều | Lọc bếp/ngày, chọn một hoặc nhiều phiếu, bỏ chọn, xem trước và in. Chỉ những sheet được chọn mới xuất. | Lượt 4; kiểm tra riêng bộ chuyển PDF Linux. |
 | 6. Nội dung phiếu | Đối chiếu đơn vị, thông tin đơn vị mua/bán, địa chỉ, người nhận, chữ ký và tổng tiền làm tròn. | Kiểm thử mẫu chứng từ; PDF A4 và ảnh từng trang. |
-| 7. Hóa đơn đầu vào | Chọn 01–31/08/2026, tải nguồn. Tổng là 266 hóa đơn; ngày đúng kỳ, dòng chưa gán mã được ưu tiên hiển thị. Có thể đối chiếu bảng kê nhập cũ và xác nhận riêng các mã khớp chắc chắn trước khi ghi kho. | Nguồn mSMI thật và màn hình Railway đều trả 266; tải lại trên bản sao không trùng. Luồng đối chiếu file cũ đã thử bằng đúng file tháng 8 trên bản sao DB. |
+| 7. Hóa đơn đầu vào | Chọn 01–31/08/2026, tải nguồn. Mã khớp duy nhất được tự ghép; phần cần chọn mã/quy đổi nằm đầu bảng, tiếp theo là xác nhận ghi kho, phần đã xong nằm dưới. | Đã áp dụng tự ghép trên Railway: 941/1.104 dòng, 171 hóa đơn đủ mã, còn 163 dòng. Tổng 266 hóa đơn và tiền nguồn giữ nguyên. |
 | 8. Hóa đơn đầu ra | Dùng tài khoản hiện tại theo lựa chọn của chủ dự án ngày 06/09, chọn đúng kỳ, tải M-Invoice; khi báo còn dữ liệu, tải tiếp. Chỉ xác nhận xuất kho khi hóa đơn đủ điều kiện. | Phân trang, trạng thái và chống trùng đạt trên dữ liệu thử. Tài khoản hiện tại được cho phép sử dụng; hệ thống vẫn hiển thị đúng môi trường nhà cung cấp. |
 | 9. Tồn hóa đơn | Với bộ thử thiếu hàng: phân bổ phần có, giữ phần thiếu cho vòng sau, kiểm tra không âm tồn. | Lượt 1 và các bài kiểm thử kho/phân bổ. |
 | 10. Chốt tháng | Chốt, kiểm tra tồn chuyển kỳ sau; mở lại rồi chốt lại. Không sinh bản chuyển tồn trùng. | Lượt 1; kiểm thử chốt/mở/chốt và khóa kỳ. |
@@ -53,13 +53,12 @@ Kết quả đối chiếu số liệu từng màn/file và phần dữ liệu c
 ## Ghép mã hóa đơn đầu vào tháng 8
 
 1. Vào **Hóa đơn đầu vào + đầu ra**, chọn **Hóa đơn đầu vào**, từ ngày 01/08/2026 đến 31/08/2026.
-2. Mở **Đối chiếu mã từ bảng kê nhập của phần mềm cũ**, chọn file `nhập T8.2026 (1).xlsm`, rồi bấm **Xem trước mã từ file cũ**.
-3. Kiểm tra bảng xem trước. Hệ thống chỉ nhận dòng khớp đồng thời MST, số hóa đơn, tên hàng, số lượng, thành tiền, mã có trong danh mục và cùng đơn vị. Dòng thiếu mã, khác đơn vị hoặc không khớp duy nhất được bỏ qua và nêu số lượng.
-4. Bấm **Xác nhận ghi nhớ các mã khớp chắc chắn**. Màn hình phải nói rõ số dòng trong kỳ và tổng số dòng cùng nguồn ở các kỳ chưa ghi kho sẽ được cập nhật. Bước này chỉ ghép mã, chưa làm tăng tồn.
-5. Bấm **Kiểm tra ghép mã trùng khớp** để xử lý tiếp các tên hàng còn lại khớp duy nhất với danh mục và cùng đơn vị. Xem số ảnh hưởng rồi mới xác nhận.
-6. Các dòng còn lại xử lý trực tiếp từng dòng; dòng khác đơn vị phải khai hệ số quy đổi. Chỉ bấm **Xác nhận nhập cả hóa đơn** sau khi người phụ trách đã kiểm tra đúng mã, lượng và giá trị.
+2. Khi **Tải/tiếp tục đầu vào**, hệ thống tự ghép tên duy nhất và cùng ĐVT; không hỏi xác nhận lại mã khớp chắc chắn.
+3. Nếu có bảng kê nhập cũ: mở **Tự ghép mã từ bảng kê nhập cũ**, chọn file rồi bấm **Tự ghép từ file cũ**. Hệ thống đối chiếu MST, số hóa đơn, tên, lượng, tiền, mã và ĐVT; lưu phần đủ căn cứ rồi ghép tiếp theo danh mục trong cùng lần xử lý. Các mã/quy đổi đã chọn được giữ nguyên.
+4. **Tự ghép mã trùng khớp** dùng khi muốn xử lý tiếp sau khi bổ sung danh mục. Bấm lại không tạo thêm mapping hay lịch sử nếu không có gì mới. Các quy tắc được nhớ cho cùng NCC/mã nguồn/tên/ĐVT ở những kỳ chưa ghi kho.
+5. Chỉ phần không khớp duy nhất, thiếu mã hoặc cần hệ số quy đổi mới để người dùng xử lý trên đầu bảng. Tiếp theo là hóa đơn đủ mã chờ **Xác nhận nhập cả hóa đơn**; phần đã xử lý xong nằm dưới. Xác nhận nhập kho là bước ghi sổ riêng, không phải xác nhận lại từng mã đã tự ghép.
 
-Trên bản sao dữ liệu Railway ban đầu, file cũ đối chiếu trực tiếp được 876 dòng theo 99 quy tắc; các quy tắc áp dụng cho 892 dòng trong tháng 8. Bước khớp tên danh mục tiếp theo xử lý thêm 49 dòng. Kết quả mô phỏng là **941/1.104 dòng đã ghép, 171/264 hóa đơn sẵn sàng, còn 163 dòng thuộc 93 hóa đơn cần xử lý**. Đây là kết quả trên bản sao; production chưa tự ghi các mapping này và chưa ghi kho.
+Ngày 06/09 đã áp dụng trên Railway: **941/1.104 dòng đã ghép, 171/264 hóa đơn sẵn sàng, còn 163 dòng thuộc 93 hóa đơn cần xử lý**. Khách không phải chạy lại phần này. 111 quy tắc đã ghép tổng cộng 9.193 dòng cùng nguồn ở các kỳ chưa ghi kho. Có sao lưu trước/sau, kết quả mapping khớp bản sao đã kiểm chứng; tổng 266 hóa đơn và 919.234.874 đồng giữ nguyên. Chưa ghi kho trong lượt tự ghép.
 
 ## Lập hồ sơ thanh toán từ hóa đơn VAT
 
@@ -74,7 +73,7 @@ Trên bản sao dữ liệu Railway ban đầu, file cũ đối chiếu trực t
 
 - **Quyết định ngày 06/09: chủ dự án chỉ dùng tài khoản M-Invoice hiện tại.** Giữ nguyên URL/tài khoản, cho phép sử dụng qua `MINVOICE_ALLOW_TEST_ENVIRONMENT=true`; không còn yêu cầu đổi tài khoản như điều kiện bàn giao. Máy chủ `0106026495-999.minvoice.site` vẫn được nhận diện là môi trường kiểm thử của nhà cung cấp; lựa chọn này không thay đổi môi trường thực tế hoặc tự xác nhận tính hợp lệ của từng hóa đơn.
 - File `Đơn hàng  03.09.2026.xlsx`: chủ dự án đã giải thích dòng đặt hàng **157** (dưa hấu) và **158** (nhãn) là hàng bị hỏng, chị đi mua cho khách. Còn cần chốt khoản âm trừ công nợ NCC hay theo dõi khoản mua bù riêng; dòng 158 vẫn thiếu mã hàng. Chưa đổi dấu lượng/tiền hoặc ghi công nợ khi chưa rõ cách tính khoản này.
-- **Tổng đủ 266 hóa đơn đầu vào**, gồm **264 cần gán mã** và **2 không nhập tồn**. Có **1.107 dòng hàng**, **1.104 dòng cần xử lý**; đây là các bộ đếm khác nhau, không phải thiếu hai hóa đơn. Tải hóa đơn không đồng nghĩa đã xác nhận nhập kho. Người phụ trách cần đối chiếu mã hàng trước khi ghi kho.
+- **Tổng đủ 266 hóa đơn đầu vào**, gồm **171 đủ mã, 93 còn cần xử lý và 2 không nhập tồn**. Trong 1.107 dòng hàng, 941 dòng đã tự ghép, 163 dòng còn thiếu căn cứ và 3 dòng không nhập tồn. Phần còn lại được đưa lên đầu bảng; không yêu cầu khách xác nhận lại 941 mã đã tự ghép.
 - Bản production tại lúc kiểm tra chưa có hồ sơ MST bên mua và chưa có hóa đơn đầu ra đã đồng bộ. Form hồ sơ độc lập đã được bổ sung; không tự đoán MST hoặc liên kết hóa đơn với nhà thầu.
 - Không thực hiện ký/phát hành hóa đơn thật hoặc ghi thanh toán thật trong lượt kiểm thử này.
 

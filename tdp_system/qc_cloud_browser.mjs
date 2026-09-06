@@ -132,6 +132,20 @@ try {
   assert.equal(invoices.status,200);assert.equal(invoices.data.totals.invoice_count,266);
   report.input_totals=invoices.data.totals;report.input_counts=invoices.data.counts;
   report.checks.push('august_266_input_invoices');
+  const actionRanks=invoices.data.lines.map(row=>row.action_rank);
+  assert.deepEqual(actionRanks,[...actionRanks].sort());
+  await click('[data-view="msmi"]');
+  await wait(`document.getElementById('invoiceFrom')`);
+  assert.ok(await evaluate(`Object.entries({invoiceFrom:'2026-08-01',invoiceTo:'2026-08-31',invoiceStatus:'all',invoiceLineFilter:'all'}).every(([id,value])=>document.getElementById(id)?.value===value)`));
+  await wait(`document.querySelectorAll('.invoice-lines-card tbody tr[data-issue]').length===${invoices.data.lines.length}`);
+  const displayed=await evaluate(`Array.from(document.querySelectorAll('.invoice-lines-card tbody tr[data-issue]')).map(row=>Number(row.id.replace('invoice-line-input-','')))`);
+  assert.deepEqual(displayed,invoices.data.lines.map(row=>row.id));
+  assert.equal(await evaluate(`document.querySelectorAll('[data-action="apply-msmi-suggestions"],[data-action="confirm-msmi-legacy-mappings"]').length`),0);
+  await evaluate(`document.querySelector('.invoice-lines-card').scrollIntoView({block:'start'})`);
+  await sleep(350);
+  fs.writeFileSync(path.join(output,'invoice-actions-first.png'),Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
+  report.screens.push('invoice-actions-first.png');
+  report.checks.push('remaining_actions_before_completed_without_mapping_confirmation');
   for(const [name,route] of Object.entries({output:'/api/invoice-workbench/invoices?invoice_type=output&from=2026-08-01&to=2026-08-31',backup:'/api/backup/status',inventory:'/api/invoice-valuation?from=2026-08-01&to=2026-08-31',msmi:'/api/msmi/status',minvoice:'/api/minvoice/status'})){
     const r=await api(route);report[name]={status:r.status,ok:r.data.ok,error:r.data.error,totals:r.data.totals,counts:r.data.counts,item_count:r.data.items?.length};
     if(name==='backup')report.backup={status:r.status,...r.data};

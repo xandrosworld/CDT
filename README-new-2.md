@@ -1,5 +1,10 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Tự động xử lý phần đủ căn cứ — 06/09/2026:** chủ dự án yêu cầu tự ghép
+> mã chắc chắn, bỏ bước bắt khách xem rồi xác nhận lại. Dòng còn cần xử lý hoặc
+> xác nhận nằm trước, phần đã xử lý xong nằm dưới; chỉ lỗi mới tô đỏ. Đã áp dụng
+> **941 dòng trên Railway**, còn **163 dòng** thiếu căn cứ. Xem **13.23**.
+
 > **Quyết định mới 06/09/2026:** chỉ dòng có **lỗi** mới tô đỏ cả dòng, áp dụng
 > chung mọi file; cảnh báo hiển thị riêng. Hai dòng âm đặt hàng 03/09 được giải thích
 > là hàng hỏng, chị đi mua cho khách; còn cần chốt ảnh hưởng công nợ. Xem **13.22**.
@@ -28,9 +33,9 @@
 
 > **Đợt sửa để nghiệm thu Railway đang thực hiện:** xem **13.15**. Các mục bên dưới có mốc ngày là lịch sử kiểm tra, không thay thế kết quả mới nhất.
 
-> **Cập nhật mới nhất 06/09/2026:** đã triển khai trên Railway hai luồng xem trước
+> **Mốc xem trước ngày 06/09/2026, trước quyết định tự động tại 13.23:** đã triển khai trên Railway hai luồng xem trước
 > để giảm khối lượng ghép mã hóa đơn đầu vào, gồm ghép chính xác theo danh mục và
-> đối chiếu bảng kê nhập của phần mềm cũ. Production mới chỉ chạy xem trước, chưa
+> đối chiếu bảng kê nhập của phần mềm cũ. Tại mốc này production chỉ chạy xem trước, chưa
 > xác nhận ghi mapping hoặc ghi kho. Kết quả và giới hạn tại **13.17**.
 
 > **Lỗi 1 (BUG-0509-04): đã sửa và kiểm chứng bằng EXE ứng viên `2026.09.05.2`.**
@@ -197,7 +202,7 @@ Kết quả rà và sửa riêng 3.1–3.2 ngày 05/09/2026 (source, chưa build
 - Dòng chưa ghép mã, thiếu đơn vị hoặc có lỗi phải tự đưa lên đầu.
 - Có bộ lọc `Chưa ghép mã`, `Cần kiểm tra`, `Sẵn sàng`, `Đã ghi kho`.
 - Tiêu đề bảng phải cố định khi cuộn.
-- Mã gợi ý chỉ được lưu sau khi người dùng xác nhận; không tự đoán trường hợp không chắc chắn.
+- Theo quyết định mới tại 13.23, tự lưu mã khớp duy nhất theo danh mục/ĐVT hoặc bảng kê cũ đủ điều kiện. Chỉ trường hợp chưa đủ căn cứ mới cần người dùng chọn mã/quy đổi; giữ lựa chọn đã có.
 - Sau khi ghép mã phải có bước xác nhận ghi nhập kho rõ ràng.
 - Ghi kho xong phải có đường dẫn/nút mở thẳng sang chi tiết nhập trong `Báo cáo vật tư hàng hóa`.
 - Trạng thái phải phân biệt rõ: đã tải, chưa ghép, sẵn sàng, đã ghi kho và lỗi.
@@ -938,3 +943,15 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Kiểm thử nhóm chịu ảnh hưởng: **69/69 lượt test đạt** (`error-only-tests-01`). Các bằng chứng mới nằm dưới `D:\TDP_RAILWAY_PRIVATE\evidence\error-only-*`; trạng thái browser và triển khai được ghi sau khi có kết quả.
 - Browser DB riêng `error-only-worksheet-03` đạt: đo màu dòng lỗi/cảnh báo khi mở và sau lưu; viewer chung phân biệt lỗi với nhãn trạng thái đã hoàn tác; nhập/dán lượng lẻ, lưu chậm, mất mạng/thử lại, đồng bộ/xung đột, mở/đóng không tự ghi. Không có JavaScript exception. Hai lượt trước dừng ở công cụ kiểm tra (bảng QA bị lần tải nền thay thế; vùng đo pixel lấn sang dòng bên cạnh), đã sửa và chạy lại toàn bộ. Snapshot production trước triển khai `error-only-before` toàn vẹn `ok`.
 - Source `2ba0df8e5d1d7ecd6df0dfe425e89a8776a41bb2` đã chạy Railway **SUCCESS**, deployment `30582043-04b1-4cb0-bace-9a426ec37e2d`. Browser hosted `error-only-hosted-01` đạt **31 mục/48 ảnh**, có mở bảng đơn và tải phiếu giao Excel/PDF; không JavaScript exception, HTTP 5xx hoặc yêu cầu ghi ngoài phạm vi. Snapshot `error-only-after` lấy sau khi browser kết thúc: **80/80 bảng giữ nguyên nội dung/schema**, hai DB toàn vẹn `ok` (`full-preservation.json`). Phần hàng hỏng vẫn chờ chốt ảnh hưởng công nợ, chưa được tự chuyển thành nghiệp vụ ghi giảm hay khoản mua bù.
+
+### 13.23. Tự ghép phần chắc chắn, đưa phần cần thao tác lên đầu — 06/09/2026
+
+- Chỉ đạo mới của chủ dự án thay yêu cầu xác nhận mọi mã ở 3.3/13.17: phần có đủ căn cứ được tự xử lý; chỉ phần thật sự cần chọn mã, quy đổi hoặc xác nhận nghiệp vụ mới ưu tiên trên đầu bảng. Giữ quy tắc chỉ lỗi mới đỏ; thứ tự ưu tiên không phải dấu hiệu lỗi.
+- Hóa đơn đầu vào tự ghép tên duy nhất và cùng ĐVT sau khi tải. Bảng kê cũ có một thao tác **Tự ghép từ file cũ**: đối chiếu file rồi xử lý tiếp theo danh mục trong cùng giao dịch, bỏ bước xem trước → xác nhận lần nữa. GET/mở màn/đổi bộ lọc vẫn chỉ đọc; không phát sinh ghi ngoài ý định khi chỉ xem.
+- Tự động giữ nguyên mã và quy đổi đã chọn, kể cả quy tắc có kỳ hiệu lực hoặc dòng lịch sử không còn quy tắc đi kèm. Không chọn tên gần giống, không đoán hệ số, không sửa nguồn lỗi/đã ghi kho. Khóa giao dịch trước khi tính và ghi; lỗi audit hoàn tác cả lượt, chạy lại không thêm lịch sử nếu không có gì mới.
+- Bảng hóa đơn và Excel cùng thứ tự: dòng có lỗi/thiếu mã/cần quy đổi → hóa đơn đủ mã chờ xác nhận ghi kho → dòng đã xử lý xong/không nhập tồn. Phần ghép xong cập nhật bộ đếm và chuyển xuống sau khi lưu. Đủ mã không tự coi là đã nhập kho; phát hành hóa đơn, thu/trả tiền và sửa tồn đầu vẫn cần dữ liệu nghiệp vụ tương ứng.
+- Bản sao production mới `auto-mapping-copy-02`: tự ghép **941/1.104 dòng tháng 8**, **171 hóa đơn sẵn sàng**, còn **163 dòng/93 hóa đơn**; 111 quy tắc gồm 99 từ bảng kê cũ và 12 từ danh mục, áp dụng **9.193 dòng** cùng nguồn ở mọi kỳ chưa ghi kho. Chạy lại cùng file không ghi thêm; lượng/tiền nguồn và dữ liệu được bảo vệ của 76 bảng giữ nguyên, DB nguồn không đổi, SQLite toàn vẹn. Lượt copy-01 dừng do công cụ hash sắp theo địa chỉ đối tượng SQLite Row; sửa công cụ so tuple dữ liệu rồi chạy lại, không sửa sản phẩm để vượt kiểm tra.
+- Kiểm thử mục tiêu/hồi quy chịu ảnh hưởng **104/104 đạt**, gồm 6 bài mới tự ghép không cần xác nhận, tải đầu vào tự ghép, giữ lựa chọn cũ, rollback khi audit lỗi, gửi lại không thay dữ liệu và thứ tự API/Excel. Lượt đầu bài tải dùng ngày giả 44/08 bị chặn đúng; sửa fixture ngày hợp lệ và chạy lại. Browser `auto-mapping-browser-01` đạt toàn luồng hóa đơn/kho cũ, thêm bấm tự ghép không mở confirm, ghép xong chuyển nhóm, chạy lại và đối chiếu thứ tự DOM/API; không JavaScript exception.
+- Source **`d3d511fa04efec7f36f7b9a3bd1472e4675e7f2f`** đã deploy Railway **SUCCESS**, deployment **`daf9db5f-aa49-4a40-8f7d-7c16f0bd77ee`**. Sau sao lưu riêng ngay trước thao tác, **đã áp dụng 941 dòng trên production**, không chờ khách bấm xác nhận lại. Từng mapping khớp bản sao đã kiểm chứng; dữ liệu được bảo vệ của 76 bảng không đổi, tổng vẫn **266 hóa đơn / 919.234.874 đồng**. Sổ kho hóa đơn vẫn 0; chưa ký/phát hành hoặc ghi nhận thanh toán. Bằng chứng `auto-mapping-production-01/summary.json`, `before.sqlite3`, `after.sqlite3` dưới `D:\TDP_RAILWAY_PRIVATE\evidence`.
+- Đã tự dò bốn mã tồn âm về file **`TĐK T8-2026.xlsx thụy.xlsx`**, sheet **`Ton 7 (2)`**: dòng 58 `D000056` lượng −1,5; dòng 166 `I000084` lượng −14,1; dòng 168 `I000091` lượng −1,5; dòng 321 `N000009` lượng −3. Giá trị âm có ngay trong nguồn, khớp bút toán tồn đầu đã lưu; không có căn cứ để đổi dấu/đưa về 0. Phần hàng hỏng 03/09 vẫn thiếu căn cứ xác định khoản trừ NCC hay mua bù; không tự chuyển thành nghiệp vụ tiền.
+- Kiểm tra hosted cuối `auto-mapping-hosted-02` đạt **32 mục/49 ảnh**, gồm đối chiếu thứ tự từng dòng màn hình với API sau tự ghép, không còn nút xác nhận mã gợi ý, mở bảng đơn không tự ghi, phiếu giao Excel/PDF và đăng xuất; không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi. Lượt hosted-01 dừng do công cụ đổi nhiều bộ lọc trong lúc DOM tải lại; sửa công cụ dùng bộ lọc đã đặt sẵn và chạy lại. Snapshot `auto-mapping-final` lấy sau khi kết thúc browser: so với snapshot ngay sau tự ghép, **80/80 bảng nguyên nội dung/schema**, SQLite toàn vẹn. Đây là kiểm tra bảo toàn sau tự ghép, không tuyên bố 80 bảng không đổi so với trước khi áp dụng mapping.
