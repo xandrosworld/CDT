@@ -703,3 +703,12 @@ body { min-width: 320px; }
 .receipt-other-menu { position:absolute; right:0; top:100%; z-index:15; width:250px; display:flex; flex-direction:column; gap:8px; padding:12px; background:white; border:1px solid #b8c2ca; box-shadow:0 4px 12px #0002; }
 .invoice-lines-card .card-head { flex-wrap:wrap; }
 .invoice-mapping-fullscreen .invoice-lines-card .card-head > .compact-controls { flex-wrap:nowrap; }
+
+.receipt-review-dialog[open] { display:flex; flex-direction:column; }
+.receipt-review-dialog > .inventory-totals-heading { flex:0 0 auto; }
+.receipt-review-body { min-height:0; }
+.receipt-review-body table { table-layout:fixed; min-width:0; }
+.receipt-review-body th,.receipt-review-body td { font-size:14px; color:#172b3a; white-space:normal; overflow-wrap:anywhere; }
+.receipt-review-body th:first-child { width:60px; }
+.receipt-review-body th:nth-child(3) { width:90px; }
+.receipt-review-body th:last-child { width:185px; }

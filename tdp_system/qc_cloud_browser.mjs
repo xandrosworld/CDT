@@ -81,6 +81,27 @@ try {
       await wait('document.querySelector("#invoice-list-count")');
       await click('.invoice-lines-card .tdp-open-sheet');
       await wait('document.querySelector(".invoice-mapping-fullscreen-bar")');
+      const bulkButton = await evaluate(`document.querySelector('[data-action="review-input-receipts"]')?.textContent`);
+      assert.ok(bulkButton?.includes('Nhập kho'));
+      if (await evaluate(`!document.querySelector('[data-action="review-input-receipts"]').disabled`)) {
+        await click('[data-action="review-input-receipts"]');
+        await wait(`document.querySelector('.receipt-confirm')`);
+        const reviewed = await evaluate(`({count:document.querySelectorAll('.receipt-choice').length,checked:document.querySelectorAll('.receipt-choice:checked').length,total:document.querySelector('.receipt-selection-total').textContent})`);
+        assert.ok(reviewed.count>0); assert.equal(reviewed.count,reviewed.checked);
+        assert.ok(reviewed.total.includes('chưa thuế'));
+        await shot('receipt-bulk-preview');
+        await evaluate(`document.querySelector('.receipt-selection-details').open=true`);
+        if (reviewed.count>1) {
+          await click('.receipt-choice');
+          assert.equal(await evaluate(`document.querySelectorAll('.receipt-choice:checked').length`),reviewed.count-1);
+          await click('.receipt-choice');
+        }
+        await shot('receipt-bulk-selection');
+        await click('.receipt-cancel');
+        await wait(`!document.querySelector('.receipt-review-dialog')`);
+        report.checks.push('bulk_receipt_preview_selection_cancel_without_posting');
+        report.controls.bulk_receipts=reviewed;
+      }
       const priceRows=await evaluate(`(()=>{const card=document.querySelector('.invoice-lines-card');return {heading:card.querySelector('thead th:nth-child(7)').textContent,rows:Array.from(card.querySelectorAll('tbody tr[data-issue]')).map(row=>({id:row.id,text:row.querySelector('.invoice-unit-price').textContent,editable:!!row.querySelector('.invoice-unit-price input,.invoice-unit-price select,.invoice-unit-price [contenteditable=true]')}))};})()`);
       assert.equal(priceRows.heading,'Đơn giá');
       const priceQuery=await evaluate(`document.querySelector('.invoice-lines-card a[href*="/invoices/export"]').search`);

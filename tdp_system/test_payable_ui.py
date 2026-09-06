@@ -30,7 +30,7 @@ class PayableUiStaticContractTests(unittest.TestCase):
         self.assertIn("payable-line-select:disabled", css)
         self.assertIn("payable-payment-form", css)
         self.assertIn("/static/app.js?v=20260907-2", page)
-        self.assertIn("/static/real.css?v=20260907-2", page)
+        self.assertIn("/static/real.css?v=20260907-3", page)
 
 
 if __name__ == "__main__":
