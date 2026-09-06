@@ -127,3 +127,11 @@ Kết nối mới hỗ trợ tải hóa đơn đã có. Để lập hóa đơn, 
 Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → Lịch sử các lần tải → Xem dữ liệu cũ. Không cộng vào nguồn công ty hoặc kho/công nợ VAT. Sau chuyển, chọn tháng 8 và tải hóa đơn; ghép mã và xác nhận ghi kho vẫn là các bước riêng.
 
 Đối chiếu bản sao: 89 hóa đơn / 1.953 dòng, tổng nguồn 2.157.268.585 đồng. Hai hóa đơn điều chỉnh 695/696 và số 716/717 lệch tổng chi tiết được giữ để đối chiếu, không tự sửa số hoặc mở khóa ghi kho. Trạng thái Railway ghi tại README-new-2.md mục 13.32.
+
+
+## Tìm mã hoặc tên trong bảng — 07/09/2026
+
+- Mở bảng Excel hoặc bảng Ghép mã / Quy đổi, bấm **Ctrl+F** (Mac: Command+F), nhập mã hoặc tên rồi **Enter**. Có thể gõ tên không dấu, chẳng hạn `dau phu` để tìm `Đậu phụ`.
+- **Enter / F3 / ↓** tới kết quả tiếp; **Shift+Enter / Shift+F3 / ↑** về kết quả trước. Bộ đếm cho biết vị trí và số ô khớp. Không thấy thì kiểm tra từ khóa và phạm vi ngày/trạng thái/trang đang mở.
+- **Escape** khi đang ở thanh tìm xóa từ khóa, giữ bảng mở. Nút đóng bảng vẫn dùng như trước. Tìm trong phạm vi bảng đang mở; bản xem chỉ một trang không tìm dữ liệu các trang khác.
+- Bảng Excel chọn và cuộn tới đúng ô. Đang gõ ô rồi Ctrl+F thì ô được kết thúc nhập theo cơ chế tự lưu. Riêng ô ghép mã hóa đơn vẫn cần Enter ở ô mã hoặc Ghi nhớ mới lưu; Enter ở ô tìm chỉ tìm kiếm.

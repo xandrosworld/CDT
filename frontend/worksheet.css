@@ -11,4 +11,14 @@
 .tdp-sheet-host { flex:1; min-height:0; position:relative; overflow:hidden; }
 .tdp-sheet-controls:empty { display:none; }
 .tdp-open-sheet { padding:6px 12px; margin:6px 0; border:1px solid #168175; background:#fff; color:#09695f; cursor:pointer; border-radius:4px; font:14px Arial; }
+.tdp-table-search { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:5px 12px; flex:0 0 auto; border-bottom:1px solid #d5dde2; background:white; color:#183c40; font:14px Arial,sans-serif; }
+.tdp-table-search input { width:220px; min-width:120px; padding:5px 8px; border:1px solid #bac8ce; background:white; color:#182e35; font:inherit; }
+.tdp-table-search button { padding:4px 10px; min-height:30px; border:1px solid #bac8ce; background:white; color:#183c40; cursor:pointer; font:inherit; }
+.tdp-table-search small { color:#526369; font-size:12px; }
+.tdp-search-result { min-width:135px; }
+.tdp-search-hit { outline:3px solid #1769aa; outline-offset:-3px; }
+.invoice-mapping-fullscreen-bar:has(.tdp-table-search) > span { display:none; }
+.invoice-mapping-fullscreen-bar .tdp-table-search { padding:0; border:0; }
+.invoice-mapping-fullscreen-bar .tdp-table-search small { display:none; }
+@media print { .tdp-table-search { display:none; } .tdp-search-hit { outline:none; } }
 @media(max-width:650px){ .tdp-sheet-top{gap:5px;padding:5px} .tdp-sheet-top input{width:130px} .tdp-sheet-top strong{font-size:14px} .tdp-sheet-controls input{width:145px} }

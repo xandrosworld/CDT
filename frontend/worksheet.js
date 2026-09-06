@@ -20,7 +20,6 @@ async function open(options) {
   const status = make('span', 'Đang mở bảng…', 'tdp-sheet-status'); status.setAttribute('role', 'status');
   top.append(status);
   const button = (label, fn) => { const el = make('button', label); el.type = 'button'; el.onclick = fn; top.append(el); return el; };
-  const find = make('input'); find.placeholder = 'Tìm trong bảng…'; find.setAttribute('aria-label', 'Tìm trong bảng'); top.append(find);
   const close = button('×', () => shutdown()); close.className = 'tdp-sheet-close'; close.setAttribute('aria-label', 'Đóng bảng');
   if (options.onImport) { const upload = button('Nạp bản mới', async () => { await shutdown(); if (disposed) options.onImport(); }); top.insertBefore(upload, close); }
   const notice = make('div', options.editable ? 'Nhập trực tiếp hoặc dán nhiều ô. Enter / Tab để chuyển ô và tự lưu. Cột tính toán chỉ xem.' : 'Bảng chỉ xem · có thể chọn và sao chép ô, kéo rộng cột, phóng to.', 'tdp-sheet-notice');
@@ -52,7 +51,38 @@ async function open(options) {
       // English number parser otherwise turns the Vietnamese input 0,855 into 855.
       bl: header ? 1 : 0, ...(!header ? { n: { pattern: col.editable && options.editable && !col.money ? '@' :
         col.numeric ? (col.money || Number.isInteger(value) ? '#,##0' : '#,##0.######') : '@' } } : {}) } });
-  function valuesFor(row) { return columns.map(col => textValue(row[col.key])); }
+  const search = window.TDPTableSearch({
+    scope: 'Trong bảng đang mở · không phân biệt dấu / hoa thường',
+    active: () => !disposed && !document.querySelector('dialog[open]'),
+    prepare: async () => { await waitForRender(); if (book?.isCellEditing()) await book.endEditingAsync(true); },
+    cells: () => {
+      if (!sheet || !rows.length) return [];
+      const raw = sheet.getRange(1, 0, rows.length, columns.length).getRawValues();
+      return raw.flatMap((row, r) => columns.map((col, c) => ({ key: `${r}:${c}`, r, c,
+        values: [row[c], ...(col.numeric && typeof row[c] === 'number' ? [row[c].toLocaleString('en-US', { maximumFractionDigits: col.money ? 0 : 6 }), row[c].toLocaleString('vi-VN', { maximumFractionDigits: 6 })] : [])] })));
+    },
+    select: hit => revealCell(hit.r + 1, hit.c)
+  });
+  shell.insertBefore(search.element, notice);
+  async function waitForRender() {
+    const deadline = Date.now() + 15000;
+    while (!disposed && (!api || api.getCurrentLifecycleStage() < api.Enum.LifecycleStages.Rendered)) {
+      if (Date.now() > deadline) throw new Error('Bảng chưa sẵn sàng');
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+  function revealCell(r, c) {
+    sheet.setActiveRange(sheet.getRange(r, c));
+    // The SDK's scrollToCell subtracts frozen column *indices*, which misses
+    // the target when column widths differ. Scroll by actual unfrozen sizes.
+    let offsetX = 0, offsetY = 0;
+    for (let i = sheet.getFrozenColumns(); i < c; i++) offsetX += sheet.getColumnWidth(i);
+    for (let i = sheet.getFrozenRows(); i < r; i++) offsetY += sheet.getRowHeight(i);
+    api.syncExecuteCommand('sheet.operation.set-scroll', {
+      unitId: book.getId(), sheetId: sheet.getSheetId(),
+      sheetViewStartRow: 0, sheetViewStartColumn: 0, offsetX, offsetY
+    });
+  }
   function changed() {
     if (muting || disposed || !options.editable) return;
     const matrix = sheet.getRange(1, 0, rows.length, columns.length).getRawValues();
@@ -142,7 +172,7 @@ async function open(options) {
       changed();
       if (!await flush(true)) { notice.textContent = 'Chưa đóng vì còn phần sửa chưa lưu. Sửa ô lỗi hoặc bấm Thử lưu lại.'; return; }
     }
-    disposed = true; clearTimeout(timer); clearInterval(pollTimer); subscription?.dispose(); univer?.dispose();
+    disposed = true; search.dispose(); clearTimeout(timer); clearInterval(pollTimer); subscription?.dispose(); univer?.dispose();
     window.removeEventListener('beforeunload', guard); shell.remove(); siblings.forEach(el => el.inert = false);
     document.body.style.overflow = previousOverflow; opened = null; origin?.focus(); options.onClose?.();
   }
@@ -151,7 +181,7 @@ async function open(options) {
   if (options.editable) {
     const retry = make('button', 'Thử lưu lại'); retry.onclick = () => flush(true); controls.append(retry);
     const nextError = make('button', 'Tới dòng lỗi'); let errorRow = -1;
-    nextError.onclick = () => { const candidates = rows.map((row, index) => hasErrors(row) ? index : -1).filter(index => index >= 0); errorRow = candidates.find(index => index > errorRow) ?? candidates[0] ?? -1; if (errorRow >= 0) { sheet.setActiveRange(sheet.getRange(errorRow + 1, columns.length - 2)); sheet.scrollToCell(errorRow + 1, columns.length - 2); } };
+    nextError.onclick = () => { const candidates = rows.map((row, index) => hasErrors(row) ? index : -1).filter(index => index >= 0); errorRow = candidates.find(index => index > errorRow) ?? candidates[0] ?? -1; if (errorRow >= 0) revealCell(errorRow + 1, columns.length - 2); };
     controls.append(nextError);
     const recover = make('button', 'Đọc lại / đối chiếu');
     recover.onclick = async () => {
@@ -201,12 +231,10 @@ async function open(options) {
       }
       subscription = api.addEvent(api.Event.SheetValueChanged, changed);
     }
-    find.onkeydown = event => {
-      if (event.key !== 'Enter' || !find.value) return;
-      const needle = find.value.toLocaleLowerCase();
-      const index = rows.findIndex(row => valuesFor(row).some(value => String(value).toLocaleLowerCase().includes(needle)));
-      if (index >= 0) { sheet.setActiveRange(sheet.getRange(index + 1, 0)); sheet.scrollToCell(index + 1, 0); }
-    };
+    // Render controllers (including scrolling) are registered after workbook creation.
+    // Do not advertise readiness while the SDK is still mounting them.
+    await waitForRender();
+    if (disposed) return;
     setStatus(options.editable ? 'Đã tải · tự lưu khi sửa ô' : 'Chỉ xem');
     updateNotice();
     if (options.batchId) pollTimer = setInterval(async () => {

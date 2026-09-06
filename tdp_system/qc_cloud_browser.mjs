@@ -41,6 +41,22 @@ try {
   const click=async selector=>{await wait(`document.querySelector(${JSON.stringify(selector)})`);await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'center'});e.click();})()`);};
   const shot=async name=>{await evaluate('window.scrollTo(0,0)');await sleep(350);const r=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));report.screens.push(name+'.png');};
   const api=async(route,body)=>evaluate(`fetch(${JSON.stringify(route)},${JSON.stringify(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})}).then(async r=>({status:r.status,data:await r.json()}))`);
+  const searchTable=async(term,name)=>{
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'f',code:'KeyF',windowsVirtualKeyCode:70,modifiers:2});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'f',code:'KeyF',windowsVirtualKeyCode:70,modifiers:2});
+    await wait(`document.activeElement===document.querySelector('.tdp-table-search input')`);
+    await call('Input.insertText',{text:term});
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',windowsVirtualKeyCode:13});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',windowsVirtualKeyCode:13});
+    await wait(`document.querySelector('.tdp-search-result').textContent.includes('ô khớp')`);
+    const result=await evaluate(`document.querySelector('.tdp-search-result').textContent`);
+    await shot(name+'-search');
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',windowsVirtualKeyCode:27});
+    assert.equal(await evaluate(`document.querySelector('.tdp-table-search input').value`),'');
+    report.checks.push(name+'_ctrl_f_enter_escape_without_write');
+    return result;
+  };
   await call('Page.enable');await call('Runtime.enable');await call('Network.enable');
   await call('Emulation.setDeviceMetricsOverride',{width:1680,height:1050,deviceScaleFactor:1,mobile:false});
   await call('Page.addScriptToEvaluateOnNewDocument',{source:`localStorage.setItem('tdp.invoiceWorkbenchFilters',JSON.stringify({direction:'input',date_from:'2026-08-01',date_to:'2026-08-31',status:'all',line_filter:'all'}));`});
@@ -139,7 +155,9 @@ try {
       report.checks.push('mapping_table_uses_at_least_70_percent_height_four_desktop_sizes');
       await call('Emulation.setDeviceMetricsOverride',{width:1680,height:1050,deviceScaleFactor:1,mobile:false});
       await shot('invoice-mapping-fullscreen');
-      await click('.invoice-mapping-fullscreen-bar button');
+      await searchTable(priceSource.data.lines.find(line=>line.source_item_name).source_item_name,'mapping');
+      assert.ok(await evaluate(`!!document.querySelector('.invoice-mapping-fullscreen-bar')`));
+      await click('.invoice-mapping-fullscreen-bar > button');
       assert.equal(await evaluate('document.querySelector("#content").classList.contains("invoice-mapping-fullscreen")'),false);
       report.checks.push('invoice_mapping_fullscreen_uses_live_editors');
     }
@@ -193,6 +211,7 @@ try {
         report.checks.push('hosted_worksheet_full_red_error_row');
       }
       await shot('worksheet-orders');
+      await searchTable(boot.data.orders.find(row=>row.product_code).product_code,'orders');
       await click('.tdp-sheet-close'); await wait(`!document.querySelector('.tdp-sheet-shell')`);
       report.checks.push('hosted_order_worksheet_read_only_smoke');
     }

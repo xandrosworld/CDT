@@ -29,7 +29,7 @@ def main():
     flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
     env = dict(os.environ, PYTHONIOENCODING='utf-8', TDP_DATA_DIR=str(output / 'data'),
                TDP_DB_PATH=str(output / 'isolated.sqlite3'), TDP_EXPORT_DIR=str(output / 'exports'),
-               MSMI_API_BASE_URL='http://127.0.0.1:9', MINVOICE_API_BASE_URL='http://127.0.0.1:9')
+               MSMI_API_BASE_URL='http://127.0.0.1:9', MINVOICE_API_BASE_URL='http://127.0.0.1:9', MINVOICE_API_MODE='legacy')
     with (output / 'server.log').open('wb') as log:
         server = subprocess.Popen([sys.executable, '-c', launcher, str(local_fixture), str(fixture)],
                                   env=env, stdout=log, stderr=log, creationflags=flags)

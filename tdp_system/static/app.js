@@ -6738,8 +6738,53 @@
     if (event.key === 'Escape' && invoiceMappingFullscreen && backdrop.hidden && !document.querySelector('dialog[open]')) closeInvoiceMappingFullscreen();
   });
   var sheetEnhanceTimer;
+  var mappingSearch = null;
+  function enhanceMappingSearch() {
+    var card = content.querySelector('.invoice-lines-card');
+    if (mappingSearch && (!card || !card.contains(mappingSearch.element))) {
+      mappingSearch.dispose(); mappingSearch = null;
+    }
+    if (!card) return;
+    var fullscreenBar = card.querySelector('.invoice-mapping-fullscreen-bar');
+    if (mappingSearch) {
+      if (fullscreenBar && mappingSearch.element.parentNode !== fullscreenBar) fullscreenBar.insertBefore(mappingSearch.element, fullscreenBar.lastChild);
+      return;
+    }
+    var selectedCell = null;
+    mappingSearch = window.TDPTableSearch({
+      scope: 'Trong các dòng đúng bộ lọc ngày / trạng thái',
+      active: function () { return !window.TDPWorksheet?.isOpen() && backdrop.hidden && !document.querySelector('dialog[open]'); },
+      cells: function () {
+        var cells = [];
+        card.querySelectorAll('.invoice-lines-scroll tbody tr').forEach(function (row, r) {
+          Array.from(row.cells).slice(0, -1).forEach(function (cell, c) {
+            var copy = cell.cloneNode(true);
+            copy.querySelectorAll('button,input,select').forEach(function (el) { el.remove(); });
+            var values = [copy.textContent];
+            cell.querySelectorAll('input').forEach(function (el) { values.push(el.value); });
+            cells.push({ key: r + ':' + c, element: cell, values: values });
+          });
+        });
+        return cells;
+      },
+      clear: function () { if (selectedCell) selectedCell.classList.remove('tdp-search-hit'); selectedCell = null; },
+      select: function (hit) {
+        selectedCell = hit.element; selectedCell.classList.add('tdp-search-hit');
+        var scroll = card.querySelector('.invoice-lines-scroll');
+        var head = scroll.querySelector('thead').getBoundingClientRect().height;
+        scroll.scrollTop += selectedCell.getBoundingClientRect().top - scroll.getBoundingClientRect().top - head - 12;
+        if (selectedCell.cellIndex > 0) {
+          var left = selectedCell.parentNode.cells[0].getBoundingClientRect().width;
+          scroll.scrollLeft += selectedCell.getBoundingClientRect().left - scroll.getBoundingClientRect().left - left - 12;
+        }
+      }
+    });
+    if (fullscreenBar) fullscreenBar.insertBefore(mappingSearch.element, fullscreenBar.lastChild);
+    else card.insertBefore(mappingSearch.element, card.querySelector('.invoice-lines-scroll'));
+  }
   function addWorksheetButtons() {
     syncInvoiceMappingFullscreen();
+    enhanceMappingSearch();
     content.querySelectorAll('table').forEach(function(table) {
       if(table.closest('.inventory-nxt-scroll')) return;
       if(table.dataset.worksheetReady) return;

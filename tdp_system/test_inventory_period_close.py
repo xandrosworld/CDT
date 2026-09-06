@@ -283,7 +283,7 @@ class InventoryPeriodCloseUiContractTests(unittest.TestCase):
         self.assertIn('data-action="close-inventory-month"', app_js)
         self.assertIn('data-action="reopen-inventory-month"', app_js)
         self.assertIn(".inventory-month-close", styles)
-        self.assertIn("app.js?v=20260906-16", index)
+        self.assertIn("app.js?v=20260907-1", index)
         self.assertIn("real.css?v=20260906-11", index)
         self.assertIn("invoice-workbench.js?v=20260906-8", index)
 

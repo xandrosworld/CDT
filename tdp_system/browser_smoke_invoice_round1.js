@@ -65,6 +65,21 @@ async function main() {
     assert.deepEqual(ambiguous.candidate_products.map(p=>p.code).sort(),['R1-ALT-A','R1-ALT-B']);
     assert.equal(await evaluate(`document.getElementById('${mappingId}').tagName`),'INPUT');
     assert.equal(await evaluate(`document.getElementById('${mappingId}').value`),'');
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar .tdp-table-search')`);
+    await evaluate(`document.getElementById('${mappingId}').value='MA-CHUA-LUU';document.getElementById('${mappingId}').focus()`);
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'f',code:'KeyF',windowsVirtualKeyCode:70,modifiers:2});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'f',code:'KeyF',windowsVirtualKeyCode:70,modifiers:2});
+    await wait(`document.activeElement===document.querySelector('.tdp-table-search input')`);
+    await call('Input.insertText',{text:'ma-chua-luu'});
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',windowsVirtualKeyCode:13});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',windowsVirtualKeyCode:13});
+    await wait(`document.querySelector('.tdp-search-result').textContent==='1 / 1 ô khớp'`);
+    assert.ok(await evaluate(`document.querySelector('.tdp-search-hit').contains(document.getElementById('${mappingId}'))`));
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',windowsVirtualKeyCode:27});
+    assert.ok(await evaluate(`!!document.querySelector('.invoice-mapping-fullscreen-bar')`));
+    assert.equal(await evaluate(`document.getElementById('${mappingId}').value`),'MA-CHUA-LUU');
+    assert.deepEqual((await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.lines,initial.lines,'Finding unsaved mapping must not save it');
     await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
     await call('Input.insertText',{text:'Hàng kiểm thử kg'});
     await wait(`!!document.querySelector('#msmiProductOptions [data-product-code="R1-KG"]')`);
@@ -98,7 +113,7 @@ async function main() {
     assert.equal((await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.lines.find(line=>line.id===fixture.line_b).product_code,'');
     await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
     await call('Input.insertText',{text:'NO-SUCH-CODE'});
-    await click('.invoice-mapping-fullscreen-bar button');
+    await click('.invoice-mapping-fullscreen-bar > button');
     assert.equal(await evaluate(`document.getElementById('${mappingId}').value`),'NO-SUCH-CODE');
     await click('.invoice-lines-card .tdp-open-sheet');
     await click(`[data-action="save-invoice-mapping"][data-id="${fixture.line_b}"]`);
@@ -126,7 +141,7 @@ async function main() {
     await evaluate(`document.getElementById('${conv}').value='12';document.getElementById('${conv}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`);
     await wait(`!document.getElementById('${conv}')`);
     await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
-    await click('.invoice-mapping-fullscreen-bar button');
+    await click('.invoice-mapping-fullscreen-bar > button');
     assert.equal(await evaluate(`document.body.style.overflow`),'');
     await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
     await change('invoiceStatus','ready');
@@ -228,7 +243,7 @@ async function main() {
     await click('.invoice-workbench-help > summary');
     assert.ok(await evaluate(`document.querySelector('.invoice-workbench-help').open`));
     await click('.invoice-workbench-help > summary');
-    await click('.invoice-mapping-fullscreen-bar button');
+    await click('.invoice-mapping-fullscreen-bar > button');
     fs.writeFileSync('D:/TDP_ROUND1/mapping-layout.json',JSON.stringify(mappingLayouts,null,2));
     // One click performs exact mapping; no human confirmation for a proven match.
     const autoFixture = (await request('/fixture/automatic-mapping','POST',{})).body;
@@ -294,7 +309,7 @@ async function main() {
     const oilStock=(await request('/api/invoice-valuation?from=2026-08-01&to=2026-08-31')).body.items.find(r=>r.product_code==='QA-OIL');
     assert.equal(oilStock.closing_qty,30);assert.equal(oilStock.closing_value,1288889);
     assert.ok(Math.abs(oilStock.average_unit_cost-1288889/30)<0.000001);
-    await click('.invoice-mapping-fullscreen-bar button');
+    await click('.invoice-mapping-fullscreen-bar > button');
     // Many units used to turn the sticky total into a panel covering the rows.
     // Replace only this GET response in the isolated browser, leaving the DB intact.
     await evaluate(`(()=>{const original=window.fetch;window.fetch=async function(input,init){const response=await original(input,init);if(String(input).startsWith('/api/invoice-valuation?')){const data=await response.json();data.items=Array.from({length:240},(_,i)=>({product_code:'LAYOUT-'+i,product_name:'Long inventory item '+i,unit:'unit '+(i%24),opening_qty:1000.855,input_qty:2,output_qty:1,closing_qty:1001.855,opening_value:10000000,input_value:20000,output_value:10000,closing_value:10010000,average_unit_cost:10000,valuation_status:'ok'}));return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});}return response;};})()`);
