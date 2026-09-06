@@ -244,6 +244,26 @@ try {
     const r=await api(route);report[name]={status:r.status,ok:r.data.ok,error:r.data.error,totals:r.data.totals,counts:r.data.counts,item_count:r.data.items?.length};
     if(name==='backup')report.backup={status:r.status,...r.data};
     assert.equal(r.status,200,route);
+    if(name==='minvoice' && r.data.account?.connection_mode==='portal') {
+      assert.equal(r.data.account.company_tax_code,'0202265016');
+      assert.equal(r.data.test_environment,false);
+      assert.equal(r.data.draft_save_available,false);
+      assert.equal(boot.data.minvoice_draft_available,false);
+      await click('[data-action="set-invoice-direction"][data-direction="output"]');
+      await wait(`document.querySelector('[data-direction="output"][aria-selected="true"]') && !document.querySelector('.loading-panel,.loading-inline')`);
+      await sleep(1200);
+      const current=await api('/api/invoice-workbench/invoices?invoice_type=output&from=2026-08-01&to=2026-08-31');
+      assert.equal(current.status,200);
+      assert.ok(current.data.items.every(i=>i.source==='minvoice'));
+      assert.ok(current.data.items.every(i=>!i.source_status_field || i.source_status_field.startsWith('minvoice_portal.')));
+      assert.ok(await evaluate(`!!document.querySelector('a[href="/api/invoice-workbench/output-archive"]')`));
+      await evaluate(`document.querySelector('.invoice-batch-card').open=true`);
+      await shot('official-output-and-archive');
+      const archive=await evaluate(`fetch('/api/invoice-workbench/output-archive').then(async r=>({status:r.status,text:await r.text()}))`);
+      assert.equal(archive.status,200);assert.ok(archive.text.includes('chỉ xem'));
+      report.official_account={tax_code:r.data.account.company_tax_code,totals:current.data.totals,counts:current.data.counts,archive_available:true};
+      report.checks.push('official_portal_account_output_and_read_only_archive');
+    }
   }
   const chosen=boot.data.batches.flatMap(b=>(b.delivery_notes||[]).map(n=>({batch_id:b.id,kitchen:n.code})))[0];
   if(chosen){

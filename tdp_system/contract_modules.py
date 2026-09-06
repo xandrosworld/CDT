@@ -8243,6 +8243,9 @@ def register_contract_routes(app, ctx):
             minvoice_client = client_factory()
         except MinvoiceError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502
+        if getattr(minvoice_client, "supports_remote_drafts", True) is False:
+            return jsonify({"ok": False, "remote_write": False,
+                            "error": "Portal mới đang hỗ trợ tải hóa đơn. Để lập hóa đơn, tải file M-Invoice rồi nhập trên portal."}), 409
         requested_series = clean_text(body.get("series")).upper()
         timestamp = now_iso()
         reconcile_only = False

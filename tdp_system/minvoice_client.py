@@ -44,6 +44,7 @@ class MinvoiceConfig:
     password: str
     unit_code: str = "VP"
     allow_test_environment: bool = False
+    api_mode: str = "legacy"
 
     @classmethod
     def from_env_files(cls, paths: list[Path]) -> "MinvoiceConfig":
@@ -65,6 +66,7 @@ class MinvoiceConfig:
             password=required["MINVOICE_PASSWORD"],
             unit_code=values.get("MINVOICE_UNIT_CODE", "VP") or "VP",
             allow_test_environment=values.get("MINVOICE_ALLOW_TEST_ENVIRONMENT", "").strip().lower() in {"1", "true", "yes"},
+            api_mode=values.get("MINVOICE_API_MODE", "legacy").strip().lower() or "legacy",
         )
 
 
@@ -84,9 +86,15 @@ class MinvoiceClient:
     _SIX_PLACES = Decimal("0.000001")
 
     def __init__(self, config: MinvoiceConfig, timeout: int = 25):
+        if config.api_mode not in {"legacy", "portal"}:
+            raise MinvoiceError("MINVOICE_API_MODE phải là legacy hoặc portal")
         self.config = config
         self.timeout = timeout
         self._token = ""
+
+    @property
+    def supports_remote_drafts(self):
+        return True
 
     def _json(self, method: str, path: str, payload=None, params=None, authenticated=False):
         url = self.config.api_base_url + "/api/" + path.lstrip("/")

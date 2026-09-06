@@ -309,6 +309,7 @@ def _batch_dict(row) -> dict[str, Any]:
     item["direction_label"] = INVOICE_LABELS[item["invoice_type"]]
     item["source_label"] = SOURCE_LABELS.get(item["source"], item["source"])
     item["read_only_source"] = True
+    item["archived"] = item["source"] == "minvoice_test_0106026495_999"
     return item
 
 
@@ -440,6 +441,15 @@ def register_invoice_workbench_routes(app, ctx) -> None:
     audit_event = ctx.get("audit_event")
     create_msmi_client = ctx.get("create_msmi_client")
     create_minvoice_client = ctx.get("create_minvoice_client")
+
+    @app.get("/api/invoice-workbench/output-archive")
+    def api_output_archive():
+        try:
+            from .minvoice_account_archive import archive_html
+        except ImportError:
+            from minvoice_account_archive import archive_html
+        with db_factory() as conn:
+            return archive_html(conn), 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
 
     def persist_sync_error(batch_id: int, error_code: str) -> None:
         """Persist only a count/code after the failed sync transaction rolls back.

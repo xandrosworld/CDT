@@ -44,6 +44,7 @@
     }).join('');
     var batchLabels = {prepared:'Đã chuẩn bị', syncing:'Đang tải', needs_mapping:'Chưa ghép mã',ready:'Sẵn sàng',posted:'Đã ghi kho',partial:'Còn phần cần xử lý',error:'Lỗi tải',quarantined:'Cần kiểm tra'};
     var batches = ((state.invoiceWorkbench || {}).batches || []).map(function (batch) {
+      if (batch.archived) return '<tr><td>' + batch.id + '</td><td>' + dateVN(batch.date_from) + ' → ' + dateVN(batch.date_to) + '</td><td>Kết nối thử cũ · chỉ xem</td><td>' + num(batch.fetched_count) + '</td><td><a class="btn btn-small btn-outline" href="/api/invoice-workbench/output-archive" target="_blank" rel="noopener">Xem dữ liệu cũ</a></td></tr>';
       return '<tr><td>' + batch.id + '</td><td>' + dateVN(batch.date_from) + ' → ' + dateVN(batch.date_to) + '</td><td>' + esc(batchLabels[batch.status] || batch.status) + (batch.error_code ? ' · hãy kiểm tra và tải tiếp' : '') + '</td><td>' + num(batch.fetched_count) + '</td><td>' + (input && batch.fetched_count ? '<a href="/api/invoice-workbench/batches/' + batch.id + '/export-input-xlsx" class="btn btn-small btn-outline">Excel cả lần tải</a>' : '—') + '</td></tr>';
     }).join('');
     var qty = Object.keys(totals.qty_by_unit || {}).map(function (unit) { return num(totals.qty_by_unit[unit]) + ' ' + esc(unit); }).join(' · ') || '0';

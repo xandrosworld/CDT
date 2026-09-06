@@ -2380,6 +2380,12 @@ def create_minvoice_client():
     if test_factory is not None:
         return test_factory()
     config = MinvoiceConfig.from_env_files(connector_config_paths())
+    if config.api_mode == "portal":
+        try:
+            from .minvoice_portal import MinvoicePortalClient
+        except ImportError:
+            from minvoice_portal import MinvoicePortalClient
+        return MinvoicePortalClient(config)
     return MinvoiceClient(config)
 
 
@@ -2419,7 +2425,7 @@ def api_minvoice_status():
                          'Đang kết nối máy chủ kiểm thử M-Invoice; cần cấu hình tài khoản được chủ dự án chọn.')
                         if account.get('test_environment', False) else ''),
             "automatic_sign_or_issue": False,
-            "official_api": True,
+            "official_api": account.get("official_api", True),
         })
     except MinvoiceError as error:
         return jsonify({"ok": False, "connected": False, "error": str(error), "read_only": True}), 502
@@ -2448,6 +2454,10 @@ def api_bootstrap():
     with db() as conn:
         payload = batch_payload(conn, request.args.get("batch_id", type=int))
         payload["hosted"] = bool(app.config.get("TDP_CLOUD_ADMIN_USER"))
+        try:
+            payload["minvoice_draft_available"] = create_minvoice_client().supports_remote_drafts
+        except (MinvoiceError, AttributeError):
+            payload["minvoice_draft_available"] = False
         payload["batches"] = rows_dict(conn.execute(
             """SELECT b.*,
                       (SELECT COUNT(*) FROM orders o WHERE o.batch_id=b.id) AS line_count,

@@ -515,6 +515,8 @@ def save_mapping(
             code="not_inventory",
             status=409,
         )
+    if safe_direction == "output" and context["mapping_source"] != "minvoice":
+        raise InvoiceMappingError("Dữ liệu kết nối cũ chỉ được xem trong lịch sử", code="archived_source", status=409)
     if context["parent_sync_status"] != "synced":
         raise InvoiceMappingError(
             "Nguồn hóa đơn đang lỗi hoặc đã thay đổi; cần đồng bộ và đối chiếu trước khi ghép mã",
@@ -633,6 +635,8 @@ def save_conversion(
         raise InvoiceMappingError("Không tìm thấy dòng hóa đơn", code="not_found", status=404)
     if not context["inventory_eligible"]:
         raise InvoiceMappingError("Dòng này không ảnh hưởng kho", code="not_inventory", status=409)
+    if safe_direction == "output" and context["mapping_source"] != "minvoice":
+        raise InvoiceMappingError("Dữ liệu kết nối cũ chỉ được xem trong lịch sử", code="archived_source", status=409)
     if context["parent_sync_status"] != "synced":
         raise InvoiceMappingError(
             "Nguồn hóa đơn đang lỗi hoặc đã thay đổi; cần đồng bộ và đối chiếu trước khi quy đổi",

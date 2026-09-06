@@ -116,3 +116,14 @@ Khách đánh dấu kết quả thực tế ở checklist sau khi thử từng m
 5. Nạp lại cùng file không trừ thêm. File NCC tải ra giữ khoản trừ bằng số tiền trực tiếp và cột **Loại dòng**; nếu chỉnh khoản tiền này, giữ lượng/giá/các cột điều chỉnh bằng 0 và nhập thành tiền âm. Giữ nguyên lịch sử các lần sửa.
 
 Lượt triển khai chức năng không tự nạp hoặc duyệt đơn 03/09 lên production. Số 790.040đ là kết quả kiểm chứng trên bản sao, chưa phải số dư Phong đã ghi trên Railway. Bốn mã tồn đầu âm tiếp tục chờ khách chốt.
+
+
+### Kết nối portal công ty — 07/09/2026
+
+Cấu hình: `MINVOICE_API_MODE=portal`, `MINVOICE_API_BASE_URL=https://0202265016.minvoice.net`, tài khoản/mật khẩu khách và `MINVOICE_ALLOW_TEST_ENVIRONMENT=false`. Web dùng biến Railway; sửa `.env` trên máy không tự cập nhật Railway. Không đưa mật khẩu vào tài liệu/Git.
+
+Kết nối mới hỗ trợ tải hóa đơn đã có. Để lập hóa đơn, tải file M-Invoice của phần đủ điều kiện rồi nhập trên portal. Gửi nháp trực tiếp từ phần mềm sang portal mới chưa hỗ trợ; không tự ký/phát hành.
+
+Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → Lịch sử các lần tải → Xem dữ liệu cũ. Không cộng vào nguồn công ty hoặc kho/công nợ VAT. Sau chuyển, chọn tháng 8 và tải hóa đơn; ghép mã và xác nhận ghi kho vẫn là các bước riêng.
+
+Đối chiếu bản sao: 89 hóa đơn / 1.953 dòng, tổng nguồn 2.157.268.585 đồng. Hai hóa đơn điều chỉnh 695/696 và số 716/717 lệch tổng chi tiết được giữ để đối chiếu, không tự sửa số hoặc mở khóa ghi kho. Trạng thái Railway ghi tại README-new-2.md mục 13.32.

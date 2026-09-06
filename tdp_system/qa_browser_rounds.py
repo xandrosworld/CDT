@@ -40,7 +40,7 @@ def main():
         env = dict(os.environ, TDP_DATA_DIR=str(folder / 'data'), TDP_DB_PATH=str(folder / 'default.sqlite3'),
                    TDP_EXPORT_DIR=str(folder / 'exports'), MSMI_API_BASE_URL='http://127.0.0.1:9',
                    MSMI_API_TOKEN='offline-test', MINVOICE_API_BASE_URL='http://127.0.0.1:9',
-                   MINVOICE_USERNAME='offline-test', MINVOICE_PASSWORD='offline-test', PYTHONIOENCODING='utf-8')
+                   MINVOICE_USERNAME='offline-test', MINVOICE_PASSWORD='offline-test', MINVOICE_API_MODE='legacy', PYTHONIOENCODING='utf-8')
         flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         launcher = ('from pathlib import Path; import sys; '
                     "exec(compile(Path(sys.argv[1]).read_text(encoding='utf-8'),sys.argv[2],'exec'),"

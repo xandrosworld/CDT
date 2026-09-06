@@ -24,7 +24,7 @@ def main():
                           TDP_EXPORT_DIR=str(output / 'exports'), TEMP=str(output / 'temp'), TMP=str(output / 'temp'),
                           MSMI_API_BASE_URL='http://127.0.0.1:9', MSMI_API_TOKEN='offline-test',
                           MINVOICE_API_BASE_URL='http://127.0.0.1:9', MINVOICE_USERNAME='offline-test',
-                          MINVOICE_PASSWORD='offline-test')
+                          MINVOICE_PASSWORD='offline-test', MINVOICE_API_MODE='legacy')
         from . import server
         server.connector_config_paths = lambda: []
         suite = unittest.defaultTestLoader.loadTestsFromName('tdp_system.' + args.module)

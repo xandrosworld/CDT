@@ -2662,7 +2662,7 @@
           esc(item.issued_invoice_number || "") + ' · ' + dateVN(item.issued_invoice_date || item.invoice_date) + '</div>' : '') +
         '</td><td>' + actions + '</td></tr>';
     }).join("");
-    var minvoiceForms = (state.outgoingInvoices || []).filter(function (item) {
+    var minvoiceForms = ((state.data && state.data.minvoice_draft_available === false) ? [] : (state.outgoingInvoices || [])).filter(function (item) {
       return item.batch_id === state.batchId && item.status === "draft";
     }).map(function (item) {
       var buyer = item.buyer || {};
@@ -3308,6 +3308,7 @@
     var minvoiceText = m && m.connected
       ? "M-Invoice đang hoạt động · " + num(m.outgoing.series_count) + " ký hiệu. Có thể lưu nháp chờ ký; không tự ký/phát hành."
       : "Kiểm tra kết nối an toàn; lưu nháp cần xác nhận riêng và không bao giờ tự ký/phát hành.";
+    if (m && m.connected && m.draft_save_available === false) minvoiceText = "Đã kết nối portal công ty · " + num(m.outgoing.series_count) + " ký hiệu. Tải hóa đơn đã có; lập hóa đơn bằng file Excel nhập trên M-Invoice.";
     if (m && m.warning) minvoiceText = m.warning;
     var minvoiceCard = '<div class="card fade-in" style="margin-bottom:18px"><div class="card-head"><div><h3>' +
       esc(minvoiceTitle) + '</h3><p>' + esc(minvoiceText) + '</p></div><button class="btn btn-primary" data-action="check-minvoice">' +
@@ -4523,7 +4524,7 @@
       button.textContent = "Đang kiểm tra…";
       state.minvoiceStatus = await api("/api/minvoice/status");
       renderSettings();
-      showToast(state.minvoiceStatus.warning || "M-Invoice đã kết nối · có thể lưu nháp chờ ký · " + num(state.minvoiceStatus.outgoing.series_count) + " ký hiệu", !!state.minvoiceStatus.warning);
+      showToast(state.minvoiceStatus.warning || (state.minvoiceStatus.draft_save_available === false ? "Đã kết nối portal công ty · có thể tải hóa đơn" : "M-Invoice đã kết nối · có thể lưu nháp chờ ký · " + num(state.minvoiceStatus.outgoing.series_count) + " ký hiệu"), !!state.minvoiceStatus.warning);
     } catch (error) {
       button.disabled = false;
       button.textContent = "Kiểm tra lại";

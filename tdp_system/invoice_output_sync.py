@@ -164,6 +164,12 @@ def minvoice_source_status(remote: dict) -> tuple[str, str, str]:
     Only an original invoice at the final success state may enter the stock
     mapping queue; every missing or undocumented combination fails closed.
     """
+    if remote.get("_tdp_source_contract") == "minvoice_portal_v1":
+        try:
+            from .minvoice_portal import portal_status
+        except ImportError:
+            from minvoice_portal import portal_status
+        return portal_status(remote)
     document_labels = {
         "goc": 0,
         "huy": 1,
@@ -247,13 +253,23 @@ def normalize_output_invoice(
     subtotal = msmi_number(first_value(remote, "tgtcthue", "subtotal", "totalBeforeTax"), "Tiền trước thuế")
     tax_amount = msmi_number(first_value(remote, "tgtthue", "taxAmount", "totalTax"), "Tiền thuế")
     total_amount = msmi_number(first_value(remote, "tgtttbso", "tgtttbchu", "totalAmount", "total"), "Tổng tiền")
-    if subtotal < 0 or tax_amount < 0 or total_amount < 0:
+    source_raw, source_class, source_field = resolved_source_status(remote, status_map, status_fields)
+    portal_adjustment = (remote.get("_tdp_source_contract") == "minvoice_portal_v1"
+                         and source_class in {"adjusted", "replaced", "cancelled"})
+    if (subtotal < 0 or tax_amount < 0 or total_amount < 0) and not portal_adjustment:
         raise MsmiError("Hóa đơn đầu ra có tổng tiền âm; cần đối chiếu thủ công")
-    if total_amount <= 0:
+    if total_amount <= 0 and remote.get("_tdp_source_contract") != "minvoice_portal_v1":
         total_amount = subtotal + tax_amount
     source_raw, source_class, source_field = resolved_source_status(
         remote, status_map, status_fields,
     )
+    validation_error = ""
+    if remote.get("_tdp_source_contract") == "minvoice_portal_v1":
+        try:
+            from .minvoice_portal import portal_validation_error
+        except ImportError:
+            from minvoice_portal import portal_validation_error
+        validation_error = portal_validation_error(remote)
     try:
         raw_json = json.dumps(remote, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError):
@@ -273,6 +289,7 @@ def normalize_output_invoice(
         "source_status_raw": source_raw,
         "source_status_class": source_class,
         "source_status_field": source_field,
+        "validation_error": validation_error,
         "relation_reference": _reference(remote, reference_fields),
         "raw_json": raw_json,
         "synced_at": now,
@@ -280,7 +297,7 @@ def normalize_output_invoice(
     }
 
 
-def normalize_output_item(remote_item: dict, line_index: int) -> dict[str, Any]:
+def normalize_output_item(remote_item: dict, line_index: int, *, portal_adjustment=False) -> dict[str, Any]:
     """Normalize either documented M-Invoice detail names or legacy aliases."""
     qty = msmi_number(
         first_value(remote_item, "inv_quantity", "sluong", "quantity", "qty"),
@@ -303,13 +320,15 @@ def normalize_output_item(remote_item: dict, line_index: int) -> dict[str, Any]:
     )
     nature = str(first_value(remote_item, "tchat", "nature", "itemNature", "type")).strip()
     financial_adjustment = amount < 0 and qty == 0 and unit_price == 0
-    if qty < 0 or unit_price < 0 or (amount < 0 and not financial_adjustment):
+    if not portal_adjustment and (qty < 0 or unit_price < 0 or (amount < 0 and not financial_adjustment)):
         raise MsmiError(
             f"Dòng {line_index} M-Invoice có số lượng, đơn giá hoặc thành tiền âm; "
             "cần đối chiếu thủ công"
         )
-    inventory_eligible = not financial_adjustment and qty > 0 and (unit_price > 0 or amount == 0)
-    if financial_adjustment:
+    inventory_eligible = not portal_adjustment and not financial_adjustment and qty > 0 and (unit_price > 0 or amount == 0)
+    if portal_adjustment:
+        validation_note = "Giữ lượng/tiền điều chỉnh nguồn để đối chiếu; không tự ghi kho"
+    elif financial_adjustment:
         validation_note = (
             "Không ghi kho: dòng chiết khấu/điều chỉnh tài chính âm, "
             "được giữ nguyên để đối chiếu tổng hóa đơn"
@@ -484,7 +503,9 @@ def upsert_output_invoice(
             now=now,
         )
         normalized_items = [
-            normalize_output_item(item if isinstance(item, dict) else {}, index)
+            normalize_output_item(item if isinstance(item, dict) else {}, index,
+                                  portal_adjustment=(remote.get("_tdp_source_contract") == "minvoice_portal_v1"
+                                                     and data["source_status_class"] in {"adjusted", "replaced", "cancelled"}))
             for index, item in enumerate(invoice_details(remote), start=1)
         ]
     except MsmiError as error:
@@ -536,7 +557,7 @@ def upsert_output_invoice(
         )]
         changed = _business_signature(dict(existing), stored_items) != _business_signature(data, normalized_items)
         already_reversed = existing["stock_status"] == "reversed"
-        requires_reconcile = already_reversed or changed or data["source_status_class"] != "issued"
+        requires_reconcile = already_reversed or changed or data["source_status_class"] != "issued" or bool(data.get("validation_error"))
         next_stock_status = (
             "reversed" if already_reversed
             else "reversal_required" if requires_reconcile
@@ -593,7 +614,9 @@ def upsert_output_invoice(
             ),
         )
     status_class = data["source_status_class"]
-    if status_class == "issued":
+    if data.get("validation_error"):
+        sync_status, stock_status, error_message = "review_required", "blocked", data["validation_error"]
+    elif status_class == "issued":
         sync_status = "synced"
         stock_status = "pending_mapping" if inventory_items else "not_inventory"
         error_message = ""
@@ -766,6 +789,13 @@ def sync_output_batch(
         raise InvoiceOutputSyncError("Không tìm thấy phiên tải hóa đơn")
     if batch["source"] != MINVOICE_SOURCE or batch["invoice_type"] != OUTPUT_INVOICE:
         raise InvoiceOutputSyncError("Phiên này không phải hóa đơn đầu ra M-Invoice")
+    active_connection = conn.execute("SELECT value FROM settings WHERE key='minvoice_active_connection'").fetchone()
+    portal_client = getattr(getattr(client, "config", None), "api_mode", "legacy") == "portal"
+    if active_connection and active_connection[0] == "portal" and not portal_client:
+        raise InvoiceOutputSyncError("Đang chuyển sang tài khoản portal công ty; kết nối cũ không được tải thêm dữ liệu")
+    if portal_client and conn.execute("""SELECT 1 FROM outgoing_source_invoices WHERE source='minvoice'
+             AND COALESCE(json_extract(raw_json,'$._tdp_source_contract'),'')!='minvoice_portal_v1' LIMIT 1""").fetchone():
+        raise InvoiceOutputSyncError("Cần đối chiếu và lưu dữ liệu tài khoản cũ vào lịch sử riêng trước khi tải từ portal mới")
     if (getattr(client, 'is_test_environment', False) is True
             and getattr(getattr(client, 'config', None), 'allow_test_environment', False) is not True):
         raise InvoiceOutputSyncError('M-Invoice đang dùng máy chủ kiểm thử. Hãy cấu hình URL và tài khoản '
@@ -918,7 +948,7 @@ def sync_output_batch(
             "invoice_items": item_count,
             "review_required": review_count,
             "complete": complete,
-            "status_contract": "minvoice_api_v1.0.9",
+            "status_contract": "minvoice_portal_v1" if portal_client else "minvoice_api_v1.0.9",
             "reconciliation": reconciliation,
         })
         conn.execute(f"RELEASE SAVEPOINT {savepoint}")
@@ -937,7 +967,7 @@ def sync_output_batch(
             "more_history": not complete,
             "status": status,
             "status_mapping_configured": True,
-            "status_contract": "minvoice_api_v1.0.9",
+            "status_contract": "minvoice_portal_v1" if portal_client else "minvoice_api_v1.0.9",
             "series_count": len(series_codes),
             "reconciliation": reconciliation,
             **counts,
