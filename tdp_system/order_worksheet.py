@@ -105,6 +105,14 @@ def register(app, h):
                     current.update({key: resolved[key] for key in h['ORDER_FIELDS'] if key in resolved})
                     # Price edits must use exactly the audited value, including zero for gifts.
                     current['sell_price'] = selected_price
+                    # The stored override may differ from the quotation used by resolve_order.
+                    # Validate the value actually saved, particularly an unfinished zero price.
+                    if selected_price <= 0 and current['invoice_nature'] != '2' and 'Thiếu giá bán' not in resolved['errors']:
+                        resolved['errors'].append('Thiếu giá bán')
+                    loss_warning = 'Giá bán thấp hơn giá mua – cần xác nhận bán lỗ'
+                    resolved['warnings'] = [item for item in resolved['warnings'] if item != loss_warning]
+                    if 0 < selected_price < current['buy_price'] and current['invoice_nature'] != '2':
+                        resolved['warnings'].append(loss_warning)
                     prepared.append((raw, current, resolved, changed_price))
                 timestamp = h['now_iso']()
                 h['clear_batch_derived_inventory'](conn, batch_id)

@@ -1708,11 +1708,20 @@ def strict_purchase_contract_rows(items):
     } for item in items]
 
 
-def strict_order_index(orders, *, finalization=False):
+def strict_continuous_contract_rows(orders):
+    """Include every imported value when comparing a later daily revision."""
+    ordered = sorted(orders, key=lambda item: int(item.get('source_row') or 0))
+    rows = strict_daily_contract_rows(ordered)
+    for row, item in zip(rows, ordered):
+        row['payload'].update({field: item.get(field) for field in ('note', 'seller', 'cccd')})
+    return rows
+
+
+def strict_order_index(orders, *, finalization=False, continuous=False):
     ordered = sorted(orders, key=lambda item: int(item.get("source_row") or 0))
     descriptors = (
         strict_final_sales_contract_rows(ordered)
-        if finalization else strict_daily_contract_rows(ordered)
+        if finalization else strict_continuous_contract_rows(ordered) if continuous else strict_daily_contract_rows(ordered)
     )
     output = {}
     for item, descriptor in zip(ordered, descriptors):
@@ -1747,8 +1756,8 @@ def strict_customer_scope_diff(conn, batch_id: int, incoming_orders, *, continuo
     current_orders = rows_dict(conn.execute(
         "SELECT * FROM orders WHERE batch_id=? ORDER BY source_row,id", (batch_id,),
     )) if batch_id else []
-    incoming = strict_order_index(incoming_orders, finalization=not continuous)
-    current = strict_order_index(current_orders, finalization=not continuous)
+    incoming = strict_order_index(incoming_orders, finalization=not continuous, continuous=continuous)
+    current = strict_order_index(current_orders, finalization=not continuous, continuous=continuous)
     incoming_keys = set(incoming)
     current_keys = set(current)
     removed_keys = current_keys - incoming_keys
@@ -1847,8 +1856,8 @@ def apply_strict_customer_scope(conn, batch_id: int, incoming_orders, *, continu
     current_rows = rows_dict(conn.execute(
         "SELECT * FROM orders WHERE batch_id=? ORDER BY source_row,id", (batch_id,),
     ))
-    current = strict_order_index(current_rows, finalization=not continuous)
-    incoming = strict_order_index(incoming_orders, finalization=not continuous)
+    current = strict_order_index(current_rows, finalization=not continuous, continuous=continuous)
+    incoming = strict_order_index(incoming_orders, finalization=not continuous, continuous=continuous)
     removed_keys = set(current) - set(incoming)
     for key in removed_keys:
         conn.execute("DELETE FROM orders WHERE id=?", (int(current[key]["order"]["id"]),))
@@ -1975,7 +1984,7 @@ def confirm_strict_daily_finalization(pending, body, sheets):
                     metadata={'source': pending['name'], 'selected_scopes': selected_scopes,
                               'purchase_before': rows_dict(conn.execute('SELECT * FROM purchase_workbook_lines WHERE batch_id=?', (batch_id,)))})
         rows_by_scope = {
-            "customer_orders": (strict_daily_contract_rows(customer_orders) if analysis.get('continuous')
+            "customer_orders": (strict_continuous_contract_rows(customer_orders) if analysis.get('continuous')
                                 else strict_final_sales_contract_rows(customer_orders)),
         }
         if analysis["purchaseSheets"]:

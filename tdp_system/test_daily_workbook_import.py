@@ -237,6 +237,19 @@ class DailyWorkbookImportTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual(conn.execute('SELECT qty FROM orders WHERE batch_id=?', (first.json['batch']['id'],)).fetchone()[0], 3)
 
+    def test_continuous_new_file_restores_note_even_when_other_values_match(self):
+        import zipfile
+        data = self.continuous_file(qty=3)
+        first = self.confirm_api(self.continuous_analyze(data)).json
+        with server.db() as conn:
+            conn.execute("UPDATE orders SET note='web only' WHERE batch_id=?", (first['batch']['id'],))
+        stream = io.BytesIO(data)
+        with zipfile.ZipFile(stream, 'a') as archive:
+            archive.comment = b'Later revision with identical business cells'
+        result = self.confirm_api(self.continuous_analyze(stream.getvalue()))
+        self.assertEqual(result.status_code, 200, result.json)
+        self.assertEqual(result.json['orders'][0]['note'], first['orders'][0]['note'])
+
     def test_structure_first_analyzer_never_serializes_reference_values(self):
         secret = "CCCD-DO-NOT-SERIALIZE"
         path = Path(self.temp.name) / "structure.xlsx"

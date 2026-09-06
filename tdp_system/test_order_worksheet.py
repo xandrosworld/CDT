@@ -7,6 +7,22 @@ from . import server
 
 
 class WorksheetTests(OrderPriceOverrideTests):
+    def test_unfinished_zero_price_keeps_error_when_resolver_finds_a_quote(self):
+        batch, ident = self.create_order()
+        with server.db() as conn:
+            conn.execute('UPDATE orders SET sell_price=0 WHERE id=?', (ident,))
+        original = server.resolve_order
+        def quoted(*args):
+            row = original(*args)
+            row['sell_price'] = 15000
+            row['errors'] = []
+            return row
+        with patch.object(server, 'resolve_order', quoted):
+            result = self.send(self.request_for(batch, ident, {'note': 'Still incomplete'}))
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json['orders'][0]['sell_price'], 0)
+        self.assertIn('Thiếu giá bán', result.json['orders'][0]['errors'])
+
     def request_for(self, batch, ident, values):
         with server.db() as conn:
             row = next(item for item in server.batch_payload(conn, batch)['orders'] if item['id'] == ident)

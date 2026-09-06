@@ -24,6 +24,8 @@ async function open(options) {
   if (options.onImport) { const upload = button('Nạp bản mới', async () => { await shutdown(); if (disposed) options.onImport(); }); top.insertBefore(upload, close); }
   const notice = make('div', options.editable ? 'Nhập trực tiếp hoặc dán nhiều ô. Enter / Tab để chuyển ô và tự lưu. Cột tính toán chỉ xem.' : 'Bảng chỉ xem · có thể chọn và sao chép ô, kéo rộng cột, phóng to.', 'tdp-sheet-notice');
   const normalNotice = notice.textContent;
+  const updateNotice = () => { notice.textContent = (options.batchId ?
+    `${rows.length} dòng · ${rows.filter(row => row.errors?.length).length} dòng lỗi · ${rows.filter(row => row.warnings?.length).length} dòng cảnh báo. ` : '') + normalNotice; };
   const controls = make('div', '', 'tdp-sheet-controls');
   const actor = make('input'); actor.placeholder = 'Người sửa giá'; actor.setAttribute('aria-label', actor.placeholder); actor.maxLength = 120;
   const reason = make('input'); reason.placeholder = 'Lý do sửa giá'; reason.setAttribute('aria-label', reason.placeholder); reason.maxLength = 500;
@@ -118,7 +120,7 @@ async function open(options) {
         muting = false;
         pending.clear(); newer.forEach((value, key) => pending.set(key, value));
         options.onSaved?.(payload);
-        notice.textContent = normalNotice;
+        updateNotice();
         setStatus(pending.size ? 'Đang lưu…' : 'Đã lưu · ' + new Date().toLocaleTimeString('vi-VN'));
       } catch (error) {
         failed = sent; setStatus('Lưu lỗi: ' + (error.name === 'AbortError' ? 'Kết nối chậm, bấm Thử lưu lại' : error.message), true);
@@ -201,6 +203,7 @@ async function open(options) {
       if (index >= 0) { sheet.setActiveRange(sheet.getRange(index + 1, 0)); sheet.scrollToCell(index + 1, 0); }
     };
     setStatus(options.editable ? 'Đã tải · tự lưu khi sửa ô' : 'Chỉ xem');
+    updateNotice();
     if (options.batchId) pollTimer = setInterval(async () => {
       if (disposed || polling || running || pending.size || failed || book.isCellEditing()) return;
       polling = true;
@@ -221,7 +224,7 @@ async function open(options) {
           rows.forEach((row, r) => cellValue[r + 1] = Object.fromEntries(columns.map((col, c) => [c, cell(row[col.key], col)])));
           muting = true;
           api.syncExecuteCommand('sheet.mutation.set-range-values', { unitId: book.getId(), subUnitId: 'data', cellValue });
-          muting = false; options.onSaved?.(payload); setStatus('Đã đồng bộ dữ liệu mới');
+          muting = false; options.onSaved?.(payload); updateNotice(); setStatus('Đã đồng bộ dữ liệu mới');
         }
       } catch (_) { /* Keep visible data and local edits; the next interval retries. */ }
       finally { polling = false; }

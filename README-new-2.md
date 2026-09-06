@@ -1,7 +1,7 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
 > **Nhập đơn nhiều lần trong ngày và bảng Excel trên web — 06/09/2026:**
-> đã triển khai source và kiểm thử, đang đưa lên Railway. File đầu được lưu nháp
+> đã triển khai và kiểm tra trên Railway. File đầu được lưu nháp
 > dù còn thiếu; file mới hợp lệ cùng ngày/phạm vi cập nhật bản đang dùng, có lịch sử.
 > Bảng đơn sửa ô/dán nhiều ô và tự lưu. Phạm vi và bằng chứng tại **13.19**.
 
@@ -884,4 +884,7 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Bảng nhập–xuất–tồn dùng đầy đủ danh sách API định giá với ô số/tiền. Các bảng HTML khác có bản chỉ xem toàn màn hình của **phần đang hiển thị**, gồm giới hạn phân trang đang chọn. Đây chưa phải trình sửa mọi loại chứng từ; ghép mã, ghi kho, thanh toán, duyệt/chốt vẫn dùng thao tác chuyên biệt. Bản xem này không thay mẫu in/Excel/PDF.
 - Hồi quy rộng: 76 module, 573 lượt test, 568 đạt và 5 thất bại chỉ vì khóa phiên bản cache JS cũ. Đổi đúng kỳ vọng và chạy lại 5 nhóm: 34/34 đạt. Sau hoàn thiện ưu tiên dữ liệu file/trạng thái giá, chạy lại 14 test nhập workbook đạt. Nhóm cuối về sửa bảng/kho thực tế/giá đạt 39 lượt test. Không cộng lượt chạy lặp thành số bài độc lập.
 - Browser trên DB riêng 65 dòng: sửa ô, dán hai dòng, phản hồi chậm, mất mạng/X/thử lại, người khác sửa và đồng bộ, xung đột giữ dữ liệu server, đọc lại để đối chiếu, khổ 1440/1024/390 đều đạt, không có JavaScript exception. Bằng chứng `D:\TDP_RAILWAY_PRIVATE\evidence\worksheet-11\result.json` và ảnh; tái chạy bằng `qa_worksheet.py`. Lượt 04–08 phát hiện hộp thoại bảo vệ ô khi cập nhật ô tính toán; đã sửa phản hồi server và chạy lại đạt, giữ bảo vệ ô người dùng.
-- Bản sao trước triển khai: `D:\TDP_RAILWAY_PRIVATE\evidence\worksheet-before-deploy\snapshot.sqlite3`, toàn vẹn đạt. Chưa ghi nhận kết quả hosted của lượt này cho đến khi kiểm tra xong. Các lần ghi đơn kiểm thử dùng DB riêng, không ghi mapping/kho/thanh toán hoặc phát hành hóa đơn trên production.
+- Bản sao trước triển khai: `D:\TDP_RAILWAY_PRIVATE\evidence\worksheet-before-deploy\snapshot.sqlite3`, toàn vẹn đạt. Các lần ghi đơn kiểm thử dùng DB riêng, không ghi mapping/kho/thanh toán hoặc phát hành hóa đơn trên production.
+- Bản chức năng `094eaaf` đã chạy tại deployment `d66b1e7b-09ff-4d1e-9107-f2e511845b1a`, trạng thái SUCCESS. Browser hosted đạt 22 mục/17 ảnh: bảng đơn, bảng nhập–xuất–tồn, 12 màn, phiếu giao Excel/PDF, đăng xuất và bố cục 1024/390. Hai bản sao trước/sau toàn vẹn; đối chiếu nội dung 8 bảng không đổi. Bằng chứng `worksheet-hosted-01`, `worksheet-before-deploy`, `worksheet-after-deploy` dưới thư mục evidence.
+- Hoàn thiện tiếp cảnh báo giá: kiểm tra theo giá thực lưu để dòng còn giá bán 0 không bị mất lỗi chỉ vì bảng giá tham chiếu đã có giá. Nhóm sửa bảng/giá 20 lượt test đạt; browser `worksheet-12` đạt cả các tình huống cũ, thêm số dòng lỗi/cảnh báo ngay trên thanh bảng. Đây là kiểm tra kỹ thuật, chưa thay xác nhận nghiệm thu của khách.
+- Kiểm tra file thật 01/09 trên bản sao production tìm thêm trường hợp chỉ ghi chú khác thì phép so sánh cũ bỏ qua. Đã bổ sung so toàn bộ giá trị nhập trong chế độ liên tục; 15 test workbook đạt. Chạy lại `worksheet-real-copy-02`: nạp 30 dòng, sửa ghi chú qua API bảng rồi nạp bản sao file có metadata mới nhưng giữ nguyên ô nghiệp vụ; ghi chú trở lại đúng file, cùng phiên đơn, có lịch sử. 233 dòng đơn cũ nguyên vẹn, sổ kho hóa đơn vẫn 0, toàn vẹn DB đạt. File khách gốc không bị sửa; đây là mô phỏng hai lần nạp bằng một file nguồn, không phải hai bản sáng/tối thực tế khách đã gửi.
