@@ -6,6 +6,11 @@
 
 > **Đợt sửa để nghiệm thu Railway đang thực hiện:** xem **13.15**. Các mục bên dưới có mốc ngày là lịch sử kiểm tra, không thay thế kết quả mới nhất.
 
+> **Cập nhật mới nhất 06/09/2026:** đã triển khai trên Railway hai luồng xem trước
+> để giảm khối lượng ghép mã hóa đơn đầu vào, gồm ghép chính xác theo danh mục và
+> đối chiếu bảng kê nhập của phần mềm cũ. Production mới chỉ chạy xem trước, chưa
+> xác nhận ghi mapping hoặc ghi kho. Kết quả và giới hạn tại **13.17**.
+
 > **Lỗi 1 (BUG-0509-04): đã sửa và kiểm chứng bằng EXE ứng viên `2026.09.05.2`.**
 > Chạy chính EXE trên bản sao DB cũ đạt **257 → 266**, mở lại lần hai vẫn đúng;
 > danh sách/API và Excel khớp tập hóa đơn, tổng tiền **919.234.874 đồng**.
@@ -838,3 +843,15 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Đã kiểm tra 38 test cấu hình, M-Invoice và đồng bộ đầu ra (`selected-account-01`), gồm cả mặc định chặn, cho phép theo lựa chọn chủ dự án, đồng bộ không tự ghi kho và lưu nháp không tự ký/phát hành.
 - Làm rõ bộ đếm: **266 hóa đơn = 264 chờ ghép mã + 2 không nhập tồn**; **1.107 dòng hàng, 1.104 dòng cần xử lý**. Không thiếu hai hóa đơn.
 - Đã mở lại file `Đơn hàng  03.09.2026.xlsx`, sheet `đặt hàng`: dòng 157, `J000017`, `quả dưa hấu`, F157/O157 = −1, P157 = −117.000; dòng 158, `quả nhãn`, B158 trống, F158/O158 = −1, P158 = −90.000. Đây là dữ liệu đặt hàng Excel, không phải lỗi thiếu hóa đơn. Chưa tự diễn giải thành hàng trả hoặc sửa số lượng.
+
+### 13.17. Đối chiếu mã hóa đơn đầu vào có bước xem trước — 06/09/2026
+
+- Mục tiêu của lượt này là giảm **1.104 dòng hóa đơn đầu vào tháng 8 cần xử lý** mà không tự đoán mã, không bỏ bước xác nhận của người dùng và không ghi kho khi chỉ đang đối chiếu. Đã bổ sung hai luồng ngay tại màn `Hóa đơn đầu vào`: ghép theo tên hàng trùng chính xác với danh mục và đối chiếu mã từ bảng kê nhập của phần mềm cũ.
+- Luồng ghép theo danh mục chỉ nhận tên hàng duy nhất và ĐVT trùng chính xác. Bản xem trước trên production tìm được **650 dòng tháng 8 / 86 quy tắc**, dự kiến làm **65 hóa đơn** sẵn sàng; cùng các quy tắc này có thể ảnh hưởng **7.054 dòng chưa ghi kho ở mọi kỳ**. Có 5 dòng trùng tên nhưng cần rà ĐVT và 449 dòng chưa có tên duy nhất. Chưa bấm xác nhận trên production.
+- Luồng bảng kê cũ đọc file Excel mà không chạy macro. Một dòng chỉ được nhận khi đồng thời khớp MST bên bán, số hóa đơn, tên hàng chuẩn hóa, số lượng, thành tiền, mã hàng tồn tại và ĐVT của nguồn/file/danh mục trùng nhau. Trường hợp thiếu mã, không tìm thấy hóa đơn, không duy nhất hoặc lệch ĐVT được tách riêng để người dùng rà; không tự chọn mã gần giống.
+- Chạy **xem trước** trên Railway bằng đúng file `nhập T8.2026 (1).xlsm` tìm được **876 dòng khớp trực tiếp / 99 quy tắc**. Các quy tắc này dự kiến ghép **892 dòng tháng 8**, làm **157 hóa đơn** sẵn sàng và ảnh hưởng **7.896 dòng chưa ghi kho ở mọi kỳ**. Phần bỏ qua gồm 20 dòng không tìm thấy hóa đơn, 158 dòng không xác định duy nhất, 47 dòng thiếu mã sản phẩm và 3 dòng cần rà ĐVT. Trước và sau lượt xem trước, production vẫn giữ **0 dòng đã ghép / 1.104 dòng cần xử lý**.
+- Đã thử thao tác xác nhận trên **bản sao DB production**, không phải DB Railway đang vận hành. Xác nhận bảng kê cũ rồi ghép chính xác theo danh mục cho kết quả **941/1.104 dòng đã ghép**, **171/264 hóa đơn sẵn sàng**; còn **163 dòng thuộc 93 hóa đơn** cần xử lý thủ công. Sổ kho hóa đơn vẫn 0 vì chưa gọi ghi kho. Thử tiếp 65 hóa đơn sẵn sàng trên một bản sao riêng ghi đúng 201 bút toán; bấm lại không sinh bút toán trùng và kiểm tra toàn vẹn SQLite đạt.
+- API xác nhận dùng mã snapshot của bản xem trước, mở lại file và tính lại dưới giao dịch khóa ghi trước khi lưu. Nếu dữ liệu nguồn thay đổi thì dừng. Mapping chỉ lan sang cùng NCC, tên nguồn và ĐVT trên hóa đơn chưa ghi kho. Backend đã chặn ghép mã cho nguồn không còn trạng thái `synced`; với đầu ra còn bắt buộc nguồn là hóa đơn đã phát hành hợp lệ.
+- Kiểm thử mục tiêu và các nhóm chịu ảnh hưởng đạt **87/87**. Lượt hồi quy rộng trước đó chạy 552 test, có 547 đạt và 5 lỗi chỉ do test giao diện khóa phiên bản cache JS cũ; đã cập nhật đúng kỳ vọng và chạy lại toàn bộ nhóm chịu ảnh hưởng đạt. Browser fixture của lượt hóa đơn đạt; kiểm tra cú pháp Python/JavaScript và `git diff --check` đều đạt.
+- Source đã đẩy lên `xandrosworld/CDT`, nhánh `main`, commit `48a974a51b2aaf3d10f073ba7f92560605e35842`. Railway deployment `dc63c861-37a9-45e5-b66a-e2be2931e379` trạng thái `SUCCESS`; `/health` báo database/schema sẵn sàng và `integrity=ok`. Bằng chứng xem trước hosted: `D:\TDP_RAILWAY_PRIVATE\evidence\mapping-hosted-01\summary.json`; bằng chứng bản sao: `legacy-route-realdata-01`, `safe-mapping-realdata-02` trong cùng thư mục evidence.
+- Hướng dẫn thao tác và cách đọc phần bỏ qua đã cập nhật tại [NGHIEM-THU-RAILWAY.md](NGHIEM-THU-RAILWAY.md). Bước vận hành tiếp theo là người dùng xem bảng kết quả và chủ động xác nhận hai lượt ghép mã; sau đó xử lý 163 dòng còn lại trước khi ghi kho. Lượt này không ký/phát hành hóa đơn, không ghi nhận thanh toán và không thay đổi dữ liệu nghiệp vụ production.
