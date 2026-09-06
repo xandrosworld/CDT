@@ -34,7 +34,7 @@ class ReceivableUiStaticContractTests(unittest.TestCase):
         ):
             self.assertIn(required, css)
         self.assertIn("/static/app.js?v=20260906-12", page)
-        self.assertIn("/static/real.css?v=20260906-8", page)
+        self.assertIn("/static/real.css?v=20260906-9", page)
 
 
 if __name__ == "__main__":

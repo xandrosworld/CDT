@@ -205,14 +205,19 @@ class InvoiceRangeTests(unittest.TestCase):
         self.assertEqual(2, self.payload(line_filter="error")["totals"]["invoice_count"])
 
     def test_excel_exactly_matches_filtered_rows_and_never_runs_source_formulas(self):
-        self.conn.execute("UPDATE msmi_invoice_items SET source_item_name='=1+1' WHERE id=?", (self.fixture["line_box"],))
+        self.conn.execute("UPDATE msmi_invoice_items SET source_item_name='=1+1',unit_price=5432.5 WHERE id=?", (self.fixture["line_box"],))
         payload = self.payload(line_filter="unit_review")
         wb = load_workbook(range_workbook(payload))
         ws = wb.active
         self.assertEqual("=1+1", ws["E3"].value)
         self.assertEqual("s", ws["E3"].data_type)
-        self.assertEqual(10000, ws["H4"].value)
-        self.assertEqual(21600, ws.cell(ws.max_row,8).value)
+        self.assertEqual("Đơn giá", ws["H2"].value)
+        self.assertEqual(5432.5, payload["lines"][0]["unit_price"])
+        self.assertEqual(5432.5, ws["H3"].value)  # Source price, not amount / qty.
+        self.assertEqual("#,##0", ws["H3"].number_format)
+        self.assertIsNone(ws["H4"].value)  # Unit prices are not summed.
+        self.assertEqual(10000, ws["I4"].value)
+        self.assertEqual(21600, ws.cell(ws.max_row,9).value)
         self.assertEqual(2, ws["G3"].value)
         self.assertEqual("E3", ws.freeze_panes)
         self.assertEqual("$1:$2", ws.print_title_rows)

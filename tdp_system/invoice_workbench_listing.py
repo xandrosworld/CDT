@@ -153,27 +153,28 @@ def range_workbook(payload):
     ws.title = "Hoa don"
     title = "HÓA ĐƠN ĐẦU VÀO" if payload["direction"] == "input" else "HÓA ĐƠN ĐẦU RA"
     ws.append([title + " · " + payload["date_from"] + " → " + payload["date_to"]])
-    ws.merge_cells("A1:L1")
+    ws.merge_cells("A1:M1")
     ws.append(["Ngày", "Ký hiệu / Số HĐ", "Đối tác", "Dòng", "Tên hàng", "ĐVT", "Số lượng",
-               "Thành tiền dòng (chưa thuế)", "Mã kho", "Lượng kho", "ĐVT kho", "Trạng thái / Cần xử lý"])
+               "Đơn giá", "Thành tiền dòng (chưa thuế)", "Mã kho", "Lượng kho", "ĐVT kho", "Trạng thái / Cần xử lý"])
     invoices = {invoice["id"]: invoice for invoice in payload["items"]}
     for line in payload["lines"]:
         invoice = invoices[line["invoice_id"]]
         ws.append([
             invoice["invoice_date"], (invoice.get("invoice_series", "") + " / " + invoice.get("invoice_number", "")),
             invoice.get("seller_name") or invoice.get("buyer_name") or "", line.get("line_index"),
-            line.get("source_item_name", ""), line.get("source_unit", ""), line.get("qty"), line.get("amount"),
+            line.get("source_item_name", ""), line.get("source_unit", ""), line.get("qty"),
+            line.get("unit_price"), line.get("amount"),
             line.get("product_code", ""), line.get("stock_qty"), line.get("product_unit", ""),
             line["issue"] or STATUS_LABELS[invoice["workbench_status"]],
         ])
     total_row = ws.max_row + 1
-    ws.append(["TỔNG TIỀN CÁC DÒNG ĐANG LỌC", None, None, None, None, None, None, payload["totals"]["line_amount"]])
+    ws.append(["TỔNG TIỀN CÁC DÒNG ĐANG LỌC", None, None, None, None, None, None, None, payload["totals"]["line_amount"]])
     for unit, qty in payload["totals"]["qty_by_unit"].items():
         ws.append(["TỔNG LƯỢNG", None, None, None, None, unit, qty])
     ws.append(["TỔNG THANH TOÁN CÁC HÓA ĐƠN CÓ DÒNG ĐANG LỌC (mỗi hóa đơn tính một lần)",
-               None, None, None, None, None, None, payload["totals"]["invoice_amount"]])
-    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=7)
-    widths = [13, 24, 30, 7, 38, 10, 15, 22, 14, 15, 12, 42]
+               None, None, None, None, None, None, None, payload["totals"]["invoice_amount"]])
+    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=8)
+    widths = [13, 24, 30, 7, 38, 10, 15, 18, 22, 14, 15, 12, 42]
     edge = Side(style="thin", color="B8C2CA")
     border = Border(left=edge, right=edge, top=edge, bottom=edge)
     for cells in ws:
@@ -184,9 +185,9 @@ def range_workbook(payload):
             cell.font = Font(name="Arial", size=10, bold=cell.row <= 2 or cell.row >= total_row)
             cell.alignment = Alignment(vertical="center", wrap_text=True)
             cell.border = border
-            if cell.column in {7, 10}:
+            if cell.column in {7, 11}:
                 cell.number_format = "#,##0.######"
-            if cell.column == 8:
+            if cell.column in {8, 9}:
                 cell.number_format = "#,##0"
         ws.row_dimensions[cells[0].row].height = max(36, 14 * max(
             (len(str(cell.value or "")) // max(1, int(widths[cell.column - 1]) - 3) + 1) for cell in cells
@@ -209,10 +210,10 @@ def range_workbook(payload):
         for col, width in zip("ABCDEF", (18, 18, 42, 18, 22, 70)):
             review.column_dimensions[col].width = width
         review.freeze_panes = "A3"
-    ws.auto_filter.ref = f"A2:L{max(2, total_row - 1)}"
+    ws.auto_filter.ref = f"A2:M{max(2, total_row - 1)}"
     ws.freeze_panes = "E3"
     ws.print_title_rows = "1:2"
-    ws.print_area = f"A1:L{ws.max_row}"
+    ws.print_area = f"A1:M{ws.max_row}"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = ws.PAPERSIZE_A3
     ws.page_setup.fitToWidth = 1

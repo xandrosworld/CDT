@@ -28,6 +28,15 @@ async function main() {
     await wait(`document.querySelector('#invoice-list-count')?.textContent.includes('3 / 3')`);
     const fixture=(await request('/fixture/ids')).body;
     const initial=(await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body;
+    const checkPrices=async (direction,payload)=>{
+      assert.equal(await evaluate(`document.querySelector('.invoice-lines-card thead th:nth-child(6)').textContent`),'Đơn giá');
+      for(const line of payload.lines) {
+        const cell=await evaluate(`(()=>{const cell=document.querySelector('#invoice-line-${direction}-${line.id} .invoice-unit-price');return {text:cell.textContent,editable:!!cell.querySelector('input,select,textarea,[contenteditable=true]'),align:getComputedStyle(cell).textAlign};})()`);
+        assert.equal(Number(cell.text.replace(/[^0-9-]/g,'')),Math.sign(line.unit_price)*Math.floor(Math.abs(line.unit_price)+0.5));
+        assert.equal(cell.editable,false);assert.equal(cell.align,'right');
+      }
+    };
+    await checkPrices('input',initial);
     assert.equal(initial.totals.line_count,22);
     assert.ok(await evaluate('innerWidth === 1440 && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1'));
     const order=await evaluate(`Array.from(document.querySelectorAll('.invoice-lines-card tbody tr')).map(e=>e.dataset.issue)`);
@@ -50,6 +59,7 @@ async function main() {
     const mappingId=`map_input_${fixture.line_b}`;
     await click('.invoice-lines-card .tdp-open-sheet');
     await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
+    await checkPrices('input',(await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body);
     assert.equal(await evaluate(`!!document.querySelector('.tdp-sheet-shell')`),false);
     await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
     await call('Input.insertText',{text:'NO-SUCH-CODE'});
@@ -105,6 +115,7 @@ async function main() {
     await change('invoiceStatus','all');
     await click('[data-action="set-invoice-direction"][data-direction="output"]');
     await wait(`document.getElementById('map_output_${fixture.output_line}')`);
+    await checkPrices('output',(await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31&invoice_type=output')).body);
     await evaluate(`document.getElementById('map_output_${fixture.output_line}').value='R1-KG'`);
     await click(`[data-action="save-invoice-mapping"][data-direction="output"][data-id="${fixture.output_line}"]`);
     await wait(`document.querySelector('[data-action="post-invoice-output"]')`);

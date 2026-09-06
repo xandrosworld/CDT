@@ -624,7 +624,7 @@ body { min-width: 320px; }
 .invoice-lines-card .card-head { padding: 10px 14px; gap: 10px; }
 .invoice-lines-card .card-head .btn { padding: 7px 10px; font-size: 13px; border-radius: 6px; }
 .invoice-lines-card .invoice-lines-scroll { max-height: 65vh; }
-.invoice-lines-card .invoice-lines-scroll table { table-layout: fixed; width: 100%; min-width: 1200px; }
+.invoice-lines-card .invoice-lines-scroll table { table-layout: fixed; width: 100%; min-width: 1360px; }
 .invoice-lines-card .invoice-lines-scroll td,
 .invoice-lines-card .invoice-lines-scroll th { padding: 7px 9px; min-width: 0; max-width: none; font-size: 14px; }
 .invoice-lines-card .invoice-lines-scroll .num-cell { white-space: nowrap; overflow-wrap: normal; }
@@ -660,6 +660,6 @@ body { min-width: 320px; }
   .invoice-lines-card .invoice-lines-scroll tbody td:last-child { position: static; }
 }
 
-.invoice-lines-card td:nth-child(7) > .compact-controls { flex-wrap: nowrap; }
-.invoice-lines-card td:nth-child(7) > .compact-controls .invoice-mapping-input { flex: 1 1 0; width: 0; }
-.invoice-lines-card td:nth-child(7) > .compact-controls .btn { flex: 0 0 auto; padding: 6px 8px; }
+.invoice-lines-card .invoice-mapping-cell > .compact-controls { flex-wrap: nowrap; }
+.invoice-lines-card .invoice-mapping-cell > .compact-controls .invoice-mapping-input { flex: 1 1 0; width: 0; }
+.invoice-lines-card .invoice-mapping-cell > .compact-controls .btn { flex: 0 0 auto; padding: 6px 8px; }

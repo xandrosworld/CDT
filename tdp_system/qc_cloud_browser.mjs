@@ -65,6 +65,18 @@ try {
       await wait('document.querySelector("#invoice-list-count")');
       await click('.invoice-lines-card .tdp-open-sheet');
       await wait('document.querySelector(".invoice-mapping-fullscreen-bar")');
+      const priceRows=await evaluate(`(()=>{const card=document.querySelector('.invoice-lines-card');return {heading:card.querySelector('thead th:nth-child(6)').textContent,rows:Array.from(card.querySelectorAll('tbody tr[data-issue]')).map(row=>({id:row.id,text:row.querySelector('.invoice-unit-price').textContent,editable:!!row.querySelector('.invoice-unit-price input,.invoice-unit-price select,.invoice-unit-price [contenteditable=true]')}))};})()`);
+      assert.equal(priceRows.heading,'Đơn giá');
+      const priceQuery=await evaluate(`document.querySelector('.invoice-lines-card a[href*="/invoices/export"]').search`);
+      const priceSource=await api('/api/invoice-workbench/invoices'+priceQuery);
+      assert.equal(priceSource.status,200);
+      assert.equal(priceRows.rows.length,priceSource.data.lines.length);
+      for(const line of priceSource.data.lines) {
+        const row=priceRows.rows.find(r=>r.id==='invoice-line-'+priceSource.data.direction+'-'+(line.id||'empty-'+line.invoice_id));
+        assert.ok(row);assert.equal(row.editable,false);
+        assert.equal(row.text,line.unit_price==null?'—':new Intl.NumberFormat('en-US',{maximumFractionDigits:0}).format(line.unit_price)+' đ');
+      }
+      report.checks.push('readonly_source_unit_price_matches_every_filtered_api_line');
       assert.equal(await evaluate('!!document.querySelector(".tdp-sheet-shell")'),false);
       assert.ok(await evaluate('!!document.querySelector(".invoice-lines-card .invoice-mapping-input:not(:disabled)")'));
       await evaluate('document.querySelector(".invoice-lines-card .invoice-mapping-input").scrollIntoView({block:"center",inline:"center"})');

@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Bổ sung cột Đơn giá — 06/09/2026:** đã thêm giá nguồn giữa Số lượng nguồn
+> và Tiền dòng trong bảng ghép mã, gồm chế độ toàn màn hình và Excel đúng bộ lọc.
+> Kiểm thử đạt; trạng thái triển khai và bằng chứng tại **13.29**.
+
 > **Sửa diện tích bảng ghép mã — 06/09/2026:** toàn màn hình đã dành phần lớn
 > chiều cao cho bảng, thu gọn hướng dẫn/tổng và giữ cột thao tác ở mép phải.
 > Đã deploy, kiểm tra trực tiếp Railway ở bốn khổ máy tính; xem **13.28**.
@@ -1039,3 +1043,11 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Source **`9c3308057d6b6384cab2846d3e0189cfb1337b1e`** đã deploy từ `xandrosworld/CDT/main`, deployment **`557e3a6f-1255-4fd2-87d8-cd8f9bda9765`**, trạng thái **SUCCESS**. `/health` báo database/schema sẵn sàng, toàn vẹn `ok`. Browser Railway `mapping-space-hosted-01` đạt **36 mục / 54 ảnh**, gồm bốn khổ màn ghép mã với tỷ lệ chiều cao trên, mở ô ghép mã, bảng khả năng xuất đơn 04/09, các màn máy tính và phiếu giao Excel/PDF. Không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi. Đã xem các ảnh `mapping-space-1440.png`, `mapping-space-1280.png`, `mapping-space-1024.png`.
 - Snapshot `mapping-space-after` lấy sau khi browser kết thúc: đối chiếu `mapping-space-before`, hai DB toàn vẹn `ok`, **73/80 bảng nguyên nội dung**, schema giữ nguyên. Có **hai lượt xác nhận mapping lúc 21:56:20 và 21:56:39**, trước browser QA bắt đầu lúc **21:56:49**; thêm hai mapping/hai phiên/hai audit, áp dụng 576 dòng nguồn, cập nhật trạng thái 28 hóa đơn và bộ đếm ba lần tải. Không đổi lượng/tiền nguồn, đơn, kho hoặc công nợ. Đây là thay đổi vận hành ngoài lượt browser chỉ đọc, được giữ nguyên; không phục hồi DB cũ và không tuyên bố cả 80 bảng không đổi. Bằng chứng `mapping-space-after/full-preservation.json`, `concurrent-mapping-changes.json`.
 - Khách tải lại trang, mở **Ghép mã / Quy đổi · toàn màn hình** để nhận bố cục mới. Hướng dẫn thao tác đã cập nhật tại `NGHIEM-THU-RAILWAY.md`; đây là sửa diện tích/thao tác màn hình, không phải kết luận mọi dòng hóa đơn đã đủ điều kiện nhập kho.
+
+### 13.29. Bổ sung cột Đơn giá trong bảng ghép mã — 06/09/2026
+
+- Theo ảnh và yêu cầu mới của khách, thêm cột **Đơn giá** ngay giữa **Số lượng nguồn** và **Tiền dòng (chưa thuế)**. Áp dụng bảng đầu vào/đầu ra, chế độ thường và toàn màn hình; giá chỉ xem, lấy `unit_price` của dòng hóa đơn nguồn, không tính ngược từ tiền/lượng hoặc lấy giá đã quy đổi.
+- Hiển thị nguyên đồng như cột tiền; nguồn không có chi tiết giá hiện dấu gạch, giá 0 vẫn hiển thị 0. File **Excel đúng bộ lọc** thêm cùng cột, giữ giá trị gốc và định dạng `#,##0`; không cộng đơn giá ở dòng tổng. Tổng tiền, lượng theo ĐVT, bộ lọc và quy tắc ghi kho giữ nguyên.
+- Điều chỉnh độ rộng chín cột, giữ ô ghép mã/Ghi nhớ cùng hàng và cột thao tác ở mép phải. Trên màn hẹp dùng thanh cuộn ngang.
+- **42/42 bài đạt** trong sáu nhóm chịu ảnh hưởng (`unit-price-tests-01`). Kiểm tra Excel có giá nguồn khác tiền/lượng và có phần lẻ; giữ giá gốc, đúng định dạng và tổng tiền sau khi dịch cột. Browser `unit-price-browser-01` đạt luồng hóa đơn/kho, đối chiếu giá từng dòng đầu vào/đầu ra với API, ô giá chỉ xem và toàn màn hình ở bốn khổ máy tính. Đã xem ảnh 1440px; cú pháp JS và `git diff --check` đạt.
+- Snapshot trước triển khai `unit-price-before` toàn vẹn `ok`. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/unit-price-*`; trạng thái Railway và kiểm tra trực tiếp sẽ bổ sung sau khi có kết quả.
