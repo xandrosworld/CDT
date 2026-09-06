@@ -620,16 +620,46 @@ body { min-width: 320px; }
   .document-preview,.document-scroll { border:0; overflow:visible; max-height:none; }
   .document-sheet td { background:#fff !important; color:#000 !important; }
 }
-/* Keep the live mapping controls and their delegated save handlers in #content. */
+/* The invoice table owns the available space; editors remain in the live DOM. */
+.invoice-lines-card .card-head { padding: 10px 14px; gap: 10px; }
+.invoice-lines-card .card-head .btn { padding: 7px 10px; font-size: 13px; border-radius: 6px; }
+.invoice-lines-card .invoice-lines-scroll { max-height: 65vh; }
+.invoice-lines-card .invoice-lines-scroll table { table-layout: fixed; width: 100%; min-width: 1200px; }
+.invoice-lines-card .invoice-lines-scroll td,
+.invoice-lines-card .invoice-lines-scroll th { padding: 7px 9px; min-width: 0; max-width: none; font-size: 14px; }
+.invoice-lines-card .invoice-lines-scroll .num-cell { white-space: nowrap; overflow-wrap: normal; }
+.invoice-lines-card .invoice-lines-scroll thead th { white-space: normal; overflow-wrap: normal; }
+.invoice-lines-card .invoice-mapping-input { width: 100%; min-width: 0; max-width: 100%; padding: 6px 8px; font-size: 14px; }
+.invoice-lines-card .compact-controls { gap: 6px; }
+.invoice-lines-card .invoice-row-actions { min-width: 0; gap: 5px; }
+.invoice-lines-card .invoice-row-actions .btn { padding: 6px 8px; font-size: 13px; white-space: normal; }
+.invoice-lines-card .invoice-lines-scroll tbody td:last-child { position: sticky; right: 0; z-index: 2; box-shadow: -1px 0 #b8c2ca; }
+.invoice-lines-card .invoice-lines-scroll thead th:last-child { right: 0; z-index: 5; box-shadow: -1px 1px #9aabb8; }
+.invoice-lines-card .invoice-lines-scroll tfoot td { height: 38px; padding: 5px 9px; white-space: nowrap; overflow-wrap: normal; }
+.invoice-lines-card .invoice-total-note { padding: 8px 14px; margin: 0; font-size: 13px; border-radius: 0; flex: 0 0 auto; }
+.invoice-workbench-help { position: relative; flex: 0 0 auto; }
+.invoice-workbench-help > summary { padding: 6px 14px; font-size: 13px; cursor: pointer; color: #205b64; }
+.invoice-workbench-help-body { position: absolute; top: 100%; left: 0; right: 0; z-index: 10; max-height: 50vh; overflow: auto; background: white; border: 1px solid #b8c2ca; box-shadow: 0 6px 18px #0002; }
 .invoice-mapping-fullscreen .invoice-lines-card {
-  position: fixed; inset: 8px; z-index: 90; margin: 0; background: white;
+  position: fixed; inset: 0; z-index: 90; margin: 0; border: 0; border-radius: 0; background: white;
   display: flex; flex-direction: column; overflow: hidden;
 }
 .invoice-mapping-fullscreen-bar {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  padding: 10px 16px; border-bottom: 1px solid #dfe5e8; flex: 0 0 auto;
-  background: white; color: #172b3a;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 6px 12px; border-bottom: 1px solid #dfe5e8; flex: 0 0 auto;
+  background: white; color: #172b3a; font-size: 14px;
 }
+.invoice-mapping-fullscreen-bar .btn { padding: 6px 10px; font-size: 13px; border-radius: 6px; }
 .invoice-mapping-fullscreen .invoice-lines-card > .tdp-open-sheet { display: none; }
-.invoice-mapping-fullscreen .invoice-lines-scroll { flex: 1 1 auto; min-height: 0; max-height: none; }
-.invoice-mapping-fullscreen .invoice-lines-card .card-head { flex: 0 0 auto; }
+.invoice-mapping-fullscreen .invoice-lines-card > .invoice-lines-scroll { flex: 1 1 0; min-height: 0; max-height: none; border-radius: 0; }
+.invoice-mapping-fullscreen .invoice-lines-card .card-head { flex: 0 0 auto; padding: 6px 12px; }
+.invoice-mapping-fullscreen .invoice-lines-card .card-head h3 { display: none; }
+.invoice-mapping-fullscreen .invoice-lines-card .card-head p { margin: 0; }
+@media print {
+  .invoice-lines-card .invoice-lines-scroll { max-height: none; }
+  .invoice-lines-card .invoice-lines-scroll tbody td:last-child { position: static; }
+}
+
+.invoice-lines-card td:nth-child(7) > .compact-controls { flex-wrap: nowrap; }
+.invoice-lines-card td:nth-child(7) > .compact-controls .invoice-mapping-input { flex: 1 1 0; width: 0; }
+.invoice-lines-card td:nth-child(7) > .compact-controls .btn { flex: 0 0 auto; padding: 6px 8px; }

@@ -66,6 +66,9 @@ Chọn Giang ở dòng cần lập bảng kê, mở **Xem bảng kê và biên n
 
 Để sửa mã trên màn hình lớn, bấm **Ghép mã / Quy đổi · toàn màn hình** ngay trên bảng hóa đơn. Nhập ở cột **Ghép mã / Quy đổi**, nhấn **Enter** hoặc **Ghi nhớ** (mã hàng), nút lưu quy đổi (hệ số); đơn vị khác nhau vẫn cần hệ số quy đổi hợp lệ. Bảng tiếp tục mở sau khi lưu. **Đóng toàn màn hình** hoặc Escape quay lại; ô mới gõ chưa Enter/bấm lưu vẫn là phần chưa lưu. Số lượng và tiền hóa đơn nguồn chỉ xem. Nếu còn mở bản Excel cũ và gặp thông báo “The range is protected”, đóng bảng cũ rồi tải lại trang để dùng nút mới.
 
+Trong chế độ toàn màn hình, bảng dùng hết phần chiều cao còn lại của trình duyệt. **Hướng dẫn / Ghép từ file cũ** được thu gọn, bấm khi cần. Cột **Thao tác cả hóa đơn** giữ ở mép phải khi kéo ngang; hóa đơn đủ điều kiện hiện nút **Xác nhận nhập cả hóa đơn**. Dòng tổng gọn phía dưới; bấm số **ĐVT** để xem tổng lượng riêng từng đơn vị. Màn hình hẹp có thanh kéo ngang để xem các cột giữa.
+
+
 Ngày 06/09 đã áp dụng trên Railway: **941/1.104 dòng đã ghép, 171/264 hóa đơn sẵn sàng, còn 163 dòng thuộc 93 hóa đơn cần xử lý**. Khách không phải chạy lại phần này. 111 quy tắc đã ghép tổng cộng 9.193 dòng cùng nguồn ở các kỳ chưa ghi kho. Có sao lưu trước/sau, kết quả mapping khớp bản sao đã kiểm chứng; tổng 266 hóa đơn và 919.234.874 đồng giữ nguyên. Chưa ghi kho trong lượt tự ghép.
 
 ## Lập hồ sơ thanh toán từ hóa đơn VAT

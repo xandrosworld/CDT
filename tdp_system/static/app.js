@@ -241,6 +241,18 @@
     document.body.appendChild(dialog);
     dialog.showModal();
   }
+  function showInvoiceUnitTotals() {
+    var groups = (state.invoiceListing && state.invoiceListing.totals || {}).qty_by_unit || {};
+    var dialog = document.createElement('dialog');
+    dialog.className = 'inventory-totals-dialog invoice-unit-totals-dialog';
+    dialog.setAttribute('aria-label', 'Tổng lượng dòng hóa đơn theo đơn vị');
+    dialog.innerHTML = '<div class="inventory-totals-heading"><h3>Tổng lượng dòng đang lọc theo ĐVT</h3><button type="button" class="icon-button" aria-label="Đóng tổng lượng">×</button></div><div class="inventory-totals-body"><table><thead><tr><th>ĐVT</th><th>Tổng lượng</th></tr></thead><tbody>' + Object.keys(groups).map(function(unit) {
+      return '<tr><th scope="row">' + esc(unit) + '</th><td>' + stockQty(groups[unit]) + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+    dialog.querySelector('button').onclick = function() { dialog.close(); };
+    dialog.addEventListener('close', function() { dialog.remove(); });
+    document.body.appendChild(dialog); dialog.showModal();
+  }
   function dateVN(value) {
     if (!value) return "";
     var parts = String(value).slice(0, 10).split("-");
@@ -6594,7 +6606,7 @@
     if (card.querySelector('.invoice-mapping-fullscreen-bar')) return;
     var bar = document.createElement('div'); bar.className = 'invoice-mapping-fullscreen-bar';
     var help = document.createElement('span');
-    help.textContent = 'Ghép mã / Quy đổi · nhập mã rồi Enter hoặc bấm Lưu. Số liệu hóa đơn nguồn chỉ xem.';
+    help.textContent = 'Ghép mã / Quy đổi · Enter hoặc Ghi nhớ để lưu';
     var close = document.createElement('button'); close.type = 'button'; close.className = 'btn btn-outline';
     close.textContent = 'Đóng toàn màn hình'; close.onclick = closeInvoiceMappingFullscreen;
     bar.appendChild(help); bar.appendChild(close); card.insertBefore(bar, card.firstChild);
@@ -6607,7 +6619,7 @@
     syncInvoiceMappingFullscreen();
   }
   document.addEventListener('keydown', function(event) {
-    if (event.key === 'Escape' && invoiceMappingFullscreen && backdrop.hidden) closeInvoiceMappingFullscreen();
+    if (event.key === 'Escape' && invoiceMappingFullscreen && backdrop.hidden && !document.querySelector('dialog[open]')) closeInvoiceMappingFullscreen();
   });
   var sheetEnhanceTimer;
   function addWorksheetButtons() {
@@ -6628,6 +6640,7 @@
   new MutationObserver(function() { clearTimeout(sheetEnhanceTimer); sheetEnhanceTimer=setTimeout(addWorksheetButtons,50); })
     .observe(content,{childList:true,subtree:true});
   content.addEventListener('click',function(event) {
+    if(event.target.closest('[data-action="view-invoice-unit-totals"]')) { showInvoiceUnitTotals(); return; }
     if(event.target.closest('[data-action="view-inventory-unit-totals"]')) { showInventoryUnitTotals(); return; }
     if(event.target.closest('[data-action="view-inventory-worksheet"]')) { openTableWorksheet(content.querySelector('.inventory-nxt-scroll table')); return; }
     var button=event.target.closest('[data-action="bulk-edit-orders"]');

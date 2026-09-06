@@ -36,8 +36,10 @@ async function main() {
     await click('[data-action="jump-invoice-issue"]');
     assert.ok(await evaluate(`document.activeElement.classList.contains('invoice-mapping-input')`));
     // Scroll both axes, then prove header sticks and text/background contrast is readable.
+    await call('Emulation.setDeviceMetricsOverride',{width:1024,height:700,deviceScaleFactor:1,mobile:false});
     const scroll=await evaluate(`(()=>{const e=document.querySelector('.invoice-lines-card .invoice-lines-scroll');e.scrollTop=420;e.scrollLeft=250;const h=e.querySelector('th');return {top:h.getBoundingClientRect().top,wrap:e.getBoundingClientRect().top,scroll:e.scrollTop,x:e.scrollLeft,position:getComputedStyle(h).position,color:getComputedStyle(h).color,bg:getComputedStyle(h).backgroundColor};})()`);
     assert.equal(scroll.position,'sticky');assert.ok(scroll.scroll>0 && scroll.x>0);assert.ok(Math.abs(scroll.top-scroll.wrap)<4);assert.notEqual(scroll.color,scroll.bg);
+    await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
     await change('invoiceFrom','2026-08-02'); await change('invoiceTo','2026-08-02');
     assert.ok(await evaluate(`document.querySelector('#invoice-list-count').textContent.includes('1 / 1')`));
     await change('invoiceFrom','2026-08-01');await change('invoiceTo','2026-08-31');
@@ -149,6 +151,35 @@ async function main() {
     await call('Emulation.setDeviceMetricsOverride',{width:1024,height:900,deviceScaleFactor:1,mobile:false});
     assert.ok(await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1'));
     assert.ok(await evaluate("(()=>{const box=document.querySelector('.invoice-lines-card .invoice-lines-scroll');return box.scrollWidth > box.clientWidth;})()"));
+    await click('.invoice-lines-card .tdp-open-sheet');
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
+    const mappingLayouts=[];
+    for(const [width,height] of [[1920,900],[1440,800],[1280,640],[1024,560]]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+      for(const fraction of [0,0.5,1]) {
+        const geometry=await evaluate(`(()=>{const box=document.querySelector('.invoice-lines-card > .invoice-lines-scroll');box.scrollTop=box.scrollHeight*${fraction};box.scrollLeft=box.scrollWidth*${fraction};const r=box.getBoundingClientRect();const head=box.querySelector('thead').getBoundingClientRect();const foot=box.querySelector('tfoot').getBoundingClientRect();const action=box.querySelector('thead th:last-child').getBoundingClientRect();return {width:innerWidth,height:innerHeight,tableHeight:r.height,bodySpace:r.height-head.height-foot.height,footerHeight:foot.height,actionRight:action.right,boxRight:r.right,overflow:document.documentElement.scrollWidth>innerWidth+1};})()`);
+        assert.ok(geometry.tableHeight>=height*0.70,JSON.stringify(geometry));
+        assert.ok(geometry.bodySpace>=height*0.50,JSON.stringify(geometry));
+        assert.ok(geometry.footerHeight<=52,JSON.stringify(geometry));
+        assert.ok(geometry.actionRight<=width && geometry.boxRight-geometry.actionRight<22,JSON.stringify(geometry));
+        assert.equal(geometry.overflow,false); mappingLayouts.push(geometry);
+      }
+      await evaluate(`document.querySelector('.invoice-lines-card > .invoice-lines-scroll').scrollTop=0;document.querySelector('.invoice-lines-card > .invoice-lines-scroll').scrollLeft=0;document.getElementById('toast').classList.remove('show')`);
+      fs.writeFileSync('D:/TDP_ROUND1/mapping-layout-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
+    }
+    const totalGroups=(await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.totals.qty_by_unit;
+    await click('[data-action="view-invoice-unit-totals"]');
+    assert.equal(await evaluate(`document.querySelectorAll('.invoice-unit-totals-dialog tbody tr').length`),Object.keys(totalGroups).length);
+    assert.equal(await evaluate(`document.querySelector('.invoice-unit-totals-dialog tbody').textContent.includes('kg')`),true);
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await wait(`!document.querySelector('.invoice-unit-totals-dialog')`);
+    assert.ok(await evaluate(`document.querySelector('.invoice-mapping-fullscreen-bar') !== null`));
+    await click('.invoice-workbench-help > summary');
+    assert.ok(await evaluate(`document.querySelector('.invoice-workbench-help').open`));
+    await click('.invoice-workbench-help > summary');
+    await click('.invoice-mapping-fullscreen-bar button');
+    fs.writeFileSync('D:/TDP_ROUND1/mapping-layout.json',JSON.stringify(mappingLayouts,null,2));
     // One click performs exact mapping; no human confirmation for a proven match.
     const autoFixture = (await request('/fixture/automatic-mapping','POST',{})).body;
     await change('invoiceStatus','all');

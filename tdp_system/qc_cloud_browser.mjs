@@ -68,6 +68,18 @@ try {
       assert.equal(await evaluate('!!document.querySelector(".tdp-sheet-shell")'),false);
       assert.ok(await evaluate('!!document.querySelector(".invoice-lines-card .invoice-mapping-input:not(:disabled)")'));
       await evaluate('document.querySelector(".invoice-lines-card .invoice-mapping-input").scrollIntoView({block:"center",inline:"center"})');
+      report.mapping_layouts=[];
+      for(const [width,height] of [[1920,900],[1440,800],[1280,640],[1024,560]]) {
+        await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+        const geometry=await evaluate(`(()=>{const box=document.querySelector('.invoice-lines-card > .invoice-lines-scroll');box.scrollTop=0;box.scrollLeft=0;const r=box.getBoundingClientRect();const head=box.querySelector('thead').getBoundingClientRect();const foot=box.querySelector('tfoot').getBoundingClientRect();const a=box.querySelector('thead th:last-child').getBoundingClientRect();return {width:innerWidth,height:innerHeight,tableHeight:r.height,bodySpace:r.height-head.height-foot.height,footerHeight:foot.height,actionRight:a.right,boxRight:r.right};})()`);
+        assert.ok(geometry.tableHeight>=height*0.70,JSON.stringify(geometry));
+        assert.ok(geometry.bodySpace>=height*0.50,JSON.stringify(geometry));
+        assert.ok(geometry.footerHeight<=52,JSON.stringify(geometry));
+        assert.ok(geometry.actionRight<=width && geometry.boxRight-geometry.actionRight<22,JSON.stringify(geometry));
+        report.mapping_layouts.push(geometry); await shot('mapping-space-'+width);
+      }
+      report.checks.push('mapping_table_uses_at_least_70_percent_height_four_desktop_sizes');
+      await call('Emulation.setDeviceMetricsOverride',{width:1680,height:1050,deviceScaleFactor:1,mobile:false});
       await shot('invoice-mapping-fullscreen');
       await click('.invoice-mapping-fullscreen-bar button');
       assert.equal(await evaluate('document.querySelector("#content").classList.contains("invoice-mapping-fullscreen")'),false);
