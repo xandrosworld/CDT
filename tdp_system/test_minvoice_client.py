@@ -177,6 +177,11 @@ class MinvoiceDraftTests(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_confirmed_remote_write_checks_series_then_only_saves_unsigned_draft(self):
+        self.client.config = MinvoiceConfig('https://0106026495-999.minvoice.site', 'user', 'password',
+                                            allow_test_environment=True)
+        self.client._token = 'fixture'
+        self.assertTrue(self.client.profile_status()['test_environment'])
+        self.assertTrue(self.client.profile_status()['draft_save_available'])
         self.client.responses = {
             "Invoice68/GetTypeInvoiceSeries": {
                 "ok": True,

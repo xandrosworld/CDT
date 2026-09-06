@@ -41,7 +41,8 @@ def main():
             batch,_=prepare_sync_batch(conn,tenant=tenant,source=source,invoice_type=direction,
                                       date_from='2026-08-01',date_to='2026-08-31',now_iso=server.now_iso)
             client = factory()
-            if getattr(client, 'is_test_environment', False) is True:
+            if (getattr(client, 'is_test_environment', False) is True
+                    and not client.config.allow_test_environment):
                 report['runs'].append({'direction':direction,'blocked':'provider_test_environment'})
                 print(json.dumps(report['runs'][-1]), flush=True)
                 continue

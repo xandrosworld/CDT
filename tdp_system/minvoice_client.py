@@ -43,6 +43,7 @@ class MinvoiceConfig:
     username: str
     password: str
     unit_code: str = "VP"
+    allow_test_environment: bool = False
 
     @classmethod
     def from_env_files(cls, paths: list[Path]) -> "MinvoiceConfig":
@@ -63,6 +64,7 @@ class MinvoiceConfig:
             username=required["MINVOICE_USERNAME"],
             password=required["MINVOICE_PASSWORD"],
             unit_code=values.get("MINVOICE_UNIT_CODE", "VP") or "VP",
+            allow_test_environment=values.get("MINVOICE_ALLOW_TEST_ENVIRONMENT", "").strip().lower() in {"1", "true", "yes"},
         )
 
 
@@ -129,14 +131,16 @@ class MinvoiceClient:
     def profile_status(self) -> dict:
         self._ensure_login()
         return {"authenticated": True, "credential_verified": True, "official_api": True,
-                "test_environment": self.is_test_environment}
+                "test_environment": self.is_test_environment,
+                "test_environment_allowed": self.config.allow_test_environment,
+                "draft_save_available": not self.is_test_environment or self.config.allow_test_environment}
 
     @property
     def is_test_environment(self) -> bool:
         return (urlsplit(self.config.api_base_url).hostname or '').lower() == '0106026495-999.minvoice.site'
 
     def assert_business_environment(self) -> None:
-        if self.is_test_environment:
+        if self.is_test_environment and not self.config.allow_test_environment:
             raise MinvoiceError('M-Invoice đang dùng máy chủ kiểm thử. Cần cấu hình URL và tài khoản chính thức '
                                 'của Thành Đạt Phát trước khi tải hóa đơn đầu ra hoặc lưu nháp nghiệp vụ.')
 

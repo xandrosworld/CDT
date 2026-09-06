@@ -19,7 +19,7 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 | 5. Chọn và in nhiều | Lọc bếp/ngày, chọn một hoặc nhiều phiếu, bỏ chọn, xem trước và in. Chỉ những sheet được chọn mới xuất. | Lượt 4; kiểm tra riêng bộ chuyển PDF Linux. |
 | 6. Nội dung phiếu | Đối chiếu đơn vị, thông tin đơn vị mua/bán, địa chỉ, người nhận, chữ ký và tổng tiền làm tròn. | Kiểm thử mẫu chứng từ; PDF A4 và ảnh từng trang. |
 | 7. Hóa đơn đầu vào | Chọn 01–31/08/2026, tải nguồn. Tổng là 266 hóa đơn; ngày đúng kỳ, dòng chưa gán mã được ưu tiên hiển thị. | Nguồn mSMI thật và màn hình Railway đều trả 266; tải lại trên bản sao không trùng. |
-| 8. Hóa đơn đầu ra | Cấu hình tài khoản chính thức, chọn đúng kỳ, tải M-Invoice; khi báo còn dữ liệu, tải tiếp. Chỉ xác nhận xuất kho khi hóa đơn đủ điều kiện. | Phân trang, trạng thái và chống trùng đạt trên dữ liệu thử. **Chưa xác nhận nguồn nghiệp vụ: Railway đang trỏ máy chủ kiểm thử của nhà cung cấp.** |
+| 8. Hóa đơn đầu ra | Dùng tài khoản hiện tại theo lựa chọn của chủ dự án ngày 06/09, chọn đúng kỳ, tải M-Invoice; khi báo còn dữ liệu, tải tiếp. Chỉ xác nhận xuất kho khi hóa đơn đủ điều kiện. | Phân trang, trạng thái và chống trùng đạt trên dữ liệu thử. Tài khoản hiện tại được cho phép sử dụng; hệ thống vẫn hiển thị đúng môi trường nhà cung cấp. |
 | 9. Tồn hóa đơn | Với bộ thử thiếu hàng: phân bổ phần có, giữ phần thiếu cho vòng sau, kiểm tra không âm tồn. | Lượt 1 và các bài kiểm thử kho/phân bổ. |
 | 10. Chốt tháng | Chốt, kiểm tra tồn chuyển kỳ sau; mở lại rồi chốt lại. Không sinh bản chuyển tồn trùng. | Lượt 1; kiểm thử chốt/mở/chốt và khóa kỳ. |
 | 11. Báo cáo tháng | Lọc tháng, nhà thầu, bếp; thêm bếp ở dữ liệu thử rồi đối chiếu tổng và cột động. | Lượt 3 và kiểm thử báo cáo. |
@@ -38,9 +38,9 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 
 ## Dữ liệu cần người phụ trách xác nhận
 
-- **M-Invoice đang dùng `0106026495-999.minvoice.site`, môi trường kiểm thử của nhà cung cấp.** Cần cấu hình URL, tài khoản và mã đơn vị chính thức trong `MINVOICE_*`. Đã chặn tải dữ liệu thử vào DB vận hành; kết nối thành công với máy chủ thử không có nghĩa hóa đơn đầu ra của khách đã sẵn sàng.
+- **Quyết định ngày 06/09: chủ dự án chỉ dùng tài khoản M-Invoice hiện tại.** Giữ nguyên URL/tài khoản, cho phép sử dụng qua `MINVOICE_ALLOW_TEST_ENVIRONMENT=true`; không còn yêu cầu đổi tài khoản như điều kiện bàn giao. Máy chủ `0106026495-999.minvoice.site` vẫn được nhận diện là môi trường kiểm thử của nhà cung cấp; lựa chọn này không thay đổi môi trường thực tế hoặc tự xác nhận tính hợp lệ của từng hóa đơn.
 - File `Đơn hàng  03.09.2026.xlsx`: dòng đặt hàng **157** (dưa hấu) và **158** (nhãn) có lượng **−1**; dòng 158 còn thiếu mã. Cần xác nhận đó là hàng trả hay nhập nhầm và cung cấp dữ liệu đúng. Phần mềm giữ chặn các dòng này.
-- 266 hóa đơn đầu vào tháng 8 hiện gồm **264 cần gán mã** và **2 không nhập tồn**. Tải hóa đơn không đồng nghĩa đã xác nhận nhập kho. Người phụ trách cần đối chiếu mã hàng trước khi ghi kho.
+- **Tổng đủ 266 hóa đơn đầu vào**, gồm **264 cần gán mã** và **2 không nhập tồn**. Có **1.107 dòng hàng**, **1.104 dòng cần xử lý**; đây là các bộ đếm khác nhau, không phải thiếu hai hóa đơn. Tải hóa đơn không đồng nghĩa đã xác nhận nhập kho. Người phụ trách cần đối chiếu mã hàng trước khi ghi kho.
 - Bản production tại lúc kiểm tra chưa có hồ sơ MST bên mua và chưa có hóa đơn đầu ra đã đồng bộ. Form hồ sơ độc lập đã được bổ sung; không tự đoán MST hoặc liên kết hóa đơn với nhà thầu.
 - Không thực hiện ký/phát hành hóa đơn thật hoặc ghi thanh toán thật trong lượt kiểm thử này.
 

@@ -38,6 +38,15 @@ class ConnectorEnvironmentTests(unittest.TestCase):
                 with self.assertRaises(MsmiError): MsmiConfig.from_env_files([file])
                 with self.assertRaises(MinvoiceError): MinvoiceConfig.from_env_files([file])
 
+    def test_owner_selected_test_account_requires_explicit_configuration(self):
+        with patch.dict(os.environ, MINVOICE_API_BASE_URL='https://0106026495-999.minvoice.site',
+                        MINVOICE_USERNAME='user', MINVOICE_PASSWORD='password'):
+            self.assertFalse(MinvoiceConfig.from_env_files([]).allow_test_environment)
+            with patch.dict(os.environ, MINVOICE_ALLOW_TEST_ENVIRONMENT='true'):
+                self.assertTrue(MinvoiceConfig.from_env_files([]).allow_test_environment)
+            with patch.dict(os.environ, MINVOICE_ALLOW_TEST_ENVIRONMENT='false'):
+                self.assertFalse(MinvoiceConfig.from_env_files([]).allow_test_environment)
+
     def test_hosted_start_preserves_print_template_and_skips_catalog_reimport(self):
         from . import server, cloud_server
         from . import cloud_auth
@@ -67,6 +76,13 @@ class ConnectorEnvironmentTests(unittest.TestCase):
         self.assertTrue(payload['test_environment'])
         self.assertFalse(payload['draft_save_available'])
         self.assertIn('kiểm thử', payload['warning'])
+        client.profile_status.return_value.update(test_environment_allowed=True, draft_save_available=True)
+        with patch.object(server, 'create_minvoice_client', return_value=client):
+            allowed = server.app.test_client().get('/api/minvoice/status').get_json()
+        self.assertTrue(allowed['test_environment'])
+        self.assertTrue(allowed['test_environment_allowed'])
+        self.assertTrue(allowed['draft_save_available'])
+        self.assertIn('lựa chọn của chủ dự án', allowed['warning'])
 
 
 if __name__ == '__main__':

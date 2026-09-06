@@ -766,7 +766,8 @@ def sync_output_batch(
         raise InvoiceOutputSyncError("Không tìm thấy phiên tải hóa đơn")
     if batch["source"] != MINVOICE_SOURCE or batch["invoice_type"] != OUTPUT_INVOICE:
         raise InvoiceOutputSyncError("Phiên này không phải hóa đơn đầu ra M-Invoice")
-    if getattr(client, 'is_test_environment', False) is True:
+    if (getattr(client, 'is_test_environment', False) is True
+            and getattr(getattr(client, 'config', None), 'allow_test_environment', False) is not True):
         raise InvoiceOutputSyncError('M-Invoice đang dùng máy chủ kiểm thử. Hãy cấu hình URL và tài khoản '
                                      'chính thức của Thành Đạt Phát trước khi tải hóa đơn đầu ra.')
     safe_map = normalize_status_map(status_map)

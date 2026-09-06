@@ -198,6 +198,17 @@ class InvoiceOutputSyncTests(unittest.TestCase):
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM outgoing_source_invoices').fetchone()[0], 0)
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
 
+    def test_owner_selected_test_account_can_sync_without_bypassing_stock_gates(self):
+        from types import SimpleNamespace
+        client = OutputFixtureMsmi([output_invoice(1)])
+        client.is_test_environment = True
+        client.config = SimpleNamespace(allow_test_environment=True)
+        result = self.sync(client)
+        self.assertTrue(result['complete'])
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM outgoing_source_invoices').fetchone()[0], 1)
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
+        self.assertEqual(self.conn.execute('SELECT stock_status FROM outgoing_source_invoices').fetchone()[0], 'pending_mapping')
+
     def test_documented_minvoice_schema_and_status_contract_are_normalized(self):
         cases = {
             (0, 4): "issued",
