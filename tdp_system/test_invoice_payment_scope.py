@@ -356,7 +356,7 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         ):
             self.assertIn(marker, script if marker != "stale_invoice_payment_scope" else
                           (root / "tdp_system" / "contract_modules.py").read_text(encoding="utf-8"))
-        self.assertIn("/static/app.js?v=20260906-8", page)
+        self.assertIn("/static/app.js?v=20260906-9", page)
         self.assertIn("invoice_payment_scope.py", build)
         self.assertIn("--hidden-import invoice_payment_scope", build)
         self.assertIn("invoice_delivery_statement.py", build)

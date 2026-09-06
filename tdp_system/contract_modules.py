@@ -26,6 +26,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
 
+try:
+    from .purchase_money_adjustments import DEDUCTION_KIND, DEDUCTION_LABEL, approved_phong_source
+except ImportError:
+    from purchase_money_adjustments import DEDUCTION_KIND, DEDUCTION_LABEL, approved_phong_source
+
 
 PRINT_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 PAYROLL_TEMPLATE_SOURCE = PRINT_TEMPLATE_DIR / "payroll_template.xlsx"
@@ -816,6 +821,8 @@ def init_contract_schema(conn, opening_template_path=None):
     ensure_column(conn, "outgoing_invoice_lines", "invoice_nature", "TEXT NOT NULL DEFAULT '1'")
     ensure_column(conn, "purchase_order_lines", "price_source", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "purchase_workbook_lines", "price_source", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "purchase_workbook_lines", "line_kind", "TEXT NOT NULL DEFAULT 'goods'")
+    ensure_column(conn, "purchase_workbook_line_revisions", "line_kind", "TEXT NOT NULL DEFAULT 'goods'")
     ensure_column(conn, "historical_payable_lines", "source_amount", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "historical_payable_lines", "calculated_amount", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "historical_payable_lines", "source_hash", "TEXT NOT NULL DEFAULT ''")
@@ -3521,6 +3528,7 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
             row = {
                 "row_key": item["row_key"], "order_id": item["order_id"],
                 "source_row": item["source_row"],
+                "line_kind": item.get("line_kind", "goods"),
                 "product_code": item["product_code"], "product_name": item["product_name"],
                 "kitchen": item["kitchen"], "work_date": item["work_date"],
                 "unit": item["unit"], "demand_qty": base_qty, "customer_qty": base_qty,
@@ -3705,6 +3713,7 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
         "presented_line_count": sum(len(group["items"]) for group in group_list),
         "checklist": checklist, "checklist_counts": checklist_counts,
         "rows": rows, "groups": group_list,
+        "money_adjustments": [row for row in rows if row.get("line_kind") == DEDUCTION_KIND],
         "plan_hash": purchase_order_database_state_hash(conn, batch_id),
     }
 
@@ -3727,7 +3736,7 @@ def purchase_order_database_state_hash(conn, batch_id: int) -> str:
             "purchase_workbook_lines",
             "SELECT row_key,order_id,product_code,kitchen,work_date,product_name,base_qty,unit,"
             "supplier,note,buy_price,price_source,damaged_qty,added_qty,reduced_qty,missing_qty,actual_qty,"
-            "amount,status,revision FROM purchase_workbook_lines WHERE batch_id=? ORDER BY row_key",
+            "amount,status,revision,line_kind FROM purchase_workbook_lines WHERE batch_id=? ORDER BY row_key",
             (batch_id,),
         ),
     ))
@@ -3750,6 +3759,7 @@ PURCHASE_CANONICAL_ALIASES = {
     "actual_qty": {"slthucte", "soluongthucte", "slthucte"},
     "amount": {"thanhtien"},
     "row_key": {"madonghethong", "rowkey", "khoadong"},
+    "line_kind": {"loaidong"},
 }
 
 
@@ -3820,6 +3830,8 @@ def purchase_scope_hash(items) -> str:
     )
     for item in sorted(items, key=lambda row: row["row_key"]):
         normalized = {field: mapping_cell_text(item.get(field)) for field in text_fields}
+        if item.get("line_kind", "goods") != "goods":
+            normalized["line_kind"] = item["line_kind"]
         normalized.update({field: as_number(item.get(field)) for field in number_fields})
         encoded = json.dumps(
             normalized,
@@ -3855,6 +3867,8 @@ def expected_purchase_formulas(fields: dict, source_row: int) -> tuple[str, set[
 
 def purchase_line_changed(previous: dict | None, item: dict) -> bool:
     if previous is None:
+        return True
+    if previous.get("line_kind", "goods") != item.get("line_kind", "goods"):
         return True
     text_fields = (
         "product_code", "kitchen", "work_date", "product_name", "unit",
@@ -3948,6 +3962,8 @@ def apply_purchase_order_preview(
     inserted_count = 0
     updated_count = 0
     for item in items:
+        if item.get("errors"):
+            raise PurchaseOrderApplyError("Dòng mua còn lỗi; chưa được ghi")
         previous = existing_by_key.get(item["row_key"])
         if not purchase_line_changed(previous, item):
             continue
@@ -3958,8 +3974,8 @@ def apply_purchase_order_preview(
                    batch_id,row_key,order_id,source_sheet,source_row,product_code,kitchen,
                    work_date,product_name,base_qty,unit,supplier,note,buy_price,price_source,damaged_qty,
                    added_qty,reduced_qty,missing_qty,actual_qty,amount,status,source_hash,
-                   revision,created_at,updated_at
-               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?)
+                   revision,created_at,updated_at,line_kind
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?)
                ON CONFLICT(batch_id,row_key) DO UPDATE SET
                    order_id=excluded.order_id,source_sheet=excluded.source_sheet,
                    source_row=excluded.source_row,product_code=excluded.product_code,
@@ -3971,7 +3987,7 @@ def apply_purchase_order_preview(
                    added_qty=excluded.added_qty,reduced_qty=excluded.reduced_qty,
                    missing_qty=excluded.missing_qty,actual_qty=excluded.actual_qty,
                    amount=excluded.amount,status='confirmed',source_hash=excluded.source_hash,
-                   revision=excluded.revision,updated_at=excluded.updated_at""",
+                   revision=excluded.revision,updated_at=excluded.updated_at,line_kind=excluded.line_kind""",
             (
                 batch_id, item["row_key"], item.get("order_id"), item["source_sheet"],
                 item["source_row"], item["product_code"], item["kitchen"], item["work_date"],
@@ -3980,20 +3996,22 @@ def apply_purchase_order_preview(
                 item["added_qty"], item["reduced_qty"], item["missing_qty"],
                 item["actual_qty"], item["amount"], source_hash, revision,
                 previous["created_at"] if previous else timestamp, timestamp,
+                item.get("line_kind", "goods"),
             ),
         )
         conn.execute(
             """INSERT INTO purchase_workbook_line_revisions(
                    batch_id,row_key,order_id,revision,change_kind,source_hash,source_row,
                    base_qty,damaged_qty,added_qty,reduced_qty,missing_qty,actual_qty,
-                   buy_price,amount,created_at
-               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   buy_price,amount,created_at,line_kind
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 batch_id, item["row_key"], item.get("order_id"), revision,
                 change_kind, source_hash, item["source_row"], item["base_qty"],
                 item["damaged_qty"], item["added_qty"], item["reduced_qty"],
                 item["missing_qty"], item["actual_qty"], item["buy_price"],
                 item["amount"], timestamp,
+                item.get("line_kind", "goods"),
             ),
         )
         changed_count += 1
@@ -4093,6 +4111,7 @@ def parse_canonical_purchase_workbook(
     parsed = []
     occurrences = Counter()
     seen_row_keys = set()
+    seen_deductions = set()
     for source_row, values in enumerate(
         worksheet.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1
     ):
@@ -4128,6 +4147,21 @@ def parse_canonical_purchase_workbook(
             except ValueError as exc:
                 errors.append(str(exc))
                 numbers[field] = 0
+        explicit_kind = mapping_key(cell("line_kind"))
+        explicit_deduction = explicit_kind in {mapping_key(DEDUCTION_KIND), mapping_key(DEDUCTION_LABEL)}
+        if explicit_kind and explicit_kind not in {"goods", "hanghoa"} and not explicit_deduction:
+            errors.append("Loại dòng không hợp lệ")
+        approved_deduction = approved_phong_source(
+            work_date, supplier, kitchen, product_code, product_name, unit, numbers,
+        ) and not explicit_kind
+        deduction = explicit_deduction or approved_deduction
+        if deduction:
+            deduction_identity = (mapping_key(supplier), mapping_key(kitchen), mapping_key(product_name))
+            if deduction_identity in seen_deductions:
+                errors.append("Khoản trừ tiền mua hộ bị lặp trong file")
+            seen_deductions.add(deduction_identity)
+        if explicit_deduction and any(numbers.values()):
+            errors.append("Dòng trừ tiền mua hộ chỉ nhập thành tiền âm; số lượng, giá mua và các cột điều chỉnh phải bằng 0")
         identity = (mapping_key(product_code), mapping_key(kitchen))
         occurrences[identity] += 1
         occurrence = occurrences[identity]
@@ -4156,10 +4190,10 @@ def parse_canonical_purchase_workbook(
             errors.append("Mã dòng không thuộc sheet đặt hàng đang chọn")
         matches = orders_by_identity.get(identity) or []
         matched_order = matches[occurrence - 1] if occurrence <= len(matches) else None
-        order_id = int(matched_order["id"]) if matched_order else None
+        order_id = int(matched_order["id"]) if matched_order and not deduction else None
         sheet_buy_price = numbers["buy_price"]
         quoted_buy_price = 0
-        if matched_order and (not previous or previous.get("price_source") == "Bảng báo giá"):
+        if matched_order and not deduction and (not previous or previous.get("price_source") == "Bảng báo giá"):
             quoted_buy_price = max(as_number(matched_order.get("buy_price")), 0)
         if quoted_buy_price > 0:
             numbers["buy_price"] = quoted_buy_price
@@ -4168,13 +4202,13 @@ def parse_canonical_purchase_workbook(
             price_source = "Sheet đặt hàng chuẩn"
         if not kitchen:
             errors.append("Dòng đặt hàng thiếu mã bếp")
-        if not product_code:
+        if not product_code and not deduction:
             errors.append("Dòng đặt hàng thiếu mã hàng")
         if not product_name:
             errors.append("Dòng đặt hàng thiếu tên hàng")
-        if numbers["base_qty"] < 0 or any(
+        if not deduction and (numbers["base_qty"] < 0 or any(
             numbers[field] < 0 for field in ("damaged_qty", "added_qty", "reduced_qty", "missing_qty")
-        ):
+        )):
             errors.append("Số lượng và các cột điều chỉnh không được âm")
         computed_actual = (
             numbers["base_qty"] + numbers["added_qty"] - numbers["damaged_qty"]
@@ -4211,7 +4245,9 @@ def parse_canonical_purchase_workbook(
             if formula_worksheet is not None else cell("amount")
         )
         amount_formula_key = purchase_formula_key(formula_amount)
-        if amount_formula_key and amount_formula_key not in expected_amount_formulas:
+        if explicit_deduction and amount_formula_key:
+            errors.append("Thành tiền mua hộ phải nhập số tiền trực tiếp")
+        elif amount_formula_key and amount_formula_key not in expected_amount_formulas:
             errors.append("Công thức Thành tiền phải là Số lượng thực tế × Giá mua")
         source_formula_amount = vnd_product(actual_qty, sheet_buy_price)
         try:
@@ -4221,10 +4257,10 @@ def parse_canonical_purchase_workbook(
         except ValueError as exc:
             errors.append(str(exc))
             cached_amount = source_formula_amount
-        if cell("amount") not in (None, "") and vnd_round(cached_amount) != source_formula_amount:
+        if not explicit_deduction and cell("amount") not in (None, "") and vnd_round(cached_amount) != source_formula_amount:
             errors.append("Thành tiền lệch Số lượng thực tế × Giá mua")
         amount = vnd_product(actual_qty, numbers["buy_price"])
-        if actual_qty < -1e-9:
+        if actual_qty < -1e-9 and not deduction:
             errors.append("Số lượng thực tế không được âm")
         if numbers["buy_price"] < 0:
             errors.append("Giá mua không được âm")
@@ -4232,6 +4268,19 @@ def parse_canonical_purchase_workbook(
             errors.append("Dòng có đặt hàng phải có NCC")
         if actual_qty > 1e-9 and numbers["buy_price"] <= 0 and not is_internal_stock_supplier(supplier):
             errors.append("Dòng mua ngoài có số lượng dương phải có giá mua lớn hơn 0")
+        if deduction:
+            if not supplier or is_internal_stock_supplier(supplier):
+                errors.append("Khoản trừ tiền mua hộ phải có nhà cung cấp bên ngoài")
+            amount = vnd_round(cached_amount)
+            if cell("amount") in (None, "") or amount >= 0:
+                errors.append("Khoản trừ tiền mua hộ phải có thành tiền âm")
+            # This line has a monetary effect only. Preserve its source row and
+            # business identity, without fabricating a stock code or order link.
+            numbers = {field: 0 for field in numbers}
+            actual_qty = 0
+            price_source = DEDUCTION_LABEL
+            if not note.startswith(DEDUCTION_LABEL):
+                note = DEDUCTION_LABEL + (" · " + note if note else "")
         parsed.append({
             "source_sheet": worksheet.title, "source_row": source_row,
             "format": "customer_canonical", "row_key": row_key, "order_id": order_id,
@@ -4242,6 +4291,7 @@ def parse_canonical_purchase_workbook(
             "damaged_qty": numbers["damaged_qty"], "added_qty": numbers["added_qty"],
             "reduced_qty": numbers["reduced_qty"], "missing_qty": numbers["missing_qty"],
             "actual_qty": actual_qty, "amount": amount, "errors": errors, "warnings": warnings,
+            "line_kind": DEDUCTION_KIND if deduction else "goods",
         })
     if not parsed:
         raise ValueError("Sheet đặt hàng chuẩn không có dòng dữ liệu")

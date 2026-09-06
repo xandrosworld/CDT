@@ -1,5 +1,10 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Xử lý phần Phong — 06/09/2026:** hai khoản mua hộ do hàng hỏng ngày 03/09
+> được trừ **207.000 đồng vào công nợ Phong**, giữ doanh thu và lượng bán.
+> Đã sửa và kiểm tra trên bản sao; kết quả triển khai ghi tại **13.24**.
+> Bốn mã tồn đầu âm vẫn chờ khách chốt, không tự đổi số.
+
 > **Tự động xử lý phần đủ căn cứ — 06/09/2026:** chủ dự án yêu cầu tự ghép
 > mã chắc chắn, bỏ bước bắt khách xem rồi xác nhận lại. Dòng còn cần xử lý hoặc
 > xác nhận nằm trước, phần đã xử lý xong nằm dưới; chỉ lỗi mới tô đỏ. Đã áp dụng
@@ -7,7 +12,7 @@
 
 > **Quyết định mới 06/09/2026:** chỉ dòng có **lỗi** mới tô đỏ cả dòng, áp dụng
 > chung mọi file; cảnh báo hiển thị riêng. Hai dòng âm đặt hàng 03/09 được giải thích
-> là hàng hỏng, chị đi mua cho khách; còn cần chốt ảnh hưởng công nợ. Xem **13.22**.
+> là hàng hỏng, chị đi mua cho khách; quyết định công nợ mới tại **13.24** thay phần chờ ở **13.22**.
 
 > **Đối chiếu số liệu và màu cảnh báo 06/09/2026:** bảng Excel tô đỏ cả dòng
 > lỗi/cảnh báo và hết đỏ sau khi sửa hợp lệ. Đã đối chiếu nguồn–API–Excel trên
@@ -955,3 +960,14 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Source **`d3d511fa04efec7f36f7b9a3bd1472e4675e7f2f`** đã deploy Railway **SUCCESS**, deployment **`daf9db5f-aa49-4a40-8f7d-7c16f0bd77ee`**. Sau sao lưu riêng ngay trước thao tác, **đã áp dụng 941 dòng trên production**, không chờ khách bấm xác nhận lại. Từng mapping khớp bản sao đã kiểm chứng; dữ liệu được bảo vệ của 76 bảng không đổi, tổng vẫn **266 hóa đơn / 919.234.874 đồng**. Sổ kho hóa đơn vẫn 0; chưa ký/phát hành hoặc ghi nhận thanh toán. Bằng chứng `auto-mapping-production-01/summary.json`, `before.sqlite3`, `after.sqlite3` dưới `D:\TDP_RAILWAY_PRIVATE\evidence`.
 - Đã tự dò bốn mã tồn âm về file **`TĐK T8-2026.xlsx thụy.xlsx`**, sheet **`Ton 7 (2)`**: dòng 58 `D000056` lượng −1,5; dòng 166 `I000084` lượng −14,1; dòng 168 `I000091` lượng −1,5; dòng 321 `N000009` lượng −3. Giá trị âm có ngay trong nguồn, khớp bút toán tồn đầu đã lưu; không có căn cứ để đổi dấu/đưa về 0. Phần hàng hỏng 03/09 vẫn thiếu căn cứ xác định khoản trừ NCC hay mua bù; không tự chuyển thành nghiệp vụ tiền.
 - Kiểm tra hosted cuối `auto-mapping-hosted-02` đạt **32 mục/49 ảnh**, gồm đối chiếu thứ tự từng dòng màn hình với API sau tự ghép, không còn nút xác nhận mã gợi ý, mở bảng đơn không tự ghi, phiếu giao Excel/PDF và đăng xuất; không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi. Lượt hosted-01 dừng do công cụ đổi nhiều bộ lọc trong lúc DOM tải lại; sửa công cụ dùng bộ lọc đã đặt sẵn và chạy lại. Snapshot `auto-mapping-final` lấy sau khi kết thúc browser: so với snapshot ngay sau tự ghép, **80/80 bảng nguyên nội dung/schema**, SQLite toàn vẹn. Đây là kiểm tra bảo toàn sau tự ghép, không tuyên bố 80 bảng không đổi so với trước khi áp dụng mapping.
+
+### 13.24. Trừ tiền mua hộ vào công nợ Phong — 06/09/2026
+
+- Chủ dự án yêu cầu xử lý phần Phong, deploy rồi kiểm tra lại trong lúc chờ khách chốt bốn mã tồn đầu âm. Cách tính đã chốt: hai khoản mua hộ do hàng hỏng ngày 03/09 **117.000 + 90.000 = 207.000 đồng trừ phải trả Phong**, giữ doanh thu, lượng và giá bán. Quyết định này thay phần chờ xác định công nợ ở 13.22–13.23.
+- Bổ sung loại dòng **Trừ tiền mua hộ do hàng hỏng** vào sheet đặt hàng và lịch sử. Hai dòng nguồn 157–158 được nhận theo đúng ngày, Phong, bếp, tên, mã/ĐVT và số tiền đã đối chiếu; không dùng riêng số dòng Excel để suy nghiệp vụ. Sau nhập, khoản tiền có lượng/giá mua/điều chỉnh lượng bằng 0, không liên kết dòng xuất hàng. Dòng nhãn thiếu mã không tự sinh mã tồn. Dòng âm khác hoặc khác căn cứ vẫn bị chặn.
+- Sổ phải trả giữ khoản trừ riêng, chỉ có hiệu lực khi đơn được duyệt; hiển thị cùng lý do ở màn NCC, công nợ và Excel phải trả 14 cột. Không tạo khoản thanh toán. File NCC tải ra giữ thành tiền trực tiếp và cột Loại dòng để nạp lại; khoản tiền không bị tính lại thành lượng × giá bằng 0. Sửa có phiên lịch sử, gửi lại không thêm khoản trừ; lỗi audit hoàn tác cả lượt.
+- Kiểm chứng đúng file khách trên snapshot Railway riêng `phong-real-copy-02`: **352 dòng bán / 273 dòng mua**, hai khoản trừ tổng **207.000đ**. Phong có tiền hàng **997.040đ**, còn phải trả **790.040đ**; sổ và Excel 14 cột khớp. Dòng gạo nếp 103 vẫn là kho, 0,54 kg, 14.040đ. Nạp lại không thêm phiên phải trả. Giữ nguyên 233 dòng đơn cũ; phần mua không đổi đơn bán, sổ phải thu, sổ kho hóa đơn, tồn đầu và nhập/điều chỉnh kho thực tế. DB nguồn và file khách gốc không đổi, SQLite toàn vẹn.
+- Browser trên chính bản sao đó đạt: hai khoản trừ, tổng, số tiền công nợ, chặn chọn khoản trừ làm dòng trả tiền, màn máy tính 1440/1024px; không JavaScript exception hoặc request ghi khi chỉ xem. Ảnh `phong-purchases.png`, `phong-payable.png` và `browser-result.json` trong cùng thư mục. Tái chạy bằng `qa_phong_copy.py` rồi `qa_phong_browser.py`, luôn chỉ định snapshot/thư mục thử riêng.
+- Kiểm thử mới gồm xử lý đúng căn cứ, số âm khác vẫn chặn, khoản tiền rõ loại phải có lượng 0/tiền âm, nạp lại, xuất/nạp lại, tổng Excel phải trả, trạng thái nháp và rollback. Lượt công cụ ban đầu gọi nhầm cột `supplier` thay vì `supplier_code`, rồi tham chiếu helper sai module; đã sửa công cụ. Lượt copy-01 chọn sheet mua qua chế độ nhập liên tục chỉ dành cho bán nên bị chặn đúng; copy-02 dùng luồng nhập NCC riêng, không bỏ chặn của sản phẩm.
+- Triển khai/kiểm tra hosted sẽ bổ sung sau khi có kết quả. Chưa tự nạp hoặc duyệt đơn 03/09 trên production; số 790.040đ ở trên là kết quả trên bản sao. Bốn mã tồn đầu âm và các dòng hóa đơn chưa đủ căn cứ giữ nguyên. Hướng dẫn thao tác đã cập nhật tại NGHIEM-THU-RAILWAY.md.
+- Hồi quy trước triển khai `phong-regression-01`: **78 module / 589 test đạt, 0 lỗi/0 thất bại/không bỏ qua bài nào**. Browser bản sao kiểm tra thêm tổng phát sinh tài khoản Phong ở `/api/debts` khớp 790.040đ; kiểm tra cú pháp JS và `git diff --check` đạt.

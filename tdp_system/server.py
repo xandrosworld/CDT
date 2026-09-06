@@ -1699,7 +1699,7 @@ def strict_purchase_contract_rows(items):
     fields = (
         "product_code", "kitchen", "work_date", "product_name", "base_qty",
         "unit", "supplier", "buy_price", "price_source", "damaged_qty",
-        "added_qty", "reduced_qty", "missing_qty", "actual_qty", "amount",
+        "added_qty", "reduced_qty", "missing_qty", "actual_qty", "amount", "line_kind", "note",
     )
     return [{
         "row_key": item["row_key"],
@@ -3521,6 +3521,7 @@ def export_supplier_orders(conn, batch, orders):
         from .document_totals import quantity_cell
     ws = wb.active
     payload = purchase_order_payload(conn, int(batch["id"]))
+    has_money_adjustments = bool(payload.get("money_adjustments"))
     headers = [
         "Mã hàngNCC", "Mã hàng", "Mã bếp", "", "Tên hàng ", "Số lượng",
         "ĐVT", "NCC", "ghi chú", "giá mua", "hỏng", "thêm", "Giảm",
@@ -3531,6 +3532,8 @@ def export_supplier_orders(conn, batch, orders):
         ws.delete_rows(4, ws.max_row - 3)
     for column, label in enumerate(headers, 1):
         ws.cell(2, column, label)
+    if has_money_adjustments:
+        ws.cell(2, 18, "Loại dòng")
     occurrences = Counter()
     for output_index, item in enumerate(payload["rows"], start=3):
         identity = (
@@ -3559,6 +3562,11 @@ def export_supplier_orders(conn, batch, orders):
             f"=F{row_number}+L{row_number}-K{row_number}-M{row_number}-N{row_number}",
             f"=IFERROR(O{row_number}*J{row_number},0)", row_key,
         ]
+        if item.get("line_kind") == "replacement_deduction":
+            values[14] = 0
+            values[15] = item["amount"]
+        if has_money_adjustments:
+            ws.cell(row_number, 18, "Trừ tiền mua hộ do hàng hỏng" if item.get("line_kind") == "replacement_deduction" else "Hàng hóa")
         for column, value in enumerate(values, 1):
             cell = ws.cell(row_number, column, value)
             cell._style = copy.copy(prototype_styles[column - 1])
@@ -3585,7 +3593,9 @@ def export_supplier_orders(conn, batch, orders):
         ws.cell(row_index,5).alignment=Alignment(horizontal='left',vertical='center',wrap_text=True)
     for column in ("A", "B", "Q"):
         ws.column_dimensions[column].hidden = True
-    ws.auto_filter.ref = f"A2:Q{last_row}"
+    ws.auto_filter.ref = f"A2:{'R' if has_money_adjustments else 'Q'}{last_row}"
+    if has_money_adjustments:
+        ws.column_dimensions["R"].width = 35
     ws.freeze_panes = "C3"
     ws.print_area = f"A1:Q{last_row}"
     ws.print_title_rows = "$2:$2"

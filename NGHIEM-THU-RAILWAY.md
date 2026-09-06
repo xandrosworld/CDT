@@ -72,7 +72,7 @@ Ngày 06/09 đã áp dụng trên Railway: **941/1.104 dòng đã ghép, 171/264
 ## Dữ liệu cần người phụ trách xác nhận
 
 - **Quyết định ngày 06/09: chủ dự án chỉ dùng tài khoản M-Invoice hiện tại.** Giữ nguyên URL/tài khoản, cho phép sử dụng qua `MINVOICE_ALLOW_TEST_ENVIRONMENT=true`; không còn yêu cầu đổi tài khoản như điều kiện bàn giao. Máy chủ `0106026495-999.minvoice.site` vẫn được nhận diện là môi trường kiểm thử của nhà cung cấp; lựa chọn này không thay đổi môi trường thực tế hoặc tự xác nhận tính hợp lệ của từng hóa đơn.
-- File `Đơn hàng  03.09.2026.xlsx`: chủ dự án đã giải thích dòng đặt hàng **157** (dưa hấu) và **158** (nhãn) là hàng bị hỏng, chị đi mua cho khách. Còn cần chốt khoản âm trừ công nợ NCC hay theo dõi khoản mua bù riêng; dòng 158 vẫn thiếu mã hàng. Chưa đổi dấu lượng/tiền hoặc ghi công nợ khi chưa rõ cách tính khoản này.
+- File `Đơn hàng  03.09.2026.xlsx`: đã chốt hai khoản mua hộ do hàng hỏng **117.000 + 90.000 = 207.000 đồng trừ công nợ Phong**, doanh thu/lượng bán giữ nguyên. Xem hướng dẫn phần Phong bên dưới; không còn chờ xác nhận cách tính hai khoản này.
 - **Tổng đủ 266 hóa đơn đầu vào**, gồm **171 đủ mã, 93 còn cần xử lý và 2 không nhập tồn**. Trong 1.107 dòng hàng, 941 dòng đã tự ghép, 163 dòng còn thiếu căn cứ và 3 dòng không nhập tồn. Phần còn lại được đưa lên đầu bảng; không yêu cầu khách xác nhận lại 941 mã đã tự ghép.
 - Bản production tại lúc kiểm tra chưa có hồ sơ MST bên mua và chưa có hóa đơn đầu ra đã đồng bộ. Form hồ sơ độc lập đã được bổ sung; không tự đoán MST hoặc liên kết hóa đơn với nhà thầu.
 - Không thực hiện ký/phát hành hóa đơn thật hoặc ghi thanh toán thật trong lượt kiểm thử này.
@@ -81,7 +81,7 @@ Ngày 06/09 đã áp dụng trên Railway: **941/1.104 dòng đã ghép, 171/264
 
 Tại **Báo cáo vật tư hàng hóa → Chi tiết Nhập – Xuất – Tồn**, bấm **Xem bằng Excel · toàn màn hình** ngay cạnh tiêu đề để xem bảng rộng. Dòng **TỔNG** vẫn cố định khi cuộn; bấm nút số **ĐVT** để xem tổng tồn đầu, nhập, xuất, tồn cuối theo từng đơn vị. Tổng tiền nằm trên một dòng. Nút tải Excel theo kỳ vẫn ở phần đầu màn hình.
 
-Chi tiết sửa và kết quả mới nhất ở mục **13.17 của README-new-2.md**. Bằng chứng riêng nằm trong `D:\TDP_RAILWAY_PRIVATE\evidence`; không đưa dữ liệu hóa đơn, bản sao DB hoặc thông tin đăng nhập vào Git.
+Chi tiết sửa và kết quả mới nhất ở mục **13.24 của README-new-2.md**. Bằng chứng riêng nằm trong `D:\TDP_RAILWAY_PRIVATE\evidence`; không đưa dữ liệu hóa đơn, bản sao DB hoặc thông tin đăng nhập vào Git.
 
 ```powershell
 python -m tdp_system.qa_railway_acceptance --output THU_MUC_MOI
@@ -89,3 +89,13 @@ python -m tdp_system.qa_browser_rounds --output THU_MUC_MOI
 ```
 
 Khách đánh dấu kết quả thực tế ở checklist sau khi thử từng mục. Các điểm phụ thuộc dữ liệu phía trên cần được giải quyết trước khi xác nhận nghiệm thu toàn bộ.
+
+## Trừ tiền mua hộ cho Phong ngày 03/09
+
+1. Nạp đơn ngày 03/09 tại **Công việc hằng ngày**. Chế độ nhập liên tục nhận phần đơn bán; phần mua được xử lý riêng bên dưới.
+2. Chọn phiên 03/09, vào **Đặt hàng nhà cung cấp → Chỉnh số lượng và giá mua bằng Excel → Chọn file đã chỉnh**, chọn đúng file khách `Đơn hàng  03.09.2026.xlsx` rồi xác nhận phần mua sau khi hết lỗi.
+3. Hai dòng dưa hấu/nhãn đã chốt được nhận thành **Trừ tiền mua hộ do hàng hỏng**: lượng 0, tiền −117.000 và −90.000 đồng. Thiếu mã ở khoản tiền nhãn không tạo hàng tồn hoặc tự sinh mã mới. Các dòng âm khác vẫn bị kiểm tra như trước.
+4. Sau khi đơn được duyệt, vào **Công nợ → Phải trả**, lọc 03/09–03/09 và NCC **phong**. Trên bản sao đúng file khách: tiền hàng 997.040đ, trừ 207.000đ, còn 790.040đ. Excel phải trả giữ 14 cột và cùng tổng tiền. Khoản trừ không phải khoản thanh toán; không chọn nó để ghi trả tiền.
+5. Nạp lại cùng file không trừ thêm. File NCC tải ra giữ khoản trừ bằng số tiền trực tiếp và cột **Loại dòng**; nếu chỉnh khoản tiền này, giữ lượng/giá/các cột điều chỉnh bằng 0 và nhập thành tiền âm. Giữ nguyên lịch sử các lần sửa.
+
+Lượt triển khai chức năng không tự nạp hoặc duyệt đơn 03/09 lên production. Số 790.040đ là kết quả kiểm chứng trên bản sao, chưa phải số dư Phong đã ghi trên Railway. Bốn mã tồn đầu âm tiếp tục chờ khách chốt.

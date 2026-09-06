@@ -28,6 +28,11 @@ from typing import Any, Callable
 
 from flask import jsonify, request
 
+try:
+    from .purchase_money_adjustments import DEDUCTION_KIND, DEDUCTION_LABEL
+except ImportError:
+    from purchase_money_adjustments import DEDUCTION_KIND, DEDUCTION_LABEL
+
 
 PAYABLE_STATUSES = ("open", "partially_paid", "paid", "reversed")
 SOURCE_TYPES = ("current_purchase", "current_order", "historical_import")
@@ -364,7 +369,8 @@ def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]
             work_date=row["work_date"],
             kitchen=row["kitchen"],
             product_code=row["product_code"],
-            product_name=row["product_name"],
+            product_name=(DEDUCTION_LABEL + " · " + row["product_name"]
+                          if row["line_kind"] == DEDUCTION_KIND else row["product_name"]),
             actual_qty=row["actual_qty"],
             unit=row["unit"],
             raw_supplier=row["supplier"],

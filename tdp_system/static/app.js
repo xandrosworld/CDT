@@ -1368,7 +1368,7 @@
       return '<tr class="' + (errors.length ? 'row-error' : warnings.length ? 'row-warning' : '') + '"><td>' +
         esc(item.source_sheet || "—") + '<div class="muted">Dòng ' + esc(item.source_row || "—") +
         '</div></td><td><strong>' + esc(item.product_name || source.product_name || "—") +
-        '</strong><div class="muted">' + esc(item.product_code || source.product_code || "Mã dòng " + item.order_id) +
+        '</strong><div class="muted">' + (item.line_kind === 'replacement_deduction' ? esc(item.note) + ' · ' + money(item.amount) : esc(item.product_code || source.product_code || "—")) +
         ' · ' + esc(item.kitchen || source.kitchen || "—") + '</div></td><td class="num-cell">' +
         num(canonical ? item.base_qty : (item.demand_qty == null ? source.demand_qty : item.demand_qty)) +
         ' ' + esc(item.unit || source.unit || "") + '</td><td class="num-cell">' +
@@ -1451,6 +1451,11 @@
       purchaseOrderPreviewHtml() +
       '<div class="code-note" style="margin-top:14px">File Excel chỉ cập nhật phần mua và công nợ phải trả; không làm thay đổi đơn khách.</div>' +
       '</div></details>';
+    if ((needs.money_adjustments || []).length) {
+      content.innerHTML += '<div class="card purchase-money-adjustments"><div class="card-head"><h3>Trừ tiền mua hộ do hàng hỏng</h3></div><div class="card-body"><p>Các khoản này trừ vào công nợ phải trả khi đơn được duyệt. Doanh thu và số lượng hàng giữ nguyên.</p><div class="table-wrap"><table><thead><tr><th>NCC</th><th>Bếp</th><th>Nội dung</th><th>Khoản trừ</th></tr></thead><tbody>' +
+        needs.money_adjustments.map(function (item) { return '<tr><td>' + esc(item.supplier) + '</td><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td class="num-cell">' + money(item.amount) + '</td></tr>'; }).join('') +
+        '</tbody><tfoot><tr><td colspan="3">Tổng khoản trừ</td><td class="num-cell">' + money(needs.money_adjustments.reduce(function (total, item) { return total + n(item.amount); }, 0)) + '</td></tr></tfoot></table></div></div></div>';
+    }
   }
 
   function supplierPresentation(group) {
