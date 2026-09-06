@@ -2,7 +2,7 @@
 
 > **Xử lý phần Phong — 06/09/2026:** hai khoản mua hộ do hàng hỏng ngày 03/09
 > được trừ **207.000 đồng vào công nợ Phong**, giữ doanh thu và lượng bán.
-> Đã sửa và kiểm tra trên bản sao; kết quả triển khai ghi tại **13.24**.
+> Đã deploy Railway và kiểm tra lại; kết quả và phạm vi tại **13.24**.
 > Bốn mã tồn đầu âm vẫn chờ khách chốt, không tự đổi số.
 
 > **Tự động xử lý phần đủ căn cứ — 06/09/2026:** chủ dự án yêu cầu tự ghép
@@ -969,5 +969,7 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Kiểm chứng đúng file khách trên snapshot Railway riêng `phong-real-copy-02`: **352 dòng bán / 273 dòng mua**, hai khoản trừ tổng **207.000đ**. Phong có tiền hàng **997.040đ**, còn phải trả **790.040đ**; sổ và Excel 14 cột khớp. Dòng gạo nếp 103 vẫn là kho, 0,54 kg, 14.040đ. Nạp lại không thêm phiên phải trả. Giữ nguyên 233 dòng đơn cũ; phần mua không đổi đơn bán, sổ phải thu, sổ kho hóa đơn, tồn đầu và nhập/điều chỉnh kho thực tế. DB nguồn và file khách gốc không đổi, SQLite toàn vẹn.
 - Browser trên chính bản sao đó đạt: hai khoản trừ, tổng, số tiền công nợ, chặn chọn khoản trừ làm dòng trả tiền, màn máy tính 1440/1024px; không JavaScript exception hoặc request ghi khi chỉ xem. Ảnh `phong-purchases.png`, `phong-payable.png` và `browser-result.json` trong cùng thư mục. Tái chạy bằng `qa_phong_copy.py` rồi `qa_phong_browser.py`, luôn chỉ định snapshot/thư mục thử riêng.
 - Kiểm thử mới gồm xử lý đúng căn cứ, số âm khác vẫn chặn, khoản tiền rõ loại phải có lượng 0/tiền âm, nạp lại, xuất/nạp lại, tổng Excel phải trả, trạng thái nháp và rollback. Lượt công cụ ban đầu gọi nhầm cột `supplier` thay vì `supplier_code`, rồi tham chiếu helper sai module; đã sửa công cụ. Lượt copy-01 chọn sheet mua qua chế độ nhập liên tục chỉ dành cho bán nên bị chặn đúng; copy-02 dùng luồng nhập NCC riêng, không bỏ chặn của sản phẩm.
-- Triển khai/kiểm tra hosted sẽ bổ sung sau khi có kết quả. Chưa tự nạp hoặc duyệt đơn 03/09 trên production; số 790.040đ ở trên là kết quả trên bản sao. Bốn mã tồn đầu âm và các dòng hóa đơn chưa đủ căn cứ giữ nguyên. Hướng dẫn thao tác đã cập nhật tại NGHIEM-THU-RAILWAY.md.
+- Source **`6443acc82a2b3bef7935244f4ae7ea9338f38d9e`** đã deploy từ `xandrosworld/CDT/main` thành công, deployment **`2dc8ff20-c375-421e-ab41-9b1d19e126c4`**. `/health` xác nhận database/schema sẵn sàng, toàn vẹn `ok`, không cảnh báo nguồn công nợ trùng. Browser `phong-hosted-01` đạt **32 mục/49 ảnh**, gồm các màn máy tính, đầu vào sau tự ghép, Excel toàn màn hình, phiếu giao Excel/PDF và đăng xuất; không JavaScript exception, HTTP 5xx hoặc request ghi ngoài ý định.
+- Snapshot `phong-after` lấy sau khi browser kết thúc: so với `phong-before`, **80/80 bảng giữ nguyên mọi cột và giá trị đã có**; hai bảng dòng mua/lịch sử chỉ thêm `line_kind` mặc định hàng hóa. Hai DB toàn vẹn `ok`; bằng chứng `phong-after/full-preservation.json`. Không diễn đạt schema giữ nguyên vì đã thêm hai cột có chủ đích.
+- Chưa tự nạp hoặc duyệt đơn 03/09 trên production; số 790.040đ ở trên là kết quả trên bản sao. Bốn mã tồn đầu âm và các dòng hóa đơn chưa đủ căn cứ giữ nguyên. Hướng dẫn thao tác đã cập nhật tại NGHIEM-THU-RAILWAY.md.
 - Hồi quy trước triển khai `phong-regression-01`: **78 module / 589 test đạt, 0 lỗi/0 thất bại/không bỏ qua bài nào**. Browser bản sao kiểm tra thêm tổng phát sinh tài khoản Phong ở `/api/debts` khớp 790.040đ; kiểm tra cú pháp JS và `git diff --check` đạt.
