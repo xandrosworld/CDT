@@ -64,6 +64,8 @@ Chọn Giang ở dòng cần lập bảng kê, mở **Xem bảng kê và biên n
 4. **Tự ghép mã trùng khớp** dùng khi muốn xử lý tiếp sau khi bổ sung danh mục. Bấm lại không tạo thêm mapping hay lịch sử nếu không có gì mới. Các quy tắc được nhớ cho cùng NCC/mã nguồn/tên/ĐVT ở những kỳ chưa ghi kho.
 5. Chỉ phần không khớp duy nhất, thiếu mã hoặc cần hệ số quy đổi mới để người dùng xử lý trên đầu bảng. Tiếp theo là hóa đơn đủ mã chờ **Xác nhận nhập cả hóa đơn**; phần đã xử lý xong nằm dưới. Xác nhận nhập kho là bước ghi sổ riêng, không phải xác nhận lại từng mã đã tự ghép.
 
+Để sửa mã trên màn hình lớn, bấm **Ghép mã / Quy đổi · toàn màn hình** ngay trên bảng hóa đơn. Nhập ở cột **Ghép mã / Quy đổi**, nhấn **Enter** hoặc **Ghi nhớ** (mã hàng), nút lưu quy đổi (hệ số); đơn vị khác nhau vẫn cần hệ số quy đổi hợp lệ. Bảng tiếp tục mở sau khi lưu. **Đóng toàn màn hình** hoặc Escape quay lại; ô mới gõ chưa Enter/bấm lưu vẫn là phần chưa lưu. Số lượng và tiền hóa đơn nguồn chỉ xem. Nếu còn mở bản Excel cũ và gặp thông báo “The range is protected”, đóng bảng cũ rồi tải lại trang để dùng nút mới.
+
 Ngày 06/09 đã áp dụng trên Railway: **941/1.104 dòng đã ghép, 171/264 hóa đơn sẵn sàng, còn 163 dòng thuộc 93 hóa đơn cần xử lý**. Khách không phải chạy lại phần này. 111 quy tắc đã ghép tổng cộng 9.193 dòng cùng nguồn ở các kỳ chưa ghi kho. Có sao lưu trước/sau, kết quả mapping khớp bản sao đã kiểm chứng; tổng 266 hóa đơn và 919.234.874 đồng giữ nguyên. Chưa ghi kho trong lượt tự ghép.
 
 ## Lập hồ sơ thanh toán từ hóa đơn VAT

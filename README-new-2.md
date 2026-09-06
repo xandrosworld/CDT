@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Sửa lỗi khóa ô khi ghép mã — 06/09/2026:** nút toàn màn hình của bảng
+> hóa đơn đã mở đúng bảng ghép mã/quy đổi có thể thao tác, thay cho bản Excel
+> chỉ xem. Đã deploy và kiểm tra trên Railway; xem **13.27**.
+
 > **Sửa lỗi tab hóa đơn của đơn 04/09 — 06/09/2026:** đã bổ sung đúng hai mã
 > `M000357`, `O000139` từ file khách và khôi phục ĐVT bị bỏ sót khi nhập.
 > Railway đã hiển thị lại bảng khả năng xuất; 320 dòng đơn giữ nguyên lượng,
@@ -1009,3 +1013,13 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Browser Railway `sep04-hosted-01` đạt **34 mục / 49 ảnh**, có kiểm tra bổ sung bắt buộc bảng khả năng xuất của chính phiên 04/09 hiển thị, API trả 200 và đủ 320 dòng. Đã xem ảnh `09-documents.png`; không còn thông báo thiếu hai mã. Không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi xem trước.
 - Snapshot `sep04-after` lấy sau browser, đối chiếu `sep04-before-repair`: schema của **80 bảng giữ nguyên**, **70 bảng nguyên nội dung**. Chỉ thêm hai sản phẩm; hai dòng đơn và hai dòng tương ứng trong mỗi sổ phải thu/phải trả đổi ĐVT cùng phiên/giờ cập nhật, giữ toàn bộ lượng, giá, tiền và trạng thái. Các bảng lịch sử/audit thêm dấu vết, không sửa lịch sử cũ; SQLite toàn vẹn `ok`. Bằng chứng `sep04-after/preservation.json`, các script và dữ liệu riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/sep04-*`.
 - Đơn 04/09 vẫn là nháp; không tự duyệt, ghi kho, thu/trả tiền hoặc phát hành hóa đơn. Khách chỉ cần tải lại trang để xem kết quả, không cần nhập lại file. Bốn mã tồn đầu âm và các dòng hóa đơn còn thiếu căn cứ không thuộc lần sửa này.
+
+### 13.27. Sửa lỗi bảng chỉ xem bị dùng để ghép mã — 06/09/2026
+
+- Khách gặp hộp thoại `The range is protected, and you do not have edit permission` khi sửa cột ghép mã trong bảng Excel toàn màn hình. Nguyên nhân giao diện: nút mở bảng chung sao chép giá trị từ bảng HTML sang Univer với `editable:false`, bao gồm cả giá trị ô ghép mã nhưng không mang theo thao tác lưu. Vì vậy bảng bị khóa đúng cấu hình nhưng đường sử dụng gây hiểu nhầm. Không phải thiếu quyền tài khoản Railway của khách.
+- Bảng hóa đơn đầu vào/đầu ra dùng nút **Ghép mã / Quy đổi · toàn màn hình** để mở rộng chính bảng đang thao tác. Giữ các ô nhập/chọn mã, gợi ý mã, Enter/nút Ghi nhớ và quy đổi cùng API hiện có. Sau khi lưu và cập nhật thứ tự dòng, bảng tiếp tục ở chế độ toàn màn hình. Đóng hoặc Escape quay lại, giữ ô đang gõ trên cùng bảng; nội dung chưa Enter/bấm lưu vẫn chưa được ghi. Số lượng/tiền nguồn chỉ xem. Các bảng Excel chung còn lại ghi rõ **chỉ xem** trên nút.
+- Browser fixture `mapping-edit-browser-01` đạt: mở đúng bảng nhập mã, không tạo viewer Univer chỉ xem; gõ mã bằng bàn phím, mã sai bị chặn, Enter ghép mã và quy đổi; đóng/mở giữ ô chưa lưu; cập nhật bảng vẫn toàn màn hình; khổ 1440/1024px đạt. Chạy tiếp luồng xác nhận/hủy ghi kho, tra cứu, chống trùng, đầu ra và chốt/mở/chốt lại của lượt 1 đều đạt trên DB thử. Đã xem ảnh `round1/mapping-fullscreen-browser.png`.
+- Nhóm liên quan có **63 bài**: lần đầu 60 đạt, 3 bài còn khóa phiên bản CSS cũ; cập nhật đúng phiên bản asset và chạy lại cả ba nhóm chịu ảnh hưởng **10/10 đạt**. Không thay nghiệp vụ để vượt test. Bằng chứng `mapping-edit-tests-01`, `mapping-edit-tests-02`; cú pháp JavaScript và `git diff --check` đạt.
+- Source **`f93fc3fcd8bb3acf6d78cd698d71518715e8d438`**, deployment **`47985032-1a39-4a04-832c-0e51e80fbeac`** từ `xandrosworld/CDT/main`, trạng thái **SUCCESS**. Browser Railway `mapping-edit-hosted-01` đạt **35 mục / 50 ảnh**, có kiểm tra mở đúng ô ghép mã có thể thao tác, đóng toàn màn hình và tab khả năng xuất đơn 04/09. Đã xem ảnh `invoice-mapping-fullscreen.png`; không JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi xem trước.
+- Snapshot `mapping-edit-after` lấy sau browser, so với `mapping-edit-before`: **80/80 bảng nguyên nội dung và schema**, hai DB toàn vẹn `ok` (`full-preservation.json`). Thử lưu mã/quy đổi chỉ chạy trên fixture riêng; production không bị ghi mapping, đổi đơn, ghi kho, thanh toán hoặc phát hành hóa đơn trong lượt này. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/mapping-edit-*`.
+- Khách đóng hộp thoại/bảng cũ, tải lại trang, mở **Ghép mã / Quy đổi · toàn màn hình**, nhập/chọn mã rồi Enter hoặc **Ghi nhớ**. Hướng dẫn đã cập nhật tại `NGHIEM-THU-RAILWAY.md`.
