@@ -62,6 +62,15 @@ try {
   for(const [index,view] of ['home','orders','purchases','physical','quotes','reports','debts','documents','inventory','msmi','printing','settings'].entries()){
     await click(`[data-view="${view}"]`);await sleep(1100);await wait('!document.querySelector(".loading-panel")');
     if(view==='msmi')await wait('document.querySelector("#invoice-list-count")');
+    if(view==='documents') {
+      await wait('document.querySelector(".invoice-readiness") && !document.querySelector(".invoice-readiness .loading-inline")');
+      assert.equal(await evaluate('!!document.querySelector(".invoice-readiness .error-summary")'),false,'Selected batch readiness must render without a catalog error');
+      const batchId=await evaluate('document.querySelector("#batchSelect").value');
+      const readiness=await api('/api/outgoing-invoices/readiness/'+batchId);
+      assert.equal(readiness.status,200);
+      report.readiness={batch_id:batchId,rows:readiness.data.rows.length};
+      report.checks.push('selected_batch_readiness_visible');
+    }
     await shot(String(index+2).padStart(2,'0')+'-'+view);
     report.controls[view]=await evaluate(`Array.from(document.querySelectorAll('#content button,#content input,#content select,#content a')).filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,action:e.dataset.action||'',label:(e.textContent||e.getAttribute('aria-label')||e.getAttribute('placeholder')||e.name||'').trim().slice(0,120),disabled:e.disabled||false}))`);
     for(const width of [1680,1366,1024]) {

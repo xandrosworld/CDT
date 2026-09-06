@@ -154,6 +154,23 @@ class DailyWorkbookImportTests(unittest.TestCase):
         workbook.close()
         return stream.getvalue()
 
+    def test_new_product_keeps_vietnamese_unit_and_reports_missing_catalog(self):
+        workbook = load_workbook(io.BytesIO(self.workbook_bytes()))
+        sheet = workbook['01.09']
+        sheet.cell(3, 4, 'NEW-CAN')
+        sheet.cell(3, 5, 'New canned product')
+        sheet.cell(3, 7, 'Can')
+        path = Path(self.temp.name) / 'new-product.xlsx'
+        workbook.save(path)
+        workbook.close()
+        rows, _ = server.parse_workbook(path, '2026-09-01', selected_sheets=['01.09'])
+        row = rows[0]
+        self.assertEqual((row['product_code'], row['unit'], row['qty']), ('NEW-CAN', 'Can', 2))
+        self.assertIn('Mã hàng chưa có trong danh mục: NEW-CAN', row['errors'])
+        with server.db() as conn:
+            empty_unit = server.resolve_order(conn, {**row, 'unit': ''}, '2026-09-01', *server.product_lookup(conn))
+        self.assertIn('Thiếu đơn vị tính', empty_unit['errors'])
+
     def analyze_api(self, payload: bytes, filename="orders.xlsx") -> dict:
         response = self.client.post(
             "/api/import/analyze",

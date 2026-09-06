@@ -1071,7 +1071,8 @@ HEADER_ALIASES = {
 
 
 def canonical_header(value):
-    key = slug(value)
+    # Vietnamese Đ is not decomposed by Unicode NFD (ĐVT otherwise becomes vt).
+    key = slug(clean_text(value).replace("Đ", "D").replace("đ", "d"))
     for field, aliases in HEADER_ALIASES.items():
         if key in {slug(x) for x in aliases}:
             return field
@@ -1273,6 +1274,10 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
         errors.append("Chưa xác định nhà thầu")
     if not code:
         errors.append("Chưa tìm thấy mã hàng")
+    elif not product:
+        errors.append(f"Mã hàng chưa có trong danh mục: {code}")
+    if not unit:
+        errors.append("Thiếu đơn vị tính")
     if not name:
         errors.append("Thiếu tên hàng")
     if qty <= 0:
