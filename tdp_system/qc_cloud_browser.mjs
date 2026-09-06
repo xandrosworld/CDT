@@ -102,12 +102,13 @@ try {
   await wait('document.querySelector("#buyerProfileForm input[name=tax_code]")');
   report.checks.push('buyer_profile_editor_without_creating_invoice');
   report.checks.push('independent_payment_period','desktop_horizontal_menu','responsive_1024_390');
+  assert.deepEqual(await evaluate('window.__qaWrites'),[],'Opening/closing views must not request edits');
+  report.checks.push('no_edit_requests_from_read_only_views');
   const logout=await evaluate('fetch("/logout",{method:"POST"}).then(r=>({status:r.status,url:r.url}))');
   assert.equal(logout.status,200); assert.ok(logout.url.endsWith('/login'));
   assert.equal((await api('/api/bootstrap')).status,401);
   report.checks.push('logout_blocks_data_again');
   assert.deepEqual(report.errors,[]);
-  assert.deepEqual(await evaluate('window.__qaWrites'),[],'Opening/closing views must not request edits');
   report.ok=true;
 }catch(error){report.ok=false;report.failure=error.message;process.exitCode=1;}
 finally{
