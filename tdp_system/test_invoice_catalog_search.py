@@ -79,6 +79,7 @@ class InvoiceCatalogSearchTests(unittest.TestCase):
         const document={activeElement:null,getElementById:()=>list};
         const api=()=>new Promise((resolve,reject)=>pending.push({resolve,reject}));
         const esc=String,showToast=e=>errors.push(e);
+        const showMsmiProductOptions=()=>{};
         eval(functionSource);
         const input={value:'old',dataset:{},isConnected:true};document.activeElement=input;
         (async()=>{

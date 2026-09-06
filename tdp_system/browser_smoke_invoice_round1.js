@@ -67,7 +67,34 @@ async function main() {
     assert.equal(await evaluate(`document.getElementById('${mappingId}').value`),'');
     await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
     await call('Input.insertText',{text:'Hàng kiểm thử kg'});
-    await wait(`!!document.querySelector('#msmiProductOptions option[value="R1-KG"]')`);
+    await wait(`!!document.querySelector('#msmiProductOptions [data-product-code="R1-KG"]')`);
+    // Choose the visible suggestions using real keyboard events.
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowDown',code:'ArrowDown',windowsVirtualKeyCode:40});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowDown',code:'ArrowDown',windowsVirtualKeyCode:40});
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+    assert.equal(await evaluate(`document.getElementById('${mappingId}').value`),'R1-KG');
+    for(const width of [1440,1024]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
+      await evaluate(`(()=>{const e=document.getElementById('${mappingId}');e.scrollIntoView({block:'center',inline:'center'});e.focus();e.select();})()`);
+      await call('Input.insertText',{text:'Hàng kiểm thử kg'});
+      await wait(`!!document.querySelector('#msmiProductOptions [data-product-code="R1-KG"]')`);
+      assert.ok(await evaluate(`(()=>{const e=document.getElementById('msmiProductOptions');const r=e.getBoundingClientRect();return !e.hidden && r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;})()`));
+      const searchPicture=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      fs.writeFileSync('D:/TDP_ROUND1/catalog-search-'+width+'.png',Buffer.from(searchPicture.data,'base64'));
+      const point=await evaluate(`(()=>{const r=document.querySelector('#msmiProductOptions [data-product-code="R1-KG"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+      await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
+      await call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+      assert.equal(await evaluate(`document.getElementById('${mappingId}').value`),'R1-KG');
+      assert.equal(await evaluate(`document.getElementById('msmiProductOptions').hidden`),true);
+    }
+    await evaluate(`document.getElementById('${mappingId}').select()`);
+    await call('Input.insertText',{text:'NO-SUCH-PRODUCT-XYZ-987654321'});
+    await wait(`!document.getElementById('msmiProductOptions').hidden && document.getElementById('msmiProductOptions').textContent.includes('Không tìm thấy')`);
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    assert.equal(await evaluate(`document.getElementById('msmiProductOptions').hidden`),true);
+    assert.ok(await evaluate(`!!document.querySelector('.invoice-mapping-fullscreen-bar')`));
     assert.equal((await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.lines.find(line=>line.id===fixture.line_b).product_code,'');
     await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
     await call('Input.insertText',{text:'NO-SUCH-CODE'});
@@ -80,7 +107,7 @@ async function main() {
     // Search by code outside the exact-name candidates, then Enter saves it.
     await evaluate(`document.getElementById('${mappingId}').focus();document.getElementById('${mappingId}').select()`);
     await call('Input.insertText',{text:'R1-KG'});
-    await wait(`!!document.querySelector('#msmiProductOptions option[value="R1-KG"]')`);
+    await wait(`!!document.querySelector('#msmiProductOptions [data-product-code="R1-KG"]')`);
     // A differing unit still needs an explicit positive factor.
     await evaluate(`document.getElementById('${mappingId}').value='R1-KG';document.getElementById('${mappingId}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`);
     await wait(`!document.getElementById('${mappingId}')`);
@@ -249,6 +276,9 @@ async function main() {
     await call('Emulation.clearDeviceMetricsOverride');
     assert.deepEqual(errors,[]);
     console.log('PASS: complete range (266 synthetic invoices / 285 rows), filters, global error order, sticky scroll, invalid code, Enter mapping/conversion, confirmation cancel/accept, exact stock trace, duplicate safety, outgoing post, monthly close/reopen/reclose and carryforward quantities/values. Synthetic isolated DB only.');
+  } catch(error) {
+    fs.writeFileSync('D:/TDP_ROUND1/failure.json',JSON.stringify({error:String(error),errors,dom:await evaluate(`({active:document.activeElement?.outerHTML,list:document.getElementById('msmiProductOptions')?.outerHTML,toast:document.getElementById('toast')?.textContent})`)},null,2));
+    throw error;
   } finally {ws.close();}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

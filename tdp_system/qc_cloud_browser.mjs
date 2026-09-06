@@ -87,8 +87,8 @@ try {
         for(const term of ['Chả lụa','F000009']) {
           await evaluate(`(()=>{const e=document.getElementById('${editorId}');e.scrollIntoView({block:'center',inline:'center'});e.focus();e.select();})()`);
           await call('Input.insertText',{text:term});
-          await wait(`!!document.querySelector('#msmiProductOptions option[value="F000009"]')`);
-          const labels=await evaluate(`Array.from(document.querySelectorAll('#msmiProductOptions option')).map(o=>({code:o.value,label:o.label}))`);
+          await wait(`!!document.querySelector('#msmiProductOptions [data-product-code="F000009"]')`);
+          const labels=await evaluate(`Array.from(document.querySelectorAll('#msmiProductOptions [data-product-code]')).map(o=>({code:o.dataset.productCode,label:o.textContent}))`);
           assert.ok(labels.find(p=>p.code==='F000009').label.includes('Chả lụa heo'));
           report.catalog_search.push({term,items:labels});
         }

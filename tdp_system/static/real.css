@@ -663,3 +663,9 @@ body { min-width: 320px; }
 .invoice-lines-card .invoice-mapping-cell > .compact-controls { flex-wrap: nowrap; }
 .invoice-lines-card .invoice-mapping-cell > .compact-controls .invoice-mapping-input { flex: 1 1 0; width: 0; }
 .invoice-lines-card .invoice-mapping-cell > .compact-controls .btn { flex: 0 0 auto; padding: 6px 8px; }
+.invoice-product-options { position: fixed; z-index: 120; overflow: auto; background: #fff; color: #172b3a; border: 1px solid #8b9daa; border-radius: 4px; box-shadow: 0 4px 12px #0002; }
+.invoice-product-options[hidden] { display: none; }
+.invoice-product-options [role="option"] { display: block; width: 100%; padding: 10px 12px; border: 0; border-bottom: 1px solid #dfe5e8; background: #fff; color: #172b3a; text-align: left; white-space: normal; font: inherit; cursor: pointer; }
+.invoice-product-options [role="option"]:hover, .invoice-product-options [aria-selected="true"] { background: #e5f0f4; }
+.invoice-product-hint { padding: 8px 12px; font-size: 12px; line-height: 1.4; }
+@media print { .invoice-product-options { display: none; } }

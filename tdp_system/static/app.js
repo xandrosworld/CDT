@@ -188,6 +188,44 @@
   var toastTimer;
   var msmiProductSearchTimer;
   var msmiProductSearchVersion = 0;
+  var msmiProductSearchInput = null;
+
+  function closeMsmiProductOptions() {
+    clearTimeout(msmiProductSearchTimer);
+    ++msmiProductSearchVersion;
+    var list = document.getElementById("msmiProductOptions");
+    if (list) { list.hidden = true; list.innerHTML = ""; }
+    if (msmiProductSearchInput) {
+      msmiProductSearchInput.setAttribute("aria-expanded", "false");
+      msmiProductSearchInput.removeAttribute("aria-activedescendant");
+    }
+    msmiProductSearchInput = null;
+  }
+
+  function showMsmiProductOptions(input, list) {
+    msmiProductSearchInput = input;
+    input.removeAttribute("aria-activedescendant");
+    var box = input.getBoundingClientRect();
+    var below = innerHeight - box.bottom - 12, above = box.top - 12;
+    var height = Math.min(300, Math.max(below, above));
+    var width = Math.min(480, innerWidth - 24);
+    list.style.width = width + "px";
+    list.style.maxHeight = height + "px";
+    list.style.left = Math.max(12, Math.min(box.left, innerWidth - width - 12)) + "px";
+    list.style.top = below >= Math.min(300, above) ? (box.bottom + 4) + "px" : "auto";
+    list.style.bottom = list.style.top === "auto" ? (innerHeight - box.top + 4) + "px" : "auto";
+    list.hidden = false;
+    list.scrollTop = 0;
+    input.setAttribute("aria-expanded", "true");
+  }
+
+  function chooseMsmiProductOption(option) {
+    var input = msmiProductSearchInput;
+    if (!input || !input.isConnected) return;
+    input.value = option.dataset.productCode;
+    closeMsmiProductOptions();
+    // Choosing a suggestion only fills the editor; Enter/Ghi nhớ saves explicitly.
+  }
 
   function esc(value) {
     return String(value == null ? "" : value)
@@ -2878,12 +2916,15 @@
     try {
       var result = await api("/api/products/search?q=" + encodeURIComponent(term));
       if (!currentSearch()) return;
-      productList.innerHTML = (result.items || []).map(function (product) {
+      productList.innerHTML = (result.items || []).map(function (product, index) {
         var label = product.code + " · " + product.name;
         if (product.unit) label += " · " + product.unit;
         if (product.invoice_name && product.invoice_name !== product.name) label += " · Tên trên hóa đơn: " + product.invoice_name;
-        return '<option value="' + esc(product.code) + '" label="' + esc(label) + '"></option>';
+        return '<button type="button" tabindex="-1" role="option" aria-selected="false" id="invoice-product-option-' + index + '" data-product-code="' + esc(product.code) + '">' + esc(label) + '</button>';
       }).join("");
+      if (!(result.items || []).length) productList.innerHTML = '<div class="invoice-product-hint">Không tìm thấy mã. Hãy thử tên hoặc mã khác.</div>';
+      else productList.innerHTML += '<div class="invoice-product-hint">Chọn mã bằng chuột hoặc ↑ ↓ rồi Enter. Sau đó Enter/Ghi nhớ để lưu. Tìm cụ thể hơn nếu chưa thấy mã cần chọn.</div>';
+      showMsmiProductOptions(input, productList);
     } catch (error) {
       if (currentSearch()) showToast(error.message, true);
     }
@@ -5596,9 +5637,28 @@
   content.addEventListener("focusin", function (event) {
     var input = event.target.closest(".invoice-mapping-input");
     if (input) {
-      clearTimeout(msmiProductSearchTimer);
+      closeMsmiProductOptions();
       loadMsmiProductOptions(input);
     }
+  });
+
+  content.addEventListener("pointerdown", function (event) {
+    if (event.target.closest('#msmiProductOptions [data-product-code]')) event.preventDefault();
+  });
+  content.addEventListener("focusout", function (event) {
+    if (event.target.closest('.invoice-mapping-input')) closeMsmiProductOptions();
+  });
+  content.addEventListener("click", function (event) {
+    var option = event.target.closest('#msmiProductOptions [data-product-code]');
+    if (option) chooseMsmiProductOption(option);
+  });
+  document.addEventListener("scroll", function (event) {
+    var list = document.getElementById("msmiProductOptions");
+    if (list && !list.hidden && !list.contains(event.target)) closeMsmiProductOptions();
+  }, true);
+  window.addEventListener("resize", function () {
+    var list = document.getElementById("msmiProductOptions");
+    if (list && !list.hidden) closeMsmiProductOptions();
   });
 
   content.addEventListener("input", function (event) {
@@ -5620,10 +5680,7 @@
     }
     var input = event.target.closest(".invoice-mapping-input");
     if (!input) return;
-    clearTimeout(msmiProductSearchTimer);
-    ++msmiProductSearchVersion;
-    var productList = document.getElementById("msmiProductOptions");
-    if (productList) productList.innerHTML = "";
+    closeMsmiProductOptions();
     msmiProductSearchTimer = setTimeout(function () { loadMsmiProductOptions(input); }, 220);
   });
 
@@ -5656,6 +5713,28 @@
       return;
     }
     var input = event.target.closest(".invoice-mapping-input");
+    if (input && !event.isComposing) {
+      var list = document.getElementById("msmiProductOptions");
+      if (list && !list.hidden && msmiProductSearchInput === input) {
+        var options = Array.from(list.querySelectorAll('[data-product-code]'));
+        var selected = list.querySelector('[aria-selected="true"]');
+        if (event.key === "Escape") {
+          event.preventDefault(); event.stopPropagation(); closeMsmiProductOptions(); return;
+        }
+        if ((event.key === "ArrowDown" || event.key === "ArrowUp") && options.length) {
+          event.preventDefault();
+          var index = selected ? options.indexOf(selected) + (event.key === "ArrowDown" ? 1 : -1) : (event.key === "ArrowDown" ? 0 : options.length - 1);
+          index = (index + options.length) % options.length;
+          options.forEach(function (option, i) { option.setAttribute("aria-selected", i === index ? "true" : "false"); });
+          input.setAttribute("aria-activedescendant", options[index].id);
+          options[index].scrollIntoView({block:"nearest"}); return;
+        }
+        if (event.key === "Enter" && selected) {
+          event.preventDefault(); chooseMsmiProductOption(selected); return;
+        }
+      }
+    }
+    if (event.isComposing) return;
     if (!input || event.key !== "Enter") return;
     event.preventDefault();
     var direction = input.dataset.direction || state.invoiceDirection;
@@ -6610,6 +6689,7 @@
   var invoiceMappingFullscreen = false;
   var invoiceMappingPreviousOverflow = '';
   function closeInvoiceMappingFullscreen() {
+    closeMsmiProductOptions();
     invoiceMappingFullscreen = false;
     content.classList.remove('invoice-mapping-fullscreen');
     document.body.style.overflow = invoiceMappingPreviousOverflow;
