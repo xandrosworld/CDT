@@ -2778,7 +2778,7 @@
       openingImportPreviewHtml(), bkImportPreviewHtml(), bkDocumentsHtml(),
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Chi tiết Nhập – Xuất – Tồn</h3><p>',
       dateVN(state.inventoryFrom), ' → ', dateVN(state.inventoryTo), '</p></div></div>',
-      '<div class="table-wrap invoice-lines-scroll"><table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>Đơn vị</th><th>Tồn đầu kỳ</th><th>Giá trị đầu kỳ</th><th>Số nhập</th><th>Giá trị nhập</th><th>Số xuất</th><th>Giá trị xuất</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th><th>Giá bình quân</th><th>Đối chiếu</th></tr></thead><tbody>',
+      '<div class="table-wrap invoice-lines-scroll inventory-nxt-scroll"><table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>Đơn vị</th><th>Tồn đầu kỳ</th><th>Giá trị đầu kỳ</th><th>Số nhập</th><th>Giá trị nhập</th><th>Số xuất</th><th>Giá trị xuất</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th><th>Giá bình quân</th><th>Đối chiếu</th></tr></thead><tbody>',
       rows || '<tr><td colspan="14"><div class="empty">Kỳ này chưa có tồn đầu hoặc phát sinh đã ghi sổ.</div></td></tr>',
       '</tbody><tfoot><tr class="table-total-row"><td colspan="4">TỔNG</td><td class="num-cell">',
       esc(stockQuantitySummary(items, "opening_qty")), '</td><td class="num-cell">', stockMoney(totals.opening_value),
@@ -3563,7 +3563,7 @@
       closeModal();
       var automaticallyApproved = false;
       var approvalWarning = "";
-      if (useAsLatest && imported.finalized && imported.batch.status !== "approved" &&
+      if (!pending.continuous && useAsLatest && imported.finalized && imported.batch.status !== "approved" &&
           n(imported.summary && imported.summary.totals && imported.summary.totals.errors) === 0) {
         try {
           imported = await api("/api/batches/" + imported.batch.id + "/approve", { method: "POST" });
@@ -3586,6 +3586,7 @@
           : "Đã nhập " + imported.orders.length + " dòng · " + imported.summary.totals.errors +
             " lỗi · " + (imported.summary.totals.warnings || 0) + " cảnh báo";
       showToast(message, Boolean(approvalWarning));
+      if (pending.continuous) openOrderWorksheet();
       return true;
     } catch (error) {
       state.busy = false;
@@ -3601,9 +3602,21 @@
     try {
       var form = new FormData();
       form.append("file", file);
+      form.append("continuous", "1");
       var payload = await api("/api/import/analyze", { method: "POST", body: form });
+      payload.continuous = true;
       state.busy = false;
       render();
+      if (payload.strictDaily && payload.phase !== "finalization") {
+        var initialSheets = (payload.sheets || []).filter(function (sheet) {
+          return sheet.scope === "customer_orders" && sheet.confirmAvailable;
+        });
+        if (initialSheets.length === 1 && payload.detectedWorkDate) {
+          state.pendingImport = payload;
+          await applyPendingOrderImport([initialSheets[0].name], payload.detectedWorkDate, false);
+          return;
+        }
+      }
       if (payload.strictDaily && payload.phase === "finalization") {
         var scopedSheets = (payload.sheets || []).filter(function (sheet) {
           return sheet.scope === "customer_orders" || sheet.scope === "purchase_orders";
@@ -6535,5 +6548,85 @@
     enhanceLocalizedDateInputs(document);
   }).observe(document.body, { childList: true, subtree: true });
 
+  function openOrderWorksheet() {
+    if (!window.TDPWorksheet || !state.data || !state.data.batch) return;
+    var editable = state.data.batch.status !== 'approved';
+    var definitions = [
+      ['kitchen','Bếp',120], ['product_code','Mã hàng',120], ['product_name','Tên hàng',230],
+      ['qty','SL đặt',95,1], ['unit','ĐVT',70], ['supplier','NCC',110],
+      ['actual_received','SL nhận',100,1], ['damaged_qty','Hỏng',90,1], ['supplier_return_qty','Trả NCC',95,1],
+      ['actual_delivered','SL giao',100,1], ['customer_return_qty','Khách trả',100,1],
+      ['buy_price','Giá mua',110,1,1], ['sell_price','Giá bán',110,1,1], ['tax','Thuế',85],
+      ['invoice_nature','Tính chất (1/2)',115], ['note','Ghi chú',220],
+      ['cost','Tiền mua',130,1,1,1], ['revenue','Tiền bán',130,1,1,1],
+      ['errors','Lỗi cần sửa',320,0,0,1], ['warnings','Cảnh báo',280,0,0,1]
+    ];
+    window.TDPWorksheet.open({ title: 'Đơn ngày ' + dateVN(state.data.batch.work_date),
+      batchId: state.data.batch.id, editable: editable,
+      rows: state.data.orders.slice().sort(function(a,b) { return Number(!!b.errors.length) - Number(!!a.errors.length) || a.id-b.id; }),
+      columns: definitions.map(function(d) { return { key:d[0], title:d[1], width:d[2], numeric:!!d[3], money:!!d[4], editable:!d[5] }; }),
+      onSaved: function(payload) { state.data.batch=payload.batch; state.data.orders=payload.orders; state.data.summary=payload.summary; },
+      onClose: function() { loadData(state.batchId, true); },
+      onImport: function() { excelInput.click(); }
+    });
+  }
+
+  function openTableWorksheet(table) {
+    if (!window.TDPWorksheet) return;
+    if (table.closest('.inventory-nxt-scroll') && state.inventoryValuation) {
+      var nxtFields=[['product_code','Mã hàng',120],['product_name','Tên hàng',230],['unit','ĐVT',70],
+        ['opening_qty','Tồn đầu',105,1],['opening_value','Giá trị đầu',130,1,1],
+        ['input_qty','Nhập',105,1],['input_value','Giá trị nhập',130,1,1],
+        ['output_qty','Xuất',105,1],['output_value','Giá trị xuất',130,1,1],
+        ['closing_qty','Tồn cuối',105,1],['closing_value','Giá trị tồn',130,1,1],
+        ['average_unit_cost','Giá bình quân',135,1,1],['valuation_status','Đối chiếu',170]];
+      window.TDPWorksheet.open({title:'Nhập – xuất – tồn · '+dateVN(state.inventoryFrom)+' → '+dateVN(state.inventoryTo),editable:false,
+        rows:(state.inventoryValuation.items||[]).map(function(row){return Object.assign({},row,{valuation_status:row.valuation_status==='ok'?'Khớp':'Cần kiểm tra'});}),columns:nxtFields.map(function(d){return {key:d[0],title:d[1],width:d[2],numeric:!!d[3],money:!!d[4]};})});
+      return;
+    }
+    // Expand merged cells into sheet coordinates, including multi-level headers.
+    var matrix=[], maxColumns=0;
+    Array.from(table.rows).filter(function(row) { return !row.hidden && getComputedStyle(row).display !== 'none'; }).forEach(function(row,r) {
+      matrix[r]=matrix[r]||[]; var c=0;
+      Array.from(row.cells).forEach(function(cell) {
+        while(matrix[r][c] !== undefined) c++;
+        var input=cell.querySelector('input,select');
+        var value=input ? input.value : cell.innerText.trim();
+        matrix[r][c]=value;
+        for(var y=0;y<cell.rowSpan;y++) for(var x=0;x<cell.colSpan;x++) {
+          matrix[r+y]=matrix[r+y]||[];
+          if(y||x) matrix[r+y][c+x]='';
+        }
+        c+=cell.colSpan;
+      });
+      maxColumns=Math.max(maxColumns,c,matrix[r].length);
+    });
+    if(!matrix.length) return;
+    var headings=matrix.shift();
+    var title=document.getElementById('pageTitle');
+    window.TDPWorksheet.open({ title:((table.caption && table.caption.innerText) || (title && title.innerText) || 'Bảng dữ liệu')+' · phần đang hiển thị', editable:false,
+      columns:Array.from({length:maxColumns},function(_,c) { return { key:'c'+c,title:headings[c]||String.fromCharCode(65+c),width:c===1?230:150 }; }),
+      rows:matrix.map(function(row) { var obj={}; row.forEach(function(value,c) { obj['c'+c]=value; }); return obj; }) });
+  }
+
+  var sheetEnhanceTimer;
+  function addWorksheetButtons() {
+    content.querySelectorAll('table').forEach(function(table) {
+      if(table.dataset.worksheetReady) return;
+      table.dataset.worksheetReady='1';
+      var wrap=table.closest('.table-wrap,.invoice-lines-scroll')||table;
+      var button=document.createElement('button'); button.type='button'; button.className='tdp-open-sheet';
+      var isOrders=Boolean(table.closest('#orderTable'));
+      button.textContent=isOrders?'Mở bảng Excel · tự lưu':'Mở bảng Excel toàn màn hình';
+      button.onclick=function(){if(isOrders) openOrderWorksheet(); else openTableWorksheet(table);};
+      wrap.parentNode.insertBefore(button,wrap);
+    });
+  }
+  new MutationObserver(function() { clearTimeout(sheetEnhanceTimer); sheetEnhanceTimer=setTimeout(addWorksheetButtons,50); })
+    .observe(content,{childList:true,subtree:true});
+  content.addEventListener('click',function(event) {
+    var button=event.target.closest('[data-action="bulk-edit-orders"]');
+    if(button && window.TDPWorksheet) {event.preventDefault();event.stopImmediatePropagation();openOrderWorksheet();}
+  },true);
   loadData(null);
 })();

@@ -1,3 +1,10 @@
+FROM node:22-bookworm-slim AS worksheet
+WORKDIR /build
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./frontend/
+RUN npm run build:worksheet
+
 FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TZ=Asia/Ho_Chi_Minh
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -7,5 +14,6 @@ WORKDIR /app
 COPY requirements-web.txt /app/requirements-web.txt
 RUN pip install --no-cache-dir -r requirements-web.txt
 COPY tdp_system/ /app/tdp_system/
+COPY --from=worksheet /build/tdp_system/static/worksheet-bundle/ /app/tdp_system/static/worksheet-bundle/
 COPY demo_tdp/styles.css /app/demo_tdp/styles.css
 CMD ["python", "-m", "tdp_system.cloud_server"]

@@ -215,6 +215,9 @@ body { min-width: 320px; }
 .invoice-lines-card .invoice-lines-scroll tbody td:first-child { position:sticky; left:0; z-index:1; }
 .invoice-lines-card .invoice-lines-scroll thead th:first-child { left:0; z-index:4; }
 .invoice-lines-scroll tfoot td { position:sticky; bottom:0; z-index:2; background:#f2f4f6; }
+.inventory-nxt-scroll tfoot td { position:static; }
+.inventory-nxt-scroll tbody td.num-cell { white-space:nowrap; overflow-wrap:normal; }
+.inventory-nxt-scroll tbody td:first-child { min-width:48px; }
 .invoice-lines-scroll thead th { position:sticky; top:0; z-index:3; background:#f2f4f6; color:#172b3a; box-shadow:0 1px #9aabb8; }
 .invoice-lines-scroll td,.invoice-lines-scroll th { padding:10px; border-right:1px solid #d1d8dd; border-bottom:1px solid #d1d8dd; vertical-align:middle; }
 .invoice-lines-scroll td { background:#fff; min-width:65px; max-width:340px; white-space:normal; overflow-wrap:anywhere; }

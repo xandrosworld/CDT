@@ -64,6 +64,8 @@ MO_DEMO_TDP.bat
 Thumbs.db
 .vscode/
 .idea/
+node_modules/
+tdp_system/static/worksheet-bundle/
 
 # Local delivery copies, customer evidence and scratch work
 /BAN_GIAO_TDP_*/

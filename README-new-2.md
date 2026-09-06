@@ -1,5 +1,14 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Nhập đơn nhiều lần trong ngày và bảng Excel trên web — 06/09/2026:**
+> đã triển khai source và kiểm thử, đang đưa lên Railway. File đầu được lưu nháp
+> dù còn thiếu; file mới hợp lệ cùng ngày/phạm vi cập nhật bản đang dùng, có lịch sử.
+> Bảng đơn sửa ô/dán nhiều ô và tự lưu. Phạm vi và bằng chứng tại **13.19**.
+
+> **Đổi domain 06/09/2026:** địa chỉ hiện tại là https://tdp.up.railway.app/login.
+> Đã xử lý lỗi tên máy không nằm trong danh sách tin cậy và kiểm tra đăng nhập,
+> mở màn hình, tải phiếu giao trên domain mới. Xem **13.18**; đây chưa phải nghiệm thu toàn bộ quy trình.
+
 > **Quyết định mới của chủ dự án:** lưu mốc source lên `xandrosworld/CDT`, sau đó
 > chuyển sang web Railway cho khách, không tiếp tục bàn giao EXE như trước.
 > Mốc Git này chưa phải bản đã triển khai/nghiệm thu Railway. Xem **13.12**.
@@ -226,6 +235,7 @@ Kết quả rà và sửa riêng 3.1–3.2 ngày 05/09/2026 (source, chưa build
 - Hiện tổng số dòng, tổng lượng và tổng tiền theo bộ lọc.
 - File hợp lệ tải sau cùng của cùng ngày là bản đang sử dụng.
 - Khi nạp lại phải nói rõ dữ liệu nào được thay, dữ liệu nào được giữ.
+- Có thể nạp bản thiếu từ tối hôm trước/đầu ngày, rồi nạp nhiều bản hoàn thiện trong ngày. Ngày nghiệp vụ lấy từ file/phạm vi đã xác định, không lấy ngày upload thay thế. Bản sau hợp lệ ưu tiên dữ liệu của file, kể cả ô từng sửa trên web; giữ lịch sử bản trước. Nạp file không tự duyệt đơn hoặc chốt giao hàng. Xem 13.19.
 
 ### 4.2. Đặt hàng nhà cung cấp
 
@@ -856,3 +866,22 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Kiểm thử mục tiêu và các nhóm chịu ảnh hưởng đạt **87/87**. Lượt hồi quy rộng trước đó chạy 552 test, có 547 đạt và 5 lỗi chỉ do test giao diện khóa phiên bản cache JS cũ; đã cập nhật đúng kỳ vọng và chạy lại toàn bộ nhóm chịu ảnh hưởng đạt. Browser fixture của lượt hóa đơn đạt; kiểm tra cú pháp Python/JavaScript và `git diff --check` đều đạt.
 - Source đã đẩy lên `xandrosworld/CDT`, nhánh `main`, commit `48a974a51b2aaf3d10f073ba7f92560605e35842`. Railway deployment `dc63c861-37a9-45e5-b66a-e2be2931e379` trạng thái `SUCCESS`; `/health` báo database/schema sẵn sàng và `integrity=ok`. Bằng chứng xem trước hosted: `D:\TDP_RAILWAY_PRIVATE\evidence\mapping-hosted-01\summary.json`; bằng chứng bản sao: `legacy-route-realdata-01`, `safe-mapping-realdata-02` trong cùng thư mục evidence.
 - Hướng dẫn thao tác và cách đọc phần bỏ qua đã cập nhật tại [NGHIEM-THU-RAILWAY.md](NGHIEM-THU-RAILWAY.md). Bước vận hành tiếp theo là người dùng xem bảng kết quả và chủ động xác nhận hai lượt ghép mã; sau đó xử lý 163 dòng còn lại trước khi ghi kho. Lượt này không ký/phát hành hóa đơn, không ghi nhận thanh toán và không thay đổi dữ liệu nghiệp vụ production.
+
+### 13.18. Khôi phục truy cập sau đổi domain Railway — 06/09/2026
+
+- Chủ dự án đổi Public Networking sang `tdp.up.railway.app`; `/login` trả 403 với thông báo tên máy không nằm trong danh sách tin cậy. Biến `TDP_TRUSTED_HOSTS` vẫn chứa domain cũ. Đã cập nhật đúng hostname mới và triển khai lại, giữ cơ chế kiểm tra host và nguồn yêu cầu.
+- Deployment cấu hình `6623feca-a03a-404a-abe2-82069db0017c` đạt `SUCCESS`, source vẫn `a5744caecfb0163cc21554a2a243fce733f61d86`. `/login` trả 200, `/health` xác nhận DB/schema sẵn sàng và `integrity=ok`.
+- Chrome đăng nhập thành công ở domain mới, mở 12 màn, đăng xuất rồi kiểm tra API lại bị chặn đúng. Bộ kiểm tra hosted đạt 20 mục, 15 ảnh, không có JavaScript exception; phiếu giao xem trước và tải Excel/PDF đều trả 200, bố cục 1024/390px đạt. Hai API trạng thái mSMI/M-Invoice đều trả 200 trong lượt này; lỗi kết nối mSMI 502 ở lượt kiểm tra trước không tái hiện, chưa đủ căn cứ quy nguyên nhân lỗi đó cho việc đổi domain.
+- Đầu vào tháng 8 vẫn 266 hóa đơn, tổng 919.234.874 đồng, 1.104 dòng cần xử lý và 0 đã ghi kho. Đầu ra hiện có 251 hóa đơn nguồn, gồm 232 cần kiểm tra, 18 cần ghép mã và 1 không nhập tồn; không dùng đăng nhập thành công để kết luận đã khớp kho hoặc nghiệm thu toàn bộ nghiệp vụ.
+- Bằng chứng: `D:\TDP_RAILWAY_PRIVATE\evidence\domain-change-20260906\browser-result.json` cùng ảnh và phiếu giao tải về. Đã cập nhật link trong hướng dẫn nghiệm thu. Lượt sửa domain không nhập đơn, ghi mapping, ghi kho, thu/trả tiền hoặc ký/phát hành hóa đơn; đợt thử quy trình bằng ba file khách mới vẫn đang thực hiện trên DB sao chép.
+
+### 13.19. Nhập đơn liên tục và bảng Excel toàn màn hình — 06/09/2026
+
+- Chủ dự án chốt: file gửi sau là bản hoàn thiện hơn của cùng ngày/phạm vi. Bản đầu còn thiếu được nhận thành nháp và hiện lỗi; bản sau hợp lệ tự cập nhật, không tạo thêm đơn hoặc tự duyệt/chốt giao. File sai hoặc vướng liên kết chứng từ vẫn bị chặn, giữ bản đang dùng. Ngày/sheet khác không bị thay; file giống hệt không tạo giao dịch lặp.
+- Workbook khách có chế độ nhập liên tục, không khóa ngày ngay sau lần nạp thứ hai. Đã thử bản đầu thiếu rồi ba lần sửa: cùng phiên đơn, lượng 4 → 7 → 9, trạng thái nháp; NCC và ghi chú sửa trên web được thay theo file mới. Lưu đầy đủ dòng trước khi thay, tên file và trạng thái mua trước đó để đối chiếu. Giữ phạm vi mua riêng của sheet đặt hàng và các khóa chứng từ.
+- Nhúng Univer 0.25.1 trong ứng dụng. Nút Sửa nhanh cả bảng/Mở bảng Excel mở hết vùng trình duyệt, có X quay lại. Cho chọn ô, Enter/Tab, dán nhiều ô, kéo cột, tìm, nhảy đến lỗi; cố định tiêu đề và hai cột nhận diện. Ô tính tiền/lỗi chỉ xem. Sửa giá bán vẫn cần người sửa/lý do và lịch sử giá.
+- Tự lưu theo lần sửa, nhiều ô lưu nguyên tử; kiểm tra phiên từng dòng và mã chống gửi lặp. Mất mạng giữ phần đang nhập. Sửa tiếp trong lúc phản hồi chậm được giữ lại. Đọc thay đổi của người khác mỗi 5 giây khi bảng rảnh; xung đột cùng dòng thì dừng lưu. Nút Đọc lại/đối chiếu cho tải phần chưa lưu trước khi chủ động bỏ bản đang sửa. X không âm thầm làm mất phần chưa lưu.
+- Bảng nhập–xuất–tồn dùng đầy đủ danh sách API định giá với ô số/tiền. Các bảng HTML khác có bản chỉ xem toàn màn hình của **phần đang hiển thị**, gồm giới hạn phân trang đang chọn. Đây chưa phải trình sửa mọi loại chứng từ; ghép mã, ghi kho, thanh toán, duyệt/chốt vẫn dùng thao tác chuyên biệt. Bản xem này không thay mẫu in/Excel/PDF.
+- Hồi quy rộng: 76 module, 573 lượt test, 568 đạt và 5 thất bại chỉ vì khóa phiên bản cache JS cũ. Đổi đúng kỳ vọng và chạy lại 5 nhóm: 34/34 đạt. Sau hoàn thiện ưu tiên dữ liệu file/trạng thái giá, chạy lại 14 test nhập workbook đạt. Nhóm cuối về sửa bảng/kho thực tế/giá đạt 39 lượt test. Không cộng lượt chạy lặp thành số bài độc lập.
+- Browser trên DB riêng 65 dòng: sửa ô, dán hai dòng, phản hồi chậm, mất mạng/X/thử lại, người khác sửa và đồng bộ, xung đột giữ dữ liệu server, đọc lại để đối chiếu, khổ 1440/1024/390 đều đạt, không có JavaScript exception. Bằng chứng `D:\TDP_RAILWAY_PRIVATE\evidence\worksheet-11\result.json` và ảnh; tái chạy bằng `qa_worksheet.py`. Lượt 04–08 phát hiện hộp thoại bảo vệ ô khi cập nhật ô tính toán; đã sửa phản hồi server và chạy lại đạt, giữ bảo vệ ô người dùng.
+- Bản sao trước triển khai: `D:\TDP_RAILWAY_PRIVATE\evidence\worksheet-before-deploy\snapshot.sqlite3`, toàn vẹn đạt. Chưa ghi nhận kết quả hosted của lượt này cho đến khi kiểm tra xong. Các lần ghi đơn kiểm thử dùng DB riêng, không ghi mapping/kho/thanh toán hoặc phát hành hóa đơn trên production.

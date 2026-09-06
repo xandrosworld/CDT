@@ -1,6 +1,10 @@
 **
 !Dockerfile
 !requirements-web.txt
+!package.json
+!package-lock.json
+!frontend/
+!frontend/**
 !tdp_system/
 !tdp_system/*.py
 tdp_system/test_*.py

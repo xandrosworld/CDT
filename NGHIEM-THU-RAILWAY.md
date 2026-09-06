@@ -1,6 +1,8 @@
 # Kiểm tra nghiệm thu trên Railway
 
-Ứng dụng: https://tdp-web-production-5a66.up.railway.app/login
+Ứng dụng: https://tdp.up.railway.app/login
+
+Khi đổi domain Railway, cập nhật `TDP_TRUSTED_HOSTS` thành hostname mới (không kèm `https://` hoặc đường dẫn), triển khai lại rồi kiểm tra đăng nhập. Đổi phần Public Networking riêng lẻ chưa cập nhật cấu hình của tiến trình đang chạy.
 
 Checklist khách hàng: https://docs.google.com/spreadsheets/d/1c1C4Imexri4VRolrNSSmWmSnpmM0hgj0TCCbm9if3D8/edit?gid=1127847104
 
@@ -26,6 +28,15 @@ Các thao tác ghi tiền, ghi kho, chốt kỳ cần dùng bộ dữ liệu th�
 | 12. Phải trả NCC | Kiểm tra bảng 14 cột, xuất file, ghi trả một phần/đủ, hoàn tác; kiểm tra số dư và lịch sử. | Lượt 3; các bài kiểm thử sổ phải trả và phân bổ thanh toán. |
 | 13. Phải thu | Lọc nhà thầu/bếp/tháng, kiểm tra tổng, ghi nhận thu và lịch sử trên bộ thử. | Lượt 3; kiểm thử sổ phải thu và chống ghi trùng. |
 | 14. Lưu và sao lưu | Lưu thay đổi, tải lại trang, kiểm tra trạng thái sao lưu; tải bản sao lưu và kiểm tra khả năng đọc. | Lượt 5; sao lưu SQLite thật trước/sau triển khai đều kiểm tra toàn vẹn đạt. |
+
+## Nạp bản đầu và cập nhật đơn trong ngày
+
+1. Vào **Nhập & sửa đơn**, chọn file đầu ngày hoặc file chuẩn bị tối hôm trước. Hệ thống dùng ngày nghiệp vụ xác định trong file; bản đầu còn thiếu được lưu nháp và hiện lỗi.
+2. Chọn **Nạp bản mới** hoặc **Chọn file đơn hàng khác** để tải bản hoàn thiện của cùng ngày. Bản hợp lệ cập nhật dữ liệu đang dùng, kể cả ô đã sửa trên web. File sai ngày, lỗi bắt buộc hoặc vướng chứng từ sẽ có thông báo và giữ dữ liệu cũ.
+3. Có thể lặp nhiều lần. Nạp cùng file không nhân đôi; nạp mới không tự duyệt/chốt giao. Khi đủ dữ liệu, đóng bảng rồi dùng nút duyệt/chốt tương ứng.
+4. Mở **Sửa nhanh cả bảng** hoặc **Mở bảng Excel · tự lưu**: chọn ô, sửa rồi Enter/Tab; có thể dán nhiều ô. Đợi **Đã lưu**. Sửa giá bán cần người sửa và lý do ở thanh trên.
+5. Mạng lỗi: giữ bảng đang mở, bấm **Thử lưu lại**. Nếu người khác đã sửa cùng dòng, dùng **Đọc lại / đối chiếu** để tải phần chưa lưu rồi mở bản mới nhất. X chỉ đóng sau khi lưu được.
+6. Bảng báo cáo có nút xem toàn màn hình và X quay lại. Đơn hàng và nhập–xuất–tồn lấy toàn bộ dòng trong phạm vi; bảng khác ghi **phần đang hiển thị**, cần chọn bộ lọc/trang ở màn gốc. Ghi kho, thanh toán, duyệt, chốt và in vẫn dùng màn nghiệp vụ.
 
 ## Ghép mã hóa đơn đầu vào tháng 8
 

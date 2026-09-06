@@ -1,0 +1,102 @@
+const fs=require('node:fs');
+const path=require('node:path');
+const assert=require('node:assert/strict');
+const output=process.argv[2];
+(async()=>{
+ const page=await fetch('http://127.0.0.1:19313/json/new?about:blank',{method:'PUT'}).then(r=>r.json());
+ const ws=new WebSocket(page.webSocketDebuggerUrl);
+ await new Promise((yes,no)=>{ws.onopen=yes;ws.onerror=no;});
+ let sequence=0; const pending=new Map(),errors=[];
+ ws.onmessage=event=>{const m=JSON.parse(event.data);if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails);if(pending.has(m.id)){const [yes,no]=pending.get(m.id);pending.delete(m.id);m.error?no(Error(m.error.message)):yes(m.result);}};
+ const call=(method,params={})=>new Promise((yes,no)=>{const id=++sequence;pending.set(id,[yes,no]);ws.send(JSON.stringify({id,method,params}));setTimeout(()=>{if(pending.delete(id))no(Error('CDP timeout '+method));},25000).unref();});
+ const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+ const wait=async expression=>{const until=Date.now()+25000;while(Date.now()<until){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression+' status '+await evaluate("document.querySelector('.tdp-sheet-status')?.textContent"));};
+ const click=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+ const screenshot=async name=>fs.writeFileSync(path.join(output,name+'.png'),Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ const editQty=async value=>{
+   const top=await evaluate(`document.querySelector('canvas[id^="univer-sheet-main"]').getBoundingClientRect().top`);
+   await evaluate(`window.__hit=document.elementFromPoint(555,182)?.outerHTML.slice(0,600)`);
+   await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:550,y:top+61});
+   await call('Input.dispatchMouseEvent',{type:'mousePressed',x:555,y:top+60,button:'left',clickCount:2});
+   await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:555,y:top+60,button:'left',clickCount:2});
+   await new Promise(r=>setTimeout(r,100));
+   await call('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+   await call('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+   await call('Input.insertText',{text:value});
+   await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+   await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+ };
+ try{
+ await call('Runtime.enable');await call('Page.enable');
+ await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+ await call('Page.navigate',{url:'http://127.0.0.1:18803'});
+ await wait(`document.querySelector('[data-view="orders"]')&&!document.querySelector('.loading-panel')`);
+ await click('[data-view="orders"]');await wait(`document.querySelectorAll('[data-order-row]').length===65`);
+ await click('[data-action="bulk-edit-orders"]');
+ await wait(`document.querySelector('.tdp-sheet-status')?.textContent.includes('Đã tải')`);
+ await wait(`document.querySelector('canvas[id^="univer-sheet-main"]')?.width>1000`);
+ await new Promise(r=>setTimeout(r,300));
+ const beforeRows=await evaluate(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.slice().sort((a,b)=>Number(!!b.errors.length)-Number(!!a.errors.length)||a.id-b.id))`);
+ const before=beforeRows[0];
+ await editQty('7');
+ await wait(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty===7)`);
+ await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
+ // Change back to the acknowledged value while an earlier update is in flight.
+ await evaluate(`window.__requests=[];window.__fetch=window.fetch; window.__delay=false; window.fetch=async(...args)=>{if(String(args[0]).includes('/api/orders/worksheet')&&args[1]?.method==='PUT'){window.__requests.push(args[1].body);if(window.__offline)throw Error('Offline test');const r=await window.__fetch(...args);if(window.__delay)await new Promise(r=>setTimeout(r,1800));return r;}return window.__fetch(...args);};window.__delay=true;`);
+ await editQty('8');
+ await wait(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty===8)`);
+ await editQty('7');
+ await wait(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty===7)`);
+ await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
+ await evaluate(`window.__delay=false;window.__offline=true;`);
+ await editQty('9');
+ await wait(`document.querySelector('.tdp-sheet-status').classList.contains('is-error')`);
+ await click('.tdp-sheet-close');
+ assert.equal(await evaluate(`!!document.querySelector('.tdp-sheet-shell')`),true,'Close retains unsaved edits');
+ await evaluate(`window.__offline=false`);
+ await click('.tdp-sheet-controls button');
+ await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
+ assert.equal(await evaluate(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty)`),9);
+ await call('Browser.grantPermissions',{origin:'http://127.0.0.1:18803',permissions:['clipboardReadWrite','clipboardSanitizedWrite']});
+ await call('Runtime.evaluate',{expression:`navigator.clipboard.writeText('11\\n12')`,awaitPromise:true,userGesture:true});
+ const gridTop=await evaluate(`document.querySelector('canvas[id^="univer-sheet-main"]').getBoundingClientRect().top`);
+ await call('Input.dispatchMouseEvent',{type:'mousePressed',x:555,y:gridTop+60,button:'left',clickCount:1});
+ await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:555,y:gridTop+60,button:'left',clickCount:1});
+ await call('Input.dispatchKeyEvent',{type:'keyDown',key:'v',code:'KeyV',windowsVirtualKeyCode:86,modifiers:2});
+ await call('Input.dispatchKeyEvent',{type:'keyUp',key:'v',code:'KeyV',windowsVirtualKeyCode:86,modifiers:2});
+ await wait(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty===11 && p.orders.find(r=>r.id===${beforeRows[1].id}).qty===12)`);
+ await wait(`document.querySelector('.tdp-sheet-status').textContent.startsWith('Đã lưu')`);
+ await screenshot('worksheet-saved');
+ // Another client writes; idle polling must refresh, then stale local edits must stop.
+ const remoteWrite = value => evaluate(`(async()=>{const p=await window.__fetch('/api/orders/worksheet?batch_id='+${before.batch_id}).then(r=>r.json());const row=p.orders.find(r=>r.id===${before.id});return window.__fetch('/api/orders/worksheet',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:${before.batch_id},request_id:crypto.randomUUID(),items:[{id:row.id,revision:row.worksheet_revision,values:{qty:${value}}}]})}).then(r=>r.status)})()`);
+ assert.equal(await remoteWrite(15),200);
+ await wait(`document.querySelector('.tdp-sheet-status').textContent.includes('Đã đồng bộ')`);
+ assert.equal(await remoteWrite(16),200);
+ await editQty('17');
+ await wait(`document.querySelector('.tdp-sheet-status').textContent.includes('Dòng đã thay đổi')`);
+ assert.equal(await evaluate(`fetch('/api/bootstrap').then(r=>r.json()).then(p=>p.orders.find(r=>r.id===${before.id}).qty)`),16);
+ await evaluate(`window.confirm=()=>true`);
+ await evaluate(`[...document.querySelectorAll('.tdp-sheet-controls button')].find(b=>b.textContent.includes('Đọc lại')).click()`);
+ await wait(`document.querySelector('.tdp-sheet-status')?.textContent.includes('Đã tải')`);
+ assert.equal(await evaluate(`document.querySelector('.tdp-sheet-status').classList.contains('is-error')`),false);
+ await screenshot('worksheet-open');
+ fs.writeFileSync(path.join(output,'dom.txt'),await evaluate(`document.querySelector('.tdp-sheet-shell').outerHTML`));
+ assert.equal(await evaluate(`document.querySelector('.tdp-sheet-shell').getBoundingClientRect().width`),1440);
+ await click('.tdp-sheet-close');await wait(`!document.querySelector('.tdp-sheet-shell')`);
+ // Shared table reader and narrower viewports preserve a reachable close button.
+ await wait(`document.querySelector('.tdp-open-sheet')`);
+ await click('.tdp-open-sheet');
+ await wait(`document.querySelector('.tdp-sheet-status')?.textContent.match(/Chỉ xem|Đã tải/)`);
+ for (const width of [1024,390]) {
+   await call('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
+   await new Promise(r=>setTimeout(r,300));
+   assert.equal(await evaluate(`document.querySelector('.tdp-sheet-shell').getBoundingClientRect().width`),width);
+   assert.ok(await evaluate(`document.querySelector('.tdp-sheet-close').getBoundingClientRect().right<=innerWidth`));
+   await screenshot('worksheet-'+width);
+ }
+ await click('.tdp-sheet-close');await wait(`!document.querySelector('.tdp-sheet-shell')`);
+ assert.equal(errors.length,0,JSON.stringify(errors));
+ fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:true,errors},null,2));
+ }catch(error){await screenshot('failure');fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:false,error:error.message,errors,debug:await evaluate(`({requests:window.__requests,hit:window.__hit,canvas:document.querySelector('canvas[id^="univer-sheet-main"]')?.getBoundingClientRect().toJSON(),active:document.activeElement?.tagName})`)},null,2));throw error;}
+ finally{ws.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

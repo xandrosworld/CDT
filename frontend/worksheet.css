@@ -1,0 +1,14 @@
+.tdp-sheet-shell { position: fixed; inset: 0; z-index: 1000; background: white; color: #1b2932; display: flex; flex-direction: column; font: 14px Arial,sans-serif; }
+.tdp-sheet-top,.tdp-sheet-controls { display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid #d5dde2; flex-wrap:wrap; }
+.tdp-sheet-top { background:#f3f6f6; }
+.tdp-sheet-top strong { font-size:16px; }
+.tdp-sheet-top button,.tdp-sheet-controls button { border:1px solid #b5c3c9; background:white; color:#183c40; border-radius:4px; padding:6px 12px; cursor:pointer; font:inherit; }
+.tdp-sheet-shell input { border:1px solid #bac8ce; background:white; color:#182e35; border-radius:3px; padding:6px 8px; font:inherit; width:190px; }
+.tdp-sheet-top .tdp-sheet-close { margin-left:auto; font:26px Arial; padding:0 12px; min-height:34px; }
+.tdp-sheet-status { color:#16715e; flex:1; min-width:120px; }
+.tdp-sheet-status.is-error { color:#b42318; }
+.tdp-sheet-notice { font:12px Arial; padding:5px 12px; background:#fff; color:#526369; }
+.tdp-sheet-host { flex:1; min-height:0; position:relative; overflow:hidden; }
+.tdp-sheet-controls:empty { display:none; }
+.tdp-open-sheet { padding:6px 12px; margin:6px 0; border:1px solid #168175; background:#fff; color:#09695f; cursor:pointer; border-radius:4px; font:14px Arial; }
+@media(max-width:650px){ .tdp-sheet-top{gap:5px;padding:5px} .tdp-sheet-top input{width:130px} .tdp-sheet-top strong{font-size:14px} .tdp-sheet-controls input{width:145px} }

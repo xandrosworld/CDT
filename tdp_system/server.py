@@ -37,6 +37,11 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 try:
+    import order_worksheet
+except ImportError:
+    from . import order_worksheet
+
+try:
     from automatic_backup import automatic_backup, backup_status, sqlite_snapshot, start_backup_worker
 except ImportError:
     from .automatic_backup import automatic_backup, backup_status, sqlite_snapshot, start_backup_worker
@@ -853,6 +858,7 @@ def init_database(*, sync_master=True):
         conn.executescript(SCHEMA)
         init_contract_schema(conn, opening_template_path=OPENING_TEMPLATE_SOURCE)
         init_daily_import_schema(conn)
+        order_worksheet.init_schema(conn)
         init_daily_reference_schema(conn)
         init_order_price_override_schema(conn)
         init_quote_import_schema(conn)
@@ -1498,7 +1504,7 @@ def workbook_date_token(value) -> tuple[int, int] | None:
     return day, month
 
 
-def strict_daily_preview(path: Path, source_name: str = "") -> dict | None:
+def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False) -> dict | None:
     """Return a safe structure-first preview, or None for legacy workbooks."""
     analysis = analyze_daily_workbook(path)
     if not analysis["strictCustomerWorkbook"]:
@@ -1542,6 +1548,7 @@ def strict_daily_preview(path: Path, source_name: str = "") -> dict | None:
         sheet["writeScope"] = "purchase_orders_locked_until_round_trip"
         sheet["previewIssue"] = "customer_scope_must_be_loaded_first"
     analysis["phase"] = "first_load"
+    analysis["continuous"] = bool(continuous)
     analysis["batchId"] = None
     analysis["scopeSelectionRequired"] = False
     analysis["_customerOrders"] = customer_orders_by_sheet
@@ -1574,9 +1581,12 @@ def strict_daily_preview(path: Path, source_name: str = "") -> dict | None:
                     analysis["batchId"] = batch_id
                     analysis["scopeSelectionRequired"] = True
                     customer_diff = strict_customer_scope_diff(
-                        conn, batch_id, customer_orders_by_sheet[day_sheet["name"]],
+                        conn, batch_id, customer_orders_by_sheet[day_sheet["name"]], continuous=continuous,
                     )
                     day_sheet["diff"] = customer_diff
+                    if continuous and day_sheet.get("errorRows"):
+                        day_sheet["confirmAvailable"] = False
+                        day_sheet["previewIssue"] = "customer_scope_has_errors"
                     if customer_diff["conflicts"]:
                         day_sheet["confirmAvailable"] = False
                         day_sheet["previewIssue"] = "customer_scope_conflict"
@@ -1733,12 +1743,12 @@ def strict_order_removal_conflicts(conn, order_ids):
     return conflicts
 
 
-def strict_customer_scope_diff(conn, batch_id: int, incoming_orders):
+def strict_customer_scope_diff(conn, batch_id: int, incoming_orders, *, continuous=False):
     current_orders = rows_dict(conn.execute(
         "SELECT * FROM orders WHERE batch_id=? ORDER BY source_row,id", (batch_id,),
     )) if batch_id else []
-    incoming = strict_order_index(incoming_orders, finalization=True)
-    current = strict_order_index(current_orders, finalization=True)
+    incoming = strict_order_index(incoming_orders, finalization=not continuous)
+    current = strict_order_index(current_orders, finalization=not continuous)
     incoming_keys = set(incoming)
     current_keys = set(current)
     removed_keys = current_keys - incoming_keys
@@ -1827,8 +1837,8 @@ def strict_purchase_preview_from_path(conn, path: Path, batch_id: int):
         formula_workbook.close()
 
 
-def apply_strict_customer_scope(conn, batch_id: int, incoming_orders):
-    diff = strict_customer_scope_diff(conn, batch_id, incoming_orders)
+def apply_strict_customer_scope(conn, batch_id: int, incoming_orders, *, continuous=False):
+    diff = strict_customer_scope_diff(conn, batch_id, incoming_orders, continuous=continuous)
     if diff["conflicts"]:
         raise DailyImportError(
             "Có dòng cũ đã đi vào đặt NCC hoặc hóa đơn; không thể tự xóa khi chốt lại",
@@ -1837,8 +1847,8 @@ def apply_strict_customer_scope(conn, batch_id: int, incoming_orders):
     current_rows = rows_dict(conn.execute(
         "SELECT * FROM orders WHERE batch_id=? ORDER BY source_row,id", (batch_id,),
     ))
-    current = strict_order_index(current_rows, finalization=True)
-    incoming = strict_order_index(incoming_orders, finalization=True)
+    current = strict_order_index(current_rows, finalization=not continuous)
+    incoming = strict_order_index(incoming_orders, finalization=not continuous)
     removed_keys = set(current) - set(incoming)
     for key in removed_keys:
         conn.execute("DELETE FROM orders WHERE id=?", (int(current[key]["order"]["id"]),))
@@ -1852,6 +1862,8 @@ def apply_strict_customer_scope(conn, batch_id: int, incoming_orders):
         "actual_delivered", "customer_return_qty", "unit", "sell_price", "tax",
         "invoice_nature", "note", "source_sheet", "source_row",
     )
+    if continuous:
+        update_fields = tuple(sorted(ORDER_FIELDS | {"work_date", "source_sheet", "source_row"}))
     for key, value in incoming.items():
         item = value["order"]
         existing = current.get(key)
@@ -1861,14 +1873,15 @@ def apply_strict_customer_scope(conn, batch_id: int, incoming_orders):
             # purchase capability owns these fields and can link its row after
             # this order exists.
             sales_item = dict(item)
-            sales_item.update(
+            if not continuous:
+                sales_item.update(
                 actual_received=0,
                 damaged_qty=0,
                 supplier_return_qty=0,
                 supplier="",
                 buy_price=0,
                 purchase_list=0,
-            )
+                )
             save_imported_orders(conn, batch_id, [sales_item])
             continue
         if value["payload_hash"] == existing["payload_hash"]:
@@ -1883,10 +1896,15 @@ def apply_strict_customer_scope(conn, batch_id: int, incoming_orders):
                 now_iso(), int(existing["order"]["id"]),
             ),
         )
+        if continuous:
+            conn.execute("UPDATE orders SET sell_price_revision=sell_price_revision+1,"
+                         "sell_price_source='import_or_standard',sell_price_override_at=NULL WHERE id=?",
+                         (int(existing['order']['id']),))
     sync_receivable_ledger(conn, timestamp=now_iso())
     # The explicit second sales/delivery confirmation settles the existing
     # order claim; it does not post another physical issue.
-    conn.execute("UPDATE orders SET physical_stage='delivered' WHERE batch_id=?", (batch_id,))
+    if not continuous:
+        conn.execute("UPDATE orders SET physical_stage='delivered' WHERE batch_id=?", (batch_id,))
     return diff
 
 
@@ -1943,8 +1961,22 @@ def confirm_strict_daily_finalization(pending, body, sheets):
                 "Dữ liệu đã đổi sau preview; hãy tải lại file trước khi chốt",
                 code="stale_database_state",
             )
+        blocked = batch_mutation_blocker(conn, batch_id)
+        if blocked:
+            raise DailyImportError(blocked, code="batch_locked")
+        old_orders = rows_dict(conn.execute("SELECT * FROM orders WHERE batch_id=? ORDER BY id", (batch_id,)))
+        previous_keys = [r['import_key'] for r in conn.execute('SELECT import_key FROM order_import_receipts WHERE batch_id=?', (batch_id,))]
+        previous_batch = conn.execute('SELECT source_name FROM batches WHERE id=?', (batch_id,)).fetchone()
+        conn.execute('''INSERT INTO order_reimport_history
+            (batch_id,previous_source,next_source,rows_json,previous_keys_json,created_at)
+            VALUES(?,?,?,?,?,?)''', (batch_id, previous_batch['source_name'], pending['name'],
+            json.dumps(old_orders, ensure_ascii=False), json.dumps(previous_keys), now_iso()))
+        audit_event(conn, 'order.workbook.replace', entity_type='batch', entity_id=batch_id,
+                    metadata={'source': pending['name'], 'selected_scopes': selected_scopes,
+                              'purchase_before': rows_dict(conn.execute('SELECT * FROM purchase_workbook_lines WHERE batch_id=?', (batch_id,)))})
         rows_by_scope = {
-            "customer_orders": strict_final_sales_contract_rows(customer_orders),
+            "customer_orders": (strict_daily_contract_rows(customer_orders) if analysis.get('continuous')
+                                else strict_final_sales_contract_rows(customer_orders)),
         }
         if analysis["purchaseSheets"]:
             if purchase_preview is not None:
@@ -1987,7 +2019,7 @@ def confirm_strict_daily_finalization(pending, body, sheets):
         for scope in selected_scopes:
             grant = scopes[scope]
             if scope == "customer_orders":
-                diff = apply_strict_customer_scope(conn, batch_id, customer_orders)
+                diff = apply_strict_customer_scope(conn, batch_id, customer_orders, continuous=analysis.get('continuous', False))
                 applied = {
                     "processed": diff["added"] + diff["updated"] + diff["removed"],
                     "diff": diff,
@@ -2040,7 +2072,7 @@ def confirm_strict_daily_finalization(pending, body, sheets):
             (int(contract["version_id"]),),
         ).fetchone()["n"])
         finalized = None
-        if remaining == 0:
+        if remaining == 0 and not analysis.get('continuous'):
             finalized = finalize_daily_workday(
                 conn, version_id=int(contract["version_id"]), now_iso=now_iso,
             )
@@ -2059,6 +2091,11 @@ def confirm_strict_daily_finalization(pending, body, sheets):
             ),
         )
         sync_receivable_ledger(conn, timestamp=now_iso())
+        conn.execute("UPDATE batches SET source_name=? WHERE id=?", (pending['name'], batch_id))
+        if analysis.get('continuous'):
+            conn.execute("UPDATE batches SET status='draft',approved_at=NULL WHERE id=?", (batch_id,))
+            sync_payable_ledger(conn, timestamp=now_iso())
+            sync_receivable_ledger(conn, timestamp=now_iso())
         daily_import = strict_daily_version_payload(
             conn, batch_id, source_hash, day_sheet_name,
         )
@@ -2148,6 +2185,7 @@ def batch_payload(conn, batch_id=None):
         return {"batch": None, "orders": [], "summary": calculate_summary(conn, [])}
     orders = rows_dict(conn.execute("SELECT * FROM orders WHERE batch_id=? ORDER BY id", (batch["id"],)))
     for item in orders:
+        item["worksheet_revision"] = order_worksheet.row_revision(item)
         item["errors"] = json.loads(item["errors"] or "[]")
         item["warnings"] = json.loads(item["warnings"] or "[]")
         revenue, cost, profit, total = order_totals(item)
@@ -2507,7 +2545,7 @@ def api_import_analyze():
             expanded_size = sum(item.file_size for item in entries)
             if len(entries) > ORDER_IMPORT_MAX_ENTRIES or expanded_size > ORDER_IMPORT_MAX_UNCOMPRESSED_BYTES:
                 raise ValueError("File Excel có cấu trúc quá lớn để đọc an toàn")
-        strict_analysis = strict_daily_preview(temp, upload.filename)
+        strict_analysis = strict_daily_preview(temp, upload.filename, continuous=request.form.get('continuous') == '1')
         sheets = (
             strict_analysis["daySheets"] + strict_analysis["purchaseSheets"]
             if strict_analysis else analyze_workbook(temp)
@@ -2673,6 +2711,11 @@ def confirm_strict_daily_import(pending, body):
                         raise DailyImportError(blocked or "Bản cũ đã liên kết đặt NCC/hóa đơn; không thể tự thay toàn bộ đơn", code="linked_order_replacement")
                     if any(item["errors"] for item in orders):
                         raise DailyImportError("File mới còn lỗi; giữ nguyên đơn cũ, sửa file rồi nạp lại", code="invalid_replacement", status=400)
+                    old_orders = rows_dict(conn.execute('SELECT * FROM orders WHERE batch_id=?', (batch_id,)))
+                    previous_keys = [r['import_key'] for r in conn.execute('SELECT import_key FROM order_import_receipts WHERE batch_id=?', (batch_id,))]
+                    previous_source = conn.execute('SELECT source_name FROM batches WHERE id=?', (batch_id,)).fetchone()['source_name']
+                    conn.execute('''INSERT INTO order_reimport_history(batch_id,previous_source,next_source,rows_json,previous_keys_json,created_at)
+                        VALUES(?,?,?,?,?,?)''', (batch_id, previous_source, pending['name'], json.dumps(old_orders, ensure_ascii=False), json.dumps(previous_keys), now_iso()))
                 # A changed workbook for the same workday replaces only the
                 # lifecycle-owned batch contents. Historical version hashes remain.
                 conn.execute("DELETE FROM order_import_receipts WHERE batch_id=?", (batch_id,))
@@ -4876,6 +4919,7 @@ try:
 except ImportError:
     from .round4_documents import register_document_routes
 register_document_routes(app, lambda: globals())
+order_worksheet.register(app, globals())
 
 register_physical_inventory_routes(app, {
     "db": db, "now_iso": now_iso, "batch_payload": batch_payload,

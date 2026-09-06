@@ -47,6 +47,22 @@ try {
     if(view==='msmi')await wait('document.querySelector("#invoice-list-count")');
     await shot(String(index+2).padStart(2,'0')+'-'+view);
     report.checks.push('navigation_'+view);
+    if(view==='orders') {
+      await click('[data-action="bulk-edit-orders"]');
+      await wait(`document.querySelector('.tdp-sheet-status')?.textContent.match(/Đã tải|Chỉ xem/)`);
+      await wait(`document.querySelector('canvas[id^="univer-sheet-main"]')?.width>1000`);
+      await shot('worksheet-orders');
+      await click('.tdp-sheet-close'); await wait(`!document.querySelector('.tdp-sheet-shell')`);
+      report.checks.push('hosted_order_worksheet_read_only_smoke');
+    }
+    if(view==='inventory') {
+      await wait(`document.querySelector('.inventory-nxt-scroll')?.previousElementSibling?.classList.contains('tdp-open-sheet')`);
+      await evaluate(`document.querySelector('.inventory-nxt-scroll').previousElementSibling.click()`);
+      await wait(`document.querySelector('.tdp-sheet-status')?.textContent==='Chỉ xem'`);
+      await shot('worksheet-inventory');
+      await click('.tdp-sheet-close'); await wait(`!document.querySelector('.tdp-sheet-shell')`);
+      report.checks.push('hosted_inventory_worksheet');
+    }
   }
   const invoices=await api('/api/invoice-workbench/invoices?invoice_type=input&from=2026-08-01&to=2026-08-31&status=all&line_filter=all');
   assert.equal(invoices.status,200);assert.equal(invoices.data.totals.invoice_count,266);

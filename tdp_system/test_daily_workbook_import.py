@@ -184,6 +184,59 @@ class DailyWorkbookImportTests(unittest.TestCase):
                 )
             }
 
+    def continuous_file(self, *, qty=2, complete=True):
+        workbook = load_workbook(io.BytesIO(self.workbook_bytes(quantities=(qty,))))
+        sheet = workbook['01.09']
+        sheet['H2'] = 'NCC'
+        sheet['H3'] = 'S1'
+        sheet['J3'] = 12000 if complete else 0
+        stream = io.BytesIO(); workbook.save(stream); workbook.close()
+        return stream.getvalue()
+
+    def continuous_analyze(self, data):
+        response = self.client.post('/api/import/analyze', data={
+            'file': (io.BytesIO(data), 'orders-01.09.xlsx'), 'continuous': '1'}, content_type='multipart/form-data')
+        self.assertEqual(response.status_code, 200, response.json)
+        return response.json
+
+    def test_continuous_day_accepts_incomplete_first_then_three_revisions(self):
+        first = self.confirm_api(self.continuous_analyze(self.continuous_file(complete=False)))
+        self.assertEqual(first.status_code, 200, first.json)
+        self.assertGreater(first.json['summary']['totals']['errors'], 0)
+        batch_id = first.json['batch']['id']
+        for qty in (4, 7, 9):
+            analysis = self.continuous_analyze(self.continuous_file(qty=qty))
+            self.assertTrue(analysis['sheets'][0]['confirmAvailable'], analysis)
+            result = self.confirm_api(analysis)
+            self.assertEqual(result.status_code, 200, result.json)
+            self.assertEqual(result.json['batch']['id'], batch_id)
+            self.assertEqual(result.json['batch']['status'], 'draft')
+            self.assertEqual(len(result.json['orders']), 1)
+            self.assertEqual(result.json['orders'][0]['qty'], qty)
+            self.assertEqual(result.json['orders'][0]['supplier'], 'S1')
+            self.assertNotEqual(result.json['orders'][0]['note'], 'edited on web')
+            with server.db() as conn:
+                self.assertEqual(conn.execute('SELECT lifecycle_status FROM daily_workdays WHERE batch_id=?', (batch_id,)).fetchone()[0], 'picking')
+                conn.execute("UPDATE orders SET note='edited on web',supplier='web supplier' WHERE batch_id=?", (batch_id,))
+        with server.db() as conn:
+            history = conn.execute('SELECT rows_json FROM order_reimport_history WHERE batch_id=? ORDER BY id', (batch_id,)).fetchall()
+            self.assertEqual(len(history), 3)
+            self.assertIn('edited on web', history[-1][0])
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
+
+    def test_continuous_invalid_latest_preserves_current_and_duplicate_is_noop(self):
+        data = self.continuous_file(qty=3)
+        first = self.confirm_api(self.continuous_analyze(data))
+        self.assertEqual(first.status_code, 200, first.json)
+        repeated = self.confirm_api(self.continuous_analyze(data))
+        self.assertEqual(repeated.status_code, 200, repeated.json)
+        self.assertTrue(repeated.json['idempotent'])
+        invalid = self.continuous_analyze(self.continuous_file(qty=4, complete=False))
+        self.assertFalse(invalid['sheets'][0]['confirmAvailable'])
+        self.assertEqual(self.confirm_api(invalid).status_code, 400)
+        with server.db() as conn:
+            self.assertEqual(conn.execute('SELECT qty FROM orders WHERE batch_id=?', (first.json['batch']['id'],)).fetchone()[0], 3)
+
     def test_structure_first_analyzer_never_serializes_reference_values(self):
         secret = "CCCD-DO-NOT-SERIALIZE"
         path = Path(self.temp.name) / "structure.xlsx"
