@@ -6358,15 +6358,32 @@
       await fetchOutgoingPeriodShortages();
     }
     if (['edit-invoice-mapping', 'edit-invoice-conversion', 'cancel-invoice-mapping-edit'].includes(action)) {
+      var activeEdit = content.querySelector('.invoice-mapping-cell[data-editing-id]');
+      if (activeEdit && activeEdit.dataset.editingId !== button.dataset.id) {
+        showToast('Hãy Lưu hoặc Bỏ sửa dòng đang mở trước khi sửa dòng khác.', true);
+        activeEdit.querySelector('input')?.focus();
+        return;
+      }
       var editLine = invoiceEditingLine(button.dataset.id);
       var editInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === editLine?.invoice_id; });
       if (!editLine || !editInvoice) return;
       var editCell = button.closest('.invoice-mapping-cell');
+      if (action === 'cancel-invoice-mapping-edit') delete editCell.dataset.editingId;
+      else editCell.dataset.editingId = button.dataset.id;
       editCell.innerHTML = window.TdpInvoiceMappingCell(editLine, editInvoice,
         action === 'edit-invoice-mapping' ? 'code' : action === 'edit-invoice-conversion' ? 'conversion' : '');
       var editField = editCell.querySelector('input');
       if (editField) { editField.focus(); editField.select(); }
       return;
+    }
+    if (['save-invoice-mapping', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'post-invoice-output'].includes(action)) {
+      var pendingEdit = content.querySelector('.invoice-mapping-cell[data-editing-id]');
+      var savingThisEdit = action.startsWith('save-invoice-') && pendingEdit?.dataset.editingId === button.dataset.id;
+      if (pendingEdit && !savingThisEdit) {
+        showToast('Đang sửa mã/quy đổi. Hãy Lưu hoặc Bỏ sửa trước khi tiếp tục.', true);
+        pendingEdit.querySelector('input')?.focus();
+        return;
+      }
     }
     if (action === "save-invoice-mapping") {
       var mappingDirection = button.dataset.direction || state.invoiceDirection;

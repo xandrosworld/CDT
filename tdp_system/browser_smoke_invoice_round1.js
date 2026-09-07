@@ -161,6 +161,10 @@ async function main() {
     await wait(`document.activeElement?.dataset.action === 'edit-invoice-mapping'`);
     await click(`[data-action="edit-invoice-conversion"][data-id="${fixture.line_box}"]`);
     assert.equal(await evaluate(`document.getElementById('${conv}').value`),'12');
+    await click(`[data-action="create-msmi-receipt"][data-id="${fixture.input_ids['2']}"]`);
+    assert.equal(await evaluate(`!!document.querySelector('.receipt-review-dialog[open]')`),false);
+    assert.ok(await evaluate(`document.querySelector('#toast').textContent.includes('Lưu hoặc Bỏ sửa')`));
+
     await evaluate(`document.getElementById('${conv}').value='30'`);
     await click(`[data-action="cancel-invoice-mapping-edit"][data-id="${fixture.line_box}"]`);
     assert.equal((await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.lines.find(r=>r.id===fixture.line_box).conversion_factor,12);
