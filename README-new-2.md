@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Chọn dòng để gộp — 07/09/2026:** khách chốt phải chọn dòng và sau gộp
+> chỉ hiện một dòng, có tính lại giá vốn. Đã sửa source và kiểm tra trên bản sao;
+> trạng thái triển khai được ghi tại **13.38**. Yêu cầu này bổ sung phần tổng cùng mã ở 13.37.
+
 > **Nhập kho theo nhóm — 07/09/2026:** đã triển khai nhãn **Đã đủ mã · Chưa nhập kho**,
 > nút kiểm tra lượng/tiền và nhập nhiều hóa đơn sau một lần xác nhận. Giữ thao tác
 > từng hóa đơn; kiểm tra Railway chỉ xem/hủy, không ghi kho thay khách. Xem **13.35**.
@@ -1204,3 +1208,14 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Source **`35e17b0abfc7b5dc0d9ee9e138be8a2bf5ee1c27`** đã deploy từ `xandrosworld/CDT/main`, deployment **`ed0cee6b-7919-43f9-9ba2-3321b9276a8b`**, trạng thái **SUCCESS**. Browser `conversion-visible-hosted-01` đạt 7 mục/6 ảnh: preview đúng Omachi 8 Thùng → 240 Gói ở 1920×900, 1440×800, 1280×640, 1024×560; tổng cùng mã khớp API cả hóa đơn. Không JavaScript exception, HTTP 5xx hay request ghi nghiệp vụ. Trên hosted chỉ nhập ô chưa lưu rồi phục hồi giá trị, không lưu hệ số hoặc nhập kho.
 - Snapshot `conversion-visible-after` lấy sau khi browser kết thúc, so `conversion-visible-before`: **80/80 bảng nguyên nội dung và schema**, hai DB toàn vẹn `ok`, bằng chứng `full-preservation.json`. Mã kiểm thử và tám bút toán nhập chỉ có trong bản sao riêng; không đưa chúng vào production.
 - Đã cập nhật đúng các mục UNIT-SUMMARY, MAPPING-CORRECT, OPEN-MAPPING trong tab Lỗi & cập nhật và ghi chú E11 của checklist; không tạo trùng lỗi, giữ phần khách chốt/kiểm tra/ý kiến và lịch sử. Hướng dẫn giải thích dòng nguồn giữ riêng, kết quả quy đổi/tổng cùng mã hiện tại chỗ. Bằng chứng riêng `D:/TDP_RAILWAY_PRIVATE/evidence/conversion-*`.
+
+### 13.38. Chọn dòng, gộp thành một dòng và tách lại — 07/09/2026
+
+- Khách chốt lúc 12:08–12:14: phải chọn các dòng muốn gộp, tính giá vốn và sau gộp chỉ giữ một dòng trên bảng. Phần Tổng cùng mã tại 13.37 chưa đáp ứng thao tác này; không coi tổng tự động là đã gộp theo lựa chọn.
+- Dòng đầu vào đã ghép mã/quy đổi có ô chọn ở cột Dòng. Chọn từ hai dòng rồi bấm **Gộp dòng đã chọn**, xem tổng lượng/tiền/giá vốn và xác nhận **Gộp thành 1 dòng**. Chỉ nhận cùng hóa đơn, mã hàng, ĐVT sau quy đổi và thuế suất; dòng chưa đủ quy đổi hoặc hóa đơn đã nhập kho không được tạo nhóm mới.
+- Bảng chính và **Excel đúng bộ lọc** chỉ còn một dòng của nhóm đã chọn. Giá vốn riêng nhóm = tổng tiền chưa thuế ÷ tổng lượng sau quy đổi, gồm lượng hàng 0đ; không lấy trung bình các đơn giá. Nhóm có **Xem dòng gốc** và **Tách lại** để chọn lại hoặc sửa mã/quy đổi trước nhập kho. Excel có sheet **Dong goc da gop** để đối chiếu; file nguồn và chứng từ gốc không bị xóa hay sửa.
+- Nhóm lưu riêng trong database, đọc lại vẫn còn. Xem trước/Quay lại không tạo nhóm; xác nhận khóa giao dịch và đối chiếu dữ liệu đã xem. Hai yêu cầu cùng lúc/gửi lại chỉ tạo một nhóm; lỗi audit hoàn tác. Nguồn hoặc mapping thay đổi thì hiện lại dòng gốc, cảnh báo và cho bỏ nhóm cũ. Gộp/tách không ghi kho; nhập kho vẫn giữ dấu vết từng dòng nguồn và kiểm tra chống trùng.
+- **627/627 test, 83 module đạt** trong `selected-group-regression-01`. Sau bổ sung kiểm tra gửi đồng thời, khác hóa đơn và tải lại nguồn, nhóm mới **8/8 đạt** (`selected-group-tests-03`); nhóm danh sách/Excel cuối **12/12 đạt**. Không cộng lượt chạy lặp thành số test độc lập. Lượt tests-02 lỗi dọn file Windows do công cụ chưa đóng kết nối SQLite; đã sửa công cụ và chạy lại đạt.
+- Browser `selected-group-browser-03` đạt toàn luồng hóa đơn/kho, thêm chọn → xem trước/hủy → gộp → tách → gộp lại → nhập kho/chống trùng và bốn khổ máy tính. Lượt browser-02 và real-copy-01/02 phát hiện chế độ toàn màn hình bị đóng khi loader tạm thay bảng trong phản hồi chậm; đã sửa giữ chế độ khi vẫn ở màn hóa đơn, thêm phép thử phản hồi chậm 450ms và chạy lại đạt. Không đổi tiêu chí nghiệp vụ để vượt kiểm tra.
+- `selected-group-real-copy-03` chạy trên snapshot Railway mới: quy đổi bốn dòng Kokomi/Omachi; chọn hai dòng dầu hào 24 + 6 = **30 Can / 1.288.889đ / 42.963đ mỗi Can**, sau gộp một dòng. Hủy, tách, gộp lại, đổi bộ lọc, Excel và nhập kho đều kiểm tra qua browser; tám bút toán nhập đúng nguồn, nhập lại không trùng. Đối chiếu độc lập `reconciliation.json`: lượng/giá/tiền nguồn nguyên vẹn; Excel chính một dòng dầu hào, sheet gốc hai dòng; NXT dầu hào 30 Can/1.288.889đ, Omachi tăng 240 Gói/1.666.667đ và giữ tồn cũ. Snapshot nguồn không đổi, SQLite toàn vẹn ok.
+- Mã QA chỉ dùng trong bản sao cho dầu hào/tương ớt và Omachi bò còn thiếu xác nhận danh mục. Không tự xác nhận dầu hào MISA là Quê Tôi hoặc tương ớt là tương cà; không chuyển mã QA, nhóm gộp hay bút toán thử vào production. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/selected-group-*`. Đang triển khai và kiểm tra hosted; chưa dùng kết quả bản sao thay kết quả Railway.

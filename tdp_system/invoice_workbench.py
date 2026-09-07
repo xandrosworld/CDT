@@ -247,6 +247,11 @@ class InvoiceWorkbenchError(ValueError):
 
 def init_invoice_workbench_schema(conn) -> None:
     conn.executescript(INVOICE_WORKBENCH_SCHEMA)
+    try:
+        from invoice_line_groups import SCHEMA
+    except ImportError:
+        from .invoice_line_groups import SCHEMA
+    conn.executescript(SCHEMA)
     # Input invoice tables predate the shared workbench. Add conversion
     # snapshots in place without rebuilding or touching existing source rows.
     for table in ("msmi_invoice_items", "outgoing_source_invoice_items"):
@@ -435,6 +440,11 @@ def list_sync_batches(
 
 
 def register_invoice_workbench_routes(app, ctx) -> None:
+    try:
+        from invoice_line_groups import register_group_routes
+    except ImportError:
+        from .invoice_line_groups import register_group_routes
+    register_group_routes(app,ctx)
     db_factory = ctx["db"]
     now_iso = ctx["now_iso"]
     setting_get = ctx["setting_get"]

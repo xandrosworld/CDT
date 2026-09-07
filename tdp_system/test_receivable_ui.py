@@ -33,8 +33,8 @@ class ReceivableUiStaticContractTests(unittest.TestCase):
             ".receivable-line-reversed", ".receivable-revision-panel",
         ):
             self.assertIn(required, css)
-        self.assertIn("/static/app.js?v=20260907-6", page)
-        self.assertIn("/static/real.css?v=20260907-6", page)
+        self.assertIn("/static/app.js?v=20260907-7", page)
+        self.assertIn("/static/real.css?v=20260907-7", page)
 
 
 if __name__ == "__main__":

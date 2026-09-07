@@ -334,6 +334,39 @@ async function main() {
       const cells=await evaluate(`(()=>{const row=document.getElementById('invoice-line-input-${line.id}');return [row.querySelector('.invoice-source-qty').textContent,row.querySelector('.invoice-source-unit').textContent];})()`);
       assert.deepEqual(cells,[String(line.qty),'Can']);
     }
+    await evaluate(`window.__groupOriginalFetch=window.fetch;window.fetch=async (...args)=>{const response=await window.__groupOriginalFetch(...args);if(String(args[0]).startsWith('/api/invoice-workbench/invoices?'))await new Promise(r=>setTimeout(r,450));return response;}`);
+    await change('invoiceLineFilter','mapped');
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar') && document.querySelectorAll('.invoice-group-select').length===4`);
+    await change('invoiceLineFilter','all');
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar') && document.querySelectorAll('.invoice-group-select').length===4`);
+    await evaluate(`window.fetch=window.__groupOriginalFetch`);
+    const oilPair=[promo.promotion_lines['QA-OIL-PAID'],promo.promotion_lines['QA-OIL-FREE']];
+    for(const id of oilPair)await click(`.invoice-group-select[data-id="${id}"]`);
+    await click('[data-action="preview-invoice-group"]');
+    await wait(`document.querySelector('.invoice-group-dialog[open]')`);
+    const groupText=await evaluate(`document.querySelector('.invoice-group-dialog').textContent`);
+    assert.ok(groupText.includes('30 Can')&&groupText.includes('1,288,889')&&groupText.includes('42,963'));
+    await click('.group-cancel');
+    assert.equal((await request('/api/invoice-workbench/invoices?from=2026-08-28&to=2026-08-28')).body.lines.filter(r=>r.group_id).length,0);
+    await click('[data-action="preview-invoice-group"]');
+    await wait(`document.querySelector('.group-confirm')`);
+    await click('.group-confirm');
+    await wait(`document.querySelector('[data-action="split-invoice-group"]')`);
+    let groupedPayload=(await request('/api/invoice-workbench/invoices?from=2026-08-28&to=2026-08-28')).body;
+    let oilGroup=groupedPayload.lines.find(r=>r.group_id);
+    assert.equal(oilGroup.qty,30);assert.equal(oilGroup.amount,1288889);assert.equal(oilGroup.group_members.length,2);
+    assert.equal(groupedPayload.lines.filter(r=>r.product_code==='QA-OIL').length,1);
+    assert.equal(await evaluate(`document.querySelector('#invoice-line-input-${oilGroup.id} .invoice-source-qty').textContent`),'30');
+    await click(`[data-action="split-invoice-group"][data-id="${oilGroup.group_id}"]`);
+    await wait(`document.querySelectorAll('.invoice-group-select').length===4`);
+    for(const id of oilPair)await click(`.invoice-group-select[data-id="${id}"]`);
+    await click('[data-action="preview-invoice-group"]');
+    await wait(`document.querySelector('.group-confirm')`);await click('.group-confirm');
+    await wait(`document.querySelector('[data-action="split-invoice-group"]')`);
+    for(const [width,height] of [[1920,900],[1440,800],[1280,640],[1024,560]]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+      fs.writeFileSync('D:/TDP_ROUND1/selected-group-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    }
     await click(`[data-action="view-invoice-receipt-summary"][data-id="${promo.promotion_invoice}"]`);
     await wait(`document.querySelector('.invoice-receipt-summary-dialog[open]')`);
     const oilCells=await evaluate(`Array.from(document.querySelectorAll('.invoice-receipt-summary-dialog tbody tr')).find(r=>r.cells[0].textContent.includes('QA-OIL')).textContent`);

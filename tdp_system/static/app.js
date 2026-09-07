@@ -5515,6 +5515,12 @@
   });
 
   content.addEventListener("change", function (event) {
+    if (event.target.matches('.invoice-group-select')) {
+      var selectedGroups = content.querySelectorAll('.invoice-group-select:checked').length;
+      var groupButton = content.querySelector('[data-action="preview-invoice-group"]');
+      if (groupButton) { groupButton.disabled = selectedGroups < 2; groupButton.textContent = 'Gộp dòng đã chọn (' + selectedGroups + ')'; }
+      return;
+    }
     if (event.target.form && event.target.form.id === 'buyerProfileForm') {
       state.buyerEdits = state.buyerEdits || {};
       state.buyerEdits[event.target.form.dataset.contractor] = Object.fromEntries(new FormData(event.target.form).entries());
@@ -6386,7 +6392,7 @@
       if (editField) { editField.focus(); editField.select(); }
       return;
     }
-    if (['save-invoice-mapping', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'post-invoice-output'].includes(action)) {
+    if (['save-invoice-mapping', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'post-invoice-output', 'preview-invoice-group','split-invoice-group'].includes(action)) {
       var pendingEdit = content.querySelector('.invoice-mapping-cell[data-editing-id]');
       var savingThisEdit = action.startsWith('save-invoice-') && pendingEdit?.dataset.editingId === button.dataset.id;
       if (pendingEdit && !savingThisEdit) {
@@ -6394,6 +6400,43 @@
         pendingEdit.querySelector('input')?.focus();
         return;
       }
+    }
+    if (action === 'preview-invoice-group') {
+      var groupIds = Array.from(content.querySelectorAll('.invoice-group-select:checked')).map(function(e) { return Number(e.dataset.id); });
+      try {
+        button.disabled = true;
+        var groupPreview = await api('/api/invoice-workbench/input-groups/preview', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_ids:groupIds})});
+        var groupDialog = document.createElement('dialog');
+        groupDialog.className = 'inventory-totals-dialog invoice-group-dialog';
+        groupDialog.innerHTML = '<div class="inventory-totals-heading"><h3>Gộp ' + groupPreview.count + ' dòng thành 1 dòng</h3></div><p>' + esc(groupPreview.invoice_number) + ' · ' + esc(groupPreview.product_code) + ' · ' + esc(groupPreview.product_name) + '</p><p><strong>Tổng lượng: ' + stockQty(groupPreview.qty) + ' ' + esc(groupPreview.unit) + '</strong></p><p>Tổng tiền chưa thuế: <strong>' + stockMoney(groupPreview.amount) + '</strong></p><p>Giá vốn sau gộp: <strong>' + stockMoney(groupPreview.unit_cost) + ' / ' + esc(groupPreview.unit) + '</strong></p><p class="code-note">Giá vốn = tổng tiền ÷ tổng lượng sau quy đổi, gồm cả hàng 0đ. Bảng và Excel chính chỉ còn 1 dòng; vẫn xem được dòng gốc và Tách lại. Gộp chưa nhập kho.</p><div class="compact-controls"><button type="button" class="btn btn-outline group-cancel">Quay lại</button><button type="button" class="btn btn-primary group-confirm">Gộp thành 1 dòng</button></div><p class="group-error" role="alert"></p>';
+        var groupBusy = false;
+        groupDialog.querySelector('.group-cancel').onclick=function() { if(!groupBusy) groupDialog.close(); };
+        groupDialog.addEventListener('cancel',function(e) { if(groupBusy)e.preventDefault(); });
+        groupDialog.addEventListener('close',function() { groupDialog.remove(); });
+        groupDialog.querySelector('.group-confirm').onclick=async function() {
+          if(groupBusy)return;
+          groupBusy=true; groupDialog.querySelectorAll('button').forEach(function(b) { b.disabled=true; });
+          try {
+            await api('/api/invoice-workbench/input-groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_ids:groupIds,token:groupPreview.token})});
+            groupDialog.close(); await loadInvoiceWorkbench(true); render();
+            var mergedRow=document.getElementById('invoice-line-input-'+groupIds[0]);
+            if(mergedRow)mergedRow.scrollIntoView({block:'center',inline:'nearest'});
+            showToast('Đã gộp thành 1 dòng · ' + stockQty(groupPreview.qty) + ' ' + groupPreview.unit + '. Chưa nhập kho.');
+          } catch(e) { groupDialog.querySelector('.group-error').textContent=e.message; }
+          finally { groupBusy=false;groupDialog.querySelectorAll('button').forEach(function(b) { b.disabled=false; }); }
+        };
+        document.body.appendChild(groupDialog); groupDialog.showModal(); groupDialog.querySelector('.group-cancel').focus();
+      } catch(e) { showToast(e.message,true); }
+      finally { button.disabled=false; }
+      return;
+    }
+    if (action === 'split-invoice-group') {
+      try {
+        button.disabled=true;
+        await api('/api/invoice-workbench/input-groups/'+button.dataset.id+'/split',{method:'POST'});
+        await loadInvoiceWorkbench(true);render();showToast('Đã hiện lại các dòng riêng. Lượng, tiền và sổ kho giữ nguyên.');
+      } catch(e) { showToast(e.message,true);button.disabled=false; }
+      return;
     }
     if (action === "save-invoice-mapping") {
       var mappingDirection = button.dataset.direction || state.invoiceDirection;
@@ -6789,7 +6832,11 @@
   function syncInvoiceMappingFullscreen() {
     if (!invoiceMappingFullscreen) return;
     var card = content.querySelector('.invoice-lines-card');
-    if (!card) { closeInvoiceMappingFullscreen(); return; }
+    if (!card) {
+      // A slow filter refresh temporarily replaces the card with its loader.
+      if (state.view !== 'msmi') closeInvoiceMappingFullscreen();
+      return;
+    }
     if (card.querySelector('.invoice-mapping-fullscreen-bar')) return;
     var bar = document.createElement('div'); bar.className = 'invoice-mapping-fullscreen-bar';
     var help = document.createElement('span');

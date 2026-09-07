@@ -162,6 +162,6 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 ### Xem ngay kết quả quy đổi và tổng hàng cùng mã
 
 - Khi nhập hệ số, ngay dưới ô hiện kết quả: **8 Thùng → 240 Gói**. Bấm **Lưu quy đổi** hoặc Enter mới lưu kết quả đó.
-- Hàng mua và hàng khuyến mại cùng một sản phẩm: chọn đúng cùng mã cho cả hai dòng. Bảng tự hiện **Tổng cùng mã: 30 Can**, gồm **6 Can hàng 0đ** ngay tại dòng; không cần nút gộp riêng. Tiền nguồn giữ nguyên.
-- Hai dòng 24 Can và 6 Can vẫn giữ để đối chiếu hóa đơn gốc; tổng 30 Can dùng khi xem tổng và cộng vào kho sau xác nhận nhập. **Kiểm tra lượng & tiền** cho xem tổng/giá bình quân của cả hóa đơn, kể cả dòng đang ẩn bởi bộ lọc.
+- Hàng mua và hàng khuyến mại cùng một sản phẩm: chọn đúng cùng mã, lưu đủ quy đổi cho các dòng. Muốn gộp, **tích ô ở cột Dòng → Gộp dòng đã chọn → kiểm tra tổng → Gộp thành 1 dòng**. Chỉ chọn cùng hóa đơn, cùng mã/ĐVT sau quy đổi và thuế suất. Ví dụ 24 Can mua + 6 Can hàng 0đ thành **một dòng 30 Can**, tiền **1.288.889đ**, giá vốn riêng nhóm hiển thị **42.963đ/Can**.
+- Chọn nhầm thì bấm **Tách lại** ở dòng đã gộp; sau đó chọn lại hoặc dùng **Sửa mã / Sửa quy đổi** khi chưa nhập kho. **Xem dòng gốc** mở phần đối chiếu ngay tại nhóm. **Excel đúng bộ lọc** cũng chỉ hiện một dòng nhóm ở sheet chính, có sheet **Dong goc da gop** giữ chi tiết. Gộp/tách chưa nhập kho. **Kiểm tra lượng & tiền** vẫn cho xem tổng của cả hóa đơn; giá bình quân kho còn tính tồn cũ.
 - Không ghép cùng mã chỉ để cộng số lượng nếu tên/loại hàng chưa xác nhận đúng: cần phân biệt dầu hào MISA/Quê Tôi và tương ớt/tương cà.

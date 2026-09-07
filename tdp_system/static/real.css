@@ -720,3 +720,9 @@ body { min-width: 320px; }
 
 .invoice-grouped-quantity, .invoice-conversion-preview { display: block; margin: 6px 0; padding: 6px 8px; border-left: 3px solid #087f78; background: #edf8f6; color: #123e3b; line-height: 1.4; }
 .invoice-grouped-quantity small { display: block; }
+
+.invoice-group-select { width: 22px; height: 22px; cursor: pointer; }
+.invoice-group-choice { display: block; padding: 5px 0; }
+.invoice-group-dialog { padding: 20px; max-width: min(640px, 94vw); max-height: 90vh; overflow: auto; font-size: 16px; }
+.invoice-group-dialog .btn { min-height: 44px; }
+.group-error { color: #a52a2a; }

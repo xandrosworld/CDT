@@ -163,10 +163,24 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
             invoice_amount += Decimal(str(invoice.get("total_amount") or 0))
     # Stable within the original date/invoice order; ALL troublesome lines first.
     lines.sort(key=lambda item: (item["action_rank"], item.get("mapping_status") != "unmapped"))
+    source_line_count=len(lines)
+    group_warnings=[]
+    if direction=='input':
+        try:
+            from invoice_line_groups import grouped_lines
+        except ImportError:
+            from .invoice_line_groups import grouped_lines
+        lines,group_warnings=grouped_lines(conn,tenant,visible_invoices,lines)
+        qty_by_unit={}
+        for line in lines:
+            if line.get('id') is not None:
+                unit=str(line.get('source_unit') or 'Không có ĐVT')
+                qty_by_unit[unit]=qty_by_unit.get(unit,Decimal(0))+Decimal(str(line.get('qty') or 0))
     return {
         "direction": direction, "source": source, "date_from": start, "date_to": end,
         "status": status, "line_filter": line_filter, "items": visible_invoices,
-        "lines": lines, "counts": counts, "status_labels": STATUS_LABELS, "line_labels": LINE_LABELS,
+        "lines": lines, "group_warnings":group_warnings,"source_line_count":source_line_count,
+        "counts": counts, "status_labels": STATUS_LABELS, "line_labels": LINE_LABELS,
         "totals": {
             "invoice_count": len(visible_invoices), "line_count": sum(item.get("id") is not None for item in lines),
             "issue_count": sum(bool(item["issue"]) for item in lines),
@@ -230,6 +244,21 @@ def range_workbook(payload):
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = width
     if payload["direction"] == "input":
+        grouped=[r for r in payload['lines'] if r.get('group_id')]
+        if grouped:
+            original=wb.create_sheet('Dong goc da gop')
+            original.append(['Nhóm','Hóa đơn','Dòng gốc','Tên nguồn','ĐVT nguồn','Lượng nguồn','Đơn giá nguồn','Tiền chưa thuế','Mã kho','Lượng sau quy đổi','ĐVT kho'])
+            for group in grouped:
+                invoice=invoices[group['invoice_id']]
+                for member in group['group_members']:
+                    original.append([group['group_id'],invoice['invoice_series']+' / '+invoice['invoice_number'],member['line_index'],member['source_item_name'],member['source_unit'],member['qty'],member['unit_price'],member['amount'],member['product_code'],member['stock_qty'],member['product_unit']])
+            for cells in original:
+                for cell in cells:
+                    if isinstance(cell.value,str):cell.data_type='s'
+                    cell.alignment=Alignment(vertical='top',wrap_text=True)
+                    if cell.column in {7,8}:cell.number_format='#,##0'
+                    elif cell.column in {6,10}:cell.number_format='#,##0.######'
+            original.freeze_panes='A2'
         summary = wb.create_sheet("Tong nhap theo ma")
         summary.append(["TỔNG NHẬP THEO MÃ TRONG TỪNG HÓA ĐƠN · Đủ các dòng đã ghép, không phụ thuộc lọc dòng"])
         summary.append(["Ngày", "Hóa đơn", "Mã kho", "Tên hàng", "ĐVT", "Tổng lượng nhập",
