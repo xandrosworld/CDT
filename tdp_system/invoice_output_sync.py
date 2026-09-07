@@ -853,6 +853,11 @@ def sync_output_batch(
                 reference_fields=safe_reference_fields,
             )
             apply_saved_mappings(conn, "output", invoice_id)
+            try:
+                from .invoice_output_mapping import match_output_catalog_codes
+            except ImportError:
+                from invoice_output_mapping import match_output_catalog_codes
+            match_output_catalog_codes(conn, tenant=tenant, invoice_id=invoice_id, now_iso=now_iso)
             invoice_date = str(normalized.get("invoice_date") or "")
             if invoice_date and not date_from <= invoice_date <= date_to:
                 raise InvoiceOutputSyncError(

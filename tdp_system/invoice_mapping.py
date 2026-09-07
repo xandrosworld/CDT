@@ -295,7 +295,8 @@ def apply_saved_mappings(conn, direction: str, invoice_id: int) -> int:
     else:
         invoice = conn.execute(
             """SELECT tenant,source mapping_source,
-                      COALESCE(buyer_tax_code,'') partner_key,invoice_date
+                      COALESCE(buyer_tax_code,'') partner_key,invoice_date,
+                      sync_status,stock_status,source_status_class
                FROM outgoing_source_invoices WHERE id=?""",
             (invoice_id,),
         ).fetchone()
@@ -304,6 +305,9 @@ def apply_saved_mappings(conn, direction: str, invoice_id: int) -> int:
     if not invoice:
         return 0
     if safe_direction == "output":
+        if (invoice["sync_status"] != "synced" or invoice["source_status_class"] != "issued"
+                or invoice["stock_status"] in {"posted", "reversal_required", "reversed"}):
+            return 0
         mapping_source = invoice["mapping_source"]
     applied = 0
     rows = conn.execute(

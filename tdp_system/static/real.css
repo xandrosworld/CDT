@@ -766,5 +766,8 @@ body { min-width: 320px; }
 .invoice-group-dialog { max-width:min(960px,96vw); }
 .invoice-group-dialog .btn { min-height: 44px; }
 .group-error { color: #a52a2a; }
-.invoice-draft-factor { width: 110px; max-width: 100%; min-height: 42px; }
-.invoice-draft-conversion { margin-top: 8px; }
+.invoice-mapping-compact { display:grid; grid-template-columns:minmax(0,1fr) 72px 44px; gap:6px; align-items:center; }
+.invoice-mapping-compact .invoice-draft-conversion { min-width:0; }
+.invoice-mapping-compact .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.invoice-mapping-compact .invoice-draft-factor { width:100%; min-width:0; max-width:100%; }
+.invoice-lines-card .invoice-mapping-compact input,.invoice-lines-card .invoice-mapping-compact .btn { height:34px; min-height:34px; margin:0; padding:5px 6px; font-size:13px; }

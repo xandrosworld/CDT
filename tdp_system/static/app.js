@@ -225,7 +225,7 @@
     var active = content.querySelector('.invoice-mapping-cell[data-editing-id]');
     if (active && active !== input.closest('.invoice-mapping-cell')) {
       closeMsmiProductOptions();
-      showToast('Hãy Lưu hoặc Bỏ sửa dòng đang mở trước khi chọn mã dòng khác.', true);
+      showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa dòng đang mở trước.', true);
       active.querySelector('input')?.focus();
       return;
     }
@@ -238,7 +238,7 @@
       cell.querySelector('.invoice-draft-conversion').innerHTML = window.TdpInvoiceDraftConversion(line, {
         code: option.dataset.productCode, name: option.dataset.productName, unit: option.dataset.productUnit
       });
-      cell.querySelector('[data-action="save-invoice-mapping"]').textContent = 'Lưu mã & quy đổi';
+      input.title = option.dataset.productCode + ' · ' + option.dataset.productName + ' · ' + option.dataset.productUnit + '. Esc để bỏ sửa.';
     }
     closeMsmiProductOptions();
     // Choosing a suggestion previews the conversion; saving remains explicit.
@@ -5500,12 +5500,14 @@
 
   content.addEventListener("input", function (event) {
     if (event.target.matches('.unit-conversion-input, .invoice-draft-factor')) {
+      event.target.closest('.invoice-mapping-cell').dataset.editingId = event.target.dataset.id;
       var previewLine = invoiceEditingLine(event.target.dataset.id);
       var previewBox = event.target.closest('.invoice-mapping-cell')?.querySelector('.invoice-conversion-preview');
       var previewFactor = Number(event.target.value.replace(',', '.'));
       if (previewLine && previewBox) previewBox.textContent = Number.isFinite(previewFactor) && previewFactor > 0 && previewFactor <= 1000000000
         ? stockQty(previewLine.qty) + ' ' + previewLine.source_unit + ' → ' + stockQty(previewLine.qty * previewFactor) + ' ' + (event.target.dataset.unit || previewLine.product_unit)
         : 'Nhập hệ số lớn hơn 0 trong giới hạn cho phép';
+      if (previewBox) event.target.title = previewBox.textContent + '. Esc để bỏ sửa.';
       return;
     }
 
@@ -5710,6 +5712,13 @@
   });
 
   content.addEventListener("focusin", function (event) {
+    var mappingField = event.target.closest('.invoice-mapping-input, .invoice-draft-factor');
+    var pendingCell = content.querySelector('.invoice-mapping-cell[data-editing-id]');
+    if (mappingField && pendingCell && mappingField.closest('.invoice-mapping-cell') !== pendingCell) {
+      showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa dòng đang mở trước.', true);
+      pendingCell.querySelector('input:not(:disabled)')?.focus();
+      return;
+    }
     var input = event.target.closest(".invoice-mapping-input");
     if (input) {
       closeMsmiProductOptions();
@@ -5760,7 +5769,7 @@
     var draftLine = invoiceEditingLine(input.dataset.id);
     if (draftCell && draftLine) {
       draftCell.querySelector('.invoice-draft-conversion').innerHTML = window.TdpInvoiceDraftConversion(draftLine, null);
-      draftCell.querySelector('[data-action="save-invoice-mapping"]').textContent = 'Ghi nhớ';
+      draftCell.dataset.editingId = input.dataset.id;
     }
     closeMsmiProductOptions();
     msmiProductSearchTimer = setTimeout(function () { loadMsmiProductOptions(input); }, 220);
@@ -5821,6 +5830,20 @@
       }
     }
     if (event.isComposing) return;
+    if (event.key === 'Escape') {
+      var cancelCell = event.target.closest('.invoice-mapping-cell');
+      var cancelField = cancelCell?.querySelector('.invoice-mapping-input');
+      if (cancelField) {
+        event.preventDefault(); event.stopPropagation(); closeMsmiProductOptions();
+        var originalLine = invoiceEditingLine(cancelField.dataset.id);
+        var originalInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === originalLine?.invoice_id; });
+        if (originalLine && originalInvoice) {
+          delete cancelCell.dataset.editingId;
+          cancelCell.innerHTML = window.TdpInvoiceMappingCell(originalLine, originalInvoice);
+        }
+      }
+      return;
+    }
     if (!input || event.key !== "Enter") return;
     event.preventDefault();
     var direction = input.dataset.direction || state.invoiceDirection;
@@ -5842,9 +5865,7 @@
   }
   async function revealSavedInvoiceLine(direction, id, needsConversion) {
     if (state.invoiceDirection !== direction) return;
-    var expandedFilter = false;
     if (!invoiceEditingLine(id)) {
-      expandedFilter = true;
       state.invoiceStatus = 'all';
       state.invoiceLineFilter = 'all';
       await loadInvoiceWorkbench(true);
@@ -5853,13 +5874,8 @@
     var row = document.getElementById('invoice-line-' + direction + '-' + id);
     if (!row) return;
     row.classList.add('invoice-just-saved');
-    var savedNote = document.createElement('small');
-    savedNote.className = 'mapping-save-note';
-    savedNote.textContent = (expandedFilter ? 'Đã mở Tất cả dòng để giữ dòng vừa lưu. ' : '') +
-      (needsConversion ? 'Còn bước nhập quy đổi bên dưới.' : (direction === 'input' ? 'Đã lưu mã. Muốn gộp: tích Chọn gộp dòng này bên dưới và dòng còn lại, rồi bấm Gộp dòng đã chọn ở trên bảng.' : 'Đã lưu. Chọn Sửa mã / Sửa quy đổi nếu cần đổi lại.'));
-    row.querySelector('.invoice-mapping-cell').prepend(savedNote);
     row.scrollIntoView({block:'center', inline:'nearest'});
-    var next = needsConversion ? document.getElementById('conversion_' + direction + '_' + id) : row.querySelector('[data-action="edit-invoice-mapping"]');
+    var next = needsConversion ? row.querySelector('.invoice-draft-factor') : row.querySelector('[data-action="save-invoice-mapping"]');
     if (next) next.focus({preventScroll:true});
   }
   content.addEventListener("click", async function (event) {
@@ -6428,7 +6444,7 @@
     if (['edit-invoice-mapping', 'edit-invoice-conversion', 'cancel-invoice-mapping-edit'].includes(action)) {
       var activeEdit = content.querySelector('.invoice-mapping-cell[data-editing-id]');
       if (activeEdit && activeEdit.dataset.editingId !== button.dataset.id) {
-        showToast('Hãy Lưu hoặc Bỏ sửa dòng đang mở trước khi sửa dòng khác.', true);
+        showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa dòng đang mở trước.', true);
         activeEdit.querySelector('input')?.focus();
         return;
       }
@@ -6448,7 +6464,7 @@
       var pendingEdit = content.querySelector('.invoice-mapping-cell[data-editing-id]');
       var savingThisEdit = action.startsWith('save-invoice-') && pendingEdit?.dataset.editingId === button.dataset.id;
       if (pendingEdit && !savingThisEdit) {
-        showToast('Đang sửa mã/quy đổi. Hãy Lưu hoặc Bỏ sửa trước khi tiếp tục.', true);
+        showToast('Đang sửa mã/quy đổi. Hãy Lưu hoặc nhấn Esc để bỏ sửa trước.', true);
         pendingEdit.querySelector('input')?.focus();
         return;
       }
@@ -6483,6 +6499,11 @@
       var mappingDirection = button.dataset.direction || state.invoiceDirection;
       var mappingInput = document.getElementById("map_" + mappingDirection + "_" + button.dataset.id);
       if (!mappingInput || !mappingInput.value.trim()) { showToast("Cần nhập mã hàng TĐP", true); return; }
+      if (mappingInput.dataset.selectedCode !== mappingInput.value.trim()) {
+        showToast('Chọn mã trong danh sách gợi ý rồi nhập quy đổi và Lưu.', true);
+        mappingInput.focus();
+        return;
+      }
       try {
         button.disabled = true;
         var mappingBody = { product_code: mappingInput.value.trim(), expected: invoiceMappingExpected(button.dataset.id) };
@@ -6495,8 +6516,9 @@
           }
           mappingBody.conversion_factor = factorValue;
         }
+        var conversionOnly = mappingBody.product_code === mappingBody.expected.product_code && mappingBody.conversion_factor != null;
         var mappingResult = await api("/api/invoice-workbench/items/" + mappingDirection + "/" +
-          button.dataset.id + "/mapping", {
+          button.dataset.id + (conversionOnly ? "/conversion" : "/mapping"), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(mappingBody)
@@ -6586,6 +6608,24 @@
       } catch (error) {
         showToast(error.message, true);
         button.disabled = false;
+      }
+      return;
+    }
+    if (action === "match-output-catalog-codes") {
+      if (document.querySelector('.invoice-mapping-cell[data-editing-id]')) {
+        showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa dòng đang mở trước.', true); return;
+      }
+      var matchLabel = button.textContent;
+      try {
+        button.disabled = true; button.textContent = 'Đang khớp mã…';
+        var matched = await api('/api/invoice-workbench/output-match-codes', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({from:state.invoiceFrom,to:state.invoiceTo})
+        });
+        await loadInvoiceWorkbench(true); render();
+        showToast('Đã khớp ' + matched.matched_lines + ' dòng theo mã danh mục; ' + matched.unit_review_lines + ' dòng trong đó cần quy đổi đơn vị. Chưa xuất kho.');
+      } catch (error) {
+        showToast(error.message, true); button.disabled = false; button.textContent = matchLabel;
       }
       return;
     }

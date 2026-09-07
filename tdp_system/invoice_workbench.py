@@ -545,6 +545,27 @@ def register_invoice_workbench_routes(app, ctx) -> None:
         except (InvoiceReceiptError, InvoiceWorkbenchError) as error:
             return jsonify({'ok': False, 'error': str(error), 'code': getattr(error, 'code', 'invalid')}), getattr(error, 'status', 400)
 
+    @app.post("/api/invoice-workbench/output-match-codes")
+    def api_output_match_codes():
+        try:
+            from .invoice_output_mapping import match_output_catalog_codes
+            from .invoice_mapping import InvoiceMappingError
+        except ImportError:
+            from invoice_output_mapping import match_output_catalog_codes
+            from invoice_mapping import InvoiceMappingError
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "Dữ liệu yêu cầu không hợp lệ"}), 400
+        try:
+            start, end = validate_date_range(body.get("from"), body.get("to"))
+            with db_factory() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                result = match_output_catalog_codes(conn, tenant=tenant_code(conn),
+                    date_from=start, date_to=end, now_iso=now_iso)
+            return jsonify({"ok": True, **result})
+        except (InvoiceWorkbenchError, InvoiceMappingError) as error:
+            return jsonify({"ok": False, "error": str(error)}), getattr(error, "status", 400)
+
     @app.get("/api/invoice-workbench/invoices")
     @app.get("/api/invoice-workbench/invoices/export")
     def api_invoice_range_rows():
