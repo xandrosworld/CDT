@@ -84,7 +84,7 @@ class UnifiedUiLanguageContractTests(unittest.TestCase):
     def test_keyboard_flow_and_official_payment_documents_remain_explicit(self):
         for marker in (
             'event.target.closest(".invoice-mapping-input")',
-            'event.target.closest(".unit-conversion-input")',
+            'event.target.closest(".unit-conversion-input, .invoice-draft-factor")',
             'event.target.closest(".quick-sell-price")',
             'event.target.closest(".payable-allocation-input")',
             'event.key === "Enter"',

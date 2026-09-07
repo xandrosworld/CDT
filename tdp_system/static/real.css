@@ -77,8 +77,13 @@ body { min-width: 320px; }
 .localized-date-control { position:relative; display:inline-block; width:172px; min-width:145px; max-width:100%; vertical-align:middle; }
 .form-field > .localized-date-control { width:100%; }
 .localized-date-display { width:100%; min-height:42px; padding-right:46px !important; box-sizing:border-box; }
-.localized-date-native { position:absolute; z-index:2; top:0; right:0; width:44px !important; height:100%; margin:0; padding:0 !important; opacity:0; cursor:pointer; }
-.localized-date-icon { position:absolute; z-index:1; top:50%; right:14px; transform:translateY(-50%); color:#17324d; font-size:18px; line-height:1; pointer-events:none; }
+.localized-date-native { position:absolute; z-index:1; top:0; right:0; width:44px !important; height:100%; margin:0; padding:0 !important; opacity:0; pointer-events:none; }
+.localized-date-control > .localized-date-icon { position:absolute; z-index:2; top:0; right:0; width:44px; height:100%; min-height:0; margin:0; padding:0; border:0; border-radius:0 9px 9px 0; background:transparent; color:#17324d; font-size:18px; line-height:1; display:grid; place-items:center; cursor:pointer; }
+.localized-date-icon:hover:not(:disabled) { background:rgba(8,127,115,.08); }
+.localized-date-icon:focus-visible { outline:2px solid #087f73; outline-offset:-4px; }
+.localized-date-icon:disabled { cursor:default; opacity:.5; }
+.native-picker-fallback > .localized-date-native { z-index:3; pointer-events:auto; cursor:pointer; }
+.native-picker-fallback > .localized-date-native::-webkit-calendar-picker-indicator { position:absolute; inset:0; width:100%; height:100%; margin:0; padding:0; }
 .localized-date-control:focus-within .localized-date-display { outline:3px solid rgba(8,127,115,.12); border-color:#087f73; }
 .kitchen-manual-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
 .kitchen-side-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; align-items:end; }

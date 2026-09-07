@@ -46,6 +46,7 @@ Kết quả đối chiếu số liệu từng màn/file và phần dữ liệu c
 
 ## Dùng bản web trên máy tính
 
+- Ô chọn ngày/tháng: bấm biểu tượng lịch hoặc vùng nút bên phải để mở, có thể dùng Tab rồi Enter/Space. Gõ ngày theo `dd/mm/yyyy` hoặc tháng theo `mm/yyyy`, rồi Tab/bấm ra ngoài để áp dụng bộ lọc. Bản sửa 07/09 dùng chung nút lịch rộng 44px, đồng bộ lại bộ lọc khi gõ tay. Kiểm thử Chrome/Edge ở 1920/1440/1024px, cùng đường mở lịch dự phòng cho trình duyệt thiếu `showPicker`, đạt trên dữ liệu thử. Chạy lại bằng `python -m tdp_system.browser_fixture_date_picker_server` và `node tdp_system/browser_smoke_date_picker.cjs` (cần Playwright, Chrome, Edge; có thể đặt `TDP_PLAYWRIGHT_MODULE` tới thư mục package Playwright).
 - Tại **In giấy tờ**, chọn phiếu rồi bấm **In phần đã chọn**. Chọn máy in và số bản trong hộp thoại của trình duyệt/PDF. Nếu hộp thoại chưa bật, dùng nút máy in trên PDF hoặc tải PDF về máy để in.
 - Dữ liệu nằm trên hệ thống trực tuyến. Đóng trình duyệt không dừng lịch sao lưu của dịch vụ đang chạy. Mở cùng địa chỉ và đăng nhập trên máy tính khác để tiếp tục.
 - Kết quả rà từng màn, lỗi tìm được và giới hạn kiểm chứng được lưu tại [KIEM-TRA-MAY-TINH-20260906.md](KIEM-TRA-MAY-TINH-20260906.md). Các thao tác ghi nghiệp vụ trong đợt rà dùng dữ liệu thử riêng.

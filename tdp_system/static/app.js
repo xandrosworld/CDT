@@ -376,6 +376,8 @@
       if (nativeInput.dataset.localizedDate === "1") return;
       nativeInput.dataset.localizedDate = "1";
       var kind = nativeInput.type;
+      var committedValue = nativeInput.value;
+      var fieldLabel = nativeInput.getAttribute("aria-label") || Array.from(nativeInput.labels || []).map(function (label) { return label.textContent.trim(); }).join(' ') || (kind === 'month' ? 'Tháng' : 'Ngày');
       var wrapper = document.createElement("span");
       wrapper.className = "localized-date-control";
       var display = document.createElement("input");
@@ -385,18 +387,35 @@
       display.inputMode = "numeric";
       display.autocomplete = "off";
       display.required = nativeInput.required;
-      display.setAttribute("aria-label", nativeInput.getAttribute("aria-label") || display.placeholder);
+      display.disabled = nativeInput.disabled;
+      display.readOnly = nativeInput.readOnly;
+      display.setAttribute("aria-label", fieldLabel);
       display.value = localizedTemporalText(nativeInput.value, kind);
       nativeInput.parentNode.insertBefore(wrapper, nativeInput);
       wrapper.appendChild(display);
       wrapper.appendChild(nativeInput);
       nativeInput.classList.add("localized-date-native");
       nativeInput.tabIndex = -1;
-      var icon = document.createElement("span");
+      var icon = document.createElement("button");
+      icon.type = "button";
       icon.className = "localized-date-icon";
-      icon.setAttribute("aria-hidden", "true");
+      icon.setAttribute("aria-label", (kind === 'month' ? 'Mở lịch tháng: ' : 'Mở lịch: ') + fieldLabel);
+      icon.disabled = nativeInput.disabled || nativeInput.readOnly;
       icon.textContent = "▦";
       wrapper.appendChild(icon);
+      if (typeof nativeInput.showPicker === 'function') {
+        // Keep the text field from blurring/re-rendering before the click arrives.
+        icon.addEventListener('pointerdown', function (event) { event.preventDefault(); });
+        icon.addEventListener('click', function () {
+          if (!nativeInput.disabled && !nativeInput.readOnly) nativeInput.showPicker();
+        });
+      } else {
+        // Older browsers use the native picker, with its full hit area over the icon.
+        wrapper.classList.add('native-picker-fallback');
+        icon.tabIndex = -1;
+        nativeInput.tabIndex = 0;
+        nativeInput.setAttribute('aria-label', fieldLabel);
+      }
 
       function syncFromDisplay(reportInvalid) {
         var parsed = parseLocalizedTemporal(display.value, kind);
@@ -408,7 +427,7 @@
           return;
         }
         display.setCustomValidity("");
-        var changed = nativeInput.value !== parsed;
+        var changed = committedValue !== parsed;
         nativeInput.value = parsed;
         display.value = localizedTemporalText(parsed, kind);
         if (changed) nativeInput.dispatchEvent(new Event("change", { bubbles: true }));
@@ -425,12 +444,13 @@
         display.setCustomValidity("");
       });
       nativeInput.addEventListener("change", function () {
+        committedValue = nativeInput.value;
         display.value = localizedTemporalText(nativeInput.value, kind);
         display.setCustomValidity("");
       });
       if (nativeInput.form) {
         nativeInput.form.addEventListener("reset", function () {
-          setTimeout(function () { display.value = localizedTemporalText(nativeInput.value, kind); }, 0);
+          setTimeout(function () { committedValue = nativeInput.value; display.value = localizedTemporalText(nativeInput.value, kind); }, 0);
         });
       }
     });
