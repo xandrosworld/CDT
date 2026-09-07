@@ -283,9 +283,9 @@ class InventoryPeriodCloseUiContractTests(unittest.TestCase):
         self.assertIn('data-action="close-inventory-month"', app_js)
         self.assertIn('data-action="reopen-inventory-month"', app_js)
         self.assertIn(".inventory-month-close", styles)
-        self.assertIn("app.js?v=20260907-8", index)
-        self.assertIn("real.css?v=20260907-8", index)
-        self.assertIn("invoice-workbench.js?v=20260907-8", index)
+        self.assertIn("app.js?v=20260907-9", index)
+        self.assertIn("real.css?v=20260907-9", index)
+        self.assertIn("invoice-workbench.js?v=20260907-9", index)
 
 
 if __name__ == "__main__":

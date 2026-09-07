@@ -724,9 +724,40 @@ body { min-width: 320px; }
 .invoice-group-select { width: 22px; height: 22px; cursor: pointer; }
 .invoice-group-choice { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 5px 0; font-weight: 600; cursor: pointer; }
 .invoice-group-choice:has(input:disabled) { color: #5b6570; cursor: default; }
+
+/* Select source rows first; mapping and conversion are completed in one dialog. */
+.invoice-lines-card .invoice-select-first { min-width:1377px; }
+.invoice-lines-card .invoice-select-first .invoice-select-cell { width:52px; min-width:52px; padding:4px; text-align:center; }
+.invoice-select-first .invoice-group-choice { justify-content:center; min-height:44px; }
+.invoice-select-first .invoice-group-select { width:24px; height:24px; flex-shrink:0; }
+.invoice-select-first .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.invoice-lines-card .invoice-select-first tbody td:nth-child(2) { position:sticky; left:52px; z-index:2; }
+.invoice-lines-card .invoice-select-first thead th:nth-child(2) { left:52px; z-index:5; }
+.invoice-lines-card .invoice-select-first tbody td:nth-child(9) { position:static; box-shadow:none; }
+.invoice-lines-card .invoice-select-first thead th:nth-child(9) { right:auto; }
+.invoice-lines-card .invoice-select-first tbody td:nth-child(10) { position:sticky; right:180px; z-index:2; box-shadow:-1px 0 #b8c2ca; }
+.invoice-lines-card .invoice-select-first thead th:nth-child(10) { right:180px; z-index:5; }
+.invoice-group-dialog { box-sizing:border-box; width:min(960px,96vw); max-height:92vh; overflow:auto; padding:22px; font-size:16px; }
+.invoice-group-dialog #group-product-search { display:block; width:100%; box-sizing:border-box; margin:8px 0; }
+.group-product-results { display:flex; flex-direction:column; gap:5px; max-height:220px; overflow:auto; }
+.group-product-results button { text-align:left; white-space:normal; min-height:44px; }
+.group-lines { max-height:32vh; margin:12px 0; }
+.invoice-group-dialog .group-lines table { width:100%; min-width:0; table-layout:fixed; border-collapse:collapse; }
+.group-lines th,.group-lines td { padding:10px; border:1px solid #d1d8dd; text-align:left; font-size:15px; }
+.group-lines th { position:sticky; top:0; background:#edf3f6; color:#172b3a; }
+.group-lines th:first-child { width:30%; }
+.group-lines th:nth-child(2) { width:14%; }
+.group-lines th:nth-child(3) { width:32%; }
+.group-lines th:nth-child(4) { width:24%; }
+.group-lines td { white-space:normal; overflow-wrap:anywhere; }
+.group-lines .group-factor { width:85px; min-height:42px; }
+.group-lines label { display:block; min-width:0; }
+.invoice-group-dialog > .compact-controls { position:sticky; bottom:-22px; background:white; padding:12px 0; }
+.group-result { padding:14px; background:#e8f6f4; line-height:1.7; }
+.invoice-group-dialog .group-error { color:#a42e1c; }
 .invoice-group-select:disabled { cursor: default; }
 .invoice-group-select { flex-shrink: 0; }
 .invoice-group-hint { display: block; color: #5b6570; }
-.invoice-group-dialog { padding: 20px; max-width: min(640px, 94vw); max-height: 90vh; overflow: auto; font-size: 16px; }
+.invoice-group-dialog { max-width:min(960px,96vw); }
 .invoice-group-dialog .btn { min-height: 44px; }
 .group-error { color: #a52a2a; }

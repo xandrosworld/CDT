@@ -124,7 +124,9 @@ def _stock_values(qty: Any, amount: Any, factor: float | None) -> tuple[float, f
     )
 
 
-def _update_line_snapshot(conn, table: str, line_id: int, product_code: str, status: str, factor) -> None:
+def _update_line_snapshot(conn, table: str, line_id: int, product_code: str, status: str, factor, *, clear_group_choice=True) -> None:
+    if clear_group_choice and table == 'msmi_invoice_items' and conn.execute("SELECT 1 FROM sqlite_master WHERE name='invoice_input_group_choices'").fetchone():
+        conn.execute('DELETE FROM invoice_input_group_choices WHERE (invoice_id,line_index) IN (SELECT invoice_id,line_index FROM msmi_invoice_items WHERE id=?)',(line_id,))
     row = conn.execute(f"SELECT qty,amount FROM {table} WHERE id=?", (line_id,)).fetchone()
     stock_qty, stock_price = _stock_values(row["qty"], row["amount"], factor) if status == "mapped" else (0, 0)
     conn.execute(
@@ -309,6 +311,14 @@ def apply_saved_mappings(conn, direction: str, invoice_id: int) -> int:
         (invoice_id,),
     ).fetchall()
     for row in rows:
+        if safe_direction == 'input':
+            try:
+                from invoice_line_groups import restore_group_choice
+            except ImportError:
+                from .invoice_line_groups import restore_group_choice
+            if restore_group_choice(conn, row):
+                applied += 1
+                continue
         scope = _scope_key(row["source_item_code"], row["source_item_name"], row["source_unit"])
         mappings = conn.execute(
             """SELECT m.* FROM invoice_line_mappings m JOIN products p ON p.code=m.product_code
@@ -361,6 +371,16 @@ def validated_input_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
             context["invoice_date"], context["invoice_date"],
         ),
     ).fetchall()
+    try:
+        from invoice_line_groups import selected_stock_mapping, GroupError
+    except ImportError:
+        from .invoice_line_groups import selected_stock_mapping, GroupError
+    try:
+        selected = selected_stock_mapping(conn, item_id)
+    except GroupError as error:
+        raise InvoiceMappingError(str(error), code='stale_conversion_snapshot') from None
+    if selected:
+        rows = [selected]
     if len(rows) != 1:
         raise InvoiceMappingError(
             "Mapping/quy đổi của dòng không còn duy nhất ở ngày hóa đơn",
@@ -700,6 +720,17 @@ def save_conversion(
     if not math.isfinite(factor) or factor <= 0 or factor > 1_000_000_000:
         raise InvoiceMappingError("Hệ số quy đổi phải lớn hơn 0 và trong giới hạn an toàn")
     _check_expected(context, expected)
+    if safe_direction == 'input':
+        try:
+            from invoice_line_groups import edit_selected_conversion, GroupError
+        except ImportError:
+            from .invoice_line_groups import edit_selected_conversion, GroupError
+        try:
+            selected_result = edit_selected_conversion(conn, int(item_id), factor, now_iso())
+        except GroupError as error:
+            raise InvoiceMappingError(str(error), code='stale_conversion_snapshot', status=409) from None
+        if selected_result:
+            return selected_result
     active = _active_mappings(conn, context, _scope_key(context['source_item_code'], context['source_item_name'], context['source_unit']))
     if len(active) != 1:
         raise InvoiceMappingError('Không có đúng một quy tắc hiệu lực; hãy kiểm tra lại mã hàng.', code='mapping_conflict' if active else 'mapping_missing', status=409)

@@ -5516,9 +5516,13 @@
 
   content.addEventListener("change", function (event) {
     if (event.target.matches('.invoice-group-select')) {
-      var selectedGroups = content.querySelectorAll('.invoice-group-select:checked').length;
+      var checked = Array.from(content.querySelectorAll('.invoice-group-select:checked'));
+      if (checked.some(function(e) { return e.dataset.invoiceId !== event.target.dataset.invoiceId; })) {
+        event.target.checked = false; showToast('Chỉ chọn các dòng trong cùng một hóa đơn để gộp.', true); return;
+      }
+      var selectedGroups = checked.length;
       var groupButton = content.querySelector('[data-action="preview-invoice-group"]');
-      if (groupButton) { groupButton.disabled = selectedGroups < 2; groupButton.textContent = 'Gộp dòng đã chọn (' + selectedGroups + ')'; }
+      if (groupButton) { groupButton.disabled = selectedGroups < 2; groupButton.textContent = 'Gộp ' + selectedGroups + ' dòng đã chọn'; }
       return;
     }
     if (event.target.form && event.target.form.id === 'buyerProfileForm') {
@@ -6405,27 +6409,16 @@
       var groupIds = Array.from(content.querySelectorAll('.invoice-group-select:checked')).map(function(e) { return Number(e.dataset.id); });
       try {
         button.disabled = true;
-        var groupPreview = await api('/api/invoice-workbench/input-groups/preview', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_ids:groupIds})});
-        var groupDialog = document.createElement('dialog');
-        groupDialog.className = 'inventory-totals-dialog invoice-group-dialog';
-        groupDialog.innerHTML = '<div class="inventory-totals-heading"><h3>Gộp ' + groupPreview.count + ' dòng thành 1 dòng</h3></div><p>' + esc(groupPreview.invoice_number) + ' · ' + esc(groupPreview.product_code) + ' · ' + esc(groupPreview.product_name) + '</p><p><strong>Tổng lượng: ' + stockQty(groupPreview.qty) + ' ' + esc(groupPreview.unit) + '</strong></p><p>Tổng tiền chưa thuế: <strong>' + stockMoney(groupPreview.amount) + '</strong></p><p>Giá vốn sau gộp: <strong>' + stockMoney(groupPreview.unit_cost) + ' / ' + esc(groupPreview.unit) + '</strong></p><p class="code-note">Giá vốn = tổng tiền ÷ tổng lượng sau quy đổi, gồm cả hàng 0đ. Bảng và Excel chính chỉ còn 1 dòng; vẫn xem được dòng gốc và Tách lại. Gộp chưa nhập kho.</p><div class="compact-controls"><button type="button" class="btn btn-outline group-cancel">Quay lại</button><button type="button" class="btn btn-primary group-confirm">Gộp thành 1 dòng</button></div><p class="group-error" role="alert"></p>';
-        var groupBusy = false;
-        groupDialog.querySelector('.group-cancel').onclick=function() { if(!groupBusy) groupDialog.close(); };
-        groupDialog.addEventListener('cancel',function(e) { if(groupBusy)e.preventDefault(); });
-        groupDialog.addEventListener('close',function() { groupDialog.remove(); });
-        groupDialog.querySelector('.group-confirm').onclick=async function() {
-          if(groupBusy)return;
-          groupBusy=true; groupDialog.querySelectorAll('button').forEach(function(b) { b.disabled=true; });
-          try {
-            await api('/api/invoice-workbench/input-groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_ids:groupIds,token:groupPreview.token})});
-            groupDialog.close(); await loadInvoiceWorkbench(true); render();
-            var mergedRow=document.getElementById('invoice-line-input-'+groupIds[0]);
-            if(mergedRow)mergedRow.scrollIntoView({block:'center',inline:'nearest'});
-            showToast('Đã gộp thành 1 dòng · ' + stockQty(groupPreview.qty) + ' ' + groupPreview.unit + '. Chưa nhập kho.');
-          } catch(e) { groupDialog.querySelector('.group-error').textContent=e.message; }
-          finally { groupBusy=false;groupDialog.querySelectorAll('button').forEach(function(b) { b.disabled=false; }); }
-        };
-        document.body.appendChild(groupDialog); groupDialog.showModal(); groupDialog.querySelector('.group-cancel').focus();
+        await window.TdpInvoiceGroupEditor(groupIds, {
+          api: api, esc: esc, quantity: stockQty, money: stockMoney,
+          saved: async function(result, preview) {
+            state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all'; persistInvoiceWorkbenchFilters();
+            await loadInvoiceWorkbench(true); render();
+            var mergedRow = document.getElementById('invoice-line-input-' + groupIds[0]);
+            if (mergedRow) mergedRow.scrollIntoView({block:'center',inline:'nearest'});
+            showToast('Đã gộp thành 1 dòng · ' + stockQty(preview.qty) + ' ' + preview.unit + '. Chưa nhập kho.');
+          }
+        });
       } catch(e) { showToast(e.message,true); }
       finally { button.disabled=false; }
       return;

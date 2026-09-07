@@ -77,6 +77,114 @@ class SelectedGroupTests(unittest.TestCase):
         self.assertEqual(before,after)
         self.assertEqual(3,len(self.payload()['lines']))
 
+    def selection(self, factor=1):
+        body={'item_ids':self.ids,'product_code':'QA-OIL','factors':{str(i):factor for i in self.ids}}
+        response=self.client.post('/api/invoice-workbench/input-groups/selection-preview',json=body)
+        self.assertEqual(200,response.status_code,response.json)
+        return {**body,'token':response.json['token']},response.json
+
+    def test_select_unmapped_first_cancel_then_atomic_mapping_merge_retry_split(self):
+        self.conn.execute("UPDATE msmi_invoice_items SET product_code=NULL,mapping_status='unmapped',conversion_factor=NULL,stock_qty=0 WHERE id IN (?,?)",self.ids)
+        self.conn.commit()
+        before=list(self.conn.iterdump())
+        first=self.client.post('/api/invoice-workbench/input-groups/selection-preview',json={'item_ids':self.ids})
+        self.assertEqual(200,first.status_code)
+        self.assertFalse(first.json['ready'])
+        body,p=self.selection()
+        self.assertEqual((30,1288889),(p['qty'],p['amount']))
+        self.assertEqual(before,list(self.conn.iterdump()),'Opening/preview/cancel must not save mappings')
+        response=self.client.post('/api/invoice-workbench/input-groups/save-selection',json=body)
+        self.assertEqual(200,response.status_code,response.json)
+        self.assertEqual(3,len(self.payload()['lines']))
+        merged=next(r for r in self.payload()['lines'] if r.get('group_id'))
+        self.assertEqual((30,1288889),(merged['qty'],merged['amount']))
+        self.assertEqual(0,self.conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0])
+        changes=self.conn.total_changes
+        retry=self.client.post('/api/invoice-workbench/input-groups/save-selection',json=body)
+        self.assertTrue(retry.json['idempotent'])
+        self.assertEqual(changes,self.conn.total_changes)
+        self.client.post(f"/api/invoice-workbench/input-groups/{response.json['id']}/split")
+        self.assertEqual(4,len(self.payload()['lines']))
+        self.assertEqual(409,self.client.post('/api/invoice-workbench/input-groups/save-selection',json=body).status_code)
+
+    def test_select_first_fraction_conversion_rollback_and_stale_preview(self):
+        self.conn.execute("UPDATE msmi_invoice_items SET source_unit='Thùng',product_code=NULL,mapping_status='unmapped' WHERE id IN (?,?)",self.ids)
+        self.conn.commit()
+        body,p=self.selection(.5)
+        self.assertEqual(15,p['qty'])
+        before=list(self.conn.iterdump())
+        with patch.object(groups,'_audit',side_effect=RuntimeError('QA rollback after mapping')):
+            r=self.client.post('/api/invoice-workbench/input-groups/save-selection',json=body)
+        self.assertEqual(500,r.status_code)
+        self.assertEqual(before,list(self.conn.iterdump()))
+        self.conn.execute('UPDATE msmi_invoice_items SET amount=amount+1 WHERE id=?',(self.ids[0],))
+        self.conn.commit()
+        self.assertEqual(409,self.client.post('/api/invoice-workbench/input-groups/save-selection',json=body).status_code)
+        self.assertEqual(0,self.conn.execute('SELECT COUNT(*) FROM invoice_input_group_choices').fetchone()[0])
+
+    def test_select_first_validates_factors_product_tax_and_posted(self):
+        body,p=self.selection()
+        for factor in [0,-1,'NaN','Infinity','',None,'1e999',True]:
+            invalid={**body,'factors':{str(i):factor for i in self.ids}}
+            self.assertEqual(409,self.client.post('/api/invoice-workbench/input-groups/selection-preview',json=invalid).status_code,factor)
+        self.assertEqual(409,self.client.post('/api/invoice-workbench/input-groups/selection-preview',json={**body,'product_code':'MISSING'}).status_code)
+        self.conn.execute('UPDATE msmi_invoice_items SET tax_rate=99 WHERE id=?',(self.ids[0],))
+        self.conn.commit()
+        self.assertEqual(409,self.client.post('/api/invoice-workbench/input-groups/selection-preview',json=body).status_code)
+        self.conn.execute('UPDATE msmi_invoice_items SET tax_rate=8 WHERE id IN (?,?)',self.ids)
+        self.conn.execute("UPDATE msmi_invoices SET receipt_status='posted' WHERE id=?",(self.fixture['promotion_invoice'],))
+        self.conn.commit()
+        self.assertEqual(409,self.client.post('/api/invoice-workbench/input-groups/save-selection',json=body).status_code)
+
+    def test_selected_mapping_survives_resync_but_explicit_edit_can_replace_it(self):
+        from .invoice_mapping import apply_saved_mappings, _update_line_snapshot
+        body,p=self.selection(2)
+        response=self.client.post('/api/invoice-workbench/input-groups/save-selection',json=body)
+        self.assertEqual(200,response.status_code,response.json)
+        self.conn.execute("UPDATE msmi_invoice_items SET product_code=NULL,mapping_status='unmapped',conversion_factor=NULL,stock_qty=0 WHERE id IN (?,?)",self.ids)
+        apply_saved_mappings(self.conn,'input',self.fixture['promotion_invoice'])
+        self.assertEqual(2,self.conn.execute('SELECT conversion_factor FROM msmi_invoice_items WHERE id=?',(self.ids[0],)).fetchone()[0])
+        self.assertEqual(3,len(self.payload()['lines']))
+        _update_line_snapshot(self.conn,'msmi_invoice_items',self.ids[0],'QA-OIL','mapped',1)
+        self.assertEqual(1,self.conn.execute('SELECT COUNT(*) FROM invoice_input_group_choices').fetchone()[0])
+        self.assertEqual(4,len(self.payload()['lines']))
+
+    def test_select_first_concurrent_confirmation_and_posted_totals(self):
+        body,preview=self.selection(2)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'selected.sqlite3'
+            with closing(sqlite3.connect(path)) as dest:self.conn.backup(dest)
+            def save():
+                with closing(sqlite3.connect(path,timeout=10)) as conn, conn:
+                    conn.row_factory=sqlite3.Row
+                    conn.execute('BEGIN IMMEDIATE')
+                    return groups.save_selection(conn,'TDP',body,now_iso())
+            with ThreadPoolExecutor(max_workers=2) as executor:results=list(executor.map(lambda _:save(),range(2)))
+            self.assertEqual(1,len({r['id'] for r in results}))
+            self.assertEqual(1,sum(bool(r['idempotent']) for r in results))
+            with closing(sqlite3.connect(path)) as conn,conn:
+                conn.row_factory=sqlite3.Row
+                create_input_receipt(conn,self.fixture['promotion_invoice'],now_iso)
+                create_input_receipt(conn,self.fixture['promotion_invoice'],now_iso)
+                report=moving_average_report(conn,date_from='2026-08-01',date_to='2026-08-31')
+                oil=next(r for r in report['items'] if r['product_code']=='QA-OIL')
+                self.assertEqual((60,1288889),(oil['closing_qty'],oil['closing_value']))
+                self.assertEqual(4,conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0])
+
+    def test_split_selected_group_can_edit_conversion_and_reject_stale_source(self):
+        from .invoice_mapping import save_conversion, validated_input_stock_snapshot, InvoiceMappingError
+        body,_=self.selection(2)
+        result=self.client.post('/api/invoice-workbench/input-groups/save-selection',json=body)
+        self.client.post(f"/api/invoice-workbench/input-groups/{result.json['id']}/split")
+        changed=save_conversion(self.conn,direction='input',item_id=self.ids[0],conversion_factor=3,now_iso=now_iso)
+        self.assertEqual(1,changed['applied_lines'])
+        snapshot=validated_input_stock_snapshot(self.conn,self.ids[0])
+        self.assertEqual(72,snapshot['stock_qty'])
+        other=validated_input_stock_snapshot(self.conn,self.ids[1])
+        self.assertEqual(12,other['stock_qty'])
+        self.conn.execute('UPDATE msmi_invoice_items SET amount=amount+1 WHERE id=?',(self.ids[0],))
+        with self.assertRaises(InvoiceMappingError):validated_input_stock_snapshot(self.conn,self.ids[0])
+
     def test_retry_overlap_and_stale_source(self):
         saved=self.create()
         retry=self.client.post('/api/invoice-workbench/input-groups',json={'item_ids':self.ids,'token':saved['token']})
