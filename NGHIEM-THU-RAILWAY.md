@@ -166,8 +166,8 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 
 ### Chi phí không nhập kho — 07/09/2026
 
-- Dòng chi phí: bấm **Chi phí không nhập kho** dưới tên hàng. Dòng hết yêu cầu mã/quy đổi, giữ số lượng và tiền hóa đơn. **Đổi thành hàng hóa** bỏ lựa chọn đó, kiểm tra mã/quy đổi trước khi nhập kho.
-- Cả hóa đơn: cột thao tác → **Phân loại hóa đơn → Chi phí cả hóa đơn**. **Bỏ phân loại chi phí** chuyển lại các dòng đã đánh dấu. Hóa đơn có cả chi phí và hàng hóa thì phân loại từng dòng; nhập kho chỉ lấy phần hàng hóa.
+- Dòng chi phí: bấm **Phân loại…** dưới tên hàng, kiểm tra số hóa đơn, dòng hàng, lượng và tiền rồi **Xác nhận là chi phí**. Bấm mở hộp chưa ghi dữ liệu; **Hủy, giữ nguyên**, Esc hoặc Enter khi vừa mở đều hủy. Dòng hết yêu cầu mã/quy đổi, giữ số lượng và tiền hóa đơn. Bấm **Phân loại… → Xác nhận là hàng hóa** để đổi lại.
+- Cả hóa đơn: cột thao tác → **Phân loại hóa đơn → Chi phí cả hóa đơn**, kiểm tra danh sách và bấm xác nhận. **Bỏ phân loại chi phí** cũng yêu cầu xác nhận trước khi chuyển lại. Trang cũ chưa gửi xác nhận bị chặn, cần tải lại trang. Hóa đơn có cả chi phí và hàng hóa thì phân loại từng dòng; nhập kho chỉ lấy phần hàng hóa.
 - Bộ lọc **Chi phí không nhập kho** và Excel vẫn giữ các dòng chi phí, tiền và thuế nguồn. Đây là phân loại để loại khỏi nhập kho, không tự định khoản kế toán.
 - Lựa chọn theo từng dòng của hóa đơn, không lan sang hóa đơn khác và không tự suy đoán chỉ vì thiếu mã. Tải lại nguồn giữ lựa chọn; đổi nội dung hoặc mất dòng nguồn thì yêu cầu kiểm tra lại trước khi nhập kho. Chọn chi phí trên dòng đã gộp sẽ tách nhóm hiển thị liên quan.
 - Đã ghi kho hoặc đã có bút toán kho thì chặn đổi phân loại. Lưu cùng một lần, có lịch sử; dữ liệu thay đổi trong lúc thao tác sẽ yêu cầu tải lại.

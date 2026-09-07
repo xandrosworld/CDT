@@ -309,6 +309,28 @@
     dialog.addEventListener('close', function() { dialog.remove(); });
     document.body.appendChild(dialog); dialog.showModal();
   }
+  function confirmInvoiceExpense(invoice, line, expense) {
+    return new Promise(function(resolve) {
+      var rows = line ? [line] : (invoice.items || []).filter(function(r) { return expense ? r.inventory_eligible || r.is_expense : r.is_expense; });
+      var dialog = document.createElement('dialog');
+      dialog.className = 'invoice-expense-confirm';
+      dialog.setAttribute('aria-labelledby','invoice-expense-confirm-title');
+      dialog.setAttribute('aria-describedby','invoice-expense-confirm-effect');
+      dialog.innerHTML = '<h3 id="invoice-expense-confirm-title">' + (expense ? 'Chuyển sang chi phí không nhập kho?' : 'Chuyển lại thành hàng hóa?') + '</h3>' +
+        '<p><strong>' + esc(invoice.invoice_series + ' / ' + invoice.invoice_number) + '</strong> · ' + dateVN(invoice.invoice_date) + '<br>' + esc(invoice.seller_name || '') + '</p>' +
+        '<p><strong>' + (line ? 'Chỉ dòng ' + line.line_index : 'Cả hóa đơn · ' + rows.length + ' dòng trong danh sách') + '</strong></p>' +
+        '<div class="invoice-expense-confirm-lines"><table><thead><tr><th>Mặt hàng</th><th>Lượng</th><th>Tiền chưa thuế</th></tr></thead><tbody>' + rows.map(function(r) {
+          return '<tr><td>' + esc(r.source_item_name) + (r.product_code ? '<small>' + esc(r.product_code) + '</small>' : '') + '</td><td>' + stockQty(r.qty) + ' ' + esc(r.source_unit || '') + '</td><td>' + stockMoney(r.amount) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<p id="invoice-expense-confirm-effect">' + (expense ? 'Các dòng này sẽ không được đưa vào lần nhập kho. Hóa đơn và số tiền vẫn được giữ nguyên. Nếu đang gộp, nhóm liên quan sẽ được tách.' : 'Các dòng này sẽ cần mã hàng và quy đổi hợp lệ trước khi nhập kho. Xác nhận phân loại chưa ghi kho.') + '</p>' +
+        '<div class="invoice-expense-confirm-actions"><button type="button" class="btn btn-outline" data-expense-cancel autofocus>Hủy, giữ nguyên</button><button type="button" class="btn btn-primary" data-expense-confirm>' + (expense ? 'Xác nhận là chi phí' : 'Xác nhận là hàng hóa') + '</button></div>';
+      dialog.querySelector('[data-expense-cancel]').onclick = function() { dialog.close('cancel'); };
+      dialog.querySelector('[data-expense-confirm]').onclick = function() { dialog.close('confirm'); };
+      dialog.addEventListener('close',function() { var confirmed = dialog.returnValue === 'confirm'; dialog.remove(); resolve(confirmed); },{once:true});
+      document.body.appendChild(dialog); dialog.showModal();
+      dialog.querySelector('[data-expense-cancel]').focus();
+    });
+  }
   function showInvoiceReceiptSummary(id) {
     var invoice = ((state.invoiceListing || {}).items || []).find(function(row) { return String(row.id) === String(id); });
     if (!invoice || !invoice.receipt_summary) return;
@@ -6474,20 +6496,24 @@
         showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa mã trước khi phân loại.',true); return;
       }
       var expenseLine = action.includes('-line') ? invoiceEditingLine(button.dataset.id) : null;
+      if (action.includes('-line') && !expenseLine) { showToast('Dòng đã thay đổi; hãy tải lại bảng trước khi phân loại.',true); return; }
       var expenseInvoiceId = expenseLine ? expenseLine.invoice_id : Number(button.dataset.id);
       var expenseInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === expenseInvoiceId; });
       if (!expenseInvoice) return;
       var expenseLabel = button.textContent;
       try {
-        button.disabled = true; button.textContent = 'Đang lưu…';
+        button.disabled = true;
+        if (!await confirmInvoiceExpense(expenseInvoice,expenseLine,!action.endsWith('-undo'))) return;
+        button.textContent = 'Đang lưu…';
         await api('/api/invoice-workbench/input-invoices/' + expenseInvoiceId + '/expense', {
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-            expense:!action.endsWith('-undo'),item_ids:expenseLine ? [expenseLine.id] : null,expected:expenseInvoice.expense_token
+            confirmed:true,expense:!action.endsWith('-undo'),item_ids:expenseLine ? [expenseLine.id] : null,expected:expenseInvoice.expense_token
           })
         });
         await loadInvoiceWorkbench(true); render();
         showToast(action.endsWith('-undo') ? 'Đã bỏ phân loại chi phí. Kiểm tra mã/quy đổi trước khi nhập kho.' : 'Đã đánh dấu chi phí không nhập kho. Giữ nguyên hóa đơn và số tiền.');
-      } catch(error) { showToast(error.message,true); button.disabled=false; button.textContent=expenseLabel; }
+      } catch(error) { showToast(error.message,true); }
+      finally { button.disabled=false; button.textContent=expenseLabel; }
       return;
     }
     if (action === 'preview-invoice-group') {

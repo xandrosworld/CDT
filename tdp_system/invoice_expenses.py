@@ -139,6 +139,8 @@ def register_expense_routes(app, ctx):
         body = request.get_json(silent=True)
         if not isinstance(body,dict):
             return jsonify(ok=False,error='Dữ liệu phân loại không hợp lệ.'),400
+        if body.get('confirmed') is not True:
+            return jsonify(ok=False,error='Cần kiểm tra và xác nhận phân loại. Nếu đang dùng trang cũ, hãy tải lại trang.'),400
         try:
             with ctx['db']() as conn:
                 conn.execute('BEGIN IMMEDIATE')

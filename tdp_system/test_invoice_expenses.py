@@ -130,8 +130,11 @@ class InvoiceExpenseTests(unittest.TestCase):
         register_expense_routes(app,{'db':db,'setting_get':lambda c,k,d:d,'now_iso':now_iso})
         client=app.test_client()
         before=list(self.conn.iterdump())
-        body={'expense':True,'expected':expense_token(self.conn,self.invoice_id)}
+        body={'confirmed':True,'expense':True,'expected':expense_token(self.conn,self.invoice_id)}
         path=f'/api/invoice-workbench/input-invoices/{self.invoice_id}/expense'
+        for confirmed in (None,False,'true'):
+            self.assertEqual(400,client.post(path,json={**body,'confirmed':confirmed}).status_code)
+            self.assertEqual(before,list(self.conn.iterdump()))
         with patch('tdp_system.invoice_expenses.restore_expenses',side_effect=RuntimeError('test rollback')):
             with self.assertRaises(RuntimeError):
                 client.post(path,json=body)

@@ -66,7 +66,7 @@
     }
     function expenseControl(item, invoice) {
       if (!input || !item.id || item.group_id || invoice.sync_status !== 'synced' || ['posted','blocked'].includes(invoice.receipt_status) || (!item.inventory_eligible && !item.is_expense)) return '';
-      return '<div class="invoice-line-classification">' + button(item.is_expense ? 'invoice-expense-line-undo' : 'invoice-expense-line',item.id,item.is_expense ? 'Đổi thành hàng hóa' : 'Chi phí không nhập kho','btn-link') +
+      return '<div class="invoice-line-classification">' + button(item.is_expense ? 'invoice-expense-line-undo' : 'invoice-expense-line',item.id,'Phân loại…','btn-link') +
         (item.expense_needs_review ? button('invoice-expense-line',item.id,'Xác nhận lại chi phí','btn-link') : '') + '</div>';
     }
     var rows = (data.lines || []).map(function (item) {
