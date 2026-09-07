@@ -1,8 +1,8 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
-> **Làm rõ chỗ chọn gộp — 07/09/2026:** đã sửa source để ô **Chọn gộp dòng này**
+> **Làm rõ chỗ chọn gộp — 07/09/2026:** đã deploy để ô **Chọn gộp dòng này**
 > nằm ngay dưới mã hàng, giải thích cần lưu mã/quy đổi và trường hợp cùng đơn vị.
-> Kiểm thử cặp sữa 480 + 40 hộp trên bản sao đạt; trạng thái triển khai tại **13.39**.
+> Cặp sữa 480 + 40 hộp trên bản sao và kiểm tra Railway đạt; bằng chứng tại **13.39**.
 
 > **Chọn dòng để gộp — 07/09/2026:** khách chốt phải chọn dòng và sau gộp
 > chỉ hiện một dòng, có tính lại giá vốn. **Đã deploy và kiểm tra Railway**;
@@ -1237,3 +1237,6 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - `milk-ui-copy-01` đạt 9 mục bằng gõ và bấm chuột: ô chọn nằm cạnh mã và giải thích khi bị khóa, Ghi nhớ, cùng đơn vị, giữ dòng sau đổi bộ lọc, chọn 480 + 40, gộp thành một dòng 520 Hộp/2.760.000đ/5.308đ, tách/hủy, bốn khổ 1920/1440/1280/1024 và không ghi kho. Đã xem ảnh ở 1024px. Đây là thao tác trên bản sao, không lưu N000033 hoặc tạo nhóm thay khách trên production.
 - Nhóm chịu ảnh hưởng `milk-ui-tests-02`: **55/55 bài đạt, 8 module**. Lượt tests-01 truyền lặp tham số --module nên thực tế chỉ chạy module cuối 1 bài; không coi đó là chạy đủ nhóm. Browser fixture `milk-ui-browser-02` đạt toàn luồng hóa đơn/kho, gồm kiểm tra mới ô chọn nằm trong cột ghép mã, khóa kèm lý do khi thiếu quy đổi. Lượt browser-01 cũng đạt trước khi bổ sung các phép kiểm tra vị trí này. Cú pháp JavaScript và git diff --check đạt.
 - Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/milk-*`. Trạng thái source tại thời điểm ghi mục này: đã kiểm thử, đang triển khai; kết quả Railway và đối chiếu sau triển khai sẽ ghi bên dưới khi có bằng chứng.
+- Source **`1e7e54d49c14be8ed6a8102bf073fc162203c0b8`** đã deploy từ `xandrosworld/CDT/main`, deployment **`8bf03c76-84b8-443f-965f-8ddd60fbe2c8`**, **SUCCESS**, health DB/schema sẵn sàng và integrity ok. `milk-ui-hosted-01` đạt **10 mục/11 ảnh**, bấm chuột thật vào ô chọn cạnh mã ở bốn khổ máy tính, kiểm tra ô bị khóa có hướng dẫn, chọn/xem trước/hủy. `milk-ui-hosted-full-01` đạt **44 mục/61 ảnh**, gồm các màn, tìm kiếm, giữ diện tích bảng, sửa/Bỏ sửa, phiếu giao Excel/PDF. Không JavaScript exception, HTTP 5xx hoặc request ghi nghiệp vụ ngoài ý định; đã xem ảnh hosted ở 1024px.
+- Đối chiếu độc lập bản sao thử: **25.319 dòng nguồn giữ nguyên mã/tên/ĐVT nguồn, lượng, giá và tiền**; đơn và các bảng kho được kiểm tra không đổi (`milk-ui-copy-01/reconciliation.json`). Snapshot production sau cả hai lượt browser `milk-ui-after` toàn vẹn ok: **75/81 bảng nguyên nội dung, schema tất cả giữ nguyên**. Có hai lần lưu quy đổi G000035 từ Thùng sang Gói, hệ số 29 rồi sửa thành 30, lúc 15:23:16/15:23:36 theo giờ audit server; áp dụng bốn dòng, thêm hai revision/audit và cập nhật giờ hai lần tải. Đây là request vận hành ngoài hai browser QA đã chặn ghi. Giữ nguyên các thay đổi này; không phục hồi snapshot cũ. Lượng/giá/tiền nguồn, đơn, kho và công nợ giữ nguyên, bảng nhóm gộp vẫn 0 dòng. Bằng chứng `full-preservation.json` và `concurrent-conversion-changes.json`; không tuyên bố toàn bộ database không đổi.
+- Đã cập nhật hai mục MAPPING-CORRECT/SELECT-MERGE, nguồn tài liệu và ghi chú E11 trên Google Sheet; đọc lại xác nhận bảy ô mục tiêu đúng, định dạng/validation và D/F/G của khách giữ nguyên. Giữ hướng dẫn cũ trong ghi chú lịch sử. Khách tải lại trang để dùng vị trí ô chọn mới; lượt này không lưu mã sữa hoặc gộp/nhập kho thay khách.
