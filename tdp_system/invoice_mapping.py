@@ -159,6 +159,12 @@ def _refresh_input_invoice(conn, invoice_id: int) -> None:
     eligible = int(counts["eligible"] or 0)
     mapped = int(counts["mapped"] or 0)
     status = "not_inventory" if not eligible else "ready" if mapped == eligible else "pending_mapping"
+    try:
+        from .invoice_expenses import expense_state
+    except ImportError:
+        from invoice_expenses import expense_state
+    if expense_state(conn,invoice_id)[1]:
+        status = 'pending_mapping'
     conn.execute("UPDATE msmi_invoices SET receipt_status=? WHERE id=?", (status, invoice_id))
 
 

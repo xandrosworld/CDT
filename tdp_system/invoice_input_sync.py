@@ -97,6 +97,11 @@ def input_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=None
                 if suggestion:
                     line["suggested_product_code"] = suggestion["code"]
                     line["suggested_product_name"] = suggestion["name"]
+        try:
+            from .invoice_expenses import annotate_expenses
+        except ImportError:
+            from invoice_expenses import annotate_expenses
+        annotate_expenses(conn,invoice)
     return {
         "batch_id": safe_batch_id,
         "invoice_type": INPUT_INVOICE,

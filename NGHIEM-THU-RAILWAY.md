@@ -164,6 +164,20 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 - Giữ mã/quy đổi đã chọn, quy tắc theo kỳ, hóa đơn đã ghi kho, nguồn cũ và nguồn không hợp lệ. Có revision cho mã tự khớp; xác nhận xuất kho vẫn là bước riêng. Đổi bộ lọc/xuất Excel không ghi dữ liệu.
 - **Chưa ghép mã trong danh mục** chỉ có nghĩa chưa liên kết được mã; không kết luận mã nguồn của khách sai.
 
+### Chi phí không nhập kho — 07/09/2026
+
+- Dòng chi phí: bấm **Chi phí không nhập kho** dưới tên hàng. Dòng hết yêu cầu mã/quy đổi, giữ số lượng và tiền hóa đơn. **Đổi thành hàng hóa** bỏ lựa chọn đó, kiểm tra mã/quy đổi trước khi nhập kho.
+- Cả hóa đơn: cột thao tác → **Phân loại hóa đơn → Chi phí cả hóa đơn**. **Bỏ phân loại chi phí** chuyển lại các dòng đã đánh dấu. Hóa đơn có cả chi phí và hàng hóa thì phân loại từng dòng; nhập kho chỉ lấy phần hàng hóa.
+- Bộ lọc **Chi phí không nhập kho** và Excel vẫn giữ các dòng chi phí, tiền và thuế nguồn. Đây là phân loại để loại khỏi nhập kho, không tự định khoản kế toán.
+- Lựa chọn theo từng dòng của hóa đơn, không lan sang hóa đơn khác và không tự suy đoán chỉ vì thiếu mã. Tải lại nguồn giữ lựa chọn; đổi nội dung hoặc mất dòng nguồn thì yêu cầu kiểm tra lại trước khi nhập kho. Chọn chi phí trên dòng đã gộp sẽ tách nhóm hiển thị liên quan.
+- Đã ghi kho hoặc đã có bút toán kho thì chặn đổi phân loại. Lưu cùng một lần, có lịch sử; dữ liệu thay đổi trong lúc thao tác sẽ yêu cầu tải lại.
+
+### Sửa dữ liệu đơn vị đậu trắng
+
+- Đã đối chiếu Railway: H000002 “Đậu phụ trắng (cái)” lưu Kg, chưa có phát sinh kho/quy tắc/mã trong đơn. Bản sửa có công cụ chỉ đổi đơn vị khi mã chưa được sử dụng, có kiểm tra tên/ĐVT cũ và ghi lịch sử.
+- Đối chiếu cụ thể dòng 47 Cái, 89.300đ của C26MTT/1715 ngày 17/08: sửa riêng lựa chọn sang H000002, hệ số 1; không đổi quy tắc chung của mã đậu rán H000001. Lựa chọn riêng được giữ khi tải lại nguồn.
+- Trước áp dụng phải sao lưu SQLite và kiểm tra trên bản sao. Kiểm tra số lượng/tiền nguồn, tổng hóa đơn, hai sổ kho và toàn bộ dòng khác giữ nguyên. Không mặc định sửa ĐVT theo chữ trong tên cho mọi mã hàng.
+
 ### Gộp và sửa nhóm
 
 - Hàng mua và hàng khuyến mại cùng một sản phẩm: **tích ô ở đầu các dòng cần gộp trước**, kể cả dòng chưa ghép mã hoặc chưa quy đổi. Chọn trong cùng hóa đơn → **Gộp 2 dòng đã chọn** trên bảng → chọn **mã hàng chung** một lần trong hộp → nhập quy đổi từng dòng nếu cần → kiểm tra tổng lượng, tiền và giá vốn → **Lưu và gộp**. Mã/hệ số đã lưu được điền sẵn khi phù hợp; cùng ĐVT điền hệ số 1. Khác thuế suất, nguồn không hợp lệ hoặc đã nhập kho thì chặn. Lưu mã/quy đổi chỉ áp dụng các dòng được chọn; hủy hộp không lưu. Ví dụ sữa chua 480 + 40 Hộp thành **một dòng 520 Hộp**, tiền **2.760.000đ**, giá vốn hiển thị **5.308đ/Hộp**. Sau đó vẫn cần xác nhận nhập kho riêng.

@@ -27,6 +27,7 @@
     };
     function mapping(item, invoice, editMode) {
       if (!item.id) return esc(item.issue);
+      if (item.is_expense) return '<span class="invoice-expense-label">Chi phí · không nhập kho</span>';
       if (item.group_id) return '<strong>' + esc(item.product_code) + '</strong><div>Đã gộp ' + item.group_members.length + ' dòng</div><div>' + num(item.stock_qty) + ' ' + esc(item.product_unit) + '</div><small>Giá vốn sau gộp: ' + money(item.stock_unit_price) + '</small><details><summary>Xem dòng gốc</summary>' + item.group_members.map(function(r) { return '<div>Dòng ' + r.line_index + ': ' + esc(r.source_item_name) + ' · ' + num(r.qty) + ' ' + esc(r.source_unit) + ' · ' + money(r.amount) + '</div>'; }).join('') + '</details>' + button('split-invoice-group', item.group_id, 'Tách lại');
 
       if (!item.inventory_eligible) return '<span class="muted">Không ghi kho · ' + esc(item.validation_note || 'Dịch vụ / điều chỉnh') + '</span>';
@@ -48,6 +49,10 @@
     function actions(invoice) {
       var result = '<span class="tag">' + esc(statusLabels[invoice.workbench_status] || 'Cần kiểm tra') + '</span>';
       if (input) result += button('view-invoice-receipt-summary', invoice.id, 'Kiểm tra lượng & tiền');
+      if (input && invoice.sync_status === 'synced' && !['posted','blocked'].includes(invoice.receipt_status)) {
+        result += '<details class="invoice-expense-menu"><summary>Phân loại hóa đơn</summary>' + button('invoice-expense-all',invoice.id,'Chi phí cả hóa đơn') +
+          ((invoice.items || []).some(function(r) { return r.is_expense; }) || invoice.expense_review_count ? button('invoice-expense-undo',invoice.id,'Bỏ phân loại chi phí') : '') + '</details>';
+      }
       if (!input) result += '<small>' + esc({issued:'Đã phát hành hợp lệ',draft:'Nháp/chờ ký',unknown:'Chưa rõ trạng thái',cancelled:'Đã hủy · cần đối chiếu',replaced:'Đã thay thế · cần đối chiếu',adjusted:'Điều chỉnh · cần đối chiếu'}[invoice.source_status_class] || 'Chưa rõ trạng thái') + '</small>';
       if (invoice.workbench_status === 'ready') result += button(input ? 'create-msmi-receipt' : 'post-invoice-output', invoice.id, input ? 'Nhập kho hóa đơn này' : 'Xác nhận xuất cả hóa đơn', 'btn-primary');
       if (invoice.stock_status === 'reversal_required') result += button('reverse-invoice-output', invoice.id, 'Xác nhận hoàn tác xuất kho', 'btn-danger');
@@ -59,9 +64,14 @@
       var allowed = item.id && !item.group_id && item.inventory_eligible && invoice.sync_status === 'synced' && !['posted','blocked'].includes(invoice.receipt_status);
       return '<td class="invoice-select-cell">' + (allowed ? '<label class="invoice-group-choice"><input type="checkbox" class="invoice-group-select" data-id="' + item.id + '" data-invoice-id="' + invoice.id + '" aria-label="Chọn dòng ' + item.line_index + ' hóa đơn ' + esc(invoice.invoice_number) + ' để gộp"><span class="sr-only">Chọn dòng để gộp</span></label>' : '<span title="Dòng đã gộp, đã nhập kho hoặc không đủ điều kiện chọn">—</span>') + '</td>';
     }
+    function expenseControl(item, invoice) {
+      if (!input || !item.id || item.group_id || invoice.sync_status !== 'synced' || ['posted','blocked'].includes(invoice.receipt_status) || (!item.inventory_eligible && !item.is_expense)) return '';
+      return '<div class="invoice-line-classification">' + button(item.is_expense ? 'invoice-expense-line-undo' : 'invoice-expense-line',item.id,item.is_expense ? 'Đổi thành hàng hóa' : 'Chi phí không nhập kho','btn-link') +
+        (item.expense_needs_review ? button('invoice-expense-line',item.id,'Xác nhận lại chi phí','btn-link') : '') + '</div>';
+    }
     var rows = (data.lines || []).map(function (item) {
       var invoice = invoices[item.invoice_id];
-      return '<tr id="invoice-line-' + direction + '-' + (item.id || 'empty-' + invoice.id) + '" data-issue="' + (item.issue ? '1' : '0') + '" class="' + (item.issue ? 'invoice-row-issue' : '') + '">' + selection(item, invoice) + '<td><strong>' + esc(invoice.invoice_series + ' / ' + invoice.invoice_number) + '</strong><div>' + dateVN(invoice.invoice_date) + '</div><small>' + esc(invoice.seller_name || invoice.buyer_name || '') + '</small></td><td>' + esc(item.line_index || '—') + '</td><td>' + esc(item.source_item_code || '—') + '</td><td>' + esc(item.source_item_name) + (item.issue ? '<div class="invoice-issue-text">' + esc(item.issue) + '</div>' : '') + '</td><td class="num-cell invoice-source-qty">' + num(item.qty) + '</td><td class="invoice-source-unit">' + esc(item.source_unit || '') + '</td><td class="num-cell invoice-unit-price">' + (item.unit_price == null ? '—' : money(item.unit_price)) + '</td><td class="num-cell">' + money(item.amount) + '</td><td class="invoice-mapping-cell">' + mapping(item, invoice) + '</td><td><div class="invoice-row-actions">' + actions(invoice) + '</div></td></tr>';
+      return '<tr id="invoice-line-' + direction + '-' + (item.id || 'empty-' + invoice.id) + '" data-issue="' + (item.issue ? '1' : '0') + '" class="' + (item.issue ? 'invoice-row-issue' : '') + '">' + selection(item, invoice) + '<td><strong>' + esc(invoice.invoice_series + ' / ' + invoice.invoice_number) + '</strong><div>' + dateVN(invoice.invoice_date) + '</div><small>' + esc(invoice.seller_name || invoice.buyer_name || '') + '</small></td><td>' + esc(item.line_index || '—') + '</td><td>' + esc(item.source_item_code || '—') + '</td><td>' + esc(item.source_item_name) + (item.issue ? '<div class="invoice-issue-text">' + esc(item.issue) + '</div>' : '') + expenseControl(item,invoice) + '</td><td class="num-cell invoice-source-qty">' + num(item.qty) + '</td><td class="invoice-source-unit">' + esc(item.source_unit || '') + '</td><td class="num-cell invoice-unit-price">' + (item.unit_price == null ? '—' : money(item.unit_price)) + '</td><td class="num-cell">' + money(item.amount) + '</td><td class="invoice-mapping-cell">' + mapping(item, invoice) + '</td><td><div class="invoice-row-actions">' + actions(invoice) + '</div></td></tr>';
     }).join('');
     var batchLabels = {prepared:'Đã chuẩn bị', syncing:'Đang tải', needs_mapping:'Chưa ghép mã',ready:'Sẵn sàng',posted:'Đã ghi kho',partial:'Còn phần cần xử lý',error:'Lỗi tải',quarantined:'Cần kiểm tra'};
     var batches = ((state.invoiceWorkbench || {}).batches || []).map(function (batch) {

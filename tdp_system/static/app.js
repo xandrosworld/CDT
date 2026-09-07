@@ -6469,6 +6469,27 @@
         return;
       }
     }
+    if (['invoice-expense-all','invoice-expense-undo','invoice-expense-line','invoice-expense-line-undo'].includes(action)) {
+      if (content.querySelector('.invoice-mapping-cell[data-editing-id]')) {
+        showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa mã trước khi phân loại.',true); return;
+      }
+      var expenseLine = action.includes('-line') ? invoiceEditingLine(button.dataset.id) : null;
+      var expenseInvoiceId = expenseLine ? expenseLine.invoice_id : Number(button.dataset.id);
+      var expenseInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === expenseInvoiceId; });
+      if (!expenseInvoice) return;
+      var expenseLabel = button.textContent;
+      try {
+        button.disabled = true; button.textContent = 'Đang lưu…';
+        await api('/api/invoice-workbench/input-invoices/' + expenseInvoiceId + '/expense', {
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+            expense:!action.endsWith('-undo'),item_ids:expenseLine ? [expenseLine.id] : null,expected:expenseInvoice.expense_token
+          })
+        });
+        await loadInvoiceWorkbench(true); render();
+        showToast(action.endsWith('-undo') ? 'Đã bỏ phân loại chi phí. Kiểm tra mã/quy đổi trước khi nhập kho.' : 'Đã đánh dấu chi phí không nhập kho. Giữ nguyên hóa đơn và số tiền.');
+      } catch(error) { showToast(error.message,true); button.disabled=false; button.textContent=expenseLabel; }
+      return;
+    }
     if (action === 'preview-invoice-group') {
       var groupIds = Array.from(content.querySelectorAll('.invoice-group-select:checked')).map(function(e) { return Number(e.dataset.id); });
       try {

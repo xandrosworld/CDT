@@ -5045,7 +5045,6 @@ def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now:
             "amount": round(as_number(item.get("amount")), 6),
             "tax_rate": str(item.get("tax_rate") or ""),
             "source_nature": str(item.get("source_nature") or ""),
-            "inventory_eligible": int(item.get("inventory_eligible", 1) or 0),
         } for item in items]
         return json.dumps({"header": header_fields, "items": item_fields}, ensure_ascii=False, sort_keys=True)
 
@@ -5117,6 +5116,14 @@ def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now:
     else:
         receipt_status = "ready" if mapped == inventory_items else "pending_mapping"
     conn.execute("UPDATE msmi_invoices SET receipt_status=? WHERE id=?", (receipt_status, invoice_id))
+    try:
+        from .invoice_expenses import restore_expenses
+        from .invoice_mapping import _refresh_input_invoice
+    except ImportError:
+        from invoice_expenses import restore_expenses
+        from invoice_mapping import _refresh_input_invoice
+    restore_expenses(conn,invoice_id)
+    _refresh_input_invoice(conn,invoice_id)
     return invoice_id, existing is None
 
 

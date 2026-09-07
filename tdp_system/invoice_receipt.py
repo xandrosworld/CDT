@@ -96,6 +96,12 @@ def create_input_receipt(conn, invoice_id: int, now_iso) -> dict[str, Any]:
             "Hóa đơn đang cần đối chiếu sau đồng bộ; chưa được tạo phiếu nhập",
             code="source_review_required",
         )
+    try:
+        from .invoice_expenses import expense_state
+    except ImportError:
+        from invoice_expenses import expense_state
+    if expense_state(conn,safe_invoice_id)[1]:
+        raise InvoiceReceiptError('Nguồn chi phí đã thay đổi; cần xác nhận lại phân loại trước khi nhập kho.', code='expense_review_required')
     if invoice["receipt_status"] != "ready":
         raise InvoiceReceiptError(
             "Hóa đơn chưa ghép đủ mã và quy đổi ĐVT",

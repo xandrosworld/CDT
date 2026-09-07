@@ -28,6 +28,7 @@ LINE_LABELS = {
     "all": "Tất cả dòng", "needs_attention": "Dòng cần xử lý",
     "unmapped": "Chưa ghép mã", "unit_review": "Cần quy đổi đơn vị",
     "error": "Lỗi / bất thường", "mapped": "Đã ghép mã",
+    "expense": "Chi phí không nhập kho",
 }
 
 
@@ -38,6 +39,8 @@ def invoice_state(invoice, direction):
         return "error"
     if stock in {"posted", "reversed"}:
         return stock
+    if invoice.get('expense_review_count'):
+        return 'needs_mapping'
     if direction == "output" and invoice.get("source_status_class") != "issued":
         return "error"
     if stock == "ready":
@@ -51,6 +54,8 @@ def invoice_state(invoice, direction):
 
 
 def line_issue(item, invoice, status):
+    if invoice.get('expense_review_count'):
+        return 'Nguồn chi phí đã thay đổi; xác nhận lại phân loại chi phí trên hóa đơn'
     if status == "error":
         return invoice.get("error_message") or item.get("validation_note") or "Kiểm tra trạng thái hóa đơn trước khi ghi kho"
     if item.get("inventory_eligible") and item.get("mapping_status") != "mapped":
@@ -142,6 +147,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
                 or (line_filter == "unmapped" and eligible and mapping == "unmapped")
                 or (line_filter == "unit_review" and eligible and mapping == "unit_review")
                 or (line_filter == "mapped" and eligible and mapping == "mapped")
+                or (line_filter == "expense" and item.get('is_expense'))
                 or (line_filter == "error" and (state == "error" or mapping == "review"))
             )
             if not visible:
@@ -214,7 +220,7 @@ def range_workbook(payload):
             line.get("source_item_name", ""), line.get("source_unit", ""), line.get("qty"),
             line.get("unit_price"), line.get("amount"),
             line.get("product_code", ""), line.get("stock_qty"), line.get("product_unit", ""),
-            line["issue"] or STATUS_LABELS[invoice["workbench_status"]],
+            line["issue"] or ('Chi phí · không nhập kho' if line.get('is_expense') else STATUS_LABELS[invoice["workbench_status"]]),
         ])
     total_row = ws.max_row + 1
     ws.append(["TỔNG TIỀN CÁC DÒNG ĐANG LỌC", None, None, None, None, None, None, None, payload["totals"]["line_amount"]])

@@ -91,6 +91,7 @@ STATUS_LABELS = {
     "ready": "Sẵn sàng ghi kho",
     "posted": "Đã ghi kho",
     "ignored": "Không đưa vào kho",
+    "not_inventory": "Không nhập kho",
     "error": "Có lỗi cần kiểm tra",
 }
 
