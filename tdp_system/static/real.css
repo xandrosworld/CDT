@@ -712,3 +712,8 @@ body { min-width: 320px; }
 .receipt-review-body th:first-child { width:60px; }
 .receipt-review-body th:nth-child(3) { width:90px; }
 .receipt-review-body th:last-child { width:185px; }
+
+.invoice-just-saved .invoice-mapping-cell { outline: 3px solid #087f78; outline-offset: -3px; }
+.invoice-mapping-cell small { display: inline-block; line-height: 1.4; }
+.mapping-scope-note { margin-top: 6px; color: #52616a; }
+.unit-conversion-editor input { min-width: 76px; max-width: 100px; }

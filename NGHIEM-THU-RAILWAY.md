@@ -146,3 +146,12 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 - Sau nhập có **Xem hàng vừa nhập** để mở từng hóa đơn. Hóa đơn còn thiếu mã/quy đổi tiếp tục chờ. Vẫn có **Kiểm tra lượng & tiền** và **Nhập kho hóa đơn này** tại từng hóa đơn.
 - **Tự ghép mã trùng khớp**, **Đến dòng cần sửa đầu tiên**, **Excel đúng bộ lọc** nằm trong **Thao tác khác** ở đầu bảng. Cột ghép mã và thao tác hóa đơn cùng giữ bên phải; kéo ngang để xem cột nguồn.
 - Bộ lọc ngày hóa đơn độc lập với đơn hàng đang chọn phía trên. Nhập nhóm chỉ áp dụng hóa đơn đầu vào; không tự phát hành hóa đơn đầu ra hoặc ghi nhận thanh toán.
+
+
+### Sửa lại mã và quy đổi đã lưu — 07/09/2026
+
+- Chọn đúng mã hàng rồi Ghi nhớ. Nếu khác đơn vị, con trỏ chuyển ngay vào ô “1 Thùng = … Gói” (hoặc đơn vị tương ứng); nhập hệ số rồi Lưu quy đổi. Ví dụ đúng loại Omachi 30 gói/thùng: nhập 30; 8 thùng thành 240 gói. Kg → Lít phải dùng hệ số thực tế của mặt hàng, không mặc định 1.
+- Sau lưu, bảng giữ dòng vừa làm trong tầm nhìn. Nếu bộ lọc cũ làm ẩn dòng, bảng mở Tất cả để xem lại và có thông báo tại dòng.
+- Chọn nhầm mã: bấm **Sửa mã**, chọn đúng mã rồi **Ghi nhớ**. Nhập nhầm hệ số: **Sửa quy đổi**, sửa số rồi **Lưu quy đổi**. **Bỏ sửa** giữ giá trị đã lưu.
+- Mở **Phạm vi ghi nhớ** để xem ảnh hưởng: các dòng cùng mặt hàng nguồn, đơn vị và đối tác chưa ghi kho; giữ kỳ hiệu lực hiện có. Đây không phải sửa số lượng/tiền trên hóa đơn gốc.
+- Dòng đã ghi kho không có nút sửa mã/quy đổi. Dữ liệu thay đổi trong lúc đang sửa sẽ báo đọc lại, không tự ghi đè. Chỉ bấm Nhập kho sau khi đã kiểm tra đúng mã, lượng và tiền.

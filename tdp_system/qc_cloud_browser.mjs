@@ -119,6 +119,18 @@ try {
         assert.equal(unit,line.source_unit||'');
       }
       report.checks.push('source_units_have_separate_column_matching_api');
+      const correctable = priceSource.data.lines.find(r=>r.mapping_status==='mapped' && documentSafeInvoice(r.invoice_id));
+      function documentSafeInvoice(id) { const inv=priceSource.data.items.find(r=>r.id===id); return inv?.sync_status==='synced' && inv.receipt_status!=='posted'; }
+      assert.ok(correctable,'A saved unposted mapping is needed for correction controls');
+      await click(`[data-action="edit-invoice-mapping"][data-id="${correctable.id}"]`);
+      assert.equal(await evaluate(`document.getElementById('map_input_${correctable.id}').value`),correctable.product_code);
+      await click(`[data-action="cancel-invoice-mapping-edit"][data-id="${correctable.id}"]`);
+      await click(`[data-action="edit-invoice-conversion"][data-id="${correctable.id}"]`);
+      assert.equal(await evaluate(`Number(document.getElementById('conversion_input_${correctable.id}').value)`),correctable.conversion_factor);
+      await shot('mapping-correction-open');
+      await click(`[data-action="cancel-invoice-mapping-edit"][data-id="${correctable.id}"]`);
+      report.checks.push('mapping_code_conversion_edit_and_cancel_readonly');
+
       const receiptInvoice=priceSource.data.items.find(r=>r.receipt_summary?.items.length);
       assert.ok(receiptInvoice,'A saved mapping is required to verify receipt totals');
       await click(`[data-action="view-invoice-receipt-summary"][data-id="${receiptInvoice.id}"]`);

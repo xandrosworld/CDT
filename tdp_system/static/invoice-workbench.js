@@ -19,19 +19,23 @@
     function button(action, id, label, style) {
       return '<button type="button" class="btn btn-small ' + (style || 'btn-outline') + '" data-action="' + action + '" data-direction="' + direction + '" data-id="' + id + '">' + label + '</button>';
     }
-    function mapping(item, invoice) {
+    function mapping(item, invoice, editMode) {
       if (!item.id) return esc(item.issue);
       if (!item.inventory_eligible) return '<span class="muted">Không ghi kho · ' + esc(item.validation_note || 'Dịch vụ / điều chỉnh') + '</span>';
-      if (item.mapping_status === 'mapped') return '<strong>' + esc(item.product_code) + '</strong><div>' + esc(item.product_name || '') + '</div><small>Lượng kho: ' + num(item.stock_qty == null ? item.qty : item.stock_qty) + ' ' + esc(item.product_unit || item.source_unit) + '</small>';
+      var saved = '<strong>' + esc(item.product_code || '') + '</strong><div>' + esc(item.product_name || '') + '</div>';
+      var quantity = '<small>Lượng kho: ' + num(item.stock_qty == null ? item.qty : item.stock_qty) + ' ' + esc(item.product_unit || item.source_unit) + '</small>';
       // Posted or unsafe source records are immutable until the source is checked.
       if (invoice.sync_status !== 'synced' || invoice.receipt_status === 'posted' || ['posted','reversed','reversal_required'].indexOf(invoice.stock_status) >= 0 || (!input && invoice.source_status_class !== 'issued')) {
-        return '<span class="tag tag-red">Cần kiểm tra nguồn hóa đơn</span>';
+        return (item.mapping_status === 'mapped' ? saved + quantity : '') + '<small>Không sửa mã/quy đổi khi đã ghi kho hoặc nguồn cần kiểm tra.</small>';
       }
-      if (item.mapping_status === 'unit_review') return '<strong>' + esc(item.product_code) + '</strong><div class="unit-conversion-editor">1 ' + esc(item.source_unit || 'đơn vị nguồn') + ' = <input class="input-date unit-conversion-input" id="conversion_' + direction + '_' + item.id + '" type="number" min="0.000001" step="any" aria-label="Hệ số quy đổi dòng ' + item.line_index + '" data-direction="' + direction + '" data-id="' + item.id + '">' + esc(item.product_unit || 'đơn vị kho') + button('save-invoice-conversion', item.id, 'Lưu quy đổi') + '</div>';
+      var scopeNote = '<details class="mapping-scope-note"><summary>Phạm vi ghi nhớ</summary><small>Áp dụng các dòng cùng mặt hàng nguồn, đơn vị và đối tác, chưa ghi kho. Giữ phạm vi ngày của quy tắc đang dùng.</small></details>';
+      if (editMode !== 'code' && (item.mapping_status === 'unit_review' || editMode === 'conversion')) return saved + '<div class="unit-conversion-editor"><label for="conversion_' + direction + '_' + item.id + '">1 ' + esc(item.source_unit || 'đơn vị nguồn') + ' =</label> <input class="input-date unit-conversion-input" id="conversion_' + direction + '_' + item.id + '" type="number" min="0.000001" step="any" value="' + esc(item.conversion_factor == null ? '' : item.conversion_factor) + '" aria-label="Hệ số quy đổi dòng ' + item.line_index + '" data-direction="' + direction + '" data-id="' + item.id + '"> ' + esc(item.product_unit || 'đơn vị kho') + '<div class="compact-controls">' + button('save-invoice-conversion', item.id, 'Lưu quy đổi') + button(editMode ? 'cancel-invoice-mapping-edit' : 'edit-invoice-mapping', item.id, editMode ? 'Bỏ sửa' : 'Sửa mã') + '</div></div><small>Nhập số ' + esc(item.product_unit || 'đơn vị kho') + ' trong 1 ' + esc(item.source_unit || 'đơn vị nguồn') + '. Không tự lấy hệ số 1 khi khác đơn vị.</small>' + scopeNote;
+      if (item.mapping_status === 'mapped' && !editMode) return saved + '<small>1 ' + esc(item.source_unit) + ' = ' + num(item.conversion_factor || 1) + ' ' + esc(item.product_unit) + '</small><br>' + quantity + '<div class="compact-controls">' + button('edit-invoice-mapping', item.id, 'Sửa mã') + button('edit-invoice-conversion', item.id, 'Sửa quy đổi') + '</div>';
       var candidates = item.candidate_products || [];
-      var editor = '<input class="input-date invoice-mapping-input" role="combobox" aria-autocomplete="list" aria-controls="msmiProductOptions" aria-expanded="false" autocomplete="off" data-direction="' + direction + '" data-source-name="' + esc(item.source_item_name) + '" id="map_' + direction + '_' + item.id + '" value="' + esc(candidates.length > 1 ? '' : (item.suggested_product_code || '')) + '" placeholder="Tìm tên hoặc mã hàng" title="Tìm trong danh mục, chọn mã rồi Enter hoặc Ghi nhớ" aria-label="Mã kho dòng ' + item.line_index + '">';
-      return '<div class="compact-controls">' + editor + button('save-invoice-mapping', item.id, 'Ghi nhớ') + '</div>';
+      var editor = '<input class="input-date invoice-mapping-input" role="combobox" aria-autocomplete="list" aria-controls="msmiProductOptions" aria-expanded="false" autocomplete="off" data-direction="' + direction + '" data-source-name="' + esc(item.source_item_name) + '" id="map_' + direction + '_' + item.id + '" value="' + esc(editMode ? item.product_code : candidates.length > 1 ? '' : (item.suggested_product_code || '')) + '" placeholder="Tìm tên hoặc mã hàng" title="Tìm trong danh mục, chọn mã rồi Enter hoặc Ghi nhớ" aria-label="Mã kho dòng ' + item.line_index + '">';
+      return '<div class="compact-controls">' + editor + button('save-invoice-mapping', item.id, 'Ghi nhớ') + (editMode ? button('cancel-invoice-mapping-edit', item.id, 'Bỏ sửa') : '') + '</div><small>Chọn mã trước; khác đơn vị sẽ hiện bước quy đổi ngay sau khi lưu.</small>' + (editMode ? scopeNote : '');
     }
+    window.TdpInvoiceMappingCell = mapping;
     function actions(invoice) {
       var result = '<span class="tag">' + esc(statusLabels[invoice.workbench_status] || 'Cần kiểm tra') + '</span>';
       if (input) result += button('view-invoice-receipt-summary', invoice.id, 'Kiểm tra lượng & tiền');

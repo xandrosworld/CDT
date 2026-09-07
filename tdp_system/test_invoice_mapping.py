@@ -126,6 +126,31 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
+    def test_edit_keeps_period_and_conversion_and_rejects_stale_line(self):
+        from .invoice_mapping import InvoiceMappingError
+        item = self.conn.execute('SELECT id FROM msmi_invoice_items').fetchone()[0]
+        save_mapping(self.conn, direction='input', item_id=item, product_code='P-BOX', now_iso=now_iso)
+        save_conversion(self.conn, direction='input', item_id=item, conversion_factor=30,
+                        effective_from='2026-08-01', effective_to='2026-08-31', now_iso=now_iso)
+        keys = ('product_code', 'mapping_status', 'conversion_factor', 'source_unit', 'qty', 'amount')
+        old = dict(self.conn.execute('SELECT * FROM msmi_invoice_items WHERE id=?', (item,)).fetchone())
+        expected = {k: old[k] for k in keys}
+        result = save_mapping(self.conn, direction='input', item_id=item, product_code='P-BOX', expected=expected, now_iso=now_iso)
+        self.assertFalse(result['requires_unit_conversion'])
+        self.assertEqual(30, self.conn.execute('SELECT conversion_factor FROM msmi_invoice_items WHERE id=?',(item,)).fetchone()[0])
+        save_conversion(self.conn, direction='input', item_id=item, conversion_factor=24, expected=expected, now_iso=now_iso)
+        self.assertEqual(('2026-08-01','2026-08-31'), tuple(self.conn.execute('SELECT effective_from,effective_to FROM invoice_line_mappings').fetchone()))
+        before = list(self.conn.iterdump())
+        with self.assertRaises(InvoiceMappingError) as raised:
+            save_mapping(self.conn, direction='input', item_id=item, product_code='P-IN', expected=expected, now_iso=now_iso)
+        self.assertEqual('mapping_stale', raised.exception.code)
+        self.assertEqual(before, list(self.conn.iterdump()))
+        save_mapping(self.conn, direction='input', item_id=item, product_code='P-IN', now_iso=now_iso)
+        self.assertEqual(('P-IN','2026-08-01','2026-08-31'), tuple(self.conn.execute('SELECT product_code,effective_from,effective_to FROM invoice_line_mappings').fetchone()))
+        after = self.conn.execute('SELECT * FROM msmi_invoice_items WHERE id=?',(item,)).fetchone()
+        for key in ('qty','unit_price','amount','source_item_name','source_unit'):
+            self.assertEqual(old[key], after[key])
+
     def test_input_confirmation_never_maps_output_and_both_survive_resync(self):
         input_item = self.conn.execute("SELECT id FROM msmi_invoice_items").fetchone()[0]
         output_item = self.conn.execute("SELECT id FROM outgoing_source_invoice_items").fetchone()[0]
@@ -405,6 +430,12 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
             )
         }
         self.assertEqual(states, states_after)
+        late_item = self.conn.execute("SELECT li.id FROM msmi_invoice_items li JOIN msmi_invoices i ON i.id=li.invoice_id WHERE i.remote_id='MSMI-LATE-SAME-SCOPE'").fetchone()[0]
+        old_line = tuple(self.conn.execute('SELECT * FROM msmi_invoice_items WHERE id<>? ORDER BY id', (late_item,)).fetchone())
+        save_conversion(self.conn, direction='input', item_id=late_item, conversion_factor=3, now_iso=now_iso)
+        save_mapping(self.conn, direction='input', item_id=late_item, product_code='P-OUT', now_iso=now_iso)
+        self.assertEqual(old_line, tuple(self.conn.execute('SELECT * FROM msmi_invoice_items WHERE id<>? ORDER BY id', (late_item,)).fetchone()))
+        self.assertEqual(('2026-08-15','2026-08-31'), tuple(self.conn.execute('SELECT effective_from,effective_to FROM invoice_line_mappings').fetchone()))
 
     def test_invalid_factor_and_overlapping_mapping_conflict_do_not_change_line(self):
         input_item = self.conn.execute("SELECT id FROM msmi_invoice_items").fetchone()[0]
@@ -437,7 +468,7 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
                 base["product_code"], base["target_unit"], NOW, NOW,
             ),
         )
-        with self.assertRaisesRegex(Exception, "đúng một mapping"):
+        with self.assertRaisesRegex(Exception, "đúng một quy tắc"):
             save_conversion(
                 self.conn,
                 direction="input",

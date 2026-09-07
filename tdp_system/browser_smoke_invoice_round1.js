@@ -124,6 +124,7 @@ async function main() {
     await call('Input.insertText',{text:'R1-KG'});
     await wait(`!!document.querySelector('#msmiProductOptions [data-product-code="R1-KG"]')`);
     // A differing unit still needs an explicit positive factor.
+    await change('invoiceLineFilter','unmapped');
     await evaluate(`document.getElementById('${mappingId}').value='R1-KG';document.getElementById('${mappingId}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`);
     await wait(`!document.getElementById('${mappingId}')`);
     await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
@@ -134,12 +135,45 @@ async function main() {
     }
     const mappingPicture=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     fs.writeFileSync('D:/TDP_ROUND1/mapping-fullscreen-browser.png',Buffer.from(mappingPicture.data,'base64'));
+    // Saved rows remain reachable even when the previous filter excluded them.
+    assert.ok(await evaluate(`!!document.querySelector('#invoice-line-input-${fixture.line_b} [data-action="edit-invoice-mapping"]')`));
+    await change('invoiceLineFilter','unit_review');
+    await click(`[data-action="edit-invoice-mapping"][data-id="${fixture.line_box}"]`);
+    await evaluate(`document.getElementById('map_input_${fixture.line_box}').value='R1-KG'`);
+    await click(`[data-action="cancel-invoice-mapping-edit"][data-id="${fixture.line_box}"]`);
+    assert.equal((await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.lines.find(r=>r.id===fixture.line_box).product_code,'R1-CAI');
+    // Correct a wrong code, with the next conversion field focused in-place.
+    await click(`[data-action="edit-invoice-mapping"][data-id="${fixture.line_box}"]`);
+    await evaluate(`document.getElementById('map_input_${fixture.line_box}').value='R1-KG'`);
+    await click(`[data-action="save-invoice-mapping"][data-id="${fixture.line_box}"]`);
+    await wait(`document.activeElement?.id === 'conversion_input_${fixture.line_box}'`);
+    await click(`[data-action="edit-invoice-mapping"][data-id="${fixture.line_box}"]`);
+    await evaluate(`document.getElementById('map_input_${fixture.line_box}').value='R1-CAI'`);
+    await click(`[data-action="save-invoice-mapping"][data-id="${fixture.line_box}"]`);
+    await wait(`document.activeElement?.id === 'conversion_input_${fixture.line_box}'`);
+    fs.writeFileSync('D:/TDP_ROUND1/correct-mapping-conversion.png',Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
     const conv=`conversion_input_${fixture.line_box}`;
     await evaluate(`document.getElementById('${conv}').value='0'`);
     await click(`[data-action="save-invoice-conversion"][data-id="${fixture.line_box}"]`);
     assert.ok(await evaluate(`document.getElementById('${conv}') !== null`));
     await evaluate(`document.getElementById('${conv}').value='12';document.getElementById('${conv}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`);
     await wait(`!document.getElementById('${conv}')`);
+    await wait(`document.activeElement?.dataset.action === 'edit-invoice-mapping'`);
+    await click(`[data-action="edit-invoice-conversion"][data-id="${fixture.line_box}"]`);
+    assert.equal(await evaluate(`document.getElementById('${conv}').value`),'12');
+    await evaluate(`document.getElementById('${conv}').value='30'`);
+    await click(`[data-action="cancel-invoice-mapping-edit"][data-id="${fixture.line_box}"]`);
+    assert.equal((await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.lines.find(r=>r.id===fixture.line_box).conversion_factor,12);
+    await click(`[data-action="edit-invoice-conversion"][data-id="${fixture.line_box}"]`);
+    await evaluate(`document.getElementById('${conv}').value='30'`);
+    await click(`[data-action="save-invoice-conversion"][data-id="${fixture.line_box}"]`);
+    await wait(`!document.getElementById('${conv}')`);
+    assert.equal((await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body.lines.find(r=>r.id===fixture.line_box).stock_qty,60);
+    await click(`[data-action="edit-invoice-conversion"][data-id="${fixture.line_box}"]`);
+    await evaluate(`document.getElementById('${conv}').value='12'`);
+    await click(`[data-action="save-invoice-conversion"][data-id="${fixture.line_box}"]`);
+    await wait(`!document.getElementById('${conv}')`);
+
     await wait(`document.querySelector('.invoice-mapping-fullscreen-bar')`);
     await click('.invoice-mapping-fullscreen-bar > button');
     assert.equal(await evaluate(`document.body.style.overflow`),'');

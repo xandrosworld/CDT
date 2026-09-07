@@ -493,6 +493,25 @@ def _record_revision(conn, mapping, now: str) -> None:
     )
 
 
+def _check_expected(context, expected):
+    if expected is None:
+        return
+    keys = ('product_code', 'mapping_status', 'conversion_factor', 'source_unit', 'qty', 'amount')
+    if not isinstance(expected, dict) or any(k not in expected or expected[k] != context[k] for k in keys):
+        raise InvoiceMappingError('Dòng đã được thay đổi từ lần bạn mở bảng. Hãy đọc lại trước khi sửa.',
+                                  code='mapping_stale', status=409)
+
+
+def _active_mappings(conn, context, scope):
+    return conn.execute(
+        """SELECT * FROM invoice_line_mappings WHERE tenant=? AND source=? AND invoice_type=?
+           AND partner_key=? AND scope_key=? AND (effective_from='' OR effective_from<=?)
+           AND (effective_to='' OR effective_to>=?) ORDER BY effective_from DESC,id DESC""",
+        (context['tenant'], context['mapping_source'], context['invoice_type'], context['partner_key'],
+         scope, context['invoice_date'], context['invoice_date']),
+    ).fetchall()
+
+
 def save_mapping(
     conn,
     *,
@@ -500,6 +519,7 @@ def save_mapping(
     item_id: int,
     product_code: Any,
     now_iso,
+    expected=None,
 ) -> dict[str, Any]:
     safe_direction = _direction(direction)
     try:
@@ -536,42 +556,59 @@ def save_mapping(
             status=409,
         )
     product = _product(conn, product_code)
+    _check_expected(context, expected)
     scope = _scope_key(
         context["source_item_code"], context["source_item_name"], context["source_unit"]
     )
     mapping_status = _mapping_status(context["source_unit"], product["unit"])
     factor = 1.0 if mapping_status == "confirmed" else None
+    existing = _active_mappings(conn, context, scope)
+    if len(existing) > 1:
+        raise InvoiceMappingError('Có nhiều quy tắc cùng hiệu lực; cần đối chiếu trước khi sửa mã.', code='mapping_conflict', status=409)
+    if not existing and conn.execute(
+        'SELECT 1 FROM invoice_line_mappings WHERE tenant=? AND source=? AND invoice_type=? AND partner_key=? AND scope_key=?',
+        (context['tenant'], context['mapping_source'], context['invoice_type'], context['partner_key'], scope),
+    ).fetchone():
+        raise InvoiceMappingError('Mặt hàng đã có quy tắc ở kỳ khác. Cần đối chiếu kỳ hiệu lực trước khi ghép dòng này.', code='mapping_period_conflict', status=409)
+    date_from = existing[0]['effective_from'] if existing else ''
+    date_to = existing[0]['effective_to'] if existing else ''
+    # Re-saving the current code must not discard an already confirmed factor.
+    if existing and existing[0]['product_code'] == product['code'] and existing[0]['target_unit'] == product['unit']:
+        mapping_status = existing[0]['mapping_status']
+        factor = existing[0]['conversion_factor']
     timestamp = now_iso()
     conn.execute(
         """INSERT INTO invoice_line_mappings(
                tenant,source,invoice_type,partner_key,scope_key,source_item_code,
                source_item_name,source_unit,product_code,target_unit,mapping_status,
                conversion_factor,effective_from,effective_to,confirmed_at,updated_at
-           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, '', '',?,?)
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(tenant,source,invoice_type,partner_key,scope_key,effective_from) DO UPDATE SET
                product_code=excluded.product_code,target_unit=excluded.target_unit,
                mapping_status=excluded.mapping_status,conversion_factor=excluded.conversion_factor,
-               effective_to='',
+               effective_to=excluded.effective_to,
                confirmed_at=excluded.confirmed_at,updated_at=excluded.updated_at""",
         (
             context["tenant"], context["mapping_source"], context["invoice_type"],
             context["partner_key"], scope,
             str(context["source_item_code"] or ""), str(context["source_item_name"] or ""),
             str(context["source_unit"] or ""), product["code"], product["unit"],
-            mapping_status, factor, timestamp, timestamp,
+            mapping_status, factor, date_from, date_to, timestamp, timestamp,
         ),
     )
     mapping = conn.execute(
         """SELECT * FROM invoice_line_mappings WHERE tenant=? AND source=?
-           AND invoice_type=? AND partner_key=? AND scope_key=? AND effective_from=''""",
+           AND invoice_type=? AND partner_key=? AND scope_key=? AND effective_from=?""",
         (
             context["tenant"], context["mapping_source"], context["invoice_type"],
-            context["partner_key"], scope,
+            context["partner_key"], scope, date_from,
         ),
     ).fetchone()
     if factor is not None:
         _record_revision(conn, mapping, timestamp)
     matching = _matching_line_ids(conn, safe_direction, context, scope)
+    matching = [(line_id, invoice_id, day) for line_id, invoice_id, day in matching
+                if (not date_from or day >= date_from) and (not date_to or day <= date_to)]
     line_status = "mapped" if mapping_status == "confirmed" else "unit_review"
     if safe_direction == "input":
         line_table = "msmi_invoice_items"
@@ -625,9 +662,10 @@ def save_conversion(
     direction: Any,
     item_id: int,
     conversion_factor: Any,
-    effective_from: Any = "",
-    effective_to: Any = "",
+    effective_from: Any = None,
+    effective_to: Any = None,
     now_iso,
+    expected=None,
 ) -> dict[str, Any]:
     safe_direction = _direction(direction)
     context = _line_context(conn, safe_direction, int(item_id))
@@ -661,8 +699,12 @@ def save_conversion(
         raise InvoiceMappingError("Hệ số quy đổi phải là số dương") from None
     if not math.isfinite(factor) or factor <= 0 or factor > 1_000_000_000:
         raise InvoiceMappingError("Hệ số quy đổi phải lớn hơn 0 và trong giới hạn an toàn")
-    date_from = _strict_date(effective_from, "Ngày hiệu lực từ")
-    date_to = _strict_date(effective_to, "Ngày hiệu lực đến")
+    _check_expected(context, expected)
+    active = _active_mappings(conn, context, _scope_key(context['source_item_code'], context['source_item_name'], context['source_unit']))
+    if len(active) != 1:
+        raise InvoiceMappingError('Không có đúng một quy tắc hiệu lực; hãy kiểm tra lại mã hàng.', code='mapping_conflict' if active else 'mapping_missing', status=409)
+    date_from = _strict_date(active[0]['effective_from'] if effective_from is None else effective_from, "Ngày hiệu lực từ")
+    date_to = _strict_date(active[0]['effective_to'] if effective_to is None else effective_to, "Ngày hiệu lực đến")
     if date_from and date_to and date_from > date_to:
         raise InvoiceMappingError("Ngày hiệu lực từ không được lớn hơn ngày hiệu lực đến")
     invoice_date = str(context["invoice_date"] or "")
@@ -725,7 +767,7 @@ def save_conversion(
                 conn, line_table, line_id, mapping["product_code"], "mapped", factor
             )
             applied += 1
-        else:
+        elif effective_from is not None or effective_to is not None:
             current = conn.execute(
                 f"SELECT product_code,mapping_status FROM {line_table} WHERE id=?", (line_id,)
             ).fetchone()
@@ -735,7 +777,8 @@ def save_conversion(
                               conversion_factor=NULL,stock_qty=0,stock_unit_price=0 WHERE id=?""",
                     (line_id,),
                 )
-        affected_invoices.add(invoice_id)
+        if in_period or effective_from is not None or effective_to is not None:
+            affected_invoices.add(invoice_id)
     for invoice_id in affected_invoices:
         if safe_direction == "input":
             _refresh_input_invoice(conn, invoice_id)
@@ -798,6 +841,7 @@ def register_invoice_mapping_routes(app, ctx) -> None:
                     item_id=item_id,
                     product_code=body.get("product_code"),
                     now_iso=now_iso,
+                    expected=body.get('expected'),
                 )
                 return jsonify({"ok": True, **result})
         except InvoiceMappingError as error:
@@ -814,9 +858,10 @@ def register_invoice_mapping_routes(app, ctx) -> None:
                     direction=direction,
                     item_id=item_id,
                     conversion_factor=body.get("conversion_factor"),
-                    effective_from=body.get("effective_from", ""),
-                    effective_to=body.get("effective_to", ""),
+                    effective_from=body.get("effective_from"),
+                    effective_to=body.get("effective_to"),
                     now_iso=now_iso,
+                    expected=body.get('expected'),
                 )
                 return jsonify({"ok": True, **result})
         except InvoiceMappingError as error:
