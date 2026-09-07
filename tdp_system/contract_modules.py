@@ -6065,6 +6065,81 @@ def register_contract_routes(app, ctx):
                         line["suggested_product_name"] = suggestion["name"]
         return invoices
 
+    @app.get("/api/catalog/products")
+    def api_catalog_products():
+        term = request.args.get('q', '').strip()[:255]
+        offset = max(0, request.args.get('offset', 0, type=int))
+        needle = '%' + term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+        where = "WHERE p.code LIKE ? ESCAPE '\\' OR p.name LIKE ? ESCAPE '\\' OR n.invoice_name LIKE ? ESCAPE '\\'"
+        join = 'FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code '
+        with db_factory() as conn:
+            conn.execute('BEGIN')
+            total = conn.execute('SELECT COUNT(*) ' + join + where, (needle,)*3).fetchone()[0]
+            items = [dict(row) for row in conn.execute(
+                "SELECT p.code,p.name,p.unit,p.tax,p.catalog_updated_at,COALESCE(n.invoice_name,'') invoice_name " + join + where + ' ORDER BY p.code LIMIT 50 OFFSET ?',
+                (*((needle,)*3), offset))]
+        return jsonify(ok=True, items=items, total=total, offset=offset, limit=50)
+
+    @app.route("/api/catalog/products", methods=['POST', 'PUT'])
+    def api_catalog_create_product():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "Thông tin mã hàng không hợp lệ"}), 400
+        limits = {"code": 64, "name": 255, "unit": 50, "tax": 20}
+        if any(not isinstance(body.get(key), str) or not body[key].strip() or len(body[key].strip()) > limit
+               for key, limit in limits.items()):
+            return jsonify({"ok": False, "error": "Nhập đủ mã hàng, tên hàng, đơn vị và thuế; mã tối đa 64, tên 255, đơn vị 50 ký tự."}), 400
+        code = body["code"].strip().upper()
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]*", code):
+            return jsonify({"ok": False, "error": "Mã hàng dùng chữ không dấu, số, dấu chấm, gạch ngang hoặc gạch dưới; không có khoảng trắng."}), 400
+        name = clean_text(body["name"])
+        unit = catalog_unit(body["unit"])
+        tax = catalog_tax(body["tax"])
+        invoice_name = body.get('invoice_name', '')
+        if not isinstance(invoice_name, str) or len(invoice_name.strip()) > 255:
+            return jsonify(ok=False, error='Tên trên hóa đơn tối đa 255 ký tự.'), 400
+        invoice_name = invoice_name.strip()
+        if not name or not unit or tax not in {"KKKNT", "KCT", "0", "0.05", "0.08", "0.1"}:
+            return jsonify({"ok": False, "error": "Tên hàng, đơn vị hoặc lựa chọn thuế không hợp lệ."}), 400
+        with db_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute("SELECT p.*,COALESCE(n.invoice_name,'') invoice_name FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code WHERE UPPER(p.code)=?", (code,)).fetchone()
+            editing = request.method == 'PUT'
+            if current and not editing:
+                return jsonify({"ok": False, "error": "Mã " + code + " đã có trong danh mục. Hãy dùng mã khác; mã cũ được giữ nguyên."}), 409
+            if editing:
+                if not current:
+                    return jsonify(ok=False, error='Không tìm thấy mã hàng.'), 404
+                expected = {key: current[key] for key in ('name', 'unit', 'tax', 'invoice_name', 'catalog_updated_at')}
+                if body.get('expected') != expected:
+                    return jsonify(ok=False, error='Mã hàng đã thay đổi. Đóng và mở lại form để xem thông tin mới.'), 409
+                if catalog_unit(current['unit']) != unit:
+                    try:
+                        from .invoice_repairs import correct_unused_product_unit
+                    except ImportError:
+                        from invoice_repairs import correct_unused_product_unit
+                    try:
+                        correct_unused_product_unit(conn, code=current['code'], expected_name=current['name'], expected_unit=current['unit'], unit=unit, now=now_iso())
+                    except ValueError:
+                        return jsonify(ok=False, error='Mã đã được sử dụng; cần đối chiếu các đơn và kho trước khi đổi đơn vị. Có thể sửa tên hàng hoặc tên trên hóa đơn với đơn vị hiện tại.'), 409
+                else:
+                    unit = current['unit']
+                code = current['code']
+                conn.execute('UPDATE products SET name=?,unit=?,tax=?,catalog_updated_at=? WHERE code=?', (name, unit, tax, now_iso(), code))
+            else:
+                conn.execute(
+                    """INSERT INTO products(code,name,unit,tax,supplier,buy_price,purchase_list,product_group,catalog_updated_at)
+                       VALUES(?,?,?,?, '',0,0,'',?)""",
+                    (code, name, unit, tax, now_iso()),
+                )
+            if invoice_name:
+                conn.execute('INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES(?,?,?) ON CONFLICT(product_code) DO UPDATE SET invoice_name=excluded.invoice_name,updated_at=excluded.updated_at', (code, invoice_name, now_iso()))
+            elif editing:
+                conn.execute('DELETE FROM outgoing_product_names WHERE product_code=?', (code,))
+            audit(conn, now_iso, "catalog.product_update" if editing else "catalog.product_create", "ok", entity_type="product", entity_id=code,
+                  metadata={"name": name, "unit": unit, "tax": tax, "invoice_name": invoice_name, "before": expected if editing else None})
+        return jsonify({"ok": True, "product": {"code": code, "name": name, "unit": unit, "tax": tax}}), 200 if editing else 201
+
     @app.post("/api/catalog/import/preview")
     def api_catalog_import_preview():
         upload = request.files.get("file")

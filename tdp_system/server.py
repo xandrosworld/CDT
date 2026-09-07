@@ -3350,6 +3350,8 @@ def api_balance():
 
 @app.post("/api/master/sync")
 def api_master_sync():
+    if not MASTER_SOURCE.exists():
+        return jsonify({"ok": False, "error": "Chưa có bản Em Thành.xlsx trên hệ thống. Dùng Nạp từ Excel để chọn file trên máy."}), 404
     sync_master_if_needed(force=True)
     return jsonify({"ok": True, "message": "Đã đồng bộ danh mục từ Em Thành.xlsx"})
 

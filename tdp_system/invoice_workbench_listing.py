@@ -96,12 +96,17 @@ def input_receipt_summary(invoice):
     return {"items": rows, "pending_lines": pending, "scope": "whole_invoice_saved_mappings"}
 
 
-def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, status="all", line_filter="all"):
+def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, status="all", line_filter="all", scope="period"):
     safe_type = normalize_invoice_type(invoice_type)
     start, end = validate_date_range(date_from, date_to)
     if status not in STATUS_LABELS or line_filter not in LINE_LABELS:
         raise InvoiceWorkbenchError("Bộ lọc hóa đơn không hợp lệ")
     direction = "input" if safe_type == INPUT_INVOICE else "output"
+    if scope not in {"period", "pending"} or (scope == "pending" and direction != "input"):
+        raise InvoiceWorkbenchError("Phạm vi hóa đơn không hợp lệ")
+    pending = scope == "pending"
+    query_start = "0001-01-01" if pending else start
+    pending_guard = "AND COALESCE(i.receipt_status,'') != 'posted'" if pending else ""
     table, links, source = (
         ("msmi_invoices", "invoice_sync_batch_invoices", "msmi") if direction == "input"
         else ("outgoing_source_invoices", "invoice_sync_batch_output_invoices", "minvoice")
@@ -116,11 +121,11 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
     # EXISTS deduplicates repeated/overlapping downloads. Filter actual invoice
     # dates, NOT the sync window (which may span a whole month or several months).
     ids = [row[0] for row in conn.execute(
-        f"""SELECT i.id FROM {table} i WHERE i.invoice_date>=? AND i.invoice_date<=? AND {source_guard}
+        f"""SELECT i.id FROM {table} i WHERE i.invoice_date>=? AND i.invoice_date<=? AND {source_guard} {pending_guard}
             AND (EXISTS (SELECT 1 FROM {links} bi JOIN invoice_sync_batches b ON b.id=bi.batch_id
                          WHERE bi.invoice_id=i.id AND b.tenant=? AND b.source=? AND b.invoice_type=?)
                  OR (? AND NOT EXISTS (SELECT 1 FROM {links} old WHERE old.invoice_id=i.id)))""",
-        (start, end, *source_params,
+        (query_start, end, *source_params,
          str(tenant or "TDP").strip() or "TDP", source, safe_type, include_legacy),
     )]
     fetch = input_invoice_payload if direction == "input" else output_invoice_payload
@@ -130,6 +135,11 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
     qty_by_unit, line_amount, invoice_amount = {}, Decimal(0), Decimal(0)
     for invoice in invoices:
         state = invoice_state(invoice, direction)
+        # Carry unfinished invoices forward, even outside the selected start
+        # date. Never offer an already posted (including changed-source) invoice
+        # or an all-expense invoice for another receipt.
+        if pending and (invoice.get("receipt_status") == "posted" or state in {"posted", "reversed", "not_inventory"}):
+            continue
         invoice["workbench_status"] = state
         counts["all"] += 1
         counts[state] += 1
@@ -184,7 +194,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
                 qty_by_unit[unit]=qty_by_unit.get(unit,Decimal(0))+Decimal(str(line.get('qty') or 0))
     return {
         "direction": direction, "source": source, "date_from": start, "date_to": end,
-        "status": status, "line_filter": line_filter, "items": visible_invoices,
+        "status": status, "line_filter": line_filter, "scope": scope, "items": visible_invoices,
         "lines": lines, "group_warnings":group_warnings,"source_line_count":source_line_count,
         "counts": counts, "status_labels": STATUS_LABELS, "line_labels": LINE_LABELS,
         "totals": {
@@ -195,7 +205,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
         },
         "read_only": True,
         "date_repair": input_date_repair_report(conn, tenant=str(tenant or "TDP").strip() or "TDP",
-                                                 date_from=start, date_to=end) if direction == "input" else {},
+                                                 date_from=query_start, date_to=end) if direction == "input" else {},
     }
 
 
@@ -207,7 +217,8 @@ def range_workbook(payload):
     ws = wb.active
     ws.title = "Hoa don"
     title = "HÓA ĐƠN ĐẦU VÀO" if payload["direction"] == "input" else "HÓA ĐƠN ĐẦU RA"
-    ws.append([title + " · " + payload["date_from"] + " → " + payload["date_to"]])
+    period = "CÒN CHƯA NHẬP ĐẾN " + payload["date_to"] if payload.get("scope") == "pending" else payload["date_from"] + " → " + payload["date_to"]
+    ws.append([title + " · " + period])
     ws.merge_cells("A1:M1")
     ws.append(["Ngày", "Ký hiệu / Số HĐ", "Đối tác", "Dòng", "Tên hàng", "ĐVT", "Số lượng",
                "Đơn giá", "Thành tiền dòng (chưa thuế)", "Mã kho", "Lượng kho", "ĐVT kho", "Trạng thái / Cần xử lý"])

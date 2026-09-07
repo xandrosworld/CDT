@@ -246,7 +246,7 @@ body { min-width: 320px; }
 .invoice-lines-scroll td,.invoice-lines-scroll th { padding:10px; border-right:1px solid #d1d8dd; border-bottom:1px solid #d1d8dd; vertical-align:middle; }
 .invoice-lines-scroll td { background:#fff; min-width:65px; max-width:340px; white-space:normal; overflow-wrap:anywhere; }
 .invoice-lines-scroll td:first-child { min-width:180px; }
-.invoice-lines-scroll .invoice-row-issue td { background:#fff5ef; }
+.invoice-lines-scroll .invoice-row-issue td { background:#fff0f0; color:#a32323; }
 .invoice-lines-scroll .invoice-row-issue td:first-child { border-left:3px solid #b44428; }
 .invoice-row-actions { display:flex; flex-direction:column; align-items:flex-start; gap:8px; min-width:200px; }
 .invoice-issue-text { color:#9c301a; font-size:13px; margin-top:5px; }
@@ -684,6 +684,18 @@ body { min-width: 320px; }
 .invoice-lines-card .invoice-lines-scroll thead th:nth-child(9) { right:180px; z-index:5; }
 .invoice-lines-card .invoice-row-actions .btn { width:100%; min-height:40px; font-size:14px; }
 .invoice-lines-card .invoice-row-actions .tag { white-space:normal; font-size:13px; }
+.invoice-lines-card .invoice-row-actions .btn { min-height:32px; }
+.invoice-workflow-note { margin:0; padding:8px 14px; border-bottom:1px solid #d1d8dd; font-size:13px; color:#366478; }
+.catalog-product-dialog { width:min(580px,96vw); }
+.catalog-product-fields { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:20px; }
+.catalog-product-fields .form-field:nth-child(-n+2),.catalog-product-error { grid-column:1/-1; }
+.catalog-product-error { margin:0; color:#a32323; }
+.catalog-product-error:empty { display:none; }
+.catalog-invoice-name { grid-column:1/-1; }
+#catalogProducts table { width:100%; min-width:750px; }
+.catalog-search { display:flex; gap:8px; margin-bottom:12px; }
+.catalog-search input { max-width:420px; }
+.catalog-product-footer { display:flex; justify-content:flex-end; gap:10px; padding:0 20px 20px; }
 .receipt-bulk-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid #d1d8dd; flex:0 0 auto; }
 .receipt-bulk-bar small { color:#526875; }
 .receipt-bulk-bar .btn { min-height:42px; }

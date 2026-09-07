@@ -547,10 +547,15 @@ def register_invoice_workbench_routes(app, ctx) -> None:
                     conn.execute('BEGIN')
                     payload = invoice_range_payload(conn, tenant=tenant_code(conn), invoice_type='input',
                         date_from=request.args.get('from'), date_to=request.args.get('to'),
-                        status=request.args.get('status', 'all'), line_filter=request.args.get('line_filter', 'all'))
+                        status=request.args.get('status', 'all'), line_filter=request.args.get('line_filter', 'all'),
+                        scope=request.args.get('scope', 'period'))
                     wanted = request.args.get('id', type=int)
                     ids = [r['id'] for r in payload['items'] if r['workbench_status'] == 'ready' and (wanted is None or r['id'] == wanted)]
                     result = preview_receipts(conn, ids, tenant_code(conn), now_iso) if ids else {'items': [], 'blocked': []}
+                    result['blocked'].extend({'id': r['id'], 'number': r['invoice_series'] + ' / ' + r['invoice_number'],
+                        'reason': r.get('error_message') or ('Cần xác nhận lại phân loại chi phí do nguồn đã thay đổi.' if r.get('expense_review_count') else 'Còn dòng chưa đủ mã hoặc hệ số quy đổi.' if r['workbench_status'] == 'needs_mapping' else 'Cần kiểm tra hóa đơn trước khi nhập kho.')}
+                        for r in payload['items'] if r['workbench_status'] in {'needs_mapping', 'error'}
+                        and r.get('receipt_status') != 'posted' and (wanted is None or r['id'] == wanted))
                 return jsonify({'ok': True, **result})
         except (InvoiceReceiptError, InvoiceWorkbenchError) as error:
             return jsonify({'ok': False, 'error': str(error), 'code': getattr(error, 'code', 'invalid')}), getattr(error, 'status', 400)
@@ -594,6 +599,7 @@ def register_invoice_workbench_routes(app, ctx) -> None:
                     conn, tenant=tenant_code(conn), invoice_type=request.args.get("invoice_type", "input"),
                     date_from=request.args.get("from"), date_to=request.args.get("to"),
                     status=request.args.get("status", "all"), line_filter=request.args.get("line_filter", "all"),
+                    scope=request.args.get("scope", "period"),
                 )
             if request.path.endswith("/export"):
                 return send_file(range_workbook(payload), as_attachment=True,

@@ -53,6 +53,10 @@
     mappingImportType: "",
     mappingPreview: null,
     catalogImportPreview: null,
+    catalogQuery: '',
+    catalogOffset: 0,
+    catalogItems: [],
+    catalogRequest: 0,
     kitchenImportPreview: null,
     kitchenMealCountOverrides: {},
     xcomPaymentPreview: null,
@@ -88,6 +92,7 @@
     invoiceTo: storedInvoiceFilters.date_to || todayIso,
     invoiceStatus: ["all", "needs_mapping", "ready", "posted", "error", "reversed", "not_inventory"].indexOf(storedInvoiceFilters.status) >= 0 ? storedInvoiceFilters.status : "all",
     invoiceLineFilter: storedInvoiceFilters.line_filter || "all",
+    invoicePending: storedInvoiceFilters.pending === true,
     supplierNeeds: null,
     purchaseOrderPreview: null,
     deliveryDetailsOpen: false,
@@ -235,13 +240,22 @@
     var line = invoiceEditingLine(input.dataset.id);
     if (cell && line) {
       cell.dataset.editingId = input.dataset.id;
-      cell.querySelector('.invoice-draft-conversion').innerHTML = window.TdpInvoiceDraftConversion(line, {
+      refreshInvoiceDraftConversion(cell, line, {
         code: option.dataset.productCode, name: option.dataset.productName, unit: option.dataset.productUnit
       });
       input.title = option.dataset.productCode + ' · ' + option.dataset.productName + ' · ' + option.dataset.productUnit + '. Esc để bỏ sửa.';
     }
     closeMsmiProductOptions();
     // Choosing a suggestion previews the conversion; saving remains explicit.
+  }
+
+  function refreshInvoiceDraftConversion(cell, line, product) {
+    var field = cell.querySelector('.invoice-draft-factor');
+    var draft = field?.dataset.userEntered === 'true' ? {value:field.value,product:field.dataset.factorProduct || ''} : null;
+    // Keep a factor entered before choosing a code, or when reselecting the same
+    // code. A different product must get its own conversion/default.
+    if (product && draft?.product && draft.product !== product.code) draft = null;
+    cell.querySelector('.invoice-draft-conversion').innerHTML = window.TdpInvoiceDraftConversion(line,product,draft);
   }
 
   function esc(value) {
@@ -343,7 +357,7 @@
       (summary.pending_lines ? '<p class="warning-summary">Còn ' + num(summary.pending_lines) + ' dòng chưa đủ mã/quy đổi. Bảng chỉ cộng phần đã ghép, tổng chưa đầy đủ.</p>' : '') +
       '<div class="inventory-totals-body"><table><thead><tr><th>Mã / Tên hàng</th><th>ĐVT</th><th>Tổng lượng nhập</th><th>Trong đó lượng 0đ</th><th>Tổng tiền chưa thuế</th><th>Giá nhập bình quân</th></tr></thead><tbody>' + summary.items.map(function(row) {
         return '<tr><td><strong>' + esc(row.product_code) + '</strong><div>' + esc(row.product_name) + '</div></td><td>' + esc(row.unit) + '</td><td class="num-cell">' + stockQty(row.qty) + '</td><td class="num-cell">' + stockQty(row.zero_amount_qty) + '</td><td class="num-cell">' + stockMoney(row.amount) + '</td><td class="num-cell">' + stockMoney(row.average_unit_cost) + '</td></tr>';
-      }).join('') + (summary.items.length ? '' : '<tr><td colspan="6">Chưa có dòng đủ mã và quy đổi để cộng.</td></tr>') + '</tbody></table></div><p class="code-note">Lấy đủ các dòng đã ghép của hóa đơn, kể cả dòng đang ẩn bởi bộ lọc. Mở bảng này chỉ xem; đóng lại và bấm Nhập kho hóa đơn này sau khi kiểm tra đúng.</p>';
+      }).join('') + (summary.items.length ? '' : '<tr><td colspan="6">Chưa có dòng đủ mã và quy đổi để cộng.</td></tr>') + '</tbody></table></div><p class="code-note">Lấy đủ các dòng đã ghép của hóa đơn, kể cả dòng đang ẩn bởi bộ lọc. Mở bảng này chỉ xem; khớp xong các hóa đơn rồi dùng nút Nhập kho chung phía trên bảng.</p>';
     dialog.querySelector('button').onclick = function() { dialog.close(); };
     dialog.addEventListener('close', function() { dialog.remove(); });
     document.body.appendChild(dialog); dialog.showModal();
@@ -817,7 +831,8 @@
         date_from: state.invoiceFrom,
         date_to: state.invoiceTo,
         status: state.invoiceStatus,
-        line_filter: state.invoiceLineFilter
+        line_filter: state.invoiceLineFilter,
+        pending: state.invoicePending
       }));
     } catch (ignore) {
       // The workbench remains usable when browser storage is disabled.
@@ -832,7 +847,7 @@
     try {
       var results = await Promise.all([
         api("/api/invoice-workbench" + query),
-        api("/api/invoice-workbench/invoices" + query + "&status=" + encodeURIComponent(state.invoiceStatus) + "&line_filter=" + encodeURIComponent(state.invoiceLineFilter))
+        api("/api/invoice-workbench/invoices" + query + "&status=" + encodeURIComponent(state.invoiceStatus) + "&line_filter=" + encodeURIComponent(state.invoiceLineFilter) + (direction === 'input' && state.invoicePending ? '&scope=pending' : ''))
       ]);
       if (requestSerial !== state.invoiceWorkbenchRequestSerial) return;
       state.invoiceWorkbench = results[0];
@@ -3352,6 +3367,82 @@
   }
   setInterval(function () { if (state.view === "settings") loadBackupStatus(); }, 60000);
 
+  async function loadCatalogProducts() {
+    var table = document.getElementById('catalogProducts');
+    if (!table) return;
+    var serial = ++state.catalogRequest;
+    table.textContent = 'Đang tải danh mục…';
+    try {
+      var data = await api('/api/catalog/products?q=' + encodeURIComponent(state.catalogQuery) + '&offset=' + state.catalogOffset);
+      if (serial !== state.catalogRequest || table !== document.getElementById('catalogProducts')) return;
+      state.catalogItems = data.items;
+      table.innerHTML = '<p class="catalog-count">' + (data.total ? (data.offset + 1) + '–' + (data.offset + data.items.length) + ' / ' : '') + data.total + ' mã hàng</p><div class="table-wrap"><table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>ĐVT</th><th>Thuế</th><th>Tên trên hóa đơn</th><th></th></tr></thead><tbody>' + data.items.map(function(item) {
+        return '<tr><td>' + esc(item.code) + '</td><td>' + esc(item.name) + '</td><td>' + esc(item.unit) + '</td><td>' + esc(taxText(item.tax)) + '</td><td>' + esc(item.invoice_name || item.name) + '</td><td><button class="btn btn-small btn-outline" data-action="edit-catalog-product" data-code="' + esc(item.code) + '">Sửa</button></td></tr>';
+      }).join('') + (!data.items.length ? '<tr><td colspan="6">Không tìm thấy mã hàng.</td></tr>' : '') + '</tbody></table></div><div class="form-actions"><button class="btn btn-small btn-outline" data-action="catalog-previous"' + (!data.offset ? ' disabled' : '') + '>Trang trước</button><button class="btn btn-small btn-outline" data-action="catalog-next"' + (data.offset + data.items.length >= data.total ? ' disabled' : '') + '>Trang sau</button></div>';
+    } catch (error) { if (serial === state.catalogRequest) table.textContent = error.message; }
+  }
+
+  function openCatalogProductDialog(product) {
+    if (document.querySelector('.catalog-product-dialog')) return;
+    var dialog = document.createElement('dialog');
+    dialog.className = 'inventory-totals-dialog catalog-product-dialog';
+    dialog.setAttribute('aria-labelledby', 'catalog-product-title');
+    dialog.innerHTML = '<form><div class="inventory-totals-heading"><h3 id="catalog-product-title">Thêm mã hàng</h3><button type="button" class="icon-button catalog-product-cancel" aria-label="Đóng">×</button></div>' +
+      '<div class="catalog-product-fields"><div class="form-field"><label for="newProductCode">Mã hàng</label><input id="newProductCode" name="code" maxlength="64" required autocomplete="off" placeholder="Ví dụ: H000003"></div>' +
+      '<div class="form-field"><label for="newProductName">Tên hàng</label><input id="newProductName" name="name" maxlength="255" required placeholder="Ví dụ: Đậu phụ chiên"></div>' +
+      '<div class="form-field"><label for="newProductUnit">Đơn vị tính</label><input id="newProductUnit" name="unit" maxlength="50" required list="newProductUnits" placeholder="Ví dụ: Cái"><datalist id="newProductUnits"><option value="Cái"><option value="Kg"><option value="Can"><option value="Gói"><option value="Hộp"><option value="Thùng"><option value="Chai"><option value="Lít"><option value="Ream"></datalist></div>' +
+      '<div class="form-field"><label for="newProductTax">Thuế</label><select id="newProductTax" name="tax" required><option value="">Chọn thuế</option><option value="KKKNT">KKKNT · Không kê khai</option><option value="KCT">KCT · Không chịu thuế</option><option value="0">0%</option><option value="0.05">5%</option><option value="0.08">8%</option><option value="0.1">10%</option></select></div>' +
+      '<div class="form-field catalog-invoice-name"><label for="newProductInvoiceName">Tên trên hóa đơn (không bắt buộc)</label><input id="newProductInvoiceName" name="invoice_name" maxlength="255" placeholder="Bỏ trống để dùng tên hàng"></div>' +
+      '<p class="catalog-product-error" role="alert"></p></div><div class="catalog-product-footer"><button type="button" class="btn btn-outline catalog-product-cancel">Hủy</button><button type="submit" class="btn btn-primary">Lưu mã hàng</button></div></form>';
+    if (product) {
+      dialog.querySelector('h3').textContent = 'Sửa mã hàng';
+      ['code','name','unit','invoice_name'].forEach(function(key) { dialog.querySelector('[name="' + key + '"]').value = product[key] || ''; });
+      dialog.querySelector('[name="tax"]').value = product.tax == null || product.tax === '' ? '' : ['KKKNT','KCT'].includes(product.tax) ? product.tax : String(Number(product.tax));
+      dialog.querySelector('[name="code"]').readOnly = true;
+    }
+    var busy = false;
+    dialog.querySelector('form').addEventListener('input', function() {
+      dialog.querySelector('.catalog-product-error').textContent = '';
+    });
+    dialog.querySelectorAll('.catalog-product-cancel').forEach(function(button) { button.onclick = function() { if (!busy) dialog.close(); }; });
+    dialog.addEventListener('cancel', function(event) { if (busy) event.preventDefault(); });
+    dialog.addEventListener('close', function() { dialog.remove(); });
+    dialog.querySelector('form').onsubmit = async function(event) {
+      event.preventDefault();
+      if (busy) return;
+      var payload = Object.fromEntries(new FormData(event.target).entries());
+      if (product) {
+        payload.expected = {};
+        ['name','unit','tax','invoice_name','catalog_updated_at'].forEach(function(key) { payload.expected[key] = product[key]; });
+      }
+      busy = true;
+      var submit = dialog.querySelector('[type="submit"]');
+      dialog.querySelectorAll('button,input,select').forEach(function(field) { field.disabled = true; });
+      submit.textContent = 'Đang lưu…';
+      dialog.querySelector('.catalog-product-error').textContent = '';
+      var created;
+      try {
+        created = await api('/api/catalog/products', {method:product ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      } catch (error) {
+        busy = false;
+        dialog.querySelectorAll('button,input,select').forEach(function(field) { field.disabled = false; });
+        submit.textContent = 'Lưu mã hàng';
+        dialog.querySelector('.catalog-product-error').textContent = error.message;
+        dialog.querySelector('[name="code"]').focus();
+        return;
+      }
+      busy = false; dialog.close();
+      state.catalogImportPreview = null;
+      state.invoiceWorkbench = null; state.invoiceListing = null;
+      state.catalogQuery = created.product.code; state.catalogOffset = 0;
+      try { await loadData(state.batchId, true); }
+      catch (error) { showToast('Đã lưu mã ' + created.product.code + '. Tải lại trang để cập nhật danh mục.', true); return; }
+      showToast('Đã lưu mã ' + created.product.code + ' · ' + created.product.name + ' · ' + created.product.unit);
+    };
+    document.body.appendChild(dialog); dialog.showModal();
+    dialog.querySelector('[name="code"]').focus();
+  }
+
   function renderSettings() {
     var d = state.data;
     var backupLocation = d.hosted
@@ -3372,10 +3463,6 @@
     var minvoiceCard = '<div class="card fade-in" style="margin-bottom:18px"><div class="card-head"><div><h3>' +
       esc(minvoiceTitle) + '</h3><p>' + esc(minvoiceText) + '</p></div><button class="btn btn-primary" data-action="check-minvoice">' +
       (m && m.connected ? "Kiểm tra lại" : "Kiểm tra ngay") + '</button></div></div>';
-    var outgoingRows = (d.master.outgoing_names || []).map(function (item) {
-      return '<div class="group-line"><div><strong>' + esc(item.product_code) + '</strong><span>' +
-        esc(item.source_name) + '</span></div><strong>' + esc(item.invoice_name) + '</strong></div>';
-    }).join("");
     content.innerHTML = html([
       minvoiceCard,
       '<div class="stats-grid fade-in">',
@@ -3384,31 +3471,25 @@
       statCard("Nhà cung cấp", num(d.master.suppliers.length), "Danh mục đặt hàng", "⇄"),
       statCard("Nhóm nhà thầu", num(d.master.contractors.length), "Giá nhóm / giá theo ngày", "₫"),
       "</div>",
-      '<div class="section-grid"><div class="card"><div class="card-head"><div><h3>Đồng bộ danh mục</h3>',
-      '<p>Nguồn: Em Thành.xlsx · Lần cuối ', esc(synced), '</p></div></div><div class="card-body">',
-      '<div class="code-note"><strong>Đang áp dụng:</strong> HATRAN, ATV, SUPPY… dùng đúng nhóm giá. GIANHAPTAY và YLKHAN là giá theo ngày, không ăn theo nhà thầu nào.</div>',
-      '<div class="form-actions"><button class="btn btn-outline" data-action="sync-master">Đồng bộ lại từ Em Thành.xlsx</button>',
-      '<button class="btn btn-primary" data-action="choose-catalog-workbook">Nạp danh mục khách chốt</button></div></div></div>',
+      '<div class="card"><div class="card-head"><div><h3>Danh mục hàng hóa</h3><p>Thêm từng mã hoặc nạp nhiều mã từ Excel. Tên trên hóa đơn để trống sẽ dùng tên hàng.</p></div></div><div class="card-body">',
+      '<div class="form-actions"><button class="btn btn-primary" data-action="add-catalog-product">Thêm mã hàng</button><button class="btn btn-outline" data-action="choose-catalog-workbook">Nạp từ Excel</button></div>',
+      '<p class="code-note">Chọn file Em Thành.xlsx hoặc danh mục có các cột Mã hàng, Tên hàng, ĐVT, Thuế. Xem trước các thay đổi rồi xác nhận.</p>',
+      '<form id="catalogSearchForm" class="catalog-search"><input class="input-date" name="q" aria-label="Tìm mã hoặc tên hàng" placeholder="Tìm mã hoặc tên hàng" value="',esc(state.catalogQuery),'"><button class="btn btn-outline" type="submit">Tìm</button></form><div id="catalogProducts"></div>',
+      '<details class="code-note"><summary>Nạp dữ liệu khác</summary><div class="form-actions"><button class="btn btn-outline" data-action="choose-mapping-file" data-mapping-type="invoice_names">Nạp riêng tên hóa đơn từ Excel</button><button class="btn btn-outline" data-action="sync-master">Đọc lại bản Em Thành trên hệ thống</button></div><p>Bản Em Thành trên hệ thống được nạp lần cuối: ',esc(synced),'. Muốn dùng file vừa sửa trên máy, chọn Nạp từ Excel phía trên.</p></details></div></div>',
+      catalogImportPreviewHtml(), mappingPreviewHtml("invoice_names"),
+      '<div class="section-grid">',
       '<div class="card"><div class="card-head"><div><h3>Sao lưu dữ liệu</h3><p>Tải toàn bộ đơn, công nợ và thanh toán về máy</p></div></div>',
       '<div class="card-body"><div class="code-note">', backupLocation, '</div>',
       '<p>', backupSchedule, ' Trước nâng cấp luôn tạo bản sao riêng. Bấm Lưu/Xác nhận để ghi thay đổi; với bảng Excel, chờ trạng thái Đã lưu. Ô đang gõ chưa xác nhận chưa được lưu.</p>',
       '<div id="automaticBackupStatus" class="code-note" role="status">Đang kiểm tra lần sao lưu gần nhất…</div>',
       '<p>Nên tải thêm một bản sang ổ khác trước khi chuyển máy. Sao lưu trên cùng ổ không bảo vệ được khi ổ đĩa hỏng.</p>',
       '<div class="form-actions"><a class="btn btn-primary" href="/api/backup">Tải bản sao lưu dữ liệu</a></div></div></div></div>',
-      catalogImportPreviewHtml(),
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Thông tin thanh toán mặc định</h3><p>Được khóa cùng hóa đơn và dùng để lập Đề nghị thanh toán chính thức theo nhà thầu</p></div></div><div class="card-body">',
       '<form id="documentSettingsForm" class="payment-grid"><div class="form-field span-2"><label>Người đại diện / đề nghị</label><input name="payment_requester" required value="', esc(d.master.settings.payment_requester || ""), '"></div>',
       '<div class="form-field"><label>Số tài khoản nhận tiền</label><input name="payment_bank_account" inputmode="numeric" required value="', esc(d.master.settings.payment_bank_account || ""), '"></div>',
       '<div class="form-field span-2"><label>Ngân hàng</label><input name="payment_bank_name" required value="', esc(d.master.settings.payment_bank_name || ""), '"></div>',
       '<button class="btn btn-primary" type="submit">Lưu thông tin</button></form>',
       '<div class="code-note" style="margin-top:14px"><strong>Kiểm soát:</strong> thiếu một trong ba thông tin sẽ chặn việc khóa hóa đơn và tạo hồ sơ thanh toán chính thức.</div></div></div>',
-      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Tên xuất hóa đơn</h3><p>Ghi nhớ tên đầu ra chuẩn theo mã hàng; nếu chưa khai báo sẽ dùng tên danh mục TĐP</p></div></div><div class="card-body">',
-      '<form id="outgoingNameForm" class="payment-grid"><div class="form-field"><label>Mã hàng</label><input name="product_code" required></div>',
-      '<div class="form-field span-2"><label>Tên xuất hóa đơn</label><input name="invoice_name" required></div><button class="btn btn-outline" type="submit">Lưu tên đầu ra</button>',
-      '<button class="btn btn-primary" type="button" data-action="choose-mapping-file" data-mapping-type="invoice_names">Nạp danh sách từ Excel</button></form>',
-      '<div class="status-bar" style="margin-top:16px">Đã lưu ', num(d.master.outgoing_name_count || 0), ' tên đầu ra</div>',
-      '<div class="group-list" style="margin-top:12px">', outgoingRows || '<div class="muted">Chưa có tên đầu ra riêng; hệ thống đang dùng tên danh mục TĐP.</div>', '</div></div></div>',
-      mappingPreviewHtml("invoice_names"),
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Những việc phần mềm tự làm và không tự làm</h3><p>Giới hạn an toàn</p></div></div>',
       '<div class="card-body"><div class="flow">',
       '<div class="flow-step done"><div class="num">✓</div><div><strong>Đơn hàng và dữ liệu</strong><span>Có thể nhập, sửa, lưu, tính và xuất file</span></div></div>',
@@ -3416,6 +3497,7 @@
       '<div class="flow-step"><div class="num">!</div><div><strong>Không tự gửi Zalo, ký hoặc phát hành</strong><span>Các thao tác gửi ra ngoài luôn chờ người dùng duyệt</span></div></div>',
       "</div></div></div>"
     ]);
+    loadCatalogProducts();
   }
 
   function render() {
@@ -5505,29 +5587,28 @@
         showToast("Đã lưu thông tin đề nghị thanh toán");
       } catch (error) { showToast(error.message, true); }
     }
-    if (event.target.id === "outgoingNameForm") {
+    if (event.target.id === "catalogSearchForm") {
       event.preventDefault();
-      var outgoingName = Object.fromEntries(new FormData(event.target).entries());
-      try {
-        await api("/api/outgoing-product-names/" + encodeURIComponent(outgoingName.product_code), {
-          method: "PUT", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ invoice_name: outgoingName.invoice_name })
-        });
-        event.target.reset();
-        await loadData(state.batchId, true);
-        showToast("Đã ghi nhớ tên xuất hóa đơn");
-      } catch (error) { showToast(error.message, true); }
+      state.catalogQuery = new FormData(event.target).get('q').trim(); state.catalogOffset = 0;
+      await loadCatalogProducts();
     }
+
   });
 
   content.addEventListener("input", function (event) {
     if (event.target.matches('.unit-conversion-input, .invoice-draft-factor')) {
       event.target.closest('.invoice-mapping-cell').dataset.editingId = event.target.dataset.id;
+      if (event.target.matches('.invoice-draft-factor')) {
+        event.target.dataset.userEntered = 'true';
+        event.target.dataset.factorProduct = event.target.dataset.productCode || '';
+      }
       var previewLine = invoiceEditingLine(event.target.dataset.id);
       var previewBox = event.target.closest('.invoice-mapping-cell')?.querySelector('.invoice-conversion-preview');
       var previewFactor = Number(event.target.value.replace(',', '.'));
       if (previewLine && previewBox) previewBox.textContent = Number.isFinite(previewFactor) && previewFactor > 0 && previewFactor <= 1000000000
-        ? stockQty(previewLine.qty) + ' ' + previewLine.source_unit + ' → ' + stockQty(previewLine.qty * previewFactor) + ' ' + (event.target.dataset.unit || previewLine.product_unit)
+        ? event.target.matches('.invoice-draft-factor') && !event.target.dataset.productCode
+          ? 'Đã nhập hệ số. Chọn mã hàng để kiểm tra đơn vị kho trước khi Lưu.'
+          : stockQty(previewLine.qty) + ' ' + previewLine.source_unit + ' → ' + stockQty(previewLine.qty * previewFactor) + ' ' + (event.target.dataset.unit || previewLine.product_unit)
         : 'Nhập hệ số lớn hơn 0 trong giới hạn cho phép';
       if (previewBox) event.target.title = previewBox.textContent + '. Esc để bỏ sửa.';
       return;
@@ -5663,9 +5744,12 @@
       return;
     }
     if (["invoiceFrom", "invoiceTo", "invoiceStatus", "invoiceLineFilter"].indexOf(event.target.id) >= 0) {
-      if (event.target.id === "invoiceFrom") { state.invoiceFrom = event.target.value; state.legacyInvoiceMappingPreview = null; }
+      if (event.target.id === "invoiceFrom") { state.invoiceFrom = event.target.value; state.invoicePending = false; state.legacyInvoiceMappingPreview = null; }
       if (event.target.id === "invoiceTo") { state.invoiceTo = event.target.value; state.legacyInvoiceMappingPreview = null; }
-      if (event.target.id === "invoiceStatus") state.invoiceStatus = event.target.value;
+      if (event.target.id === "invoiceStatus") {
+        state.invoiceStatus = event.target.value;
+        if (['posted','reversed','not_inventory'].includes(state.invoiceStatus)) state.invoicePending = false;
+      }
       if (event.target.id === "invoiceLineFilter") state.invoiceLineFilter = event.target.value;
       persistInvoiceWorkbenchFilters();
       state.invoiceWorkbench = null;
@@ -5790,7 +5874,7 @@
     var draftCell = input.closest('.invoice-mapping-cell');
     var draftLine = invoiceEditingLine(input.dataset.id);
     if (draftCell && draftLine) {
-      draftCell.querySelector('.invoice-draft-conversion').innerHTML = window.TdpInvoiceDraftConversion(draftLine, null);
+      refreshInvoiceDraftConversion(draftCell,draftLine,null);
       draftCell.dataset.editingId = input.dataset.id;
     }
     closeMsmiProductOptions();
@@ -6113,6 +6197,13 @@
       await confirmQuoteImport(button);
       return;
     }
+    if (action === "toggle-pending-invoices") {
+      state.invoicePending = !state.invoicePending;
+      state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all';
+      persistInvoiceWorkbenchFilters();
+      await loadInvoiceWorkbench();
+      return;
+    }
     if (action === "set-invoice-direction") {
       state.invoiceDirection = button.dataset.direction === "output" ? "output" : "input";
       state.legacyInvoiceMappingPreview = null;
@@ -6156,6 +6247,9 @@
       state.mappingPreview = null;
       mappingFileInput.click();
     }
+    if (action === "edit-catalog-product") { openCatalogProductDialog(state.catalogItems.find(function(item) { return item.code === button.dataset.code; })); return; }
+    if (action === "catalog-previous" || action === "catalog-next") { state.catalogOffset = Math.max(0, state.catalogOffset + (action === 'catalog-next' ? 50 : -50)); await loadCatalogProducts(); return; }
+    if (action === "add-catalog-product") { openCatalogProductDialog(); return; }
     if (action === "choose-catalog-workbook") {
       state.catalogImportPreview = null;
       catalogWorkbookInput.click();
@@ -6777,6 +6871,7 @@
     if (action === "view-invoice-receipt-summary") { showInvoiceReceiptSummary(button.dataset.id); return; }
     if (action === "create-msmi-receipt" || action === "review-input-receipts") {
       var receiptQuery = '?from=' + encodeURIComponent(state.invoiceListing.date_from) + '&to=' + encodeURIComponent(state.invoiceListing.date_to) + '&status=' + encodeURIComponent(state.invoiceStatus) + '&line_filter=' + encodeURIComponent(state.invoiceLineFilter);
+      if (state.invoiceListing.scope === 'pending') receiptQuery += '&scope=pending';
       if (action === "create-msmi-receipt") receiptQuery += '&id=' + encodeURIComponent(button.dataset.id);
       await window.TdpReceiptReview({api:api, query:receiptQuery, esc:esc, money:stockMoney, qty:stockQty, date:dateVN,
         onPosted: async function(result, rows) {
@@ -6784,6 +6879,8 @@
           state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
           state.invoiceLastPosted = {direction:'input', id:rows[0].id};
           state.invoiceLastPostedGroup = rows;
+          state.invoicePending = true; state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all';
+          persistInvoiceWorkbenchFilters();
           try { await loadInvoiceWorkbench(true); render(); }
           catch(error) { showToast('Đã nhập kho. Chưa tải lại được bảng; hãy tải lại trang.', true); return; }
           showToast('Đã nhập ' + result.posted_count + ' hóa đơn' + (result.already_posted_count ? ' · ' + result.already_posted_count + ' hóa đơn đã nhập trước đó' : '') + '. Phần chưa đủ điều kiện tiếp tục chờ.');

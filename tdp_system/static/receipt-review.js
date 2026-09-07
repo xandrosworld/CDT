@@ -18,7 +18,7 @@
       const result = await opts.api('/api/invoice-workbench/input-receipts' + opts.query);
       if (!dialog.open) return;
       const items = result.items || [];
-      body.innerHTML = '<p>Chỉ nhập các hóa đơn đã chọn trong bộ lọc đang xem. Nhập toàn bộ dòng hàng của mỗi hóa đơn.</p>' +
+      body.innerHTML = '<p>Nhập một lần các hóa đơn đủ điều kiện đã chọn bên dưới. Hóa đơn còn dòng lỗi được giữ lại cả hóa đơn trong Còn chưa nhập để xử lý tiếp.</p>' +
         '<p class="receipt-selection-total" role="status"></p>' +
         '<details class="receipt-selection-details"' + (items.length === 1 ? ' open' : '') + '><summary>Xem chi tiết / Bỏ chọn hóa đơn</summary>' +
         '<label class="receipt-select-all"><input type="checkbox" checked> Chọn tất cả</label><div class="table-wrap"><table><thead><tr><th>Chọn</th><th>Hóa đơn / Ngày / NCC</th><th>Dòng nhập</th><th>Tiền hàng nhập (chưa thuế)</th></tr></thead><tbody>' +

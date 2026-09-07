@@ -61,7 +61,7 @@ Chọn Giang ở dòng cần lập bảng kê, mở **Xem bảng kê và biên n
 
 **Số lượng nguồn** và **ĐVT** đã tách thành hai cột riêng. **Đơn giá** vẫn là giá trên dòng hóa đơn nguồn.
 
-Với hàng mua và hàng khuyến mại cùng loại, ghép cả hai dòng vào cùng mã kho, đúng ĐVT/quy đổi. Bấm **Kiểm tra lượng & tiền** tại hóa đơn để xem tổng theo mã: ví dụ 24 can mua + 6 can 0đ = **30 can**, tiền **1.288.889đ**, giá nhập bình quân hiển thị **42.963đ/can**. Bảng tổng lấy đủ dòng đã ghép trong hóa đơn, kể cả dòng bị bộ lọc ẩn; nếu còn thiếu mã/quy đổi sẽ báo tổng chưa đầy đủ. Đây là bình quân riêng hóa đơn; giá bình quân kho còn tính tồn cũ. **Excel đúng bộ lọc** có thêm sheet **Tong nhap theo ma** cùng số liệu. Xem tổng không ghi kho; đóng bảng rồi **Nhập kho hóa đơn này** khi đã kiểm tra xong.
+Với hàng mua và hàng khuyến mại cùng loại, ghép cả hai dòng vào cùng mã kho, đúng ĐVT/quy đổi. Bấm **Kiểm tra** tại hóa đơn để xem tổng theo mã: ví dụ 24 can mua + 6 can 0đ = **30 can**, tiền **1.288.889đ**, giá nhập bình quân hiển thị **42.963đ/can**. Bảng tổng lấy đủ dòng đã ghép trong hóa đơn, kể cả dòng bị bộ lọc ẩn; nếu còn thiếu mã/quy đổi sẽ báo tổng chưa đầy đủ. Đây là bình quân riêng hóa đơn; giá bình quân kho còn tính tồn cũ. **Excel đúng bộ lọc** có thêm sheet **Tong nhap theo ma** cùng số liệu. Xem tổng không ghi kho; khớp xong các hóa đơn rồi bấm **Nhập kho … hóa đơn** ở đầu bảng.
 
 Ô ghép mã cho phép **tìm tên hoặc mã trong danh mục**, kể cả dòng có nhiều mã gợi ý. Ví dụ gõ **Chả lụa** để xem các mã, hoặc gõ **F000009** để tìm **Chả lụa heo**. Bấm mã trong danh sách, hoặc dùng **↑/↓ rồi Enter** để chọn. Sau đó nhấn **Enter** lần nữa hoặc **Lưu** để lưu; chỉ tìm/chọn chưa ghi dữ liệu. **Escape** đóng gợi ý và giữ bảng đang mở. Giá giống nhau không tự xác định mã đúng. Nếu chưa thấy kết quả, gõ thêm tên hoặc mã cụ thể.
 
@@ -69,11 +69,11 @@ Với hàng mua và hàng khuyến mại cùng loại, ghép cả hai dòng vào
 2. Khi **Tải/tiếp tục đầu vào**, hệ thống tự ghép tên duy nhất và cùng ĐVT; không hỏi xác nhận lại mã khớp chắc chắn.
 3. Nếu có bảng kê nhập cũ: mở **Tự ghép mã từ bảng kê nhập cũ**, chọn file rồi bấm **Tự ghép từ file cũ**. Hệ thống đối chiếu MST, số hóa đơn, tên, lượng, tiền, mã và ĐVT; lưu phần đủ căn cứ rồi ghép tiếp theo danh mục trong cùng lần xử lý. Các mã/quy đổi đã chọn được giữ nguyên.
 4. **Tự ghép mã trùng khớp** dùng khi muốn xử lý tiếp sau khi bổ sung danh mục. Bấm lại không tạo thêm mapping hay lịch sử nếu không có gì mới. Các quy tắc được nhớ cho cùng NCC/mã nguồn/tên/ĐVT ở những kỳ chưa ghi kho.
-5. Chỉ phần không khớp duy nhất, thiếu mã hoặc cần hệ số quy đổi mới để người dùng xử lý trên đầu bảng. Tiếp theo là hóa đơn đủ mã chờ **Nhập kho hóa đơn này**; phần đã xử lý xong nằm dưới. Xác nhận nhập kho là bước ghi sổ riêng, không phải xác nhận lại từng mã đã tự ghép.
+5. Chỉ phần không khớp duy nhất, thiếu mã hoặc cần hệ số quy đổi mới để người dùng xử lý trên đầu bảng. Tiếp theo là hóa đơn đủ mã chờ nhập kho chung ở đầu bảng; phần đã xử lý xong nằm dưới. Xác nhận nhập kho là bước ghi sổ riêng, không phải xác nhận lại từng mã đã tự ghép.
 
 Nhập ở cột **Ghép mã / Quy đổi**, chọn mã, nhập hệ số rồi nhấn **Enter** hoặc **Lưu**; đơn vị khác nhau vẫn cần hệ số quy đổi hợp lệ. Bảng tiếp tục mở sau khi lưu. Ô mới gõ chưa Enter/bấm lưu vẫn là phần chưa lưu. Cột **Đơn giá** lấy giá của dòng hóa đơn nguồn và hiển thị nguyên đồng; cũng có trong **Excel đúng bộ lọc**. Số lượng, đơn giá và tiền hóa đơn nguồn chỉ xem. Nếu còn mở bản Excel cũ và gặp thông báo “The range is protected”, đóng bảng cũ rồi tải lại trang.
 
-Trong chế độ toàn màn hình, bảng dùng hết phần chiều cao còn lại của trình duyệt. **Hướng dẫn / Ghép từ file cũ** được thu gọn, bấm khi cần. Cột **Thao tác cả hóa đơn** giữ ở mép phải khi kéo ngang; hóa đơn đủ điều kiện hiện nút **Nhập kho hóa đơn này**. Dòng tổng gọn phía dưới; bấm số **ĐVT** để xem tổng lượng riêng từng đơn vị. Màn hình hẹp có thanh kéo ngang để xem các cột giữa.
+Trong chế độ toàn màn hình, bảng dùng hết phần chiều cao còn lại của trình duyệt. **Hướng dẫn / Ghép từ file cũ** được thu gọn, bấm khi cần. Cột **Thao tác cả hóa đơn** giữ ở mép phải khi kéo ngang; các dòng chỉ có **Kiểm tra** và phân loại; dùng nút nhập kho chung ở đầu bảng khi đã khớp xong. Dòng tổng gọn phía dưới; bấm số **ĐVT** để xem tổng lượng riêng từng đơn vị. Màn hình hẹp có thanh kéo ngang để xem các cột giữa.
 
 
 Ngày 06/09 đã áp dụng trên Railway: **941/1.104 dòng đã ghép, 171/264 hóa đơn sẵn sàng, còn 163 dòng thuộc 93 hóa đơn cần xử lý**. Khách không phải chạy lại phần này. 111 quy tắc đã ghép tổng cộng 9.193 dòng cùng nguồn ở các kỳ chưa ghi kho. Có sao lưu trước/sau, kết quả mapping khớp bản sao đã kiểm chứng; tổng 266 hóa đơn và 919.234.874 đồng giữ nguyên. Chưa ghi kho trong lượt tự ghép.
@@ -138,13 +138,22 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 - Bảng Excel chọn và cuộn tới đúng ô. Đang gõ ô rồi Ctrl+F thì ô được kết thúc nhập theo cơ chế tự lưu. Riêng ô ghép mã hóa đơn vẫn cần Enter ở ô mã hoặc Lưu mới lưu; Enter ở ô tìm chỉ tìm kiếm.
 
 
+### Thêm mã hàng thủ công — cập nhật 07/09/2026
+
+- Vào **Danh mục & sao lưu → Danh mục hàng hóa → Thêm mã hàng**, nhập mã, tên hàng, đơn vị, thuế và tên trên hóa đơn nếu cần rồi **Lưu mã hàng**. Tên trên hóa đơn để trống sẽ dùng tên hàng.
+- Mã được chuẩn hóa chữ hoa; trùng mã thì báo lỗi, không ghi đè. Hủy hoặc đóng form không lưu. Mã mới tìm được ngay trong ô ghép mã hóa đơn, với đúng đơn vị đã khai báo.
+- Danh sách chung có tìm kiếm, phân trang và nút **Sửa**. Tên hóa đơn đã lưu được đưa vào cùng danh sách; bỏ khung nhập tên riêng. Khi sửa, mã giữ nguyên; chặn đổi đơn vị của mã đã sử dụng và chặn ghi đè thông tin đã bị người khác sửa sau khi mở form.
+- Cách thứ hai: **Nạp từ Excel** để chọn file Em Thành.xlsx hoặc danh mục có Mã hàng, Tên hàng, ĐVT, Thuế → xem trước → xác nhận. File không có cột tên hóa đơn sẽ giữ tên đã lưu. Mã không nằm trong file vẫn được giữ.
+- **Nạp dữ liệu khác → Đọc lại bản Em Thành trên hệ thống** chỉ đọc bản đã lưu trên máy chủ; không lấy bản mới trên máy người dùng. Chưa có file thì báo rõ và hướng dẫn dùng **Nạp từ Excel**.
+
 ### Nhập kho nhiều hóa đơn — cập nhật 07/09/2026
 
-- **Đã đủ mã · Chưa nhập kho** nghĩa là đã ghép mã/quy đổi; khách vẫn cần xác nhận nhập kho.
+- Khớp mã và quy đổi tất cả trước, bấm **Kiểm tra** khi cần xem lượng/tiền, cuối cùng nhập kho chung ở đầu bảng. Cột thao tác bỏ nhãn **Đã đủ mã · Chưa nhập kho** và nút nhập kho riêng từng dòng; dòng thiếu mã/quy đổi tô đỏ cả dòng.
 - Đầu bảng có **Nhập kho … hóa đơn** theo bộ lọc đang xem. Bấm để phần mềm kiểm tra lại, xem số hóa đơn/số dòng và **tiền hàng nhập chưa thuế**. Đây không phải tổng thanh toán hóa đơn gồm thuế/dịch vụ.
 - Mặc định chọn toàn bộ phần đủ điều kiện. Khi cần, mở **Xem chi tiết / Bỏ chọn hóa đơn** hoặc **Xem tổng lượng theo đơn vị**. Bấm **Xác nhận nhập kho** một lần cho cả nhóm. Hóa đơn bị chặn có lý do trong bảng xem trước.
 - Dữ liệu thay đổi trước xác nhận thì dừng và yêu cầu mở lại bảng kiểm tra; lỗi giữa nhóm hoàn tác cả nhóm. Mất kết nối có thể gửi lại cùng lựa chọn, không nhập trùng. Đóng/Quay lại không ghi kho.
-- Sau nhập có **Xem hàng vừa nhập** để mở từng hóa đơn. Hóa đơn còn thiếu mã/quy đổi tiếp tục chờ. Vẫn có **Kiểm tra lượng & tiền** và **Nhập kho hóa đơn này** tại từng hóa đơn.
+- Sau nhập có **Xem hàng vừa nhập** để mở từng hóa đơn, bảng tự chuyển sang **Còn chưa nhập**. Hóa đơn còn dòng lỗi được giữ lại nguyên hóa đơn; không nhập một phần dòng rồi bỏ phần lỗi.
+- **Còn chưa nhập** cạnh nút nhập kho lấy các hóa đơn chưa nhập đến **Đến ngày**, gồm cả hóa đơn cũ trước **Từ ngày**. Phạm vi này được nhớ sau khi tải lại trang để tiếp tục hôm sau. Hóa đơn đã nhập và hóa đơn chỉ có chi phí không đưa lại vào hàng chờ. **Xem theo ngày** trở lại khoảng ngày đã chọn; đổi **Từ ngày** cũng trở lại xem theo ngày. Excel xuất đúng phạm vi đang xem.
 - **Tự ghép mã trùng khớp**, **Đến dòng cần sửa đầu tiên**, **Excel đúng bộ lọc** nằm trong **Thao tác khác** ở đầu bảng. Cột ghép mã và thao tác hóa đơn cùng giữ bên phải; kéo ngang để xem cột nguồn.
 - Bộ lọc ngày hóa đơn độc lập với đơn hàng đang chọn phía trên. Nhập nhóm chỉ áp dụng hóa đơn đầu vào; không tự phát hành hóa đơn đầu ra hoặc ghi nhận thanh toán.
 
@@ -182,5 +191,5 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 
 - Hàng mua và hàng khuyến mại cùng một sản phẩm: **tích ô ở đầu các dòng cần gộp trước**, kể cả dòng chưa ghép mã hoặc chưa quy đổi. Chọn trong cùng hóa đơn → **Gộp 2 dòng đã chọn** trên bảng → chọn **mã hàng chung** một lần trong hộp → nhập quy đổi từng dòng nếu cần → kiểm tra tổng lượng, tiền và giá vốn → **Lưu và gộp**. Mã/hệ số đã lưu được điền sẵn khi phù hợp; cùng ĐVT điền hệ số 1. Khác thuế suất, nguồn không hợp lệ hoặc đã nhập kho thì chặn. Lưu mã/quy đổi chỉ áp dụng các dòng được chọn; hủy hộp không lưu. Ví dụ sữa chua 480 + 40 Hộp thành **một dòng 520 Hộp**, tiền **2.760.000đ**, giá vốn hiển thị **5.308đ/Hộp**. Sau đó vẫn cần xác nhận nhập kho riêng.
 - Muốn tìm dòng đã làm: chọn đúng khoảng ngày, **Tất cả hóa đơn / Tất cả dòng**, rồi tìm tên hoặc mã bằng ô **Tìm mã/tên** hoặc Ctrl+F. Dòng chưa nhập kho có hai ô mã/quy đổi để sửa trực tiếp rồi **Lưu**; nếu đã gộp, bấm **Tách lại** trước. Không dùng các nút sửa mã để hoàn tác hóa đơn đã nhập kho.
-- Chọn nhầm thì bấm **Tách lại** ở dòng đã gộp; sau đó chọn lại hoặc dùng hai ô mã/quy đổi để sửa trực tiếp rồi **Lưu** khi chưa nhập kho. **Xem dòng gốc** mở phần đối chiếu ngay tại nhóm. **Excel đúng bộ lọc** cũng chỉ hiện một dòng nhóm ở sheet chính, có sheet **Dong goc da gop** giữ chi tiết. Gộp/tách chưa nhập kho. **Kiểm tra lượng & tiền** vẫn cho xem tổng của cả hóa đơn; giá bình quân kho còn tính tồn cũ.
+- Chọn nhầm thì bấm **Tách lại** ở dòng đã gộp; sau đó chọn lại hoặc dùng hai ô mã/quy đổi để sửa trực tiếp rồi **Lưu** khi chưa nhập kho. **Xem dòng gốc** mở phần đối chiếu ngay tại nhóm. **Excel đúng bộ lọc** cũng chỉ hiện một dòng nhóm ở sheet chính, có sheet **Dong goc da gop** giữ chi tiết. Gộp/tách chưa nhập kho. **Kiểm tra** vẫn cho xem tổng của cả hóa đơn; giá bình quân kho còn tính tồn cũ.
 - Không ghép cùng mã chỉ để cộng số lượng nếu tên/loại hàng chưa xác nhận đúng: cần phân biệt dầu hào MISA/Quê Tôi và tương ớt/tương cà.
