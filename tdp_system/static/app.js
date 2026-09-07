@@ -222,9 +222,26 @@
   function chooseMsmiProductOption(option) {
     var input = msmiProductSearchInput;
     if (!input || !input.isConnected) return;
+    var active = content.querySelector('.invoice-mapping-cell[data-editing-id]');
+    if (active && active !== input.closest('.invoice-mapping-cell')) {
+      closeMsmiProductOptions();
+      showToast('Hãy Lưu hoặc Bỏ sửa dòng đang mở trước khi chọn mã dòng khác.', true);
+      active.querySelector('input')?.focus();
+      return;
+    }
     input.value = option.dataset.productCode;
+    input.dataset.selectedCode = option.dataset.productCode;
+    var cell = input.closest('.invoice-mapping-cell');
+    var line = invoiceEditingLine(input.dataset.id);
+    if (cell && line) {
+      cell.dataset.editingId = input.dataset.id;
+      cell.querySelector('.invoice-draft-conversion').innerHTML = window.TdpInvoiceDraftConversion(line, {
+        code: option.dataset.productCode, name: option.dataset.productName, unit: option.dataset.productUnit
+      });
+      cell.querySelector('[data-action="save-invoice-mapping"]').textContent = 'Lưu mã & quy đổi';
+    }
     closeMsmiProductOptions();
-    // Choosing a suggestion only fills the editor; Enter/Ghi nhớ saves explicitly.
+    // Choosing a suggestion previews the conversion; saving remains explicit.
   }
 
   function esc(value) {
@@ -2937,7 +2954,7 @@
         var label = product.code + " · " + product.name;
         if (product.unit) label += " · " + product.unit;
         if (product.invoice_name && product.invoice_name !== product.name) label += " · Tên trên hóa đơn: " + product.invoice_name;
-        return '<button type="button" tabindex="-1" role="option" aria-selected="false" id="invoice-product-option-' + index + '" data-product-code="' + esc(product.code) + '">' + esc(label) + '</button>';
+        return '<button type="button" tabindex="-1" role="option" aria-selected="false" id="invoice-product-option-' + index + '" data-product-code="' + esc(product.code) + '" data-product-name="' + esc(product.name) + '" data-product-unit="' + esc(product.unit) + '">' + esc(label) + '</button>';
       }).join("");
       if (!(result.items || []).length) productList.innerHTML = '<div class="invoice-product-hint">Không tìm thấy mã. Hãy thử tên hoặc mã khác.</div>';
       else productList.innerHTML += '<div class="invoice-product-hint">Chọn mã bằng chuột hoặc ↑ ↓ rồi Enter. Sau đó Enter/Ghi nhớ để lưu. Tìm cụ thể hơn nếu chưa thấy mã cần chọn.</div>';
@@ -5462,12 +5479,12 @@
   });
 
   content.addEventListener("input", function (event) {
-    if (event.target.matches('.unit-conversion-input')) {
+    if (event.target.matches('.unit-conversion-input, .invoice-draft-factor')) {
       var previewLine = invoiceEditingLine(event.target.dataset.id);
       var previewBox = event.target.closest('.invoice-mapping-cell')?.querySelector('.invoice-conversion-preview');
-      var previewFactor = Number(event.target.value);
+      var previewFactor = Number(event.target.value.replace(',', '.'));
       if (previewLine && previewBox) previewBox.textContent = Number.isFinite(previewFactor) && previewFactor > 0 && previewFactor <= 1000000000
-        ? stockQty(previewLine.qty) + ' ' + previewLine.source_unit + ' → ' + stockQty(previewLine.qty * previewFactor) + ' ' + previewLine.product_unit
+        ? stockQty(previewLine.qty) + ' ' + previewLine.source_unit + ' → ' + stockQty(previewLine.qty * previewFactor) + ' ' + (event.target.dataset.unit || previewLine.product_unit)
         : 'Nhập hệ số lớn hơn 0 trong giới hạn cho phép';
       return;
     }
@@ -5718,6 +5735,13 @@
     }
     var input = event.target.closest(".invoice-mapping-input");
     if (!input) return;
+    delete input.dataset.selectedCode;
+    var draftCell = input.closest('.invoice-mapping-cell');
+    var draftLine = invoiceEditingLine(input.dataset.id);
+    if (draftCell && draftLine) {
+      draftCell.querySelector('.invoice-draft-conversion').innerHTML = window.TdpInvoiceDraftConversion(draftLine, null);
+      draftCell.querySelector('[data-action="save-invoice-mapping"]').textContent = 'Ghi nhớ';
+    }
     closeMsmiProductOptions();
     msmiProductSearchTimer = setTimeout(function () { loadMsmiProductOptions(input); }, 220);
   });
@@ -5742,9 +5766,13 @@
       saveSellPriceOverrides([quickPrice]);
       return;
     }
-    var conversionInput = event.target.closest(".unit-conversion-input");
+    var conversionInput = event.target.closest(".unit-conversion-input, .invoice-draft-factor");
     if (conversionInput && event.key === "Enter") {
       event.preventDefault();
+      if (conversionInput.matches('.invoice-draft-factor')) {
+        conversionInput.closest('.invoice-mapping-cell').querySelector('[data-action="save-invoice-mapping"]').click();
+        return;
+      }
       var conversionButton = content.querySelector('[data-action="save-invoice-conversion"][data-direction="' +
         conversionInput.dataset.direction + '"][data-id="' + conversionInput.dataset.id + '"]');
       if (conversionButton) conversionButton.click();
@@ -6437,11 +6465,21 @@
       if (!mappingInput || !mappingInput.value.trim()) { showToast("Cần nhập mã hàng TĐP", true); return; }
       try {
         button.disabled = true;
+        var mappingBody = { product_code: mappingInput.value.trim(), expected: invoiceMappingExpected(button.dataset.id) };
+        if (mappingInput.dataset.selectedCode === mappingBody.product_code) {
+          var draftFactor = button.closest('.invoice-mapping-cell').querySelector('.invoice-draft-factor');
+          var factorValue = Number(draftFactor.value.trim().replace(',', '.'));
+          if (!Number.isFinite(factorValue) || factorValue <= 0 || factorValue > 1000000000) {
+            draftFactor.focus();
+            throw new Error('Nhập hệ số quy đổi lớn hơn 0 trong giới hạn cho phép trước khi lưu.');
+          }
+          mappingBody.conversion_factor = factorValue;
+        }
         var mappingResult = await api("/api/invoice-workbench/items/" + mappingDirection + "/" +
           button.dataset.id + "/mapping", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ product_code: mappingInput.value.trim(), expected: invoiceMappingExpected(button.dataset.id) })
+          body: JSON.stringify(mappingBody)
         });
         if (mappingDirection === "input") {
           state.operations = null;

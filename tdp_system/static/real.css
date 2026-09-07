@@ -660,8 +660,8 @@ body { min-width: 320px; }
   .invoice-lines-card .invoice-lines-scroll tbody td:last-child { position: static; }
 }
 
-.invoice-lines-card .invoice-mapping-cell > .compact-controls { flex-wrap: nowrap; }
-.invoice-lines-card .invoice-mapping-cell > .compact-controls .invoice-mapping-input { flex: 1 1 0; width: 0; }
+.invoice-lines-card .invoice-mapping-cell > .compact-controls { flex-wrap: wrap; }
+.invoice-lines-card .invoice-mapping-cell > .compact-controls .invoice-mapping-input { flex: 1 0 100%; width: 100%; }
 .invoice-lines-card .invoice-mapping-cell > .compact-controls .btn { flex: 0 0 auto; padding: 6px 8px; }
 .invoice-product-options { position: fixed; z-index: 120; overflow: auto; background: #fff; color: #172b3a; border: 1px solid #8b9daa; border-radius: 4px; box-shadow: 0 4px 12px #0002; }
 .invoice-product-options[hidden] { display: none; }
@@ -761,3 +761,5 @@ body { min-width: 320px; }
 .invoice-group-dialog { max-width:min(960px,96vw); }
 .invoice-group-dialog .btn { min-height: 44px; }
 .group-error { color: #a52a2a; }
+.invoice-draft-factor { width: 110px; max-width: 100%; min-height: 42px; }
+.invoice-draft-conversion { margin-top: 8px; }

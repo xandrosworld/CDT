@@ -874,6 +874,16 @@ def register_invoice_mapping_routes(app, ctx) -> None:
                     now_iso=now_iso,
                     expected=body.get('expected'),
                 )
+                # A standalone row can confirm its code and unit conversion together.
+                # Both writes share the lock/transaction, so a rejected factor cannot
+                # leave a partially saved mapping or propagate it to other invoices.
+                if 'conversion_factor' in body:
+                    converted = save_conversion(
+                        conn, direction=direction, item_id=item_id,
+                        conversion_factor=body['conversion_factor'], now_iso=now_iso,
+                    )
+                    result.update(converted)
+                    result.update(mapping_status='confirmed', requires_unit_conversion=False)
                 return jsonify({"ok": True, **result})
         except InvoiceMappingError as error:
             return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status

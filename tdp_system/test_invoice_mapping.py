@@ -126,6 +126,29 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
+    def test_combined_output_mapping_preserves_input_and_freezes_after_posting(self):
+        self.conn.commit()
+        @contextmanager
+        def db():
+            with self.conn:
+                yield self.conn
+        app = Flask(__name__)
+        register_invoice_mapping_routes(app, {'db': db, 'now_iso': now_iso})
+        item = self.conn.execute('SELECT * FROM outgoing_source_invoice_items').fetchone()
+        before_input = dict(self.conn.execute('SELECT * FROM msmi_invoice_items').fetchone())
+        path = f'/api/invoice-workbench/items/output/{item["id"]}/mapping'
+        response = app.test_client().put(path, json={'product_code': 'P-BOX', 'conversion_factor': 0.5})
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertFalse(response.json['requires_unit_conversion'])
+        self.assertEqual(response.json['stock_qty'], item['qty'] * 0.5)
+        self.assertEqual(dict(self.conn.execute('SELECT * FROM msmi_invoice_items').fetchone()), before_input)
+        self.conn.execute("UPDATE outgoing_source_invoices SET stock_status='posted'")
+        self.conn.commit()
+        before = list(self.conn.iterdump())
+        frozen = app.test_client().put(path, json={'product_code': 'P-OUT', 'conversion_factor': 2})
+        self.assertEqual(frozen.status_code, 409)
+        self.assertEqual(list(self.conn.iterdump()), before)
+
     def test_edit_keeps_period_and_conversion_and_rejects_stale_line(self):
         from .invoice_mapping import InvoiceMappingError
         item = self.conn.execute('SELECT id FROM msmi_invoice_items').fetchone()[0]
@@ -563,6 +586,42 @@ class InvoiceMappingRouteAndStaticTests(unittest.TestCase):
         )
         self.assertEqual(200, converted.status_code, converted.get_data(as_text=True))
         self.assertEqual(30, converted.get_json()["stock_qty"])
+
+    def test_single_row_saves_code_and_conversion_without_grouping(self):
+        with self.db() as conn:
+            conn.execute("UPDATE products SET unit='thùng' WHERE code='P-API'")
+            before = dict(conn.execute('SELECT * FROM msmi_invoice_items WHERE id=?', (self.item_id,)).fetchone())
+        response = self.client.put(
+            f'/api/invoice-workbench/items/input/{self.item_id}/mapping',
+            json={'product_code': 'P-API', 'conversion_factor': 0.5, 'expected': before},
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertFalse(response.json['requires_unit_conversion'])
+        with self.db() as conn:
+            after = dict(conn.execute('SELECT * FROM msmi_invoice_items WHERE id=?', (self.item_id,)).fetchone())
+            self.assertEqual(after['mapping_status'], 'mapped')
+            self.assertEqual(after['stock_qty'], before['qty'] * 0.5)
+            self.assertAlmostEqual(after['stock_qty'] * after['stock_unit_price'], before['amount'])
+            for key in ('qty', 'amount', 'unit_price', 'source_unit', 'source_item_name'):
+                self.assertEqual(before[key], after[key])
+        stale = self.client.put(
+            f'/api/invoice-workbench/items/input/{self.item_id}/mapping',
+            json={'product_code': 'P-API', 'conversion_factor': 2, 'expected': before},
+        )
+        self.assertEqual(stale.status_code, 409)
+
+    def test_invalid_combined_conversion_rolls_back_mapping_and_audit(self):
+        with self.db() as conn:
+            before = list(conn.iterdump())
+        for factor in (0, -1, 'invalid', None, 1000000001):
+            with self.subTest(factor=factor):
+                response = self.client.put(
+                    f'/api/invoice-workbench/items/input/{self.item_id}/mapping',
+                    json={'product_code': 'P-API', 'conversion_factor': factor},
+                )
+                self.assertEqual(response.status_code, 400, response.json)
+                with self.db() as conn:
+                    self.assertEqual(list(conn.iterdump()), before)
 
     def test_ui_has_keyboard_enter_two_directions_filters_and_color_states(self):
         from .test_invoice_workbench_listing import rendered_invoice_html
