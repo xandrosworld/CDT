@@ -5462,6 +5462,16 @@
   });
 
   content.addEventListener("input", function (event) {
+    if (event.target.matches('.unit-conversion-input')) {
+      var previewLine = invoiceEditingLine(event.target.dataset.id);
+      var previewBox = event.target.closest('.invoice-mapping-cell')?.querySelector('.invoice-conversion-preview');
+      var previewFactor = Number(event.target.value);
+      if (previewLine && previewBox) previewBox.textContent = Number.isFinite(previewFactor) && previewFactor > 0 && previewFactor <= 1000000000
+        ? stockQty(previewLine.qty) + ' ' + previewLine.source_unit + ' → ' + stockQty(previewLine.qty * previewFactor) + ' ' + previewLine.product_unit
+        : 'Nhập hệ số lớn hơn 0 trong giới hạn cho phép';
+      return;
+    }
+
     if (event.target.form && event.target.form.id === 'buyerProfileForm') {
       state.buyerEdits = state.buyerEdits || {};
       state.buyerEdits[event.target.form.dataset.contractor] = Object.fromEntries(new FormData(event.target.form).entries());

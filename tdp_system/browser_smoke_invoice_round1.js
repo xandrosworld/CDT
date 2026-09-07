@@ -156,6 +156,8 @@ async function main() {
     await evaluate(`document.getElementById('${conv}').value='0'`);
     await click(`[data-action="save-invoice-conversion"][data-id="${fixture.line_box}"]`);
     assert.ok(await evaluate(`document.getElementById('${conv}') !== null`));
+    await evaluate(`document.getElementById('${conv}').value='12';document.getElementById('${conv}').dispatchEvent(new Event('input',{bubbles:true}))`);
+    assert.ok(await evaluate(`document.getElementById('${conv}').closest('td').querySelector('.invoice-conversion-preview').textContent.includes('24 cái')`));
     await evaluate(`document.getElementById('${conv}').value='12';document.getElementById('${conv}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`);
     await wait(`!document.getElementById('${conv}')`);
     await wait(`document.activeElement?.dataset.action === 'edit-invoice-mapping'`);
@@ -326,6 +328,8 @@ async function main() {
       await wait(`!document.getElementById('map_input_${id}')`);
     }
     const promoPayload=(await request('/api/invoice-workbench/invoices?from=2026-08-28&to=2026-08-28')).body;
+    assert.ok(await evaluate(`document.querySelector('#invoice-line-input-${promo.promotion_lines['QA-OIL-FREE']} .invoice-grouped-quantity').textContent.includes('30 Can')`));
+
     for(const line of promoPayload.lines.filter(r=>r.invoice_id===promo.promotion_invoice)) {
       const cells=await evaluate(`(()=>{const row=document.getElementById('invoice-line-input-${line.id}');return [row.querySelector('.invoice-source-qty').textContent,row.querySelector('.invoice-source-unit').textContent];})()`);
       assert.deepEqual(cells,[String(line.qty),'Can']);

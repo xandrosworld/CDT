@@ -432,7 +432,7 @@ class OutgoingSubstitutionTests(unittest.TestCase):
         ):
             self.assertIn(marker, app_js)
         self.assertNotIn("Gợi ý mã thay thế", app_js)
-        self.assertIn("/static/app.js?v=20260907-5", index_html)
+        self.assertIn("/static/app.js?v=20260907-6", index_html)
         self.assertIn("outgoing_substitution.py", build_script)
         self.assertIn("--hidden-import outgoing_substitution", build_script)
 

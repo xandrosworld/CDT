@@ -717,3 +717,6 @@ body { min-width: 320px; }
 .invoice-mapping-cell small { display: inline-block; line-height: 1.4; }
 .mapping-scope-note { margin-top: 6px; color: #52616a; }
 .unit-conversion-editor input { min-width: 76px; max-width: 100px; }
+
+.invoice-grouped-quantity, .invoice-conversion-preview { display: block; margin: 6px 0; padding: 6px 8px; border-left: 3px solid #087f78; background: #edf8f6; color: #123e3b; line-height: 1.4; }
+.invoice-grouped-quantity small { display: block; }

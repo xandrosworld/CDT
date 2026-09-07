@@ -157,3 +157,11 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 - Dòng đã ghi kho không có nút sửa mã/quy đổi. Dữ liệu thay đổi trong lúc đang sửa sẽ báo đọc lại, không tự ghi đè. Chỉ bấm Nhập kho sau khi đã kiểm tra đúng mã, lượng và tiền.
 
 - Khi đang mở Sửa mã/Sửa quy đổi, cần Lưu hoặc Bỏ sửa trước khi nhập kho hay lưu dòng khác, để không dùng nhầm giá trị cũ.
+
+
+### Xem ngay kết quả quy đổi và tổng hàng cùng mã
+
+- Khi nhập hệ số, ngay dưới ô hiện kết quả: **8 Thùng → 240 Gói**. Bấm **Lưu quy đổi** hoặc Enter mới lưu kết quả đó.
+- Hàng mua và hàng khuyến mại cùng một sản phẩm: chọn đúng cùng mã cho cả hai dòng. Bảng tự hiện **Tổng cùng mã: 30 Can**, gồm **6 Can hàng 0đ** ngay tại dòng; không cần nút gộp riêng. Tiền nguồn giữ nguyên.
+- Hai dòng 24 Can và 6 Can vẫn giữ để đối chiếu hóa đơn gốc; tổng 30 Can dùng khi xem tổng và cộng vào kho sau xác nhận nhập. **Kiểm tra lượng & tiền** cho xem tổng/giá bình quân của cả hóa đơn, kể cả dòng đang ẩn bởi bộ lọc.
+- Không ghép cùng mã chỉ để cộng số lượng nếu tên/loại hàng chưa xác nhận đúng: cần phân biệt dầu hào MISA/Quê Tôi và tương ớt/tương cà.
