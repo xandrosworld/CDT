@@ -137,7 +137,10 @@ async function main() {
     fs.writeFileSync('D:/TDP_ROUND1/mapping-fullscreen-browser.png',Buffer.from(mappingPicture.data,'base64'));
     // Saved rows remain reachable even when the previous filter excluded them.
     assert.ok(await evaluate(`!!document.querySelector('#invoice-line-input-${fixture.line_b} [data-action="edit-invoice-mapping"]')`));
+    assert.ok(await evaluate(`!document.querySelector('#invoice-line-input-${fixture.line_b} .invoice-mapping-cell .invoice-group-select').disabled`));
     await change('invoiceLineFilter','unit_review');
+    assert.ok(await evaluate(`document.querySelector('#invoice-line-input-${fixture.line_box} .invoice-mapping-cell .invoice-group-select').disabled`));
+    assert.ok(await evaluate(`document.querySelector('#invoice-line-input-${fixture.line_box} .invoice-group-hint').textContent.includes('Lưu quy đổi')`));
     await click(`[data-action="edit-invoice-mapping"][data-id="${fixture.line_box}"]`);
     await evaluate(`document.getElementById('map_input_${fixture.line_box}').value='R1-KG'`);
     await click(`[data-action="cancel-invoice-mapping-edit"][data-id="${fixture.line_box}"]`);
@@ -336,9 +339,9 @@ async function main() {
     }
     await evaluate(`window.__groupOriginalFetch=window.fetch;window.fetch=async (...args)=>{const response=await window.__groupOriginalFetch(...args);if(String(args[0]).startsWith('/api/invoice-workbench/invoices?'))await new Promise(r=>setTimeout(r,450));return response;}`);
     await change('invoiceLineFilter','mapped');
-    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar') && document.querySelectorAll('.invoice-group-select').length===4`);
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar') && document.querySelectorAll('.invoice-group-select:not(:disabled)').length===4`);
     await change('invoiceLineFilter','all');
-    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar') && document.querySelectorAll('.invoice-group-select').length===4`);
+    await wait(`document.querySelector('.invoice-mapping-fullscreen-bar') && document.querySelectorAll('.invoice-group-select:not(:disabled)').length===4`);
     await evaluate(`window.fetch=window.__groupOriginalFetch`);
     const oilPair=[promo.promotion_lines['QA-OIL-PAID'],promo.promotion_lines['QA-OIL-FREE']];
     for(const id of oilPair)await click(`.invoice-group-select[data-id="${id}"]`);
@@ -358,7 +361,7 @@ async function main() {
     assert.equal(groupedPayload.lines.filter(r=>r.product_code==='QA-OIL').length,1);
     assert.equal(await evaluate(`document.querySelector('#invoice-line-input-${oilGroup.id} .invoice-source-qty').textContent`),'30');
     await click(`[data-action="split-invoice-group"][data-id="${oilGroup.group_id}"]`);
-    await wait(`document.querySelectorAll('.invoice-group-select').length===4`);
+    await wait(`document.querySelectorAll('.invoice-group-select:not(:disabled)').length===4`);
     for(const id of oilPair)await click(`.invoice-group-select[data-id="${id}"]`);
     await click('[data-action="preview-invoice-group"]');
     await wait(`document.querySelector('.group-confirm')`);await click('.group-confirm');

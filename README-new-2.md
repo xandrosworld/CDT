@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Làm rõ chỗ chọn gộp — 07/09/2026:** đã sửa source để ô **Chọn gộp dòng này**
+> nằm ngay dưới mã hàng, giải thích cần lưu mã/quy đổi và trường hợp cùng đơn vị.
+> Kiểm thử cặp sữa 480 + 40 hộp trên bản sao đạt; trạng thái triển khai tại **13.39**.
+
 > **Chọn dòng để gộp — 07/09/2026:** khách chốt phải chọn dòng và sau gộp
 > chỉ hiện một dòng, có tính lại giá vốn. **Đã deploy và kiểm tra Railway**;
 > có **Xem dòng gốc / Tách lại**, chưa gộp hoặc nhập kho thay khách. Xem **13.38**;
@@ -1223,3 +1227,13 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Source **`0612706486f7833a8eb5390a936fdac6317462cd`** đã deploy từ `xandrosworld/CDT/main`, deployment **`6a97a1cb-8680-4194-847b-f89baa5dece1`**, trạng thái **SUCCESS**; health báo DB/schema sẵn sàng và integrity ok. Browser `selected-group-hosted-01` đạt **8 mục / 6 ảnh**: chọn hai dòng hợp lệ trên dữ liệu hiện có, tổng lượng/tiền/giá vốn khớp lựa chọn, hộp thoại vừa bốn khổ 1920/1440/1280/1024, hủy vẫn toàn màn hình và không tạo nhóm. Không bấm xác nhận gộp trên production.
 - Browser đầy đủ `selected-group-hosted-full-01` đạt **44 mục / 61 ảnh**, gồm các màn máy tính, tỷ lệ diện tích bảng, sửa mã/Bỏ sửa, Ctrl+F, phiếu giao Excel/PDF và đăng xuất. Cả hai lượt hosted không có JavaScript exception, HTTP 5xx hoặc request ghi ngoài phạm vi xem trước. Đã xem ảnh nhóm dầu hào trên bản sao và hộp thoại gộp hosted ở 1024px.
 - Snapshot `selected-group-after` lấy sau khi cả hai lượt browser kết thúc: **80/80 bảng cũ nguyên nội dung và schema**, chỉ thêm bảng `invoice_input_line_groups` đang **0 dòng**; hai DB toàn vẹn ok. Không tuyên bố toàn bộ schema không đổi vì có bảng mới chủ đích. Bằng chứng `selected-group-after/full-preservation.json`. Đã thêm SELECT-MERGE, cập nhật UNIT-SUMMARY/MAPPING-CORRECT và ghi chú E11 trên Google Sheet; đọc lại xác nhận giữ nguyên D/F/G của khách và ghi chú lịch sử. Khách tải lại trang để dùng; đây là kiểm tra chức năng, chưa thay nghiệm thu của khách.
+
+### 13.39. Làm rõ chọn gộp sau phản ánh hai dòng sữa — 07/09/2026
+
+- Khách phản ánh không thấy thao tác như hướng dẫn. Ảnh là hóa đơn 21379 ngày 28/08, hai dòng SCA Có đường VNM 100g: 480 Hộp có tiền và 40 Hộp hàng 0đ. Snapshot mới `milk-selection-before` cho thấy hai dòng vẫn chưa lưu mã; mã N000033 trong danh mục là Sữa chua Vinamilk 100g/hộp, ĐVT Hộp. Không có căn cứ kết luận khách chưa bấm nút hay thao tác sai chỉ từ trạng thái này.
+- Trên bản sao `milk-baseline-copy-01`, gõ N000033 rồi bấm Ghi nhớ bằng sự kiện bàn phím/chuột thật lưu được cả hai dòng theo quy tắc hiện có; gộp được 520 Hộp, tiền 2.760.000đ, giá vốn hiển thị 5.308đ/Hộp. Chưa tái hiện lỗi API lưu mã ở cặp này. Giao diện có thiếu sót đã chứng minh: giấu ô chọn khi chưa lưu và đặt ô ở cột Dòng xa chỗ nhập; hướng dẫn làm người dùng tưởng luôn phải hiện ô quy đổi.
+- Đưa **Chọn gộp dòng này** vào ngay ô ghép mã, có nhãn và vùng bấm rõ. Khi chưa đủ dữ liệu, ô chọn vẫn hiện nhưng chưa dùng được, ghi rõ cần Ghi nhớ hay Lưu quy đổi. Cùng đơn vị và hệ số 1 thì nói **không cần quy đổi**. Sau lưu, giữ cơ chế đưa dòng về tầm nhìn và bổ sung bước chọn gộp; không tự tích hay chọn các dòng thay khách.
+- Giữ các khóa cùng hóa đơn/mã/ĐVT/thuế, Sửa mã/Sửa quy đổi, Tách lại, kiểm tra phiên và xác nhận nhập kho. Không thay quy tắc lan mapping, số lượng/giá/tiền nguồn, cách tính nhóm hoặc kho. Hướng dẫn tìm dòng làm trước đây bằng đúng khoảng ngày, Tất cả hóa đơn/Tất cả dòng và ô Tìm mã/tên được bổ sung trong NGHIEM-THU-RAILWAY.md.
+- `milk-ui-copy-01` đạt 9 mục bằng gõ và bấm chuột: ô chọn nằm cạnh mã và giải thích khi bị khóa, Ghi nhớ, cùng đơn vị, giữ dòng sau đổi bộ lọc, chọn 480 + 40, gộp thành một dòng 520 Hộp/2.760.000đ/5.308đ, tách/hủy, bốn khổ 1920/1440/1280/1024 và không ghi kho. Đã xem ảnh ở 1024px. Đây là thao tác trên bản sao, không lưu N000033 hoặc tạo nhóm thay khách trên production.
+- Nhóm chịu ảnh hưởng `milk-ui-tests-02`: **55/55 bài đạt, 8 module**. Lượt tests-01 truyền lặp tham số --module nên thực tế chỉ chạy module cuối 1 bài; không coi đó là chạy đủ nhóm. Browser fixture `milk-ui-browser-02` đạt toàn luồng hóa đơn/kho, gồm kiểm tra mới ô chọn nằm trong cột ghép mã, khóa kèm lý do khi thiếu quy đổi. Lượt browser-01 cũng đạt trước khi bổ sung các phép kiểm tra vị trí này. Cú pháp JavaScript và git diff --check đạt.
+- Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/milk-*`. Trạng thái source tại thời điểm ghi mục này: đã kiểm thử, đang triển khai; kết quả Railway và đối chiếu sau triển khai sẽ ghi bên dưới khi có bằng chứng.

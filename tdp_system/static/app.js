@@ -5804,7 +5804,7 @@
     var savedNote = document.createElement('small');
     savedNote.className = 'mapping-save-note';
     savedNote.textContent = (expandedFilter ? 'Đã mở Tất cả dòng để giữ dòng vừa lưu. ' : '') +
-      (needsConversion ? 'Còn bước nhập quy đổi bên dưới.' : 'Đã lưu. Chọn Sửa mã / Sửa quy đổi nếu cần đổi lại.');
+      (needsConversion ? 'Còn bước nhập quy đổi bên dưới.' : (direction === 'input' ? 'Đã lưu mã. Muốn gộp: tích Chọn gộp dòng này bên dưới và dòng còn lại, rồi bấm Gộp dòng đã chọn ở trên bảng.' : 'Đã lưu. Chọn Sửa mã / Sửa quy đổi nếu cần đổi lại.'));
     row.querySelector('.invoice-mapping-cell').prepend(savedNote);
     row.scrollIntoView({block:'center', inline:'nearest'});
     var next = needsConversion ? document.getElementById('conversion_' + direction + '_' + id) : row.querySelector('[data-action="edit-invoice-mapping"]');

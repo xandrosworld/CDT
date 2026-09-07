@@ -722,7 +722,11 @@ body { min-width: 320px; }
 .invoice-grouped-quantity small { display: block; }
 
 .invoice-group-select { width: 22px; height: 22px; cursor: pointer; }
-.invoice-group-choice { display: block; padding: 5px 0; }
+.invoice-group-choice { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 5px 0; font-weight: 600; cursor: pointer; }
+.invoice-group-choice:has(input:disabled) { color: #5b6570; cursor: default; }
+.invoice-group-select:disabled { cursor: default; }
+.invoice-group-select { flex-shrink: 0; }
+.invoice-group-hint { display: block; color: #5b6570; }
 .invoice-group-dialog { padding: 20px; max-width: min(640px, 94vw); max-height: 90vh; overflow: auto; font-size: 16px; }
 .invoice-group-dialog .btn { min-height: 44px; }
 .group-error { color: #a52a2a; }
