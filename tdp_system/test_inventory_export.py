@@ -417,14 +417,14 @@ class InventoryExportTests(unittest.TestCase):
         for contract in (
             'id="inventoryFrom"', 'id="inventoryTo"',
             "/api/invoice-valuation/export",
-            "/api/invoice-valuation/export/opening",
-            "/api/invoice-valuation/export/input",
-            "/api/invoice-valuation/export/output",
-            "/api/invoice-valuation/export/nxt",
+            "/api/invoice-valuation/preview/",
+            'data-action="preview-inventory-report"',
             "Tải đủ 4 file ZIP",
-            "Xem chi tiết và nhập dữ liệu",
         ):
             self.assertIn(contract, script)
+        renderer = script[script.index('  function renderInventory()'):script.index('  var inventoryPreviewSerial')]
+        for removed in ('inventoryMonthCloseHtml', 'stats-grid', 'openingForm', 'inventoryAdjustmentForm', 'inventory-detail-toggle'):
+            self.assertNotIn(removed, renderer)
         self.assertNotIn("Q-005", script)
         self.assertIn("Báo cáo vật tư hàng hóa", page)
         self.assertNotIn("Kho hóa đơn", page)

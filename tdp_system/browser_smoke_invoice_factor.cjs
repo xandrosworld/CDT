@@ -31,9 +31,9 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
  const posted=data.lines.find(r=>r.invoice_id===ids.input_ids['1']);assert.equal(await page.locator('#invoice-line-input-'+posted.id+' .invoice-draft-factor').count(),0);
  await page.getByRole('tab',{name:'Hóa đơn đầu ra'}).click();await page.locator('#invoice-line-output-'+ids.output_line).waitFor();
  const out=page.locator('#invoice-line-output-'+ids.output_line),outFactor=out.locator('.invoice-draft-factor');
- assert(await outFactor.isEnabled());await outFactor.fill('0,25');await choose(out,'R1-CAI');assert.equal(await outFactor.inputValue(),'0,25');
+ assert.equal(await outFactor.count(),0);await choose(out,'R1-CAI');
  saved=page.waitForResponse(r=>r.url().endsWith('/mapping')&&r.request().method()==='PUT');await out.getByRole('button',{name:'Lưu',exact:true}).click();assert.equal((await saved).status(),200);
- data=await get('/api/invoice-workbench/invoices?invoice_type=output&from=2026-08-01&to=2026-08-31');assert.equal(data.lines.find(r=>r.id===ids.output_line).conversion_factor,0.25);
+ data=await get('/api/invoice-workbench/invoices?invoice_type=output&from=2026-08-01&to=2026-08-31');assert.equal(data.lines.find(r=>r.id===ids.output_line).conversion_factor,null);assert.equal(data.lines.find(r=>r.id===ids.output_line).mapping_status,'unit_review');
  assert.deepEqual(errors,[]);console.log('PASS: factor-first/code-first, preserve draft, product-change defaults, no-code/invalid blocked, Escape, input/output save, posted locked');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

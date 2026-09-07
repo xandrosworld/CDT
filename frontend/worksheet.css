@@ -1,6 +1,12 @@
 .tdp-sheet-shell { position: fixed; inset: 0; z-index: 1000; background: white; color: #1b2932; display: flex; flex-direction: column; font: 14px Arial,sans-serif; }
 .tdp-sheet-top,.tdp-sheet-controls { display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid #d5dde2; flex-wrap:wrap; }
 .tdp-sheet-top { background:#f3f6f6; }
+.tdp-sheet-top { padding:4px 8px; gap:6px; }
+.tdp-sheet-top > strong { font-size:14px; }
+.tdp-sheet-top > .tdp-table-search { padding:0; border:0; background:transparent; margin-left:auto; gap:4px; font-size:12px; }
+.tdp-sheet-top > .tdp-table-search small { display:none; }
+.tdp-sheet-top > .tdp-table-search input { width:170px; padding:4px 6px; }
+.tdp-sheet-top > .tdp-table-search button { min-height:28px; padding:3px 7px; }
 .tdp-sheet-top strong { font-size:16px; }
 .tdp-sheet-top button,.tdp-sheet-controls button { border:1px solid #b5c3c9; background:white; color:#183c40; border-radius:4px; padding:6px 12px; cursor:pointer; font:inherit; }
 .tdp-sheet-shell input { border:1px solid #bac8ce; background:white; color:#182e35; border-radius:3px; padding:6px 8px; font:inherit; width:190px; }

@@ -45,7 +45,7 @@ const {chromium} = require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
     assert(!(await first.innerText()).includes('Đã đủ mã · Chưa nhập kho'));
     await first.getByRole('button', {name: 'Kiểm tra', exact: true}).click();
     await page.locator('.invoice-receipt-summary-dialog').waitFor();
-    await page.locator('.invoice-receipt-summary-dialog button').click();
+    await page.locator('.invoice-receipt-summary-dialog .review-close').click();
     const before = await listing();
     const dialog = page.locator('.receipt-review-dialog');
     await bulk.click();

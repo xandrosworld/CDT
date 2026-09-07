@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Thành Đạt Phát · Hệ thống vận hành</title>
   <link rel="stylesheet" href="/shared/styles.css">
-  <link rel="stylesheet" href="/static/real.css?v=20260907-18">
+  <link rel="stylesheet" href="/static/real.css?v=20260907-19">
 </head>
 <body>
   <div class="app-shell">
@@ -14,6 +14,7 @@
         <div class="brand-mark">TĐP</div>
         <div><strong>THÀNH ĐẠT PHÁT</strong><span>Hệ thống vận hành</span></div>
       </div>
+      <button class="workspace-nav-scroll" type="button" aria-label="Cuộn các tab sang trái">‹</button>
       <nav id="nav">
         <button class="nav-item active" data-view="home"><span>⌂</span> Công việc hằng ngày</button>
         <button class="nav-item" data-view="orders"><span>▤</span> Nhập & sửa đơn</button>
@@ -28,6 +29,7 @@
         <button class="nav-item" data-view="printing"><span>▣</span> In giấy tờ</button>
         <button class="nav-item" data-view="settings"><span>⚙</span> Danh mục & sao lưu</button>
       </nav>
+      <button class="workspace-nav-scroll" type="button" aria-label="Cuộn các tab sang phải">›</button>
       <div class="sidebar-foot">
         <div class="online-dot"></div>
         <div><strong>Dữ liệu lưu sau khi xác nhận</strong><span>Sao lưu tự động theo lịch</span></div>
@@ -67,13 +69,16 @@
     </div>
   </div>
   <div class="toast" id="toast" role="status"></div>
+  <script src="/static/invoice-review-editor.js?v=20260907-19"></script>
   <script src="/static/invoice-group-editor.js?v=20260907-9"></script>
-  <script src="/static/invoice-workbench.js?v=20260907-16"></script>
+  <script src="/static/invoice-workbench.js?v=20260907-21"></script>
   <script src="/static/document-preview.js?v=20260905-4"></script>
   <script src="/static/table-search.js?v=20260907-1"></script>
-  <link rel="stylesheet" href="/static/worksheet-bundle/worksheet.css?v=20260907-1">
-  <script src="/static/worksheet-bundle/worksheet.js?v=20260907-1"></script>
+  <link rel="stylesheet" href="/static/worksheet-bundle/worksheet.css?v=20260907-21">
+  <script src="/static/worksheet-bundle/worksheet.js?v=20260907-21"></script>
   <script src="/static/receipt-review.js?v=20260907-16"></script>
-  <script src="/static/app.js?v=20260907-18"></script>
+  <script src="/static/app.js?v=20260907-21"></script>
+  <link rel="stylesheet" href="/static/workspace-layout.css?v=20260907-21">
+  <script src="/static/workspace-layout.js?v=20260907-21"></script>
 </body>
 </html>

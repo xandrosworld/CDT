@@ -21,6 +21,11 @@ async function open(options) {
   top.append(status);
   const button = (label, fn) => { const el = make('button', label); el.type = 'button'; el.onclick = fn; top.append(el); return el; };
   const close = button('×', () => shutdown()); close.className = 'tdp-sheet-close'; close.setAttribute('aria-label', 'Đóng bảng');
+  shell.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !options.editable && !document.querySelector('dialog[open]')) {
+      event.preventDefault(); event.stopPropagation(); shutdown();
+    }
+  });
   if (options.onImport) { const upload = button('Nạp bản mới', async () => { await shutdown(); if (disposed) options.onImport(); }); top.insertBefore(upload, close); }
   const notice = make('div', options.editable ? 'Nhập trực tiếp hoặc dán nhiều ô. Enter / Tab để chuyển ô và tự lưu. Cột tính toán chỉ xem.' : 'Bảng chỉ xem · có thể chọn và sao chép ô, kéo rộng cột, phóng to.', 'tdp-sheet-notice');
   const normalNotice = notice.textContent;
@@ -38,9 +43,9 @@ async function open(options) {
   siblings.forEach(el => el.inert = true);
   opened = { shell };
   let univer, book, api, sheet, subscription, muting = false, timer, pollTimer, polling = false, running = null, failed = null, activeSent = null, disposed = false;
-  let rows = options.rows.map(row => ({ ...row }));
+  let rows = (options.rows || []).map(row => ({ ...row }));
   const pending = new Map();
-  const columns = options.columns;
+  const columns = options.columns || [];
   const setStatus = (message, error = false) => { status.textContent = message; status.classList.toggle('is-error', error); };
   const cell = (value, col, header = false, row = null) => ({ v: textValue(value), t: typeof value === 'number' ? 2 : 1,
     s: { ff: 'Arial', fs: 11, ht: col.numeric ? 3 : 1, vt: 2,
@@ -56,14 +61,22 @@ async function open(options) {
     active: () => !disposed && !document.querySelector('dialog[open]'),
     prepare: async () => { await waitForRender(); if (book?.isCellEditing()) await book.endEditingAsync(true); },
     cells: () => {
+      if (options.workbookData && book) {
+        sheet = book.getActiveSheet();
+        const saved = options.workbookData.sheets[sheet.getSheetId()];
+        return Object.entries(saved.cellData).flatMap(([r, row]) => Object.entries(row).map(([c, cell]) => ({
+          key: `${saved.id}:${r}:${c}`, r: Number(r), c: Number(c),
+          values: [cell.v, ...(typeof cell.v === 'number' ? [cell.v.toLocaleString('en-US', {maximumFractionDigits:6}), cell.v.toLocaleString('vi-VN', {maximumFractionDigits:6})] : [])]
+        })));
+      }
       if (!sheet || !rows.length) return [];
       const raw = sheet.getRange(1, 0, rows.length, columns.length).getRawValues();
       return raw.flatMap((row, r) => columns.map((col, c) => ({ key: `${r}:${c}`, r, c,
         values: [row[c], ...(col.numeric && typeof row[c] === 'number' ? [row[c].toLocaleString('en-US', { maximumFractionDigits: col.money ? 0 : 6 }), row[c].toLocaleString('vi-VN', { maximumFractionDigits: 6 })] : [])] })));
     },
-    select: hit => revealCell(hit.r + 1, hit.c)
+    select: hit => revealCell(hit.r + (options.workbookData ? 0 : 1), hit.c)
   });
-  shell.insertBefore(search.element, notice);
+  top.insertBefore(search.element, close);
   async function waitForRender() {
     const deadline = Date.now() + 15000;
     while (!disposed && (!api || api.getCurrentLifecycleStage() < api.Enum.LifecycleStages.Rendered)) {
@@ -207,13 +220,14 @@ async function open(options) {
   try {
     ({ univer, univerAPI: api } = createUniver({ locale: LocaleType.EN_US, locales: { [LocaleType.EN_US]: mergeLocales(enUS) },
       presets: [UniverSheetsCorePreset({ container: host, header: true, toolbar: false, formulaBar: true, contextMenu: false,
-        footer: { sheetBar: false, statisticBar: true, menus: false, zoomSlider: true } })] }));
+        footer: { sheetBar: !!options.workbookData, statisticBar: true, menus: false, zoomSlider: true } })] }));
     const cellData = { 0: Object.fromEntries(columns.map((col, c) => [c, cell(col.title, col, true)])) };
     rows.forEach((row, r) => cellData[r + 1] = Object.fromEntries(columns.map((col, c) => [c, cell(row[col.key], col, false, row)])));
-    book = api.createWorkbook({ id: crypto.randomUUID(), name: options.title, sheetOrder: ['data'],
+    book = api.createWorkbook(options.workbookData ? {...options.workbookData, id:crypto.randomUUID()} : { id: crypto.randomUUID(), name: options.title, sheetOrder: ['data'],
       sheets: { data: { id: 'data', name: 'Dữ liệu', rowCount: Math.max(rows.length + 1, 2), columnCount: columns.length,
-        showGridlines: 1, defaultRowHeight: 27, defaultColumnWidth: 120, cellData, columnData: Object.fromEntries(columns.map((col, c) => [c, { w: col.width || 120 }])) } } });
-    sheet = book.getActiveSheet(); sheet.setFrozenRows(1); sheet.setFrozenColumns(Math.min(2, columns.length));
+        showGridlines: 1, defaultRowHeight: 24, defaultColumnWidth: 120, cellData, columnData: Object.fromEntries(columns.map((col, c) => [c, { w: col.width || 120 }])) } } });
+    sheet = book.getActiveSheet();
+    if (!options.workbookData) { sheet.setFrozenRows(1); sheet.setFrozenColumns(Math.min(2, columns.length)); }
     // Structural edits would invalidate the stable row-to-record relationship.
     const permitted = new Set(['sheet.command.set-range-values', 'sheet.mutation.set-range-values', 'sheet.command.clear-selection-content']);
     book.onBeforeCommandExecute(command => {

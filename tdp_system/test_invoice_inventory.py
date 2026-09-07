@@ -336,15 +336,16 @@ class InvoiceInventoryLedgerTests(unittest.TestCase):
         self.assertEqual(1, len(trace.get_json()["events"]))
         self.assertEqual(400, invalid_date.status_code)
 
-    def test_ui_requires_explicit_output_post_and_reversal_confirmation(self):
+    def test_compact_output_hides_actions_and_retains_explicit_write_guards(self):
         from .test_invoice_workbench_listing import rendered_invoice_html
         source = (Path(__file__).resolve().parent / "static" / "app.js").read_text(encoding="utf-8")
-        source += rendered_invoice_html()
+        rendered = rendered_invoice_html()
+        self.assertNotIn('data-action="post-invoice-output"', rendered)
+        self.assertNotIn('data-action="reverse-invoice-output"', rendered)
         for expected in (
-            "Xác nhận xuất cả hóa đơn",
-            'data-action="post-invoice-output"',
+            'action === "post-invoice-output"',
             "Xác nhận hoàn tác xuất kho",
-            'data-action="reverse-invoice-output"',
+            'action === "reverse-invoice-output"',
             "Bút toán xuất cũ sẽ được giữ nguyên",
             "confirmed: true",
         ):

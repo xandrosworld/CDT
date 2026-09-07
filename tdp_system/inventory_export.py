@@ -907,6 +907,28 @@ def register_inventory_export_routes(app: Any, ctx: Mapping[str, Any]) -> None:
         except (InventoryExportError, TemplateWorkbookError) as error:
             return error_response(error)
 
+    @app.get("/api/invoice-valuation/preview/<kind>")
+    def api_inventory_preview(kind: str):
+        try:
+            if kind not in EXPORT_KINDS:
+                raise InventoryExportError("Loại báo cáo không hợp lệ", code="invalid_export_kind", status=404)
+            try:
+                from inventory_preview import workbook_preview
+            except ImportError:
+                from .inventory_preview import workbook_preview
+            payload = model()
+            workbook = build_inventory_workbook(payload, kind, template_path=template_path, expected_sha256=expected_sha256)
+            try:
+                preview = workbook_preview(workbook, _filenames(payload)[kind])
+            finally:
+                workbook.close()
+            return jsonify(ok=True, read_only=True, kind=kind, date_from=payload['date_from'],
+                           date_to=payload['date_to'], workbook=preview)
+        except (InventoryExportError, TemplateWorkbookError) as error:
+            return error_response(error)
+        except ValueError as error:
+            return jsonify(ok=False, error=str(error)), 422
+
 
 __all__ = [
     "EXPORT_KINDS",

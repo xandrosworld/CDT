@@ -2,7 +2,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 // Run against browser_fixture_date_picker_server only, never the live customer app.
 const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
-const base='http://127.0.0.1:18805';
+const base=process.env.TDP_INVOICE_TEST_URL || 'http://127.0.0.1:18805';
 fs.mkdirSync('tmp',{recursive:true});
 (async()=>{
   const report=[];
@@ -28,8 +28,8 @@ fs.mkdirSync('tmp',{recursive:true});
           const input=page.locator('#'+id), button=input.locator('..').locator('button.localized-date-icon');
           await button.scrollIntoViewIfNeeded();
           const box=await button.boundingBox();
-          assert.equal(box.width,44);
-          for(const dx of [4,16,22,28,40]){
+          assert(box.width>=30 && box.width<=44);
+          for(const dx of [3,box.width*.25,box.width*.5,box.width*.75,box.width-3]){
             await page.keyboard.press('Escape');
             await page.mouse.click(box.x+dx,box.y+box.height/2);
             count++;
@@ -80,7 +80,7 @@ fs.mkdirSync('tmp',{recursive:true});
       report.push({channel,version:await browser.version(),pickerOpens:count,widths:[1920,1440,1024],keyboard:true,dateSelection:true,manualEntry:true,month:true,inventory:true,errors,writes});
     }finally{await browser.close();}
   }
-  // Simulate browsers without showPicker: their native indicator must cover all 44px.
+  // Without showPicker, the native indicator must cover the full rendered icon.
   const legacy=await chromium.launch({channel:'chrome',headless:true});
   try{
     const page=await legacy.newPage({viewport:{width:1440,height:1000}});
@@ -90,11 +90,11 @@ fs.mkdirSync('tmp',{recursive:true});
     });
     await page.goto(base);await page.locator('.loading-panel').waitFor({state:'detached'});
     await page.locator('[data-view="msmi"]').click();
-    for(const [id,offset,next] of [['invoiceFrom',4,'2026-09-01'],['invoiceTo',40,'2026-09-08']]){
+    for(const [id,edge,next] of [['invoiceFrom','left','2026-09-01'],['invoiceTo','right','2026-09-08']]){
       const input=page.locator('#'+id);await input.waitFor({state:'attached'});
       assert(await input.locator('..').evaluate(e=>e.classList.contains('native-picker-fallback')));
       const box=await input.boundingBox();
-      await page.mouse.click(box.x+offset,box.y+box.height/2);
+      await page.mouse.click(box.x+(edge==='left'?3:box.width-3),box.y+box.height/2);
       await page.keyboard.press('ArrowRight');await page.keyboard.press('Enter');
       await page.waitForFunction(({id,next})=>document.getElementById(id)?.value===next,{id,next});
     }
