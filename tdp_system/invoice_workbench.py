@@ -560,6 +560,36 @@ def register_invoice_workbench_routes(app, ctx) -> None:
         except (InvoiceReceiptError, InvoiceWorkbenchError) as error:
             return jsonify({'ok': False, 'error': str(error), 'code': getattr(error, 'code', 'invalid')}), getattr(error, 'status', 400)
 
+    @app.route("/api/invoice-workbench/output-postings", methods=["GET", "POST"])
+    def api_output_postings():
+        try:
+            from .invoice_output_bulk import preview_outputs, post_outputs, InvoiceInventoryError
+            from .invoice_workbench_listing import invoice_range_payload
+        except ImportError:
+            from invoice_output_bulk import preview_outputs, post_outputs, InvoiceInventoryError
+            from invoice_workbench_listing import invoice_range_payload
+        try:
+            with db_factory() as conn:
+                if request.method == 'POST':
+                    body = request.get_json(silent=True)
+                    body = body if isinstance(body, dict) else {}
+                    conn.execute('BEGIN IMMEDIATE')
+                    result = post_outputs(conn, body.get('items'), tenant_code(conn), now_iso, confirmed=body.get('confirmed'))
+                else:
+                    conn.execute('BEGIN')
+                    payload = invoice_range_payload(conn, tenant=tenant_code(conn), invoice_type='output',
+                        date_from=request.args.get('from'), date_to=request.args.get('to'),
+                        status=request.args.get('status', 'all'), line_filter=request.args.get('line_filter', 'all'),
+                        scope=request.args.get('scope', 'period'))
+                    ids = [r['id'] for r in payload['items'] if r['workbench_status'] == 'ready']
+                    result = preview_outputs(conn, ids, tenant_code(conn), now_iso) if ids else {'items': [], 'blocked': []}
+                    result['blocked'].extend({'id': r['id'], 'number': r['invoice_series'] + ' / ' + r['invoice_number'],
+                        'reason': r.get('error_message') or ('Còn dòng chưa đủ mã hoặc khác đơn vị kho.' if r['workbench_status'] == 'needs_mapping' else 'Cần đối chiếu hóa đơn nguồn trước khi ghi xuất kho.')}
+                        for r in payload['items'] if r['workbench_status'] in {'needs_mapping', 'error'} and r.get('stock_status') not in {'posted', 'reversal_required'})
+                return jsonify({'ok': True, **result})
+        except (InvoiceInventoryError, InvoiceWorkbenchError) as error:
+            return jsonify({'ok': False, 'error': str(error), 'code': getattr(error, 'code', 'invalid')}), getattr(error, 'status', 400)
+
     @app.post("/api/invoice-workbench/output-match-codes")
     def api_output_match_codes():
         try:

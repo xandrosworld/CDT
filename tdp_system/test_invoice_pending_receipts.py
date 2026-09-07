@@ -48,7 +48,8 @@ class PendingReceiptTests(unittest.TestCase):
         other = invoice_range_payload(self.conn, tenant='OTHER', invoice_type='input', date_from='2026-09-01', date_to='2026-09-02', scope='pending')
         self.assertEqual([], other['items'])
         self.assertEqual(before, '\n'.join(self.conn.iterdump()))
-        self.assertEqual(400, self.client.get('/api/invoice-workbench/invoices' + self.query + '&invoice_type=output').status_code)
+        # Output now has the same explicit carry-forward view for unfinished invoices.
+        self.assertEqual(200, self.client.get('/api/invoice-workbench/invoices' + self.query + '&invoice_type=output').status_code)
         self.assertEqual(400, self.client.get('/api/invoice-workbench/invoices' + self.query.replace('pending', 'bogus')).status_code)
 
     def test_review_posts_ready_invoice_once_and_keeps_other_invoice_next_day(self):

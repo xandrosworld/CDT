@@ -306,6 +306,8 @@ def inventory_period_close_preview(
         "unposted_input_count": unposted_input_count,
         "unposted_output_count": unposted_output_count,
         "issues": issues,
+        "problem_items": [{key: item.get(key) for key in ('product_code', 'product_name', 'unit', 'closing_qty', 'closing_value', 'valuation_status')}
+                          for item in report['items'] if item in invalid_items or item in negative_items],
         "can_close": not issues and not already_current,
         "can_reopen": bool(closure_row and closure_row["status"] == "closed" and not downstream),
         "read_only": True,

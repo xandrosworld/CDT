@@ -109,3 +109,14 @@
   #content .invoice-filter-grid { grid-template-columns:repeat(2,minmax(0,1fr)); flex-basis:100%; }
   #content .invoice-filter-grid > .btn { grid-column:1/-1; }
 }
+/* Detailed month review is opened explicitly; the report landing stays compact. */
+.inventory-close-dialog { width:min(980px,96vw); max-width:96vw; max-height:94dvh; padding:18px; overflow:auto; }
+.inventory-close-dialog .inventory-close-title h3 { font-size:18px; }
+.inventory-close-dialog .inventory-month-close { padding:14px; margin:12px 0; }
+.inventory-close-dialog .inventory-close-period { display:flex; align-items:center; gap:10px; }
+.inventory-close-dialog .inventory-close-period input { padding:6px; }
+.inventory-close-dialog table { width:100%; }
+.inventory-close-dialog td,.inventory-close-dialog th { padding:6px 8px; text-align:left; }
+.inventory-close-dialog .inventory-close-action { display:flex; flex-wrap:wrap; gap:8px; align-items:end; }
+.inventory-close-dialog .inventory-close-action label { display:grid; gap:4px; }
+.inventory-close-dialog .inventory-close-history { margin-bottom:12px; }

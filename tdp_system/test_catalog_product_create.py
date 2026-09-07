@@ -63,6 +63,19 @@ class CatalogProductCreateTests(unittest.TestCase):
         before = '\n'.join(self.conn.iterdump())
         self.assertEqual(409, self.post({**self.data, 'name': 'Tên khác', 'unit': 'Kg'}).status_code)
         self.assertEqual(before, '\n'.join(self.conn.iterdump()))
+
+    def test_customer_code_visible_beyond_first_page_and_search_without_accents(self):
+        self.conn.executemany("INSERT INTO products(code,name,unit) VALUES(?,?,'Cái')", [(f'A{i:04}', f'Hàng {i}') for i in range(1253)])
+        self.conn.commit()
+        before = self.client.get('/api/catalog/products').json
+        self.assertEqual(1255, before['catalog_total'])
+        response = self.post({'code':'HT00245','name':'Hạt bí xanh hộp 480g','unit':'Hộp','tax':'0.08'})
+        self.assertEqual(201, response.status_code, response.json)
+        for term in ('HT00245', 'ht00245', 'hat bi xanh hop 480g', 'HẠT BÍ XANH'):
+            result = self.client.get('/api/catalog/products', query_string={'q':term}).json
+            self.assertEqual(['HT00245'], [r['code'] for r in result['items']])
+            self.assertEqual(1256, result['catalog_total'])
+        self.assertEqual(50, len(self.client.get('/api/catalog/products').json['items']))
         self.assertEqual(409, self.post({**self.data, 'code': 'r1-kg'}).status_code)
 
     def test_rejects_missing_invalid_and_oversized_input_without_writes(self):

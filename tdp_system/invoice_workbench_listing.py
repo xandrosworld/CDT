@@ -102,11 +102,12 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
     if status not in STATUS_LABELS or line_filter not in LINE_LABELS:
         raise InvoiceWorkbenchError("Bộ lọc hóa đơn không hợp lệ")
     direction = "input" if safe_type == INPUT_INVOICE else "output"
-    if scope not in {"period", "pending"} or (scope == "pending" and direction != "input"):
+    if scope not in {"period", "pending"}:
         raise InvoiceWorkbenchError("Phạm vi hóa đơn không hợp lệ")
     pending = scope == "pending"
     query_start = "0001-01-01" if pending else start
-    pending_guard = "AND COALESCE(i.receipt_status,'') != 'posted'" if pending else ""
+    pending_guard = ("AND COALESCE(i.receipt_status,'') != 'posted'" if direction == 'input' else
+                     "AND COALESCE(i.stock_status,'') NOT IN ('posted','reversed','reversal_required')") if pending else ""
     table, links, source = (
         ("msmi_invoices", "invoice_sync_batch_invoices", "msmi") if direction == "input"
         else ("outgoing_source_invoices", "invoice_sync_batch_output_invoices", "minvoice")
@@ -217,7 +218,7 @@ def range_workbook(payload):
     ws = wb.active
     ws.title = "Hoa don"
     title = "HÓA ĐƠN ĐẦU VÀO" if payload["direction"] == "input" else "HÓA ĐƠN ĐẦU RA"
-    period = "CÒN CHƯA NHẬP ĐẾN " + payload["date_to"] if payload.get("scope") == "pending" else payload["date_from"] + " → " + payload["date_to"]
+    period = ("CÒN CHƯA NHẬP ĐẾN " if payload['direction'] == 'input' else "CÒN CHƯA XUẤT ĐẾN ") + payload["date_to"] if payload.get("scope") == "pending" else payload["date_from"] + " → " + payload["date_to"]
     ws.append([title + " · " + period])
     ws.merge_cells("A1:M1")
     ws.append(["Ngày", "Ký hiệu / Số HĐ", "Đối tác", "Dòng", "Tên hàng", "ĐVT", "Số lượng",

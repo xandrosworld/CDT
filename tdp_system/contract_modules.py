@@ -6069,16 +6069,21 @@ def register_contract_routes(app, ctx):
     def api_catalog_products():
         term = request.args.get('q', '').strip()[:255]
         offset = max(0, request.args.get('offset', 0, type=int))
-        needle = '%' + term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
-        where = "WHERE p.code LIKE ? ESCAPE '\\' OR p.name LIKE ? ESCAPE '\\' OR n.invoice_name LIKE ? ESCAPE '\\'"
         join = 'FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code '
         with db_factory() as conn:
             conn.execute('BEGIN')
-            total = conn.execute('SELECT COUNT(*) ' + join + where, (needle,)*3).fetchone()[0]
             items = [dict(row) for row in conn.execute(
-                "SELECT p.code,p.name,p.unit,p.tax,p.catalog_updated_at,COALESCE(n.invoice_name,'') invoice_name " + join + where + ' ORDER BY p.code LIMIT 50 OFFSET ?',
-                (*((needle,)*3), offset))]
-        return jsonify(ok=True, items=items, total=total, offset=offset, limit=50)
+                "SELECT p.code,p.name,p.unit,p.tax,p.catalog_updated_at,COALESCE(n.invoice_name,'') invoice_name " + join + ' ORDER BY p.code')]
+        catalog_total = len(items)
+        def folded(value):
+            text = unicodedata.normalize('NFD', str(value or '').casefold().replace('đ', 'd'))
+            return ' '.join(''.join(c for c in text if unicodedata.category(c) != 'Mn').split())
+        needle = folded(term)
+        if needle:
+            items = [r for r in items if any(needle in folded(r[k]) for k in ('code','name','invoice_name'))]
+        total = len(items)
+        offset = min(offset, ((total - 1) // 50) * 50) if total else 0
+        return jsonify(ok=True, items=items[offset:offset+50], total=total, catalog_total=catalog_total, offset=offset, limit=50)
 
     @app.route("/api/catalog/products", methods=['POST', 'PUT'])
     def api_catalog_create_product():

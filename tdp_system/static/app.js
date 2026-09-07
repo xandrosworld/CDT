@@ -704,7 +704,7 @@
   }
 
   async function loadInventoryMonthClose(silent) {
-    var period = (state.inventoryFrom || state.opsMonth || todayIso).slice(0, 7);
+    var period = state.inventoryClosePeriod || (state.inventoryFrom || state.opsMonth || todayIso).slice(0, 7);
     var requestSerial = ++state.inventoryMonthCloseRequestSerial;
     try {
       var result = await api(
@@ -712,11 +712,11 @@
       );
       if (requestSerial !== state.inventoryMonthCloseRequestSerial) return;
       state.inventoryMonthClose = result;
-      if (!silent && state.view === "inventory") renderInventory();
+      if (!silent && state.view === "inventory") renderInventoryCloseDialog();
     } catch (error) {
       if (requestSerial !== state.inventoryMonthCloseRequestSerial) return;
       state.inventoryMonthClose = { error: error.message, period: period, issues: [] };
-      if (!silent && state.view === "inventory") renderInventory();
+      if (!silent && state.view === "inventory") renderInventoryCloseDialog();
     }
   }
 
@@ -725,6 +725,7 @@
     state.inventoryMonthClose = null;
     await Promise.all([loadInventoryValuation(true), loadInventoryMonthClose(true)]);
     renderInventory();
+    renderInventoryCloseDialog();
     if (message) showToast(message);
   }
 
@@ -747,6 +748,8 @@
       question += "\n\nLưu ý: còn " + num(preview.unposted_input_count) + " hóa đơn đầu vào và " + num(preview.unposted_output_count) + " hóa đơn đầu ra chưa ghi kho. Chốt tháng chỉ lấy số liệu ĐÃ GHI KHO, không tự ghi các hóa đơn còn lại.";
     }
     if (!window.confirm(question)) return;
+    state.inventoryCloseBusy = true;
+    document.querySelectorAll('.inventory-close-dialog button,.inventory-close-dialog input').forEach(function(el) { el.disabled = true; });
     var label = button.textContent;
     try {
       button.disabled = true;
@@ -773,6 +776,9 @@
       showToast(error.message, true);
       await loadInventoryMonthClose(true);
       renderInventory();
+    } finally {
+      state.inventoryCloseBusy = false;
+      renderInventoryCloseDialog();
     }
   }
 
@@ -789,6 +795,8 @@
       "Tồn đầu tháng " + nextPeriodLabel + " sẽ được bỏ tạm thời. " +
       "Sau khi sửa xong, hãy chốt tháng này lại.";
     if (!window.confirm(question)) return;
+    state.inventoryCloseBusy = true;
+    document.querySelectorAll('.inventory-close-dialog button,.inventory-close-dialog input').forEach(function(el) { el.disabled = true; });
     var label = button.textContent;
     try {
       button.disabled = true;
@@ -807,6 +815,9 @@
       showToast(error.message, true);
       await loadInventoryMonthClose(true);
       renderInventory();
+    } finally {
+      state.inventoryCloseBusy = false;
+      renderInventoryCloseDialog();
     }
   }
 
@@ -844,7 +855,7 @@
     try {
       var results = await Promise.all([
         api("/api/invoice-workbench" + query),
-        api("/api/invoice-workbench/invoices" + query + "&status=" + encodeURIComponent(state.invoiceStatus) + "&line_filter=" + encodeURIComponent(state.invoiceLineFilter) + (direction === 'input' && state.invoicePending ? '&scope=pending' : ''))
+        api("/api/invoice-workbench/invoices" + query + "&status=" + encodeURIComponent(state.invoiceStatus) + "&line_filter=" + encodeURIComponent(state.invoiceLineFilter) + (state.invoicePending ? '&scope=pending' : ''))
       ]);
       if (requestSerial !== state.invoiceWorkbenchRequestSerial) return;
       state.invoiceWorkbench = results[0];
@@ -2691,7 +2702,7 @@
     var d = state.data;
     if (state.outgoingInvoices === null) setTimeout(fetchOutgoingInvoices, 0);
     if (!d.batch) {
-      content.innerHTML = '<section class="card"><div class="card-body"><h3>Hồ sơ thanh toán từ hóa đơn VAT</h3>' +
+      content.innerHTML = '<section class="card"><div class="card-body"><h3>File đưa lên M-Invoice</h3><p>Chọn đơn hàng ở thanh trên để tạo file Excel. Nếu chưa có đơn, vào Nhập &amp; sửa đơn để nạp và duyệt trước.</p><button class="btn btn-outline" data-view="orders">Mở Nhập &amp; sửa đơn</button></div></section><section class="card"><div class="card-body"><h3>Hồ sơ thanh toán từ hóa đơn VAT</h3>' +
         paymentRequestFormHtml() + '</div></section>' + invoicePaymentScopeHtml() + '<div id="paymentDocumentPreview"></div>';
       return;
     }
@@ -2782,7 +2793,7 @@
     content.innerHTML = html([
       outgoingReadinessHtml(),
       '<div class="document-primary-grid fade-in"><section class="document-primary-card"><div class="document-primary-icon">13</div>',
-      '<div><h3>File tải hóa đơn</h3><p>File 13 cột, tách riêng từng nhà thầu và nhóm thuế.</p></div><div class="document-primary-action">',
+      '<div><h3>File đưa lên M-Invoice</h3><p>Tải ZIP về máy, giải nén rồi nhập file Excel vào M-Invoice để kiểm tra, ký và phát hành.</p></div><div class="document-primary-action">',
       invoiceFileAction, '</div></section>',
       '<section class="document-primary-card"><div class="document-primary-icon">KÊ</div><div><h3>Bảng kê từ hóa đơn đỏ</h3>',
       '<p>Chọn nhà thầu để lấy đúng các hóa đơn Thành Đạt Phát đã phát hành.</p>',
@@ -2794,6 +2805,47 @@
       state.documentDetailsOpen ? 'Ẩn xử lý chi tiết' : 'Xử lý chi tiết hóa đơn', '</button></div>',
       detailsHtml
     ]);
+  }
+
+  function renderInventoryCloseDialog() {
+    if (!state.inventoryCloseOpen) return;
+    var dialog = document.querySelector('.inventory-close-dialog');
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.className = 'inventory-totals-dialog inventory-close-dialog';
+      dialog.setAttribute('aria-label', 'Chuyển tồn sang tháng sau');
+      dialog.addEventListener('cancel', function(event) { if (state.inventoryCloseBusy) event.preventDefault(); });
+      dialog.addEventListener('close', function() { state.inventoryCloseOpen = false; ++state.inventoryMonthCloseRequestSerial; dialog.remove(); });
+      document.body.appendChild(dialog); dialog.showModal();
+    }
+    var close = state.inventoryMonthClose;
+    dialog.innerHTML = '<div class="inventory-totals-heading"><h3>Chuyển tồn sang tháng sau</h3><button class="icon-button close-period-dialog" aria-label="Đóng">×</button></div>' +
+      '<label class="inventory-close-period">Tháng cần chuyển <input id="inventoryClosePeriod" type="month" value="' + esc(state.inventoryClosePeriod) + '"></label>' +
+      '<p>Kiểm tra và ghi kho các hóa đơn trước, sau đó chuyển tồn cuối tháng thành tồn đầu tháng kế tiếp.</p>' + inventoryMonthCloseHtml(close) +
+      (close && !close.error && (close.unposted_input_count || close.unposted_output_count) ? '<div class="compact-controls">' +
+        (close.unposted_input_count ? '<button class="btn btn-outline" data-pending-direction="input">Xử lý đầu vào còn chờ</button>' : '') +
+        (close.unposted_output_count ? '<button class="btn btn-outline" data-pending-direction="output">Xử lý đầu ra còn chờ</button>' : '') + '</div>' : '') +
+      (close && close.problem_items && close.problem_items.length ? '<div class="table-wrap"><table><thead><tr><th>Mã cần kiểm tra</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th></tr></thead><tbody>' + close.problem_items.map(function(item) {
+        return '<tr class="invoice-row-issue"><td>' + esc(item.product_code) + '</td><td>' + esc(item.product_name) + '</td><td>' + esc(item.unit) + '</td><td>' + stockQty(item.closing_qty) + '</td><td>' + stockMoney(item.closing_value) + '</td></tr>';
+      }).join('') + '</tbody></table></div>' : '');
+    dialog.querySelector('.close-period-dialog').onclick = function() { if (!state.inventoryCloseBusy) dialog.close(); };
+    dialog.querySelector('#inventoryClosePeriod').onchange = async function(event) {
+      if (state.inventoryCloseBusy || !/^\d{4}-\d{2}$/.test(event.target.value)) return;
+      state.inventoryClosePeriod = event.target.value; state.inventoryMonthClose = null;
+      renderInventoryCloseDialog(); await loadInventoryMonthClose();
+    };
+    dialog.querySelectorAll('[data-action]').forEach(function(button) { button.onclick = async function() {
+      if (state.inventoryCloseBusy) return;
+      if (button.dataset.action === 'close-inventory-month') await closeInventoryMonth(button);
+      if (button.dataset.action === 'reopen-inventory-month') await reopenInventoryMonth(button);
+      if (button.dataset.action === 'reload-inventory-close') { state.inventoryMonthClose = null; renderInventoryCloseDialog(); await loadInventoryMonthClose(); }
+    }; });
+    dialog.querySelectorAll('[data-pending-direction]').forEach(function(button) { button.onclick = function() {
+      state.invoiceDirection = button.dataset.pendingDirection; state.invoiceFrom = close.date_from; state.invoiceTo = close.date_to;
+      state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all'; state.invoicePending = true;
+      state.invoiceWorkbench = null; state.invoiceListing = null; persistInvoiceWorkbenchFilters(); dialog.close(); navigate('msmi');
+    }; });
+    if (state.inventoryCloseBusy) dialog.querySelectorAll('button,input').forEach(function(el) { el.disabled = true; });
   }
 
   function inventoryMonthCloseHtml(close) {
@@ -2887,6 +2939,7 @@
     content.innerHTML = inventoryTraceHtml() + html([
       '<div class="card inventory-primary-card"><div class="inventory-primary-range"><div><h3>Báo cáo vật tư hàng hóa</h3>',
       '<p>Chọn báo cáo để xem Excel toàn màn hình theo khoảng ngày.</p></div><div class="compact-controls">',
+      '<button class="btn btn-primary" data-action="open-inventory-close">Chuyển tồn sang tháng sau</button>',
       '<label>Từ ngày <input id="inventoryFrom" class="input-date" type="date" value="', esc(state.inventoryFrom), '"></label>',
       '<label>Đến ngày <input id="inventoryTo" class="input-date" type="date" value="', esc(state.inventoryTo), '"></label>',
       '</div></div><div class="inventory-export-grid">',
@@ -3305,7 +3358,8 @@
       var data = await api('/api/catalog/products?q=' + encodeURIComponent(state.catalogQuery) + '&offset=' + state.catalogOffset);
       if (serial !== state.catalogRequest || table !== document.getElementById('catalogProducts')) return;
       state.catalogItems = data.items;
-      table.innerHTML = '<p class="catalog-count">' + (data.total ? (data.offset + 1) + '–' + (data.offset + data.items.length) + ' / ' : '') + data.total + ' mã hàng</p><div class="table-wrap"><table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>ĐVT</th><th>Thuế</th><th>Tên trên hóa đơn</th><th></th></tr></thead><tbody>' + data.items.map(function(item) {
+      state.catalogOffset = data.offset;
+      table.innerHTML = '<p class="catalog-count">Tìm trên toàn bộ ' + stockQty(data.catalog_total) + ' mã · ' + (data.total ? (data.offset + 1) + '–' + (data.offset + data.items.length) + ' / ' : '') + data.total + ' kết quả</p><div class="table-wrap"><table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>ĐVT</th><th>Thuế</th><th>Tên trên hóa đơn</th><th></th></tr></thead><tbody>' + data.items.map(function(item) {
         return '<tr><td>' + esc(item.code) + '</td><td>' + esc(item.name) + '</td><td>' + esc(item.unit) + '</td><td>' + esc(taxText(item.tax)) + '</td><td>' + esc(item.invoice_name || item.name) + '</td><td><button class="btn btn-small btn-outline" data-action="edit-catalog-product" data-code="' + esc(item.code) + '">Sửa</button></td></tr>';
       }).join('') + (!data.items.length ? '<tr><td colspan="6">Không tìm thấy mã hàng.</td></tr>' : '') + '</tbody></table></div><div class="form-actions"><button class="btn btn-small btn-outline" data-action="catalog-previous"' + (!data.offset ? ' disabled' : '') + '>Trang trước</button><button class="btn btn-small btn-outline" data-action="catalog-next"' + (data.offset + data.items.length >= data.total ? ' disabled' : '') + '>Trang sau</button></div>';
     } catch (error) { if (serial === state.catalogRequest) table.textContent = error.message; }
@@ -3333,6 +3387,9 @@
     dialog.querySelector('form').addEventListener('input', function() {
       dialog.querySelector('.catalog-product-error').textContent = '';
     });
+    dialog.querySelector('form').addEventListener('invalid', function() {
+      dialog.querySelector('.catalog-product-error').textContent = 'Chưa lưu. Cần nhập đủ Mã hàng, Tên hàng, Đơn vị tính và chọn Thuế.';
+    }, true);
     dialog.querySelectorAll('.catalog-product-cancel').forEach(function(button) { button.onclick = function() { if (!busy) dialog.close(); }; });
     dialog.addEventListener('cancel', function(event) { if (busy) event.preventDefault(); });
     dialog.addEventListener('close', function() { dialog.remove(); });
@@ -3403,7 +3460,7 @@
       '<div class="card"><div class="card-head"><div><h3>Danh mục hàng hóa</h3><p>Thêm từng mã hoặc nạp nhiều mã từ Excel. Tên trên hóa đơn để trống sẽ dùng tên hàng.</p></div></div><div class="card-body">',
       '<div class="form-actions"><button class="btn btn-primary" data-action="add-catalog-product">Thêm mã hàng</button><button class="btn btn-outline" data-action="choose-catalog-workbook">Nạp từ Excel</button></div>',
       '<p class="code-note">Chọn file Em Thành.xlsx hoặc danh mục có các cột Mã hàng, Tên hàng, ĐVT, Thuế. Xem trước các thay đổi rồi xác nhận.</p>',
-      '<form id="catalogSearchForm" class="catalog-search"><input class="input-date" name="q" aria-label="Tìm mã hoặc tên hàng" placeholder="Tìm mã hoặc tên hàng" value="',esc(state.catalogQuery),'"><button class="btn btn-outline" type="submit">Tìm</button></form><div id="catalogProducts"></div>',
+      '<form id="catalogSearchForm" class="catalog-search"><input class="input-date" name="q" aria-label="Tìm mã hoặc tên hàng" placeholder="Tìm toàn bộ mã hoặc tên hàng (có / không dấu)" value="',esc(state.catalogQuery),'"><button class="btn btn-outline" type="submit">Tìm</button></form><div id="catalogProducts"></div>',
       '<details class="code-note"><summary>Nạp dữ liệu khác</summary><div class="form-actions"><button class="btn btn-outline" data-action="choose-mapping-file" data-mapping-type="invoice_names">Nạp riêng tên hóa đơn từ Excel</button><button class="btn btn-outline" data-action="sync-master">Đọc lại bản Em Thành trên hệ thống</button></div><p>Bản Em Thành trên hệ thống được nạp lần cuối: ',esc(synced),'. Muốn dùng file vừa sửa trên máy, chọn Nạp từ Excel phía trên.</p></details></div></div>',
       catalogImportPreviewHtml(), mappingPreviewHtml("invoice_names"),
       '<div class="section-grid">',
@@ -6094,6 +6151,17 @@
       await reopenInventoryMonth(button);
       return;
     }
+    if (action === 'open-minvoice-files') { navigate('documents'); return; }
+    if (action === 'open-inventory-close') {
+      if (!state.inventoryClosePeriod) {
+        var chosen = (state.inventoryFrom || todayIso).slice(0,7);
+        var current = todayIso.slice(0,7);
+        var previous = new Date(Number(current.slice(0,4)), Number(current.slice(5,7)) - 1, 0);
+        state.inventoryClosePeriod = chosen < current ? chosen : previous.getFullYear() + '-' + String(previous.getMonth()+1).padStart(2,'0');
+      }
+      state.inventoryCloseOpen = true; state.inventoryMonthClose = null; renderInventoryCloseDialog();
+      await loadInventoryMonthClose(); return;
+    }
     if (action === "toggle-document-details") {
       state.documentDetailsOpen = !state.documentDetailsOpen;
       renderDocuments();
@@ -6496,7 +6564,7 @@
       if (editField) { editField.focus(); editField.select(); }
       return;
     }
-    if (['save-invoice-mapping', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'post-invoice-output', 'preview-invoice-group','split-invoice-group'].includes(action)) {
+    if (['save-invoice-mapping', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'review-output-postings', 'post-invoice-output', 'preview-invoice-group','split-invoice-group'].includes(action)) {
       var pendingEdit = content.querySelector('.invoice-mapping-cell[data-editing-id]');
       var savingThisEdit = action.startsWith('save-invoice-') && pendingEdit?.dataset.editingId === button.dataset.id;
       if (pendingEdit && !savingThisEdit) {
@@ -6789,6 +6857,19 @@
       }
     }
     if (action === "view-invoice-receipt-summary") { showInvoiceReceiptSummary(button.dataset.id); return; }
+    if (action === 'review-output-postings') {
+      var outputQuery = '?from=' + encodeURIComponent(state.invoiceListing.date_from) + '&to=' + encodeURIComponent(state.invoiceListing.date_to) + '&status=' + encodeURIComponent(state.invoiceStatus) + '&line_filter=' + encodeURIComponent(state.invoiceLineFilter);
+      if (state.invoiceListing.scope === 'pending') outputQuery += '&scope=pending';
+      await window.TdpReceiptReview({direction:'output', api:api, query:outputQuery, esc:esc, money:stockMoney, qty:stockQty, date:dateVN,
+        onPosted:async function(result, rows) {
+          state.inventoryValuation = null; state.inventoryMonthClose = null; state.outgoingReadiness = null;
+          state.invoiceLastPosted = {direction:'output', id:rows[0].id};
+          state.invoicePending = true; state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all';
+          persistInvoiceWorkbenchFilters(); await loadInvoiceWorkbench(true); render();
+          showToast('Đã ghi xuất kho ' + result.posted_count + ' hóa đơn' + (result.already_posted_count ? ' · ' + result.already_posted_count + ' hóa đơn đã ghi trước đó' : '') + '. Hóa đơn chưa đủ điều kiện vẫn được giữ lại.');
+        }});
+      return;
+    }
     if (action === "create-msmi-receipt" || action === "review-input-receipts") {
       var receiptQuery = '?from=' + encodeURIComponent(state.invoiceListing.date_from) + '&to=' + encodeURIComponent(state.invoiceListing.date_to) + '&status=' + encodeURIComponent(state.invoiceStatus) + '&line_filter=' + encodeURIComponent(state.invoiceLineFilter);
       if (state.invoiceListing.scope === 'pending') receiptQuery += '&scope=pending';
