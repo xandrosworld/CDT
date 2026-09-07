@@ -155,3 +155,5 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 - Chọn nhầm mã: bấm **Sửa mã**, chọn đúng mã rồi **Ghi nhớ**. Nhập nhầm hệ số: **Sửa quy đổi**, sửa số rồi **Lưu quy đổi**. **Bỏ sửa** giữ giá trị đã lưu.
 - Mở **Phạm vi ghi nhớ** để xem ảnh hưởng: các dòng cùng mặt hàng nguồn, đơn vị và đối tác chưa ghi kho; giữ kỳ hiệu lực hiện có. Đây không phải sửa số lượng/tiền trên hóa đơn gốc.
 - Dòng đã ghi kho không có nút sửa mã/quy đổi. Dữ liệu thay đổi trong lúc đang sửa sẽ báo đọc lại, không tự ghi đè. Chỉ bấm Nhập kho sau khi đã kiểm tra đúng mã, lượng và tiền.
+
+- Khi đang mở Sửa mã/Sửa quy đổi, cần Lưu hoặc Bỏ sửa trước khi nhập kho hay lưu dòng khác, để không dùng nhầm giá trị cũ.

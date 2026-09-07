@@ -28,6 +28,10 @@
 > và Tiền dòng trong bảng ghép mã, gồm chế độ toàn màn hình và Excel đúng bộ lọc.
 > **Đã triển khai và kiểm tra trực tiếp Railway**; bằng chứng tại **13.29**.
 
+> **Sửa lại mã/quy đổi — 07/09/2026:** Ghi nhớ giữ dòng vừa làm trong tầm nhìn;
+> có Sửa mã, Sửa quy đổi và Bỏ sửa cho dòng chưa ghi kho. Đã deploy và kiểm tra
+> Railway, đối chiếu 80/80 bảng không đổi trong lượt QA; xem **13.36**.
+
 > **Sửa diện tích bảng ghép mã — 06/09/2026:** toàn màn hình đã dành phần lớn
 > chiều cao cho bảng, thu gọn hướng dẫn/tổng và giữ cột thao tác ở mép phải.
 > Đã deploy, kiểm tra trực tiếp Railway ở bốn khổ máy tính; xem **13.28**.
@@ -1181,4 +1185,8 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Hồi quy chịu ảnh hưởng `mapping-correction-regression-01`: 88 bài/11 module đạt. Hai module nhập kho và tổng nhập bổ sung 10/10 đạt; nhóm mapping cuối `mapping-correction-tests-03` 13/13 đạt (không cộng lượt chạy lặp). Hai lần vướng kiểm thử là kỳ vọng thông báo cũ và ID fixture đổi sau đồng bộ, đã sửa công cụ rồi chạy lại; không bỏ chặn nghiệp vụ.
 - Browser `mapping-correction-browser-02` đạt cả luồng hóa đơn/kho, sửa sai mã rồi sửa lại, Bỏ sửa, sửa hệ số 12 → 30 → 12, bộ lọc loại dòng sau lưu, focus ô quy đổi, toàn màn hình, Ctrl+F, nhập kho nhóm/chọn riêng/hủy, chống trùng, đầu ra và chốt/mở/chốt lại. Đã xem ảnh `correct-mapping-conversion.png`; thu gọn mô tả phạm vi ghi nhớ thành phần mở khi cần.
 - Thử trên bản sao trong bộ nhớ: Omachi 8 Thùng × 30 = 240 Gói; mô phỏng hai dòng dầu hào cùng mã thành 30 Can/1.288.889đ (chỉ là kiểm thử cách cộng, không xác nhận mã khách chọn đúng). Sửa hệ số bánh đa nem rồi trả lại 50 vẫn giữ 5 dòng kỳ cũ. Toàn bộ lượng/giá/tiền nguồn nguyên vẹn, sổ kho vẫn 0, file snapshot không đổi. Bằng chứng `omachi-review-01/correction-copy-test.json`.
-- Trạng thái triển khai và kiểm tra Railway sẽ được bổ sung sau khi có kết quả. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/mapping-correction-*`.
+- Hoàn thiện chặn nhập kho/lưu dòng khác khi còn mở sửa mã hoặc quy đổi: phải Lưu/Bỏ sửa trước. Browser `mapping-correction-browser-04` chạy lại toàn luồng đạt; 34 bài giao diện/phần chịu ảnh hưởng của phiên bản asset cuối đạt (`mapping-correction-ui-tests-final`). Browser-03 cũng đạt trước khi bổ sung chặn này.
+- Source `de13cf89349e459789232ed13fad3cfc5fd6ba6c` deploy SUCCESS (`ce8389dc-203d-49f2-a005-b053ee07a4b1`); browser hosted-01 đạt **44 mục/61 ảnh**, gồm mở sửa mã/quy đổi rồi Bỏ sửa, bốn khổ máy tính, Ctrl+F, phiếu giao Excel/PDF, không JavaScript exception/HTTP 5xx/request ghi ngoài ý định.
+- Source sản phẩm cuối **`e56e7344a6a1a16b2986dcf4aea02cf6ef73cbdf`** deploy SUCCESS từ `xandrosworld/CDT/main`, deployment **`4ad9f009-b311-4597-a62a-625062fde580`**. Browser `mapping-correction-hosted-02` đạt 7 mục, kiểm tra bổ sung trên 1920×900, 1440×800, 1280×640, 1024×560: ô sửa có focus và nằm trong vùng nhìn, đang sửa thì chặn nhập kho, Bỏ sửa giữ mã/hệ số/lượng/tiền. Đã xem ảnh `mapping-correction-open.png` và `conversion-edit-1024.png`. Các thao tác thử trên hosted chỉ mở ô, gõ chưa lưu và Bỏ sửa; không gọi API lưu mapping/quy đổi.
+- Snapshot `mapping-correction-after` lấy sau khi browser cuối kết thúc: so với `mapping-correction-before`, **80/80 bảng nguyên nội dung/schema**, hai DB toàn vẹn `ok`; bằng chứng `full-preservation.json`. Giữ dữ liệu khách đã thao tác trước snapshot; không ghi kho, thu/trả, phát hành hóa đơn hoặc đổi mã dầu hào/Omachi thay khách.
+- Đã thêm MAPPING-CORRECT vào hàng 37 tab Lỗi & cập nhật, cập nhật ghi chú E11 tab Khách hàng kiểm tra và đọc lại xác nhận. Giữ nguyên D/F/G của khách và lịch sử ghi chú. Bằng chứng riêng dưới `D:/TDP_RAILWAY_PRIVATE/evidence/mapping-correction-*`.
