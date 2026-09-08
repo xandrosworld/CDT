@@ -10,6 +10,7 @@ import time
 from urllib.request import urlopen
 
 CASES = {
+    'amount_review': ('amount_review_server', 18855, 'AMOUNT'),
     'stock_cause': ('invoice_issuance_server', 18854, 'ISSUANCE'),
     'invoice_issuance': ('invoice_issuance_server', 18854, 'ISSUANCE'),
     'output_names': ('date_picker_server', 18805, 'INVOICE'),

@@ -6236,6 +6236,11 @@
     var button = event.target.closest("[data-action]");
     if (!button) return;
     var action = button.dataset.action;
+    if (action === 'review-invoice-amount') {
+      await window.TdpInvoiceAmountReview(button.dataset.id, {esc: esc, money: money,
+        refresh: async function () { await loadInvoiceWorkbench(true); render(); }});
+      return;
+    }
     if (action === 'preview-inventory-report') { await previewInventoryReport(button); return; }
     if (action === 'filter-invoice-issues') {
       state.invoiceLineFilter = state.invoiceLineFilter === 'needs_attention' ? 'all' : 'needs_attention';

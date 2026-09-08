@@ -894,3 +894,29 @@ body { min-width: 320px; }
 .stock-opening-form input { min-height:44px; padding:10px; font-size:18px; }
 .stock-opening-error { color:#a52b23; }
 @media(max-width:600px) { .stock-cause-totals { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+.invoice-amount-dialog { width:min(1200px,calc(100vw - 32px)); max-height:calc(100vh - 32px); padding:0; border:1px solid #cbdce5; border-radius:12px; color:#17324d; font-size:16px; }
+.invoice-amount-dialog[open] { display:flex; flex-direction:column; }
+.invoice-amount-dialog::backdrop { background:rgba(15,35,50,.45); }
+.invoice-amount-dialog header,.invoice-amount-dialog footer { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:16px 20px; flex-shrink:0; }
+.invoice-amount-dialog header { justify-content:space-between; border-bottom:1px solid #d6e4ea; }
+.invoice-amount-dialog h2 { font-size:21px; margin:0; }
+.invoice-amount-dialog h3 { font-size:18px; margin:16px 0 8px; }
+.invoice-amount-dialog footer { border-top:1px solid #d6e4ea; }
+.invoice-amount-dialog [hidden] { display:none !important; }
+.amount-review-body { overflow:auto; min-height:0; padding:0 20px; }
+.amount-review-body p { line-height:1.6; margin:10px 0; }
+.amount-review-table { overflow:auto; border:1px solid #d6e4ea; border-radius:6px; }
+.amount-review-table table { width:100%; border-collapse:collapse; font-size:16px; }
+.amount-review-table th,.amount-review-table td { font-size:16px; padding:12px; border-bottom:1px solid #d6e4ea; text-align:left; }
+.amount-review-table thead th { position:sticky; top:0; background:#edf3f6; color:#17324d; z-index:1; }
+.amount-review-table td { white-space:nowrap; }
+.amount-review-lines { max-height:32vh; }
+.amount-review-lines td:nth-child(2) { min-width:230px; white-space:normal; }
+.amount-review-lines td:last-child { min-width:180px; white-space:normal; }
+.amount-line-check { background:#fff0ed; color:#a52b23; }
+.amount-review-help { padding:12px; background:#f1f7f8; border-radius:6px; }
+.invoice-amount-reviews td button { margin-top:8px; }
+
+.amount-review-table tbody th { background:#f5f8fa; color:#17324d; }
+.invoice-amount-dialog [data-error][data-success="true"] { color:#087c71; }

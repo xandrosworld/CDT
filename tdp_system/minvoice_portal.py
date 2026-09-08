@@ -166,6 +166,21 @@ class MinvoicePortalClient(MinvoiceClient):
             raise MinvoiceError("Portal M-Invoice trả phân trang không nhất quán")
         return items, total
 
+    def get_outgoing_invoice(self, *, remote_id, series, number, invoice_date):
+        """Read one known document; never search by number alone or write upstream."""
+        if not isinstance(remote_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", remote_id):
+            raise MinvoiceError("Không xác định được hóa đơn cần kiểm tra")
+        self._ensure_login()
+        detail = self._portal_json("GET", "app/invoice/" + quote(remote_id, safe="") + "/detail")
+        if (detail.get("id") != remote_id or detail.get("sellerTaxCode") != self.tax_code
+                or detail.get("invoiceSerial") != series
+                or str(detail.get("invoiceNumber")) != str(number)
+                or portal_date(detail.get("invoiceDate")) != portal_date(invoice_date)):
+            raise MinvoiceError("Hóa đơn trả về khác công ty, ký hiệu, số hoặc ngày. Chưa cập nhật dữ liệu.")
+        if not isinstance(detail.get("invoiceDetail"), list):
+            raise MinvoiceError("M-Invoice chưa trả đủ chi tiết hóa đơn. Hãy thử lại.")
+        return normalize_portal_document(detail)
+
     def get_outgoing_invoices(self, start_date, end_date, series, start=0, count=300, include_details=True):
         self._ensure_login()
         start_date, end_date = portal_date(start_date), portal_date(end_date)

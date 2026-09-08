@@ -460,6 +460,11 @@ def register_invoice_workbench_routes(app, ctx) -> None:
     except ImportError:
         from invoice_output_adjustments import register_adjustment_routes
     register_adjustment_routes(app,ctx)
+    try:
+        from .invoice_amount_support import register_amount_support_routes
+    except ImportError:
+        from invoice_amount_support import register_amount_support_routes
+    register_amount_support_routes(app, ctx)
     db_factory = ctx["db"]
     now_iso = ctx["now_iso"]
     setting_get = ctx["setting_get"]
