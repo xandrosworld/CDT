@@ -65,7 +65,8 @@ def _line_context(conn, direction: str, item_id: int):
         """SELECT li.*,i.id invoice_id,i.tenant,? invoice_type,
                   COALESCE(i.buyer_tax_code,'') partner_key,
                   i.stock_status parent_status,i.sync_status parent_sync_status,
-                  i.source_status_class,i.invoice_date,i.source mapping_source
+                  i.source_status_class,i.invoice_date,i.source mapping_source,
+                  i.source,i.stock_status,i.sync_status,i.error_message,i.raw_json
            FROM outgoing_source_invoice_items li
            JOIN outgoing_source_invoices i ON i.id=li.invoice_id WHERE li.id=?""",
         (OUTPUT_INVOICE, item_id),
@@ -86,6 +87,16 @@ def _product(conn, product_code: Any):
             code="product_not_found",
         )
     return rows[0]
+
+
+def _editable_mapping_source(direction, context):
+    if direction == 'input':
+        return context['parent_sync_status'] == 'synced'
+    try:
+        from .invoice_output_editing import output_mapping_allowed
+    except ImportError:
+        from invoice_output_editing import output_mapping_allowed
+    return output_mapping_allowed(context)
 
 
 def _mapping_status(source_unit: Any, target_unit: Any) -> str:
@@ -214,14 +225,16 @@ def _matching_line_ids(conn, direction: str, context, scope_key: str) -> list[tu
     else:
         rows = conn.execute(
             """SELECT li.id,li.invoice_id,li.source_item_code,li.source_item_name,li.source_unit,
-                      i.invoice_date
+                      i.invoice_date,i.source,i.sync_status,i.stock_status,i.source_status_class,
+                      i.error_message,i.raw_json
                FROM outgoing_source_invoice_items li
                JOIN outgoing_source_invoices i ON i.id=li.invoice_id
                WHERE i.tenant=? AND i.source=? AND COALESCE(i.buyer_tax_code,'')=?
-                 AND i.sync_status='synced' AND i.source_status_class='issued'
+                 AND i.source_status_class='issued'
                  AND i.stock_status NOT IN ('posted','reversal_required','reversed') AND li.inventory_eligible=1""",
             (context["tenant"], context["mapping_source"], context["partner_key"]),
         ).fetchall()
+        rows = [row for row in rows if _editable_mapping_source('output', row)]
     return [
         (int(row["id"]), int(row["invoice_id"]), str(row["invoice_date"] or "")) for row in rows
         if _scope_key(row["source_item_code"], row["source_item_name"], row["source_unit"]) == scope_key
@@ -312,7 +325,7 @@ def apply_saved_mappings(conn, direction: str, invoice_id: int) -> int:
         invoice = conn.execute(
             """SELECT tenant,source mapping_source,
                       COALESCE(buyer_tax_code,'') partner_key,invoice_date,
-                      sync_status,stock_status,source_status_class
+                      sync_status,stock_status,source_status_class,error_message,raw_json
                FROM outgoing_source_invoices WHERE id=?""",
             (invoice_id,),
         ).fetchone()
@@ -321,8 +334,7 @@ def apply_saved_mappings(conn, direction: str, invoice_id: int) -> int:
     if not invoice:
         return 0
     if safe_direction == "output":
-        if (invoice["sync_status"] != "synced" or invoice["source_status_class"] != "issued"
-                or invoice["stock_status"] in {"posted", "reversal_required", "reversed"}):
+        if not _editable_mapping_source('output', invoice):
             return 0
         mapping_source = invoice["mapping_source"]
     applied = 0
@@ -587,7 +599,7 @@ def save_mapping(
         )
     if safe_direction == "output" and context["mapping_source"] != "minvoice":
         raise InvoiceMappingError("Dữ liệu kết nối cũ chỉ được xem trong lịch sử", code="archived_source", status=409)
-    if context["parent_sync_status"] != "synced":
+    if context['parent_status'] not in {'posted', 'reversal_required', 'reversed'} and not _editable_mapping_source(safe_direction, context):
         raise InvoiceMappingError(
             "Nguồn hóa đơn đang lỗi hoặc đã thay đổi; cần đồng bộ và đối chiếu trước khi ghép mã",
             code="source_not_safe",
@@ -734,7 +746,7 @@ def save_conversion(
         raise InvoiceMappingError("Dòng này không ảnh hưởng kho", code="not_inventory", status=409)
     if safe_direction == "output" and context["mapping_source"] != "minvoice":
         raise InvoiceMappingError("Dữ liệu kết nối cũ chỉ được xem trong lịch sử", code="archived_source", status=409)
-    if context["parent_sync_status"] != "synced":
+    if context['parent_status'] not in {'posted', 'reversal_required', 'reversed'} and not _editable_mapping_source(safe_direction, context):
         raise InvoiceMappingError(
             "Nguồn hóa đơn đang lỗi hoặc đã thay đổi; cần đồng bộ và đối chiếu trước khi quy đổi",
             code="source_not_safe",

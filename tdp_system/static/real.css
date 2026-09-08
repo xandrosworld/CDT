@@ -811,6 +811,10 @@ body { min-width: 320px; }
 .group-error { color: #a52a2a; }
 .invoice-mapping-compact { display:grid; grid-template-columns:minmax(0,1fr) 72px 44px; gap:6px; align-items:center; }
 .invoice-mapping-compact .invoice-draft-conversion { min-width:0; }
+.invoice-output-conversion { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:6px 0; }
+.invoice-output-conversion .invoice-draft-factor { width:90px; min-width:70px; flex:0 1 90px; }
+.invoice-mapping-state { display:block; margin-top:4px; font-weight:600; }
+.invoice-source-review-note { display:block; margin-top:6px; }
 .invoice-mapping-compact .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 .invoice-line-classification .btn { padding:0; min-height:24px; font-size:12px; color:#366478; background:transparent; border:0; text-decoration:underline; }
 .invoice-expense-label { color:#366478; font-size:13px; }

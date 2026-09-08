@@ -24,15 +24,23 @@
       var same = product && String(item.source_unit || '').trim().toLowerCase() === String(product.unit || '').trim().toLowerCase();
       var factor = draft ? draft.value : product && item.product_code === product.code && item.mapping_status === 'mapped' ? item.conversion_factor : same ? 1 : '';
       var hint = product ? '1 ' + item.source_unit + ' = ' + (factor || '…') + ' ' + product.unit : 'Có thể nhập hệ số trước; chọn mã hàng và kiểm tra đơn vị trước khi Lưu';
-      return '<input class="input-date invoice-draft-factor" inputmode="decimal" id="draft_conversion_' + direction + '_' + item.id + '" data-id="' + item.id + '" data-unit="' + esc(product ? product.unit : '') + '" data-product-code="' + esc(product ? product.code : '') + '" data-factor-product="' + esc(product ? product.code : draft ? draft.product : '') + '"' + (draft ? ' data-user-entered="true"' : '') + ' value="' + esc(factor) + '" placeholder="Quy đổi" title="' + esc(hint) + '" aria-label="Hệ số quy đổi dòng ' + item.line_index + '"><output class="invoice-conversion-preview sr-only" aria-live="polite"></output>';
+      var field = '<input class="input-date invoice-draft-factor" inputmode="decimal" id="draft_conversion_' + direction + '_' + item.id + '" data-id="' + item.id + '" data-unit="' + esc(product ? product.unit : '') + '" data-product-code="' + esc(product ? product.code : '') + '" data-factor-product="' + esc(product ? product.code : draft ? draft.product : '') + '"' + (draft ? ' data-user-entered="true"' : '') + ' value="' + esc(factor) + '" placeholder="Quy đổi" title="' + esc(hint) + '" aria-label="Hệ số quy đổi dòng ' + item.line_index + '">';
+      if (!input) {
+        if (!product) return '';
+        if (same && Number(factor) === 1) return '<input type="hidden" class="invoice-draft-factor" value="1" data-id="' + item.id + '" data-unit="' + esc(product.unit) + '" data-product-code="' + esc(product.code) + '">';
+        field = '<label class="invoice-output-conversion">1 ' + esc(item.source_unit || 'ĐVT nguồn') + ' = ' + field + ' ' + esc(product.unit) + '</label>';
+      }
+      var preview = !input && product ? (Number(factor) > 0 ? num(item.qty) + ' ' + esc(item.source_unit) + ' → ' + num(item.qty * Number(factor)) + ' ' + esc(product.unit) : 'Nhập hệ số để xem số lượng sau quy đổi.') : '';
+      return field + '<output class="invoice-conversion-preview' + (input ? ' sr-only' : '') + '" aria-live="polite">' + preview + '</output>';
     };
     function mapping(item, invoice, editMode) {
       if (!item.id) return esc(item.issue || invoice.error_message || 'Hóa đơn chưa có dòng hàng.');
       if (item.is_expense) return '<span class="invoice-expense-label">Chi phí · không nhập kho</span>';
       if (item.group_id) return '<strong>' + esc(item.product_code) + '</strong><div>Đã gộp ' + item.group_members.length + ' dòng</div><div>' + num(item.stock_qty) + ' ' + esc(item.product_unit) + '</div><small>Giá vốn sau gộp: ' + money(item.stock_unit_price) + '</small><details><summary>Xem dòng gốc</summary>' + item.group_members.map(function(r) { return '<div>Dòng ' + r.line_index + ': ' + esc(r.source_item_name) + ' · ' + num(r.qty) + ' ' + esc(r.source_unit) + ' · ' + money(r.amount) + '</div>'; }).join('') + '</details>' + button('split-invoice-group', item.group_id, 'Tách lại');
 
-      if (!input && (invoice.sync_status !== 'synced' || invoice.stock_status === 'blocked')) {
-        return '<div class="invoice-issue-text"><strong>Hóa đơn cần kiểm tra</strong><div>' + esc(invoice.error_message || item.issue || 'Nguồn hóa đơn chưa đủ điều kiện ghi kho.') + '</div></div>' + (item.source_item_code ? '<small>Mã trên hóa đơn gốc: ' + esc(item.source_item_code) + '</small>' : '') + '<small>Kiểm tra lại hóa đơn nguồn, sau đó tải lại để tiếp tục khớp mã.</small>';
+      var editableReview = !input && invoice.can_edit_mapping === true && invoice.sync_status !== 'synced';
+      if (!input && !editableReview && (invoice.sync_status !== 'synced' || invoice.stock_status === 'blocked')) {
+        return '<div class="invoice-issue-text"><strong>Hóa đơn cần kiểm tra</strong><div>' + esc(invoice.error_message || item.issue || 'Nguồn hóa đơn chưa đủ điều kiện ghi kho.') + '</div></div>' + (item.source_item_code ? '<small>Mã trên hóa đơn gốc: ' + esc(item.source_item_code) + '</small>' : '') + '<small>Chưa thể sửa khi nguồn thiếu dữ liệu hoặc hóa đơn đã thay đổi trạng thái.</small>';
       }
       if (!item.inventory_eligible) return '<span class="muted">Không ghi kho · ' + esc(item.validation_note || 'Dịch vụ / điều chỉnh') + '</span>';
       var saved = '<strong>' + esc(item.product_code || '') + '</strong><div>' + esc(item.product_name || '') + '</div>';
@@ -40,7 +48,7 @@
       var grouped = group && group.line_count > 1 ? '<div class="invoice-grouped-quantity"><strong>Tổng cùng mã: ' + num(group.qty) + ' ' + esc(group.unit) + '</strong>' + (group.zero_amount_qty ? '<small>Gồm ' + num(group.zero_amount_qty) + ' ' + esc(group.unit) + ' hàng 0đ</small>' : '') + '<small>Cộng trong cả hóa đơn</small></div>' : '';
       var quantity = '<small>Dòng này sau quy đổi: ' + num(item.stock_qty == null ? item.qty : item.stock_qty) + ' ' + esc(item.product_unit || item.source_unit) + '</small>';
       // Posted or unsafe source records are immutable until the source is checked.
-      if (invoice.sync_status !== 'synced' || invoice.receipt_status === 'posted' || ['posted','reversed','reversal_required'].indexOf(invoice.stock_status) >= 0 || (!input && invoice.source_status_class !== 'issued')) {
+      if ((!editableReview && invoice.sync_status !== 'synced') || invoice.receipt_status === 'posted' || ['posted','reversed','reversal_required'].indexOf(invoice.stock_status) >= 0 || (!input && invoice.source_status_class !== 'issued')) {
         if (!input) return esc(item.product_code || '') + '<small>' + esc({posted:'Đã ghi xuất kho',reversed:'Đã hoàn tác xuất kho',reversal_required:'Nguồn thay đổi · cần kiểm tra trước khi hoàn tác'}[invoice.stock_status] || {draft:'Hóa đơn nháp · chưa ghi kho',cancelled:'Hóa đơn đã hủy',replaced:'Hóa đơn đã thay thế',adjusted:'Hóa đơn điều chỉnh · cần kiểm tra'}[invoice.source_status_class] || 'Chưa rõ trạng thái hóa đơn · cần kiểm tra') + '</small>';
         return (item.mapping_status === 'mapped' ? saved + quantity + grouped : '') + '<small>Không sửa mã/quy đổi khi đã ghi kho hoặc nguồn cần kiểm tra.</small>';
       }
@@ -48,7 +56,9 @@
       var candidates = item.candidate_products || [];
       var hint = (product ? product.code + ' · ' + product.name + ' · ' + product.unit + '. ' : '') + 'Tìm và chọn mã. Esc để bỏ sửa.';
       var editor = '<input class="input-date invoice-mapping-input" role="combobox" aria-autocomplete="list" aria-controls="msmiProductOptions" aria-expanded="false" autocomplete="off" data-id="' + item.id + '" data-direction="' + direction + '" data-source-name="' + esc(item.source_item_name) + '"' + (product ? ' data-selected-code="' + esc(product.code) + '"' : '') + ' id="map_' + direction + '_' + item.id + '" value="' + esc(product ? product.code : candidates.length > 1 ? '' : (item.suggested_product_code || '')) + '" placeholder="Tìm mã / tên" title="' + esc(hint) + '" aria-label="Mã kho dòng ' + item.line_index + '">';
-      return '<div class="invoice-mapping-compact' + (input ? '' : ' invoice-mapping-code-only') + '">' + editor + (input ? '<span class="invoice-draft-conversion">' + window.TdpInvoiceDraftConversion(item, product) + '</span>' : '') + button('save-invoice-mapping', item.id, 'Lưu') + '</div>' + (!input && product ? '<small class="invoice-selected-product">Mã kho: ' + esc(product.code + ' · ' + product.name + ' · ' + product.unit) + '</small>' : '') + (!input && item.identity_warning ? '<div class="invoice-issue-text">' + esc(item.identity_warning) + '</div>' : '');
+      var conversion = '<span class="invoice-draft-conversion">' + window.TdpInvoiceDraftConversion(item, product) + '</span>';
+      var progress = !input && product ? '<small class="invoice-mapping-state">' + (item.mapping_status === 'mapped' && !item.identity_warning ? 'Đã lưu mã và quy đổi.' : item.mapping_status === 'unit_review' ? 'Đã lưu mã. Cần xác nhận quy đổi bên dưới rồi Lưu.' : 'Mã cần xác nhận lại.') + '</small>' : '';
+      return '<div class="invoice-mapping-compact' + (input ? '' : ' invoice-mapping-code-only') + '">' + editor + (input ? conversion : '') + button('save-invoice-mapping', item.id, 'Lưu') + '</div>' + (!input ? '<small class="invoice-selected-product">' + (product ? 'Mã kho: ' + esc(product.code + ' · ' + product.name + ' · ' + product.unit) : '') + '</small>' + progress + conversion : '') + (!input && item.identity_warning ? '<div class="invoice-issue-text">' + esc(item.identity_warning) + '</div>' : '') + (editableReview ? '<small class="invoice-source-review-note">Vẫn lưu mã/quy đổi được. Hóa đơn còn lệch tiền; chưa xuất kho.</small>' : '');
     }
     window.TdpInvoiceMappingCell = mapping;
     function actions(invoice) {

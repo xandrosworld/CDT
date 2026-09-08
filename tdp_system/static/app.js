@@ -247,7 +247,9 @@
 
   function refreshInvoiceDraftConversion(cell, line, product) {
     var conversion = cell.querySelector('.invoice-draft-conversion');
-    if (!conversion) return; // Output only chooses a code; the server resolves units.
+    if (!conversion) return;
+    var selectedProduct = cell.querySelector('.invoice-selected-product');
+    if (selectedProduct && product) selectedProduct.textContent = 'Mã đang chọn: ' + product.code + ' · ' + product.name + ' · ' + product.unit;
     var field = cell.querySelector('.invoice-draft-factor');
     var draft = field?.dataset.userEntered === 'true' ? {value:field.value,product:field.dataset.factorProduct || ''} : null;
     // Keep a factor entered before choosing a code, or when reselecting the same
@@ -6738,16 +6740,16 @@
       try {
         button.disabled = true;
         var mappingBody = { product_code: mappingInput.value.trim(), expected: invoiceMappingExpected(button.dataset.id) };
-        if (mappingDirection === 'input' && mappingInput.dataset.selectedCode === mappingBody.product_code) {
-          var draftFactor = button.closest('.invoice-mapping-cell').querySelector('.invoice-draft-factor');
+        var draftFactor = button.closest('.invoice-mapping-cell').querySelector('.invoice-draft-factor');
+        if (draftFactor && mappingInput.dataset.selectedCode === mappingBody.product_code) {
           var factorValue = Number(draftFactor.value.trim().replace(',', '.'));
           if (!Number.isFinite(factorValue) || factorValue <= 0 || factorValue > 1000000000) {
             draftFactor.focus();
-            throw new Error('Nhập hệ số quy đổi lớn hơn 0 trong giới hạn cho phép trước khi lưu.');
+            throw new Error(mappingDirection === 'output' ? 'Mã đã chọn nhưng chưa đủ quy đổi. Nhập số ' + draftFactor.dataset.unit + ' tương ứng với 1 ' + invoiceEditingLine(button.dataset.id).source_unit + ', rồi Lưu.' : 'Nhập hệ số quy đổi lớn hơn 0 trong giới hạn cho phép trước khi lưu.');
           }
           mappingBody.conversion_factor = factorValue;
         }
-        var conversionOnly = mappingBody.product_code === mappingBody.expected.product_code && mappingBody.conversion_factor != null;
+        var conversionOnly = mappingDirection === 'input' && mappingBody.product_code === mappingBody.expected.product_code && mappingBody.conversion_factor != null;
         var savingFields=Array.from(button.closest('.invoice-mapping-cell').querySelectorAll('input'));
         savingFields.forEach(function(field){field.disabled=true;});
         var mappingUrl = "/api/invoice-workbench/items/" + mappingDirection + "/" + button.dataset.id + (conversionOnly ? "/conversion" : "/mapping");
@@ -6763,7 +6765,8 @@
         state.operations = null;
         await refreshSavedInvoiceMapping(mappingDirection, button.dataset.id);
         await revealSavedInvoiceLine(mappingDirection, button.dataset.id, mappingResult.requires_unit_conversion);
-        showToast(mappingDirection === 'output' ? 'Đã lưu mã.' : mappingResult.requires_unit_conversion
+        var savedInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === invoiceEditingLine(button.dataset.id)?.invoice_id; });
+        showToast(mappingDirection === 'output' ? (mappingResult.requires_unit_conversion ? 'Đã lưu mã. Cần nhập quy đổi để hoàn tất dòng này.' : 'Đã lưu mã và quy đổi.' + (savedInvoice && savedInvoice.sync_status !== 'synced' ? ' Hóa đơn còn lệch tiền nên chưa xuất kho.' : '')) : mappingResult.requires_unit_conversion
           ? "Đã nhớ mã nhưng đơn vị tính khác nhau — cần nhập quy đổi trước khi ghi kho"
           : "Đã ghép mã và ghi nhớ đúng loại hóa đơn, đúng đối tác");
       } catch (error) {

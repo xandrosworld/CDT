@@ -39,6 +39,21 @@ with tempfile.TemporaryDirectory(prefix='tdp_date_picker_') as root:
             row={k:v for k,v in original.items() if k!='id'}
             row.update(invoice_id=blocked,source_item_code='R1-KG',source_item_name='Hàng kiểm thử kg',line_index=1)
             ids['output_name_lines']['blocked']=conn.execute('INSERT INTO outgoing_source_invoice_items('+','.join(row)+') VALUES('+','.join('?' for _ in row)+')',tuple(row.values())).lastrowid
+            conn.execute("INSERT INTO products(code,name,unit) VALUES('M000246','Thạch rau câu Long Hải (100 cốc/ thùng)','Cốc')")
+            row={k:v for k,v in original.items() if k!='id'}
+            row.update(line_index=6,source_item_code='',source_item_name='Nước rau câu các vị (95gr/cốc x 100 cốc/thùng)',
+                       source_unit='cái',qty=5500,unit_price=1300,amount=7150000)
+            unit_line=conn.execute('INSERT INTO outgoing_source_invoice_items('+','.join(row)+') VALUES('+','.join('?' for _ in row)+')',tuple(row.values())).lastrowid
+            save_mapping(conn,direction='output',item_id=unit_line,product_code='M000246',now_iso=now_iso)
+            ids['output_name_lines']['unit_review']=unit_line
+            from tdp_system.test_minvoice_portal import document
+            from tdp_system.minvoice_portal import normalize_portal_document
+            from tdp_system.invoice_output_sync import upsert_output_invoice
+            financial=document()
+            financial.update(invoiceNumber=716,totalAmountWithoutVAT=120000,totalAmount=128000)
+            financial['invoiceDetail'][0].update(productCode='R1-KG',productName='Hàng kiểm thử kg')
+            financial_id=upsert_output_invoice(conn,normalize_portal_document(financial),tenant='TDP',now=now_iso(),status_map={},status_fields=(),reference_fields=())[0]
+            ids['output_name_lines']['amount_review']=conn.execute('SELECT id FROM outgoing_source_invoice_items WHERE invoice_id=?',(financial_id,)).fetchone()[0]
         if os.environ.get('TDP_FIXTURE_OLD_PENDING') == '1':
             conn.execute("UPDATE msmi_invoices SET invoice_date='2022-07-31' WHERE id=?",(ids['input_ids']['3'],))
     @server.app.get('/fixture/ids')

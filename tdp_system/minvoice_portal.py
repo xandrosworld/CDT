@@ -223,7 +223,11 @@ def portal_validation_error(remote):
         line_amount = sum(number(line["amountWithoutVAT"]) for line in lines)
         line_tax = sum(number(line["vatAmount"]) for line in lines)
         if abs(line_amount - subtotal) > 1 or abs(line_tax - tax) > 1 or abs(subtotal + tax - total) > 1:
-            return "Tổng dòng hàng/thuế trên portal lệch tổng hóa đơn; giữ số nguồn, cần đối chiếu trước khi ghi kho hoặc lập hồ sơ VAT"
+            try:
+                from .invoice_output_editing import PORTAL_TOTAL_MISMATCH
+            except ImportError:
+                from invoice_output_editing import PORTAL_TOTAL_MISMATCH
+            return PORTAL_TOTAL_MISMATCH
         if any(type(line.get("property")) is not int or line["property"] not in {1, 2, 5} for line in lines):
             return "Hóa đơn có loại dòng chiết khấu/diễn giải hoặc chưa rõ; cần đối chiếu trước khi ghi kho"
     except (KeyError, TypeError, ValueError, InvalidOperation):
