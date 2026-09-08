@@ -929,19 +929,28 @@ def register_invoice_mapping_routes(app, ctx) -> None:
     @app.put("/api/invoice-workbench/items/<direction>/<int:item_id>/mapping")
     def api_save_invoice_mapping(direction: str, item_id: int):
         body = request.get_json(silent=True) or {}
+        identity_review = None
         try:
             with db_factory() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 if direction == 'output':
                     try:
-                        from .invoice_product_identity import output_identity_warning
+                        from .invoice_product_identity import output_identity_warning, identity_key
                     except ImportError:
-                        from invoice_product_identity import output_identity_warning
+                        from invoice_product_identity import output_identity_warning, identity_key
                     context = _line_context(conn, 'output', item_id)
                     if context:
                         warning = output_identity_warning(conn, item_id, context=context, product_code=body.get('product_code'))
-                        if warning and body.get('confirm_identity') is not True:
-                            raise InvoiceMappingError(warning, code='product_identity_confirmation_required', status=409)
+                        if warning:
+                            product = _product(conn, body.get('product_code'))
+                            identity_review = {
+                                'key': identity_key(context, product),
+                                'source_name': context['source_item_name'], 'source_unit': context['source_unit'],
+                                'product_code': product['code'], 'product_name': product['name'], 'product_unit': product['unit'],
+                            }
+                            if (body.get('confirm_identity') is not True
+                                    or ('expected_identity' in body and body['expected_identity'] != identity_review['key'])):
+                                raise InvoiceMappingError(warning, code='product_identity_confirmation_required', status=409)
                 result = save_mapping(
                     conn,
                     direction=direction,
@@ -963,7 +972,10 @@ def register_invoice_mapping_routes(app, ctx) -> None:
                     result.update(mapping_status='confirmed', requires_unit_conversion=False)
                 return jsonify({"ok": True, **result})
         except InvoiceMappingError as error:
-            return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
+            payload = {"ok": False, "error": str(error), "code": error.code}
+            if error.code == 'product_identity_confirmation_required' and identity_review:
+                payload['identity_review'] = identity_review
+            return jsonify(payload), error.status
 
     @app.put("/api/invoice-workbench/items/<direction>/<int:item_id>/conversion")
     def api_save_invoice_conversion(direction: str, item_id: int):

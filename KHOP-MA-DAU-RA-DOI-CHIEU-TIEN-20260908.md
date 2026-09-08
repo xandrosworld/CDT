@@ -40,6 +40,16 @@ So sánh toàn bộ 85 bảng: 79 bảng giống hệt, bao gồm dữ liệu h�
 
 Không tự xác nhận các cặp này. Nếu khác mặt hàng, khách cần chọn đúng mã kho. Nếu chỉ khác cách gọi và khách xác nhận đúng cùng mặt hàng, bấm Lưu và xác nhận trong thông báo so sánh hai tên. Chỉ việc bỏ yêu cầu quy đổi không thể giải quyết chọn sai mặt hàng.
 
+### Làm rõ bước xác nhận trên đầu ra
+
+Ảnh tiếp theo của khách đã hiển thị 11 dòng cần xử lý. Kiểm tra đúng dòng 7325 (Mực trứng, E000017) trên bản sao: Lưu chưa xác nhận trả yêu cầu kiểm tra tên; xác nhận rõ cùng mặt hàng thì lưu thành công và bỏ cảnh báo. Bản thật chưa có xác nhận cho dòng này tại thời điểm lấy bản sao.
+
+Giao diện bổ sung nút **Kiểm tra mã đã chọn** ngay tại dòng đỏ. Nút này và nút Lưu cùng mở bảng so sánh tên trên hóa đơn với mã/tên trong danh mục. Khách chọn **Chọn mã khác** hoặc **Đúng cùng mặt hàng · Lưu mã**. Phím Esc đóng bảng mà không xác nhận. Khi chọn mã khác, thông báo của mã cũ được ẩn để tránh nhầm lẫn.
+
+Thông tin so sánh được lấy từ máy chủ khi kiểm tra. Nếu nguồn hoặc tên hàng danh mục đổi trong lúc đang mở bảng, xác nhận cũ bị từ chối để khách xem lại. Không có thao tác tự xác nhận 9 dòng trên dữ liệu thật.
+
+Đã kiểm tra 35 ca phía máy chủ và hai bài thử trình duyệt đầu vào/đầu ra. Trình duyệt xác nhận lưu thành công, chuyển dòng sang màu đen, tải lại vẫn giữ kết quả; hủy, Esc và chọn đúng mã khác đều hoạt động. Số lượng và tiền nguồn được đối chiếu trước/sau.
+
 Hai hóa đơn 716–717 vẫn có cảnh báo tổng tiền riêng, kể cả sau khi các dòng khớp mã đã chuyển về màu đen. Hai dòng nguồn đã điều chỉnh thuộc hóa đơn 695–696 vẫn giữ chặn.
 
 ## Kiểm tra

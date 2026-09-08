@@ -814,6 +814,19 @@ body { min-width: 320px; }
 .invoice-output-conversion { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:6px 0; }
 .invoice-output-conversion .invoice-draft-factor { width:90px; min-width:70px; flex:0 1 90px; }
 .invoice-mapping-state { display:block; margin-top:4px; font-weight:600; }
+.invoice-identity-review { margin-top:8px; display:grid; gap:6px; font-size:13px; }
+.invoice-identity-review[hidden] { display:none; }
+.invoice-identity-review .btn { white-space:normal; min-height:38px; }
+.invoice-identity-dialog { width:min(660px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; padding:24px; border:1px solid #cbd8e1; border-radius:12px; color:#172b3a; font-size:17px; line-height:1.5; }
+.invoice-identity-dialog::backdrop { background:rgb(15 35 52 / 45%); }
+.invoice-identity-dialog h3 { margin:0 0 18px; font-size:22px; }
+.invoice-identity-dialog dl { margin:0; }
+.invoice-identity-dialog dl>div { border:1px solid #d5dfe5; border-radius:8px; padding:14px; margin-bottom:12px; }
+.invoice-identity-dialog dt { font-size:14px; color:#4e6373; margin-bottom:6px; }
+.invoice-identity-dialog dd { margin:0; font-size:19px; overflow-wrap:anywhere; }
+.invoice-identity-dialog small { display:block; font-size:14px; margin-top:5px; }
+.invoice-identity-dialog-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; margin-top:20px; }
+.invoice-identity-dialog-actions .btn { min-height:44px; white-space:normal; }
 .invoice-color-guide { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 12px; color:#202a32; }
 .invoice-error-legend, .invoice-amount-difference { color:#a32323; }
 .invoice-amount-reviews { margin:0 12px 8px; padding:10px 12px; border:1px solid #e2b1a2; border-radius:6px; background:#fff7f1; color:#202a32; }

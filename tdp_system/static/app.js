@@ -250,6 +250,8 @@
     if (selectedProduct && product) selectedProduct.textContent = 'Mã đang chọn: ' + product.code + ' · ' + product.name + ' · ' + product.unit;
     var progress = cell.querySelector('.invoice-mapping-state');
     if (progress) progress.textContent = product ? 'Đang chọn mã · bấm Lưu.' : 'Chọn mã trong danh mục rồi Lưu.';
+    var identityReview = cell.querySelector('.invoice-identity-review');
+    if (identityReview) identityReview.hidden = !product || product.code !== line.product_code;
     var conversion = cell.querySelector('.invoice-draft-conversion');
     if (!conversion) return;
     var field = cell.querySelector('.invoice-draft-factor');
@@ -325,6 +327,25 @@
     dialog.querySelector('button').onclick = function() { dialog.close(); };
     dialog.addEventListener('close', function() { dialog.remove(); });
     document.body.appendChild(dialog); dialog.showModal();
+  }
+  function confirmInvoiceProductIdentity(review, warning) {
+    return new Promise(function(resolve) {
+      var dialog = document.createElement('dialog');
+      dialog.className = 'invoice-identity-dialog';
+      dialog.setAttribute('aria-labelledby', 'invoice-identity-title');
+      dialog.setAttribute('aria-describedby', 'invoice-identity-effect');
+      dialog.innerHTML = '<h3 id="invoice-identity-title">Kiểm tra mã hàng đầu ra</h3>' +
+        (review ? '<dl><div><dt>Tên trên hóa đơn</dt><dd>' + esc(review.source_name) + '<small>Đơn vị: ' + esc(review.source_unit) + '</small></dd></div>' +
+        '<div><dt>Mã kho đang chọn</dt><dd><strong>' + esc(review.product_code) + '</strong> · ' + esc(review.product_name) + '<small>Đơn vị: ' + esc(review.product_unit) + '</small></dd></div></dl>' : '<p>' + esc(warning) + '</p>') +
+        '<p><strong>Hai tên trên có đúng là cùng một mặt hàng không?</strong></p>' +
+        '<p id="invoice-identity-effect">Nếu khác mặt hàng, hãy chọn mã khác. Chỉ xác nhận khi đúng cùng mặt hàng. Lưu mã giữ nguyên số lượng, tiền hóa đơn và chưa xuất kho.</p>' +
+        '<div class="invoice-identity-dialog-actions"><button type="button" class="btn btn-outline" data-identity-cancel autofocus>Chọn mã khác</button><button type="button" class="btn btn-primary" data-identity-confirm>Đúng cùng mặt hàng · Lưu mã</button></div>';
+      dialog.querySelector('[data-identity-cancel]').onclick = function() { dialog.close('cancel'); };
+      dialog.querySelector('[data-identity-confirm]').onclick = function() { dialog.close('confirm'); };
+      dialog.addEventListener('close', function() { var confirmed = dialog.returnValue === 'confirm'; dialog.remove(); resolve(confirmed); }, {once:true});
+      document.body.appendChild(dialog); dialog.showModal();
+      dialog.querySelector('[data-identity-cancel]').focus();
+    });
   }
   function confirmInvoiceExpense(invoice, line, expense) {
     return new Promise(function(resolve) {
@@ -6677,9 +6698,9 @@
       if (editField) { editField.focus(); editField.select(); }
       return;
     }
-    if (['save-invoice-mapping', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'review-output-postings', 'post-invoice-output', 'preview-invoice-group','split-invoice-group'].includes(action)) {
+    if (['save-invoice-mapping', 'review-invoice-identity', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'review-output-postings', 'post-invoice-output', 'preview-invoice-group','split-invoice-group'].includes(action)) {
       var pendingEdit = invoicePendingEdit();
-      var savingThisEdit = action.startsWith('save-invoice-');
+      var savingThisEdit = action.startsWith('save-invoice-') || action === 'review-invoice-identity';
       if (pendingEdit && !savingThisEdit) {
         showToast('Đang sửa mã/quy đổi. Hãy Lưu hoặc nhấn Esc để bỏ sửa trước.', true);
         return;
@@ -6736,7 +6757,7 @@
       } catch(e) { showToast(e.message,true);button.disabled=false; }
       return;
     }
-    if (action === "save-invoice-mapping") {
+    if (action === "save-invoice-mapping" || action === "review-invoice-identity") {
       var mappingDirection = button.dataset.direction || state.invoiceDirection;
       var mappingInput = document.getElementById("map_" + mappingDirection + "_" + button.dataset.id);
       if (!mappingInput || !mappingInput.value.trim()) { showToast("Cần nhập mã hàng TĐP", true); return; }
@@ -6766,8 +6787,13 @@
         try { mappingResult = await saveChosenMapping(); }
         catch (identityError) {
           if (identityError.payload?.code !== 'product_identity_confirmation_required') throw identityError;
-          if (!window.confirm(identityError.message + '\n\nChỉ xác nhận nếu hai tên trên thực sự là cùng một mặt hàng. Tiếp tục dùng mã này?')) throw new Error('Chưa lưu mã. Hãy chọn đúng mặt hàng trong danh mục.');
+          if (!await confirmInvoiceProductIdentity(identityError.payload.identity_review, identityError.message)) {
+            mappingInput.disabled = false;
+            mappingInput.focus({preventScroll:true}); mappingInput.select();
+            throw new Error('Chưa xác nhận mã. Hãy chọn đúng mặt hàng trong danh mục rồi Lưu.');
+          }
           mappingBody.confirm_identity = true;
+          if (identityError.payload.identity_review) mappingBody.expected_identity = identityError.payload.identity_review.key;
           mappingResult = await saveChosenMapping();
         }
         state.operations = null;
