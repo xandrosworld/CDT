@@ -1025,6 +1025,7 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
         except ImportError:
             from invoice_output_editing import output_mapping_allowed, output_amount_review
         invoice['can_edit_mapping'] = output_mapping_allowed(invoice)
+        invoice['quantity_policy'] = 'source_quantity'
         invoice['amount_review'] = output_amount_review(invoice)
         for key in ("identity_key", "remote_id", "business_key", "raw_json"):
             invoice.pop(key, None)

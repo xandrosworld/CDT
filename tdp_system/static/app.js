@@ -246,10 +246,12 @@
   }
 
   function refreshInvoiceDraftConversion(cell, line, product) {
-    var conversion = cell.querySelector('.invoice-draft-conversion');
-    if (!conversion) return;
     var selectedProduct = cell.querySelector('.invoice-selected-product');
     if (selectedProduct && product) selectedProduct.textContent = 'Mã đang chọn: ' + product.code + ' · ' + product.name + ' · ' + product.unit;
+    var progress = cell.querySelector('.invoice-mapping-state');
+    if (progress) progress.textContent = product ? 'Đang chọn mã · bấm Lưu.' : 'Chọn mã trong danh mục rồi Lưu.';
+    var conversion = cell.querySelector('.invoice-draft-conversion');
+    if (!conversion) return;
     var field = cell.querySelector('.invoice-draft-factor');
     var draft = field?.dataset.userEntered === 'true' ? {value:field.value,product:field.dataset.factorProduct || ''} : null;
     // Keep a factor entered before choosing a code, or when reselecting the same
@@ -6747,7 +6749,7 @@
         button.disabled = true;
         var mappingBody = { product_code: mappingInput.value.trim(), expected: invoiceMappingExpected(button.dataset.id) };
         var draftFactor = button.closest('.invoice-mapping-cell').querySelector('.invoice-draft-factor');
-        if (draftFactor && mappingInput.dataset.selectedCode === mappingBody.product_code) {
+        if (mappingDirection === 'input' && draftFactor && mappingInput.dataset.selectedCode === mappingBody.product_code) {
           var factorValue = Number(draftFactor.value.trim().replace(',', '.'));
           if (!Number.isFinite(factorValue) || factorValue <= 0 || factorValue > 1000000000) {
             draftFactor.focus();
@@ -6772,7 +6774,7 @@
         await refreshSavedInvoiceMapping(mappingDirection, button.dataset.id);
         await revealSavedInvoiceLine(mappingDirection, button.dataset.id, mappingResult.requires_unit_conversion);
         var savedInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === invoiceEditingLine(button.dataset.id)?.invoice_id; });
-        showToast(mappingDirection === 'output' ? (mappingResult.requires_unit_conversion ? 'Đã lưu mã. Cần nhập quy đổi để hoàn tất dòng này.' : 'Đã lưu mã và quy đổi.' + (savedInvoice?.amount_review ? ' HĐ ' + savedInvoice.invoice_number + ' chờ đối chiếu tiền; xem cảnh báo phía trên bảng.' : '')) : mappingResult.requires_unit_conversion
+        showToast(mappingDirection === 'output' ? 'Đã khớp mã. Giữ nguyên số lượng hóa đơn.' + (savedInvoice?.amount_review ? ' HĐ ' + savedInvoice.invoice_number + ' chờ đối chiếu tiền; xem cảnh báo phía trên bảng.' : '') : mappingResult.requires_unit_conversion
           ? "Đã nhớ mã nhưng đơn vị tính khác nhau — cần nhập quy đổi trước khi ghi kho"
           : "Đã ghép mã và ghi nhớ đúng loại hóa đơn, đúng đối tác");
       } catch (error) {
@@ -6861,7 +6863,7 @@
           body:JSON.stringify({from:state.invoiceFrom,to:state.invoiceTo})
         });
         await loadInvoiceWorkbench(true); render();
-        showToast('Đã khớp ' + matched.matched_lines + ' dòng theo mã hoặc tên và đơn vị trùng khớp; ' + matched.unit_review_lines + ' dòng trong đó cần quy đổi đơn vị. Chưa xuất kho.');
+        showToast('Đã khớp ' + matched.matched_lines + ' dòng. Giữ nguyên số lượng hóa đơn. Chưa xuất kho.');
       } catch (error) {
         showToast(error.message, true); button.disabled = false; button.textContent = matchLabel;
       }

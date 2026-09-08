@@ -113,9 +113,10 @@ def mapping_units_match(source_unit: Any, target_unit: Any) -> bool:
 def _validate_target_unit(conn, mapping):
     product = _product(conn, mapping['product_code'])
     if not mapping_units_match(mapping['target_unit'], product['unit']):
+        action = 'Hãy lưu lại mã trước khi ghi kho.' if mapping['invoice_type'] == OUTPUT_INVOICE else 'Hãy lưu lại mã và xác nhận quy đổi trước khi ghi kho.'
         raise InvoiceMappingError(
             f"Đơn vị của mã {product['code']} trong danh mục đã đổi từ {mapping['target_unit']} "
-            f"sang {product['unit']}. Hãy lưu lại mã và xác nhận quy đổi trước khi ghi kho.",
+            f"sang {product['unit']}. {action}",
             code='catalog_unit_changed', status=409,
         )
 
@@ -367,6 +368,12 @@ def apply_saved_mappings(conn, direction: str, invoice_id: int) -> int:
         if len(mappings) != 1:
             continue
         mapping = mappings[0]
+        if safe_direction == 'output':
+            try:
+                from .invoice_output_code_only import confirm_code_only_rule
+            except ImportError:
+                from invoice_output_code_only import confirm_code_only_rule
+            mapping = confirm_code_only_rule(conn, mapping)
         line_status = "mapped" if mapping["mapping_status"] == "confirmed" else "unit_review"
         factor = float(mapping["conversion_factor"]) if line_status == "mapped" else None
         _update_line_snapshot(
@@ -465,7 +472,7 @@ def validated_output_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
     if not context or not context["inventory_eligible"]:
         raise InvoiceMappingError("Dòng hóa đơn không đủ điều kiện ghi kho", code="not_inventory")
     if context["mapping_status"] != "mapped" or not context["product_code"]:
-        raise InvoiceMappingError("Dòng đầu ra chưa ghép mã hoặc chưa quy đổi xong", code="mapping_incomplete")
+        raise InvoiceMappingError("Dòng đầu ra chưa khớp mã", code="mapping_incomplete")
     try:
         from .invoice_product_identity import output_identity_warning
     except ImportError:
@@ -491,7 +498,7 @@ def validated_output_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
     ).fetchall()
     if len(rows) != 1:
         raise InvoiceMappingError(
-            "Mapping/quy đổi đầu ra không còn duy nhất ở ngày hóa đơn",
+            "Mã ghép đầu ra không còn duy nhất ở ngày hóa đơn",
             code="mapping_conflict",
         )
     mapping = rows[0]
@@ -500,7 +507,7 @@ def validated_output_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
     expected_qty, expected_price = _stock_values(context["qty"], context["amount"], factor)
     if (
         not math.isfinite(factor)
-        or factor <= 0
+        or factor != 1
         or context["product_code"] != mapping["product_code"]
         or abs(float(context["conversion_factor"] or 0) - factor) > 1e-9
         or abs(float(context["stock_qty"] or 0) - expected_qty) > 1e-6
@@ -508,7 +515,7 @@ def validated_output_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
         or expected_qty <= 0
     ):
         raise InvoiceMappingError(
-            "Snapshot quy đổi đầu ra đã cũ hoặc không hợp lệ",
+            "Số lượng đầu ra chưa khớp số nguồn. Lưu lại mã trước khi xuất kho.",
             code="stale_conversion_snapshot",
         )
     revision = conn.execute(
@@ -622,7 +629,7 @@ def save_mapping(
     scope = _scope_key(
         context["source_item_code"], context["source_item_name"], context["source_unit"]
     )
-    mapping_status = _mapping_status(context["source_unit"], product["unit"])
+    mapping_status = 'confirmed' if safe_direction == 'output' else _mapping_status(context["source_unit"], product["unit"])
     factor = 1.0 if mapping_status == "confirmed" else None
     existing = _active_mappings(conn, context, scope)
     if len(existing) > 1:
@@ -635,7 +642,7 @@ def save_mapping(
     date_from = existing[0]['effective_from'] if existing else ''
     date_to = existing[0]['effective_to'] if existing else ''
     # Re-saving the current code must not discard an already confirmed factor.
-    if existing and existing[0]['product_code'] == product['code'] and existing[0]['target_unit'] == product['unit']:
+    if safe_direction == 'input' and existing and existing[0]['product_code'] == product['code'] and existing[0]['target_unit'] == product['unit']:
         mapping_status = existing[0]['mapping_status']
         factor = existing[0]['conversion_factor']
     timestamp = now_iso()
@@ -770,6 +777,11 @@ def save_conversion(
         raise InvoiceMappingError("Hệ số quy đổi phải là số dương") from None
     if not math.isfinite(factor) or factor <= 0 or factor > 1_000_000_000:
         raise InvoiceMappingError("Hệ số quy đổi phải lớn hơn 0 và trong giới hạn an toàn")
+    if safe_direction == 'output' and factor != 1:
+        raise InvoiceMappingError(
+            'Đầu ra chỉ khớp mã và giữ nguyên số lượng hóa đơn. Tải lại trang để dùng màn khớp mã.',
+            code='output_code_only', status=409,
+        )
     _check_expected(context, expected)
     if safe_direction == 'input':
         try:

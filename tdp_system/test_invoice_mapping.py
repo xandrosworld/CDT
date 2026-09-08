@@ -143,11 +143,12 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, 'catalog_unit_changed')
                 with self.assertRaises(InvoiceMappingError) as error:
                     save_conversion(self.conn, direction=direction, item_id=item, conversion_factor=2, now_iso=now_iso)
-                self.assertEqual(error.exception.code, 'catalog_unit_changed')
+                self.assertEqual(error.exception.code, 'catalog_unit_changed' if direction == 'input' else 'output_code_only')
                 self.assertEqual(list(self.conn.iterdump()), before)
                 save_mapping(self.conn, direction=direction, item_id=item, product_code=code, now_iso=now_iso)
-                save_conversion(self.conn, direction=direction, item_id=item, conversion_factor=2, now_iso=now_iso)
-                self.assertEqual(validate(self.conn, item)['conversion_factor'], 2)
+                if direction == 'input':
+                    save_conversion(self.conn, direction=direction, item_id=item, conversion_factor=2, now_iso=now_iso)
+                self.assertEqual(validate(self.conn, item)['conversion_factor'], 2 if direction == 'input' else 1)
 
     def test_combined_output_mapping_preserves_input_and_freezes_after_posting(self):
         self.conn.commit()
@@ -160,10 +161,10 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
         item = self.conn.execute('SELECT * FROM outgoing_source_invoice_items').fetchone()
         before_input = dict(self.conn.execute('SELECT * FROM msmi_invoice_items').fetchone())
         path = f'/api/invoice-workbench/items/output/{item["id"]}/mapping'
-        response = app.test_client().put(path, json={'product_code': 'P-BOX', 'conversion_factor': 0.5})
+        response = app.test_client().put(path, json={'product_code': 'P-BOX', 'conversion_factor': 1})
         self.assertEqual(response.status_code, 200, response.json)
         self.assertFalse(response.json['requires_unit_conversion'])
-        self.assertEqual(response.json['stock_qty'], item['qty'] * 0.5)
+        self.assertEqual(response.json['stock_qty'], item['qty'])
         self.assertEqual(dict(self.conn.execute('SELECT * FROM msmi_invoice_items').fetchone()), before_input)
         self.conn.execute("UPDATE outgoing_source_invoices SET stock_status='posted'")
         self.conn.commit()
@@ -347,7 +348,7 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
             "SELECT mapping_status FROM outgoing_source_invoice_items"
         ).fetchone()[0])
 
-    def test_conversion_reconciles_quantity_and_input_unit_cost_for_factor_above_and_below_one(self):
+    def test_input_conversion_and_output_source_quantity_remain_independent(self):
         input_item = self.conn.execute("SELECT id FROM msmi_invoice_items").fetchone()[0]
         save_mapping(
             self.conn, direction="input", item_id=input_item, product_code="P-BOX", now_iso=now_iso
@@ -373,11 +374,11 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
             self.conn,
             direction="output",
             item_id=output_item,
-            conversion_factor=0.5,
+            conversion_factor=1,
             now_iso=now_iso,
         )
-        self.assertEqual(0.5, output_conversion["stock_qty"])
-        self.assertEqual(20000, output_conversion["stock_unit_price"])
+        self.assertEqual(1, output_conversion["stock_qty"])
+        self.assertEqual(10000, output_conversion["stock_unit_price"])
         self.assertEqual("ready", self.conn.execute(
             "SELECT stock_status FROM outgoing_source_invoices"
         ).fetchone()[0])

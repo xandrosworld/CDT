@@ -69,6 +69,8 @@ def line_issue(item, invoice, status):
     if item.get('identity_warning'):
         return item['identity_warning']
     if item.get("inventory_eligible") and item.get("mapping_status") != "mapped":
+        if invoice.get('quantity_policy') == 'source_quantity':
+            return 'Cần lưu lại mã hàng' if item.get('product_code') else 'Chưa ghép mã trong danh mục'
         return "Cần quy đổi đơn vị" if item.get("mapping_status") == "unit_review" else "Chưa ghép mã trong danh mục"
     return ""
 

@@ -74,13 +74,13 @@ class OutputCatalogMappingTests(unittest.TestCase):
         self.assertEqual(0, self.match()['matched_lines'])
         self.assertEqual(saved, list(self.conn.iterdump()))
 
-    def test_different_unit_does_not_assume_one(self):
+    def test_different_unit_matches_code_and_keeps_source_quantity(self):
         self.product()
         self.sync(unit='Hộp')
         row = self.line()
-        self.assertEqual(('I000127','unit_review',None), (row['product_code'],row['mapping_status'],row['conversion_factor']))
-        self.assertEqual(0, row['stock_qty'])
-        self.assertEqual('pending_mapping', self.conn.execute('SELECT stock_status FROM outgoing_source_invoices').fetchone()[0])
+        self.assertEqual(('I000127','mapped',1), (row['product_code'],row['mapping_status'],row['conversion_factor']))
+        self.assertEqual(row['qty'], row['stock_qty'])
+        self.assertEqual('ready', self.conn.execute('SELECT stock_status FROM outgoing_source_invoices').fetchone()[0])
 
     def test_missing_code_matches_unique_name_unit_and_keeps_source_blank(self):
         self.product()

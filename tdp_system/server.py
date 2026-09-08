@@ -883,6 +883,11 @@ def init_database(*, sync_master=True):
         except ImportError:
             from invoice_input_integrity import repair_missing_unit_price_goods
         repair_missing_unit_price_goods(conn, timestamp=now_iso())
+        try:
+            from .invoice_output_code_only import repair_output_code_only
+        except ImportError:
+            from invoice_output_code_only import repair_output_code_only
+        repair_output_code_only(conn, timestamp=now_iso())
         defaults = {
             "company": "CÔNG TY TNHH THỰC PHẨM THÀNH ĐẠT PHÁT",
             "purchase_rate": "0.95",
