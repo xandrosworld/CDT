@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 try:
+    from .invoice_output_editing import output_mapping_allowed
     from .invoice_mapping import (
         InvoiceMappingError, _line_context, _matching_line_ids, _product,
         mapping_scope_key, save_mapping, _normalized, validated_output_stock_snapshot,
+        apply_saved_mappings, refresh_linked_batches,
     )
 except ImportError:
+    from invoice_output_editing import output_mapping_allowed
     from invoice_mapping import (
         InvoiceMappingError, _line_context, _matching_line_ids, _product,
         mapping_scope_key, save_mapping, _normalized, validated_output_stock_snapshot,
+        apply_saved_mappings, refresh_linked_batches,
     )
 
 
@@ -90,9 +94,10 @@ def _name_candidate(context, canonical, names, evidence):
 def match_output_catalog_codes(conn, *, tenant, now_iso, invoice_id=None,
                                date_from=None, date_to=None):
     """Caller owns the transaction. Existing choices/rules always take priority."""
-    clauses = ["i.tenant=?", "i.source='minvoice'", "i.sync_status='synced'",
+    clauses = ["i.tenant=?", "i.source='minvoice'",
+               "i.sync_status IN ('synced','review_required')",
                "i.source_status_class='issued'",
-               "i.stock_status NOT IN ('posted','reversal_required','reversed','blocked')",
+               "i.stock_status NOT IN ('posted','reversal_required','reversed')",
                "li.inventory_eligible=1", "li.mapping_status='unmapped'", "li.product_code=''" ]
     args = [tenant]
     if invoice_id is not None:
@@ -104,12 +109,20 @@ def match_output_catalog_codes(conn, *, tenant, now_iso, invoice_id=None,
     if invoice_id is None and (date_from is None or date_to is None):
         raise ValueError("Cần chọn khoảng ngày để đối chiếu mã đầu ra")
     rows = conn.execute(
-        "SELECT li.id,li.source_item_code,li.source_item_name,li.source_unit FROM outgoing_source_invoice_items li "
+        "SELECT li.id,li.invoice_id,li.source_item_code,li.source_item_name,li.source_unit FROM outgoing_source_invoice_items li "
         "JOIN outgoing_source_invoices i ON i.id=li.invoice_id WHERE " + " AND ".join(clauses),
         args,
     ).fetchall()
     matched = 0
     unit_review = 0
+    restored_invoices = set()
+    for parent_id in {row['invoice_id'] for row in rows}:
+        restored = apply_saved_mappings(conn, 'output', parent_id, only_unmapped=True)
+        matched += restored
+        if restored:
+            restored_invoices.add(parent_id)
+    if restored_invoices:
+        refresh_linked_batches(conn, 'output', restored_invoices, now_iso())
     canonical, names = _catalog_names(conn)
     evidence = _confirmed_names(conn, tenant, {
         (_normalized(r['source_item_name']), _normalized(r['source_unit']))
@@ -117,6 +130,10 @@ def match_output_catalog_codes(conn, *, tenant, now_iso, invoice_id=None,
     })
     for row in rows:
         context = _line_context(conn, "output", row["id"])
+        # Monetary reconciliation must not prevent an exact product match.
+        # Reuse manual editing's source validation; other blocked sources stay frozen.
+        if not output_mapping_allowed(context):
+            continue
         if context["mapping_status"] != "unmapped" or context["product_code"]:
             continue  # An earlier rule can have matched several lines already.
         scope = mapping_scope_key(context["source_item_code"], context["source_item_name"], context["source_unit"])

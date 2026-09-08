@@ -10,6 +10,7 @@ from .test_minvoice_portal import document
 from .minvoice_portal import normalize_portal_document
 from .invoice_output_sync import upsert_output_invoice, output_invoice_payload
 from .invoice_output_editing import output_mapping_allowed
+from .invoice_output_mapping import match_output_catalog_codes
 from .invoice_mapping import apply_saved_mappings, save_mapping, save_conversion, register_invoice_mapping_routes, InvoiceMappingError
 from .invoice_inventory import post_output_invoice, InvoiceInventoryError
 from .invoice_workbench_listing import invoice_range_payload
@@ -51,6 +52,77 @@ class OutputReviewMappingTests(unittest.TestCase):
     def listing(self, **filters):
         return invoice_range_payload(self.conn, tenant='TDP', invoice_type='output',
                                      date_from='2026-08-01', date_to='2026-08-31', **filters)
+
+    def match(self):
+        return match_output_catalog_codes(self.conn, tenant='TDP', now_iso=lambda:NOW,
+                                          date_from='2026-08-01', date_to='2026-08-31')
+
+    def test_amount_review_auto_matches_exact_code_without_releasing_hold(self):
+        header = dict(self.header())
+        original = dict(self.conn.execute('SELECT * FROM outgoing_source_invoice_items').fetchone())
+        self.assertEqual(self.match()['matched_lines'], 1)
+        row = dict(self.conn.execute('SELECT * FROM outgoing_source_invoice_items').fetchone())
+        self.assertEqual((row['product_code'],row['mapping_status'],row['stock_qty']), ('A','mapped',2))
+        for key in ('source_item_code','source_item_name','source_unit','qty','unit_price','amount'):
+            self.assertEqual(row[key], original[key])
+        self.assertEqual(dict(self.header()), header)
+        self.assertEqual(self.listing()['totals']['issue_count'], 0)
+        self.assertEqual(len(self.listing()['amount_reviews']), 1)
+        with self.assertRaises(InvoiceInventoryError):
+            post_output_invoice(self.conn,self.iid,confirmed=True,now_iso=lambda:NOW)
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0],0)
+        saved = list(self.conn.iterdump())
+        self.assertEqual(self.match()['matched_lines'], 0)
+        self.assertEqual(list(self.conn.iterdump()), saved)
+
+    def test_auto_match_restores_existing_rule_without_overwriting_a_chosen_row(self):
+        save_mapping(self.conn,direction='output',item_id=self.item,product_code='A',now_iso=lambda:NOW)
+        self.conn.execute("UPDATE outgoing_source_invoice_items SET product_code='',mapping_status='unmapped',"
+                          "conversion_factor=NULL,stock_qty=0,stock_unit_price=0")
+        self.assertEqual(self.match()['matched_lines'],1)
+        self.assertEqual(self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items').fetchone()[0],'A')
+        # A row with a choice is never overwritten by the automatic action.
+        self.conn.execute("UPDATE outgoing_source_invoice_items SET product_code='CUP'")
+        before=list(self.conn.iterdump())
+        self.assertEqual(self.match()['matched_lines'],0)
+        self.assertEqual(list(self.conn.iterdump()),before)
+
+    def test_auto_match_does_not_restore_expired_or_ambiguous_rules(self):
+        save_mapping(self.conn,direction='output',item_id=self.item,product_code='A',now_iso=lambda:NOW)
+        self.conn.execute("UPDATE outgoing_source_invoice_items SET product_code='',mapping_status='unmapped',"
+                          "conversion_factor=NULL,stock_qty=0,stock_unit_price=0")
+        self.conn.execute("UPDATE invoice_line_mappings SET effective_from='2026-09-01'")
+        before=list(self.conn.iterdump())
+        self.assertEqual(self.match()['matched_lines'],0)
+        self.assertEqual(list(self.conn.iterdump()),before)
+
+        self.conn.execute("UPDATE invoice_line_mappings SET effective_from=''")
+        rule=dict(self.conn.execute('SELECT * FROM invoice_line_mappings').fetchone())
+        rule.pop('id')
+        rule.update(effective_from='2026-08-01',product_code='CUP')
+        self.conn.execute('INSERT INTO invoice_line_mappings('+','.join(rule)+') VALUES('+','.join('?' for _ in rule)+')',
+                          list(rule.values()))
+        before=list(self.conn.iterdump())
+        self.assertEqual(self.match()['matched_lines'],0)
+        self.assertEqual(list(self.conn.iterdump()),before)
+
+    def test_amount_review_auto_matches_unique_name_but_not_conflicting_code_or_name(self):
+        for source_code, name, duplicate, expected in [
+            ('', 'Goods', False, 1),
+            ('', 'Goods', True, 0),
+            ('A', 'Different goods', False, 0),
+            ('UNKNOWN', 'Goods', False, 0),
+        ]:
+            with self.subTest(source_code=source_code,name=name,duplicate=duplicate):
+                self.conn.execute('SAVEPOINT matching_case')
+                self.conn.execute('UPDATE outgoing_source_invoice_items SET source_item_code=?,source_item_name=?',
+                                  (source_code,name))
+                if duplicate:
+                    self.conn.execute("INSERT INTO products(code,name,unit) VALUES('DUP','Goods','Kg')")
+                self.assertEqual(self.match()['matched_lines'], expected)
+                self.assertEqual(self.header()['stock_status'],'blocked')
+                self.conn.execute('ROLLBACK TO matching_case')
+                self.conn.execute('RELEASE matching_case')
 
     def test_completed_line_is_clear_but_invoice_total_hold_remains(self):
         save_mapping(self.conn, direction='output', item_id=self.item, product_code='A', now_iso=lambda:NOW)
@@ -155,6 +227,7 @@ class OutputReviewMappingTests(unittest.TestCase):
                                   [v for k,v in current.items() if k!='id']+[self.iid])
                 self.assertFalse(output_mapping_allowed(self.header()))
                 before=list(self.conn.iterdump())
+                self.assertEqual(self.match()['matched_lines'],0)
                 with self.assertRaises(InvoiceMappingError):
                     save_mapping(self.conn,direction='output',item_id=self.item,product_code='A',now_iso=lambda:NOW)
                 self.assertEqual(list(self.conn.iterdump()),before)
@@ -164,5 +237,9 @@ class OutputReviewMappingTests(unittest.TestCase):
             raw=normalize_portal_document(deepcopy(self.raw));raw['invoiceDetail'][0].update(edit)
             row=dict(self.header());row['raw_json']=json.dumps(raw)
             self.assertFalse(output_mapping_allowed(row))
+            self.conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',(row['raw_json'],self.iid))
+            before=list(self.conn.iterdump())
+            self.assertEqual(self.match()['matched_lines'],0)
+            self.assertEqual(list(self.conn.iterdump()),before)
         row=dict(self.header());row['raw_json']='{}'
         self.assertFalse(output_mapping_allowed(row))

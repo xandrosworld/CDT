@@ -86,6 +86,13 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
   await page.waitForFunction(id=>document.querySelector('#invoice-line-output-'+id+' td:nth-child(3)')?.textContent==='R1-KG',ids.blank);
   assert.equal(await cell('coded').innerText(),'R1-KG');assert.equal(await cell('alias').innerText(),'ALIAS');assert.equal(await cell('ambiguous').innerText(),'Chưa ghép');
   const after=await get(api);
+  const autoReview=page.locator('#invoice-line-output-'+ids.auto_amount_review);
+  assert.equal(before.lines.find(r=>r.id===ids.auto_amount_review).product_code,'');
+  assert.equal(after.lines.find(r=>r.id===ids.auto_amount_review).product_code,'AUTO-REVIEW');
+  assert.equal(await autoReview.getAttribute('data-issue'),'0');
+  assert.match(await autoReview.innerText(),/Đã khớp mã/);
+  assert.equal(await autoReview.locator('.invoice-draft-factor').count(),0);
+  assert.notEqual(await autoReview.locator('td').first().evaluate(e=>getComputedStyle(e).color),'rgb(163, 35, 35)');
   for(const old of before.lines){const current=after.lines.find(r=>r.id===old.id);for(const key of ['source_item_code','source_item_name','source_unit','qty','unit_price','amount'])assert.equal(current[key],old[key]);}
   assert.equal(after.totals.line_amount,before.totals.line_amount);assert(after.items.every(i=>i.stock_status!=='posted'));
   await page.reload();await page.locator('[data-view=msmi]').click();await page.locator('#invoice-list-count').waitFor();

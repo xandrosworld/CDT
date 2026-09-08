@@ -51,9 +51,15 @@ with tempfile.TemporaryDirectory(prefix='tdp_date_picker_') as root:
             from tdp_system.invoice_output_sync import upsert_output_invoice
             financial=document()
             financial.update(invoiceNumber=716,totalAmountWithoutVAT=120000,totalAmount=128000)
-            financial['invoiceDetail'][0].update(productCode='R1-KG',productName='Hàng kiểm thử kg')
+            financial['invoiceDetail'][0].update(productCode='R1-KG',productName='Hàng kiểm thử kg',
+                                                quantity=1,amount=50000,amountWithoutVAT=50000,vatAmount=4000)
+            conn.execute("INSERT INTO products(code,name,unit) VALUES('AUTO-REVIEW','Hàng tự khớp khi đối chiếu tiền','Kg')")
+            financial['invoiceDetail'].append(dict(financial['invoiceDetail'][0],productCode='AUTO-REVIEW',
+                                                  productName='Hàng tự khớp khi đối chiếu tiền'))
             financial_id=upsert_output_invoice(conn,normalize_portal_document(financial),tenant='TDP',now=now_iso(),status_map={},status_fields=(),reference_fields=())[0]
             ids['output_name_lines']['amount_review']=conn.execute('SELECT id FROM outgoing_source_invoice_items WHERE invoice_id=?',(financial_id,)).fetchone()[0]
+            ids['output_name_lines']['auto_amount_review']=conn.execute('SELECT id FROM outgoing_source_invoice_items WHERE invoice_id=? AND source_item_code=?',
+                                                                       (financial_id,'AUTO-REVIEW')).fetchone()[0]
         if os.environ.get('TDP_FIXTURE_OLD_PENDING') == '1':
             conn.execute("UPDATE msmi_invoices SET invoice_date='2022-07-31' WHERE id=?",(ids['input_ids']['3'],))
     @server.app.get('/fixture/ids')

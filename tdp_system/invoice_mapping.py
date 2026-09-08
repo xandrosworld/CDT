@@ -310,7 +310,7 @@ def refresh_linked_batches(conn, direction: str, invoice_ids: set[int], now: str
     _refresh_batches(conn, _direction(direction), invoice_ids, now)
 
 
-def apply_saved_mappings(conn, direction: str, invoice_id: int) -> int:
+def apply_saved_mappings(conn, direction: str, invoice_id: int, *, only_unmapped=False) -> int:
     """Restore only exact, direction-scoped mappings after a safe re-sync."""
     safe_direction = _direction(direction)
     if safe_direction == "input":
@@ -344,6 +344,8 @@ def apply_saved_mappings(conn, direction: str, invoice_id: int) -> int:
         (invoice_id,),
     ).fetchall()
     for row in rows:
+        if only_unmapped and (row['product_code'] or row['mapping_status'] != 'unmapped'):
+            continue
         if safe_direction == 'input':
             try:
                 from invoice_line_groups import restore_group_choice
