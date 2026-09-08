@@ -15,3 +15,11 @@ Hóa đơn bị chặn do nguồn không hợp lệ hiển thị “Chờ kiểm
 Đã đọc lại trực tiếp chi tiết M-Invoice bằng kết nối chỉ đọc: 11 dòng cộng trước thuế 1.938.000đ và thuế 155.040đ; đầu hóa đơn ghi trước thuế 2.058.000đ và thuế 164.640đ. Chênh 120.000đ trước thuế và 9.600đ thuế. Mã nguồn M000177, M000277, M000338 đã có trong dữ liệu tải về. Không sửa số tiền hoặc bỏ chặn để ép hóa đơn này qua bước ghi kho. Cần đối chiếu chứng từ nguồn cho khoản chênh.
 
 Chứng cứ, bản sao và ảnh trình duyệt lưu riêng ngoài Git tại `D:/TDP_RAILWAY_PRIVATE/evidence/output-complete-*`. Đây là kiểm chứng phạm vi sửa lỗi khớp mã, không phải chứng nhận 100% mọi luồng toàn hệ thống.
+
+## Kết quả trên web thật
+
+Source `1036e0181be07cbf275...` được Railway triển khai thành công ở deployment `f45d7c98-770a-44d5-b2c2-934cc2d19ab4`. Một lần bấm Khớp mã danh mục tháng 8 đã ghép đúng 53 dòng, khớp toàn bộ danh sách đã duyệt trên bản sao. Đọc lại độc lập và mở trình duyệt xác nhận hóa đơn 715 các dòng 3/5/6 nhận I000127/I000042/J000030; hóa đơn 710 dòng 3/4 nhận I000014/I000018. 717 hiện lý do chặn và mã gốc M000177. Không lỗi JavaScript hoặc HTTP 5xx. Lần kiểm tra độc lập sau thao tác không gửi yêu cầu ghi dữ liệu.
+
+Hai snapshot trước/sau có đủ 85 bảng, kiểm tra toàn vẹn đạt; 78 bảng giữ nguyên, bao gồm sổ kho và các dữ liệu nghiệp vụ ngoài mapping. Bảy bảng thay đổi đúng phần mã, trạng thái tổng hợp, revision/audit và bộ đếm. 548 đầu hóa đơn cùng 3.876 dòng nguồn giữ nguyên các trường nguồn, lượng, giá và tiền.
+
+Số dòng cần xử lý tháng 8 giảm từ 136 xuống 83. Phần còn lại gồm 29 dòng chưa xác định mã an toàn, 16 dòng cần quy đổi đơn vị, 36 dòng thuộc hóa đơn 716/717 có tổng tiền nguồn không khớp, và 2 dòng của hóa đơn điều chỉnh 695/696 cần đối chiếu trạng thái. Không tự ép ghép hoặc bỏ khóa những trường hợp này.
