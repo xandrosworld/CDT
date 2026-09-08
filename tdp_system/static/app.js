@@ -347,6 +347,27 @@
       dialog.querySelector('[data-identity-cancel]').focus();
     });
   }
+  function confirmOutputTaxAdjustment(review) {
+    return new Promise(function(resolve) {
+      var dialog = document.createElement('dialog');
+      dialog.className = 'invoice-identity-dialog invoice-tax-adjustment-dialog';
+      dialog.setAttribute('aria-labelledby','invoice-tax-adjustment-title');
+      dialog.innerHTML = '<h3 id="invoice-tax-adjustment-title">Đối chiếu cặp hóa đơn điều chỉnh</h3>' +
+        review.documents.map(function(doc) {
+          return '<section><h4>' + esc(doc.invoice_series + ' / ' + doc.invoice_number) + '</h4><p>Điều chỉnh cho hóa đơn ' + esc(doc.reference_series + ' / ' + doc.reference_number) + '</p>' +
+            doc.lines.map(function(line) { return '<p><strong>' + esc(line.product_code + ' · ' + line.product_name) + '</strong><br>' + stockQty(line.qty) + ' ' + esc(line.unit) + ' · Tiền trước thuế: ' + stockMoney(line.amount) + '</p>'; }).join('') +
+            '<p>Tiền thuế: <strong>' + stockMoney(doc.tax) + '</strong></p>' + (doc.source_note ? '<p>Lý do trên hóa đơn: ' + esc(doc.source_note) + '</p>' : '') + '</section>';
+        }).join('') + '<p><strong>Cộng hai hóa đơn: lượng thay đổi 0, tiền trước thuế thay đổi 0 đ.</strong><br>Thuế thay đổi: <strong>' + stockMoney(review.tax_difference) + '</strong>.</p>' +
+        '<label class="invoice-tax-adjustment-check"><input type="checkbox" data-tax-only-check> Tôi xác nhận cặp này chỉ sửa thuế, không giao thêm hoặc nhận trả hàng.</label>' +
+        '<p>Xác nhận sẽ đánh dấu cả hai hóa đơn đã đối chiếu. Giữ nguyên hóa đơn và số tiền, không tạo nhập/xuất kho.</p>' +
+        '<div class="invoice-identity-dialog-actions"><button type="button" class="btn btn-outline" data-tax-cancel>Để kiểm tra lại</button><button type="button" class="btn btn-primary" data-tax-confirm disabled>Xác nhận đã đối chiếu</button></div>';
+      dialog.querySelector('[data-tax-only-check]').onchange = function(event) { dialog.querySelector('[data-tax-confirm]').disabled = !event.target.checked; };
+      dialog.querySelector('[data-tax-cancel]').onclick = function() { dialog.close('cancel'); };
+      dialog.querySelector('[data-tax-confirm]').onclick = function() { if (dialog.querySelector('[data-tax-only-check]').checked) dialog.close('confirm'); };
+      dialog.addEventListener('close',function() { var confirmed = dialog.returnValue === 'confirm';dialog.remove();resolve(confirmed); },{once:true});
+      document.body.appendChild(dialog);dialog.showModal();dialog.querySelector('[data-tax-cancel]').focus();
+    });
+  }
   function confirmInvoiceExpense(invoice, line, expense) {
     return new Promise(function(resolve) {
       var rows = line ? [line] : (invoice.items || []).filter(function(r) { return expense ? r.inventory_eligible || r.is_expense : r.is_expense; });
@@ -6698,7 +6719,7 @@
       if (editField) { editField.focus(); editField.select(); }
       return;
     }
-    if (['save-invoice-mapping', 'review-invoice-identity', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'review-output-postings', 'post-invoice-output', 'preview-invoice-group','split-invoice-group'].includes(action)) {
+    if (['save-invoice-mapping', 'review-invoice-identity', 'review-output-adjustment', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'review-output-postings', 'post-invoice-output', 'preview-invoice-group','split-invoice-group'].includes(action)) {
       var pendingEdit = invoicePendingEdit();
       var savingThisEdit = action.startsWith('save-invoice-') || action === 'review-invoice-identity';
       if (pendingEdit && !savingThisEdit) {
@@ -6994,6 +7015,22 @@
       }
     }
     if (action === "view-invoice-receipt-summary") { showInvoiceReceiptSummary(button.dataset.id); return; }
+    if (action === 'review-output-adjustment') {
+      try {
+        button.disabled = true;
+        var adjustmentInvoice = (state.invoiceListing?.items || []).find(function(r) { return String(r.id) === button.dataset.id; });
+        var adjustment = adjustmentInvoice?.adjustment_review;
+        if (!adjustment || adjustment.confirmed) return;
+        if (!await confirmOutputTaxAdjustment(adjustment)) return;
+        await api('/api/invoice-workbench/output-adjustments/' + adjustmentInvoice.id + '/confirm-tax', {
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmed:true,expected:adjustment.token})
+        });
+        await refreshSavedInvoiceMapping('output','');
+        showToast('Đã đối chiếu cả hai hóa đơn điều chỉnh thuế. Không thay đổi kho.');
+      } catch (error) { showToast(error.message,true); }
+      finally { button.disabled = false; }
+      return;
+    }
     if (action === 'review-output-postings') {
       var outputQuery = '?from=' + encodeURIComponent(state.invoiceListing.date_from) + '&to=' + encodeURIComponent(state.invoiceListing.date_to) + '&status=' + encodeURIComponent(state.invoiceStatus) + '&line_filter=' + encodeURIComponent(state.invoiceLineFilter);
       if (state.invoiceListing.scope === 'pending') outputQuery += '&scope=pending';

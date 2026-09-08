@@ -60,6 +60,10 @@ with tempfile.TemporaryDirectory(prefix='tdp_date_picker_') as root:
             ids['output_name_lines']['amount_review']=conn.execute('SELECT id FROM outgoing_source_invoice_items WHERE invoice_id=?',(financial_id,)).fetchone()[0]
             ids['output_name_lines']['auto_amount_review']=conn.execute('SELECT id FROM outgoing_source_invoice_items WHERE invoice_id=? AND source_item_code=?',
                                                                        (financial_id,'AUTO-REVIEW')).fetchone()[0]
+            from tdp_system.test_invoice_output_adjustments import seed_adjustments
+            adjustment_ids=seed_adjustments(conn,now=now_iso())
+            ids['output_name_lines']['tax_adjustment_invoices']=adjustment_ids
+            ids['output_name_lines']['tax_adjustment_lines']=[conn.execute('SELECT id FROM outgoing_source_invoice_items WHERE invoice_id=?',(i,)).fetchone()[0] for i in adjustment_ids]
         if os.environ.get('TDP_FIXTURE_OLD_PENDING') == '1':
             conn.execute("UPDATE msmi_invoices SET invoice_date='2022-07-31' WHERE id=?",(ids['input_ids']['3'],))
     @server.app.get('/fixture/ids')

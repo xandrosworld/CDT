@@ -51,6 +51,15 @@ def portal_status(remote):
     return raw, status, "minvoice_portal.invoiceStatus+sendTaxStatus"
 
 
+def portal_document_role(remote):
+    """Preserve the distinction between a new related document and its original."""
+    code = remote.get('invoiceStatus')
+    if type(code) is not int:
+        return 'unknown'
+    return {0:'original',1:'cancelled',2:'adjustment',3:'replacement',
+            5:'adjusted_original',6:'replaced_original'}.get(code,'unknown')
+
+
 class MinvoicePortalClient(MinvoiceClient):
     def __init__(self, config, timeout=25):
         super().__init__(config, timeout)

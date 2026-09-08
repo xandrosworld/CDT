@@ -98,6 +98,26 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
   await collision.locator('[data-action=save-invoice-mapping]').click();await correction;
   await page.waitForFunction(id=>document.querySelector('#invoice-line-output-'+id+' td:nth-child(3)')?.textContent==='G000007',ids.collision);
   assert(!/Tên không khớp/.test(await collision.innerText()));assert.match(await collision.innerText(),/Mã kho: G000007/);
+  const taxRows=ids.tax_adjustment_lines.map(id=>page.locator('#invoice-line-output-'+id));
+  await taxRows[0].locator('[data-action=review-output-adjustment]').click();
+  const taxDialog=page.locator('.invoice-tax-adjustment-dialog');await taxDialog.waitFor({state:'visible'});
+  assert.match(await taxDialog.innerText(),/695/);assert.match(await taxDialog.innerText(),/696/);
+  assert.match(await taxDialog.innerText(),/685/);assert.match(await taxDialog.innerText(),/686/);
+  assert.match(await taxDialog.innerText(),/709.600/);assert.equal(await taxDialog.locator('[data-tax-confirm]').isDisabled(),true);
+  await page.screenshot({path:path.join(process.env.TDP_FIXTURE_OUTPUT,'tax-adjustment-review.png')});
+  await taxDialog.locator('[data-tax-cancel]').click();await taxDialog.waitFor({state:'detached'});
+  assert.equal(await taxRows[0].getAttribute('data-issue'),'1');
+  assert.equal((await get(api)).items.find(i=>i.id===ids.tax_adjustment_invoices[0]).adjustment_review.confirmed,false);
+  await taxRows[1].locator('[data-action=review-output-adjustment]').click();await taxDialog.waitFor({state:'visible'});
+  await taxDialog.locator('[data-tax-only-check]').check();
+  const taxSaved=page.waitForResponse(r=>r.url().endsWith('/confirm-tax'));
+  await taxDialog.locator('[data-tax-confirm]').click();assert.equal((await taxSaved).status(),200);
+  for(const id of ids.tax_adjustment_lines){
+   await page.waitForFunction(id=>document.querySelector('#invoice-line-output-'+id)?.getAttribute('data-issue')==='0',id);
+   const taxRow=page.locator('#invoice-line-output-'+id);
+   assert.match(await taxRow.innerText(),/K000035/);assert.match(await taxRow.innerText(),/Không thay đổi kho/);
+   assert.equal(await taxRow.locator('.invoice-draft-factor').count(),0);
+  }
   const button=page.locator('[data-action=match-output-catalog-codes]');
   await page.route('**/api/invoice-workbench/output-match-codes',r=>r.fulfill({status:503,contentType:'application/json',body:JSON.stringify({ok:false,error:'Thử lỗi mạng'})}));
   await button.click();await page.waitForFunction(()=>!document.querySelector('[data-action=match-output-catalog-codes]').disabled);
@@ -119,6 +139,7 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
   assert.equal(await cell('blank').innerText(),'R1-KG');
   assert.equal(await confirmedVariant.getAttribute('data-issue'),'0');
   assert.equal(await confirmedVariant.locator('.invoice-identity-review').count(),0);
+  for(const taxRow of taxRows){assert.equal(await taxRow.getAttribute('data-issue'),'0');assert.match(await taxRow.innerText(),/Đã đối chiếu điều chỉnh thuế/);}
   assert.match(await unit.innerText(),/Đã khớp mã/);assert.equal(await unit.locator('.invoice-draft-factor').count(),0);
   assert.match(await financial.innerText(),/Đã khớp mã/);
   assert.equal(await financial.getAttribute('data-issue'),'0');
@@ -127,7 +148,7 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
   assert.equal(finalData.items.find(i=>i.id===financialLine.invoice_id).stock_status,'blocked');
   assert.match(await blocked.innerText(),/Hóa đơn cần kiểm tra/);
   await page.screenshot({path:path.join(process.env.TDP_FIXTURE_OUTPUT,'output-names.png')});
-  assert.deepEqual(errors,[]);assert(writes.every(p=>p==='/api/invoice-workbench/output-match-codes'));
+  assert.deepEqual(errors,[]);assert(writes.every(p=>p==='/api/invoice-workbench/output-match-codes'||p==='/api/invoice-workbench/output-adjustments/'+ids.tax_adjustment_invoices[1]+'/confirm-tax'));
   console.log('PASS: same name with/without source code; alias; ambiguous name blocked; network retry; mapped-code display; reload; source amounts unchanged; no stock request');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e.message);process.exitCode=1;});

@@ -1017,6 +1017,13 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
            ORDER BY i.invoice_date DESC,i.invoice_series,i.invoice_number,i.id""",
         (json.dumps([int(value) for value in invoice_ids]),),
     ).fetchall()
+    try:
+        from .invoice_output_adjustments import adjustment_reviews, annotate_adjustment
+        from .minvoice_portal import portal_document_role
+    except ImportError:
+        from invoice_output_adjustments import adjustment_reviews, annotate_adjustment
+        from minvoice_portal import portal_document_role
+    adjustments = {tenant:adjustment_reviews(conn,tenant) for tenant in {r['tenant'] for r in rows}}
     items = []
     for row in rows:
         invoice = dict(row)
@@ -1027,6 +1034,11 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
         invoice['can_edit_mapping'] = output_mapping_allowed(invoice)
         invoice['quantity_policy'] = 'source_quantity'
         invoice['amount_review'] = output_amount_review(invoice)
+        try:
+            raw = json.loads(invoice['raw_json'])
+            invoice['source_document_role'] = portal_document_role(raw) if raw.get('_tdp_source_contract') == 'minvoice_portal_v1' else ''
+        except (TypeError,ValueError,AttributeError):
+            invoice['source_document_role'] = ''
         for key in ("identity_key", "remote_id", "business_key", "raw_json"):
             invoice.pop(key, None)
         invoice["items"] = [dict(item) for item in conn.execute(
@@ -1048,6 +1060,7 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
                 item['identity_warning'] = output_identity_warning(conn, item['id'])
             if any(item['identity_warning'] for item in invoice['items']) and invoice['stock_status'] == 'ready':
                 invoice['stock_status'] = 'pending_mapping'
+        annotate_adjustment(invoice,adjustments[row['tenant']].get(row['id']))
         items.append(invoice)
     return {
         "batch_id": int(batch_id) if batch_id is not None else None,

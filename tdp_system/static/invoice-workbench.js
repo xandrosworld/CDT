@@ -44,6 +44,10 @@
     };
     function mapping(item, invoice, editMode) {
       if (!item.id) return esc(item.issue || invoice.error_message || 'Hóa đơn chưa có dòng hàng.');
+      if (!input && invoice.adjustment_review) {
+        if (invoice.adjustment_review.confirmed) return '<strong>' + esc(item.product_code) + '</strong><div>' + esc(item.product_name) + '</div><small class="invoice-mapping-state">Đã đối chiếu điều chỉnh thuế.</small><small>Không thay đổi kho.</small>';
+        return '<div class="invoice-adjustment-review"><strong>Cặp hóa đơn điều chỉnh cần đối chiếu</strong><small>Lượng tăng/giảm bù nhau. Kiểm tra phần thuế và xác nhận có giao/nhận thêm hàng hay không.</small>' + button('review-output-adjustment',invoice.id,'Đối chiếu điều chỉnh') + '</div>';
+      }
       if (item.is_expense) return '<span class="invoice-expense-label">Chi phí · không nhập kho</span>';
       if (item.group_id) return '<strong>' + esc(item.product_code) + '</strong><div>Đã gộp ' + item.group_members.length + ' dòng</div><div>' + num(item.stock_qty) + ' ' + esc(item.product_unit) + '</div><small>Giá vốn sau gộp: ' + money(item.stock_unit_price) + '</small><details><summary>Xem dòng gốc</summary>' + item.group_members.map(function(r) { return '<div>Dòng ' + r.line_index + ': ' + esc(r.source_item_name) + ' · ' + num(r.qty) + ' ' + esc(r.source_unit) + ' · ' + money(r.amount) + '</div>'; }).join('') + '</details>' + button('split-invoice-group', item.group_id, 'Tách lại');
 

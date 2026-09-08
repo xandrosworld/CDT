@@ -34,6 +34,8 @@ LINE_LABELS = {
 
 def invoice_state(invoice, direction):
     stock = invoice.get("receipt_status" if direction == "input" else "stock_status", "")
+    if direction == 'output' and invoice.get('adjustment_review',{}).get('confirmed'):
+        return 'not_inventory'
     # A changed/cancelled source needs review even if there is an older posting.
     if stock == "reversal_required" or invoice.get("sync_status") != "synced" or invoice.get("error_message"):
         return "error"
@@ -58,6 +60,8 @@ def invoice_state(invoice, direction):
 
 
 def line_issue(item, invoice, status):
+    if invoice.get('adjustment_review',{}).get('confirmed'):
+        return ''
     if invoice.get('cost_warning'):
         return invoice['cost_warning']
     if invoice.get('expense_review_count'):
