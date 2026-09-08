@@ -148,6 +148,14 @@ class AmountSupportTests(unittest.TestCase):
             self.assertEqual(self.client.post(self.url + '/apply', json=report).status_code, 502)
         self.assertEqual(self.snapshot(), before)
 
+    def test_matched_header_does_not_override_a_flagged_line(self):
+        self.raw = document(); self.raw['invoiceDetail'][0]['unitPrice'] = 60000
+        before = self.snapshot(); report = self.check(True)
+        self.assertFalse(report['can_apply']); self.assertTrue(report['lines'][0]['note'])
+        self.assertIn('dòng cần đối chiếu', report['message'])
+        self.assertEqual(self.client.post(self.url + '/apply', json=report).status_code, 409)
+        self.assertEqual(self.snapshot(), before)
+
     def test_concurrent_change_during_remote_read_and_other_tenant_are_rejected(self):
         self.raw = document(); report = self.check(True)
         def remote(**kwargs):

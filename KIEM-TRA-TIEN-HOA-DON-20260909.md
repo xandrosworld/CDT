@@ -8,6 +8,6 @@ Chỉ đánh dấu dòng cần đối chiếu phép tính khi có số liệu ch
 
 Đã đọc lại trực tiếp hai hóa đơn 716 và 717 từ M-Invoice: vẫn lần lượt 25 và 11 dòng, không thay đổi so với dữ liệu đã tải. Chênh tổng gồm thuế vẫn 6.526.600 đ và 129.600 đ. Chưa thấy lệch phép tính số lượng × đơn giá ở 36 dòng đó. Chưa đủ căn cứ xác định dòng bị thiếu hoặc kết luận hóa đơn gốc sai; hai hóa đơn vẫn chờ đối chiếu.
 
-Kiểm thử: 120 bài trong 10 nhóm liên quan đến portal, tải hóa đơn, ghép mã, ghi kho, điều chỉnh và hỗ trợ đối chiếu đều đạt. Trình duyệt với dữ liệu giả kiểm tra mở/đóng, đọc lại, mất kết nối, tải Excel và cập nhật có chủ ý: đạt; không tạo bút toán kho. Dữ liệu nguồn lỗi, định danh khác, phiên bản cũ, sửa đồng thời và hoàn tác khi lỗi sau cập nhật đều có kiểm thử.
+Kiểm thử: 121 bài trong 10 nhóm liên quan đến portal, tải hóa đơn, ghép mã, ghi kho, điều chỉnh và hỗ trợ đối chiếu đều đạt. Trình duyệt với dữ liệu giả kiểm tra mở/đóng, đọc lại, mất kết nối, tải Excel và cập nhật có chủ ý: đạt; không tạo bút toán kho. Dữ liệu nguồn lỗi, định danh khác, phiên bản cũ, sửa đồng thời và hoàn tác khi lỗi sau cập nhật đều có kiểm thử.
 
 Không sửa dữ liệu nghiệp vụ thật trong đợt kiểm tra này.

@@ -63,7 +63,7 @@ def inspect_amounts(row, raw, *, fresh=False):
                         ('Tiền thuế', detail_tax, 'vatAmount'),
                         ('Tổng gồm thuế', detail_amount + detail_tax, 'totalAmount'))]
     validation = portal_validation_error(raw)
-    eligible = not validation and portal_status(raw)[1] == 'issued'
+    eligible = not validation and portal_status(raw)[1] == 'issued' and not any(l['note'] for l in lines)
     old = json.loads(row['raw_json'])
     old_lines = old['invoiceDetail']
     changes = []
@@ -195,7 +195,7 @@ def register_amount_support_routes(app, ctx):
             raw = source_document(create_client, row)
             if body.get('source_digest') != digest(raw):
                 raise AmountReviewError('M-Invoice vừa thay đổi dữ liệu. Bấm Kiểm tra lại M-Invoice để xem bản mới.')
-            if portal_validation_error(raw) or portal_status(raw)[1] != 'issued':
+            if not inspect_amounts(row, raw, fresh=True)['can_apply']:
                 raise AmountReviewError('Nguồn vẫn cần đối chiếu. Chưa cập nhật hoặc ghi kho.')
             with db() as conn:
                 conn.execute('BEGIN IMMEDIATE')
