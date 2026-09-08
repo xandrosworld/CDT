@@ -53,7 +53,7 @@ def save_product(conn, body, *, editing, ctx):
     if editing:
         if not current:raise CatalogError('Không tìm thấy mã hàng.',404)
         expected={k:current[k] for k in FIELDS}
-        if body.get('expected')!=expected:raise CatalogError('Mã hàng đã thay đổi. Đọc lại / đối chiếu để xem dữ liệu mới trước khi sửa.',409)
+        if body.get('expected')!=expected:raise CatalogError('Mã hàng đã thay đổi. Đóng và mở lại cửa sổ sửa để xem dữ liệu mới.',409)
         if ctx['catalog_unit'](current['unit'])!=unit:
             try:
                 from .invoice_repairs import correct_unused_product_unit
