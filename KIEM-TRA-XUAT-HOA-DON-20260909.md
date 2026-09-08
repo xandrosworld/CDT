@@ -36,3 +36,11 @@ Hóa đơn đầu ra tháng 08/2026:
 - Không được báo khách rằng bấm Ghi xuất kho là hoàn tất toàn bộ.
 
 Nhật ký, ảnh, bản sao và dữ liệu đối chiếu nằm trong thư mục bằng chứng riêng; không đưa dữ liệu khách hàng vào kho mã nguồn.
+
+## Mở đúng nguyên nhân tồn âm
+
+Nút “Xem vì sao âm” mở ngay mặt hàng đang báo lỗi trong một cửa sổ. Hiện tồn đầu, nhập, xuất, tồn còn lại và dòng nguồn; Quay lại/Esc giữ nguyên màn lập hóa đơn. Báo cáo kho chung vẫn truy cập được từ thanh menu.
+
+Đã xác định I000091 âm ngay từ tồn đầu 01/08/2026: dữ liệu nhập từ Excel ghi -1,5 kg, dòng 168; chưa có phát sinh nhập/xuất sau mốc tồn đầu. Không tự sửa hoặc cộng bù tồn.
+
+Kiểm tra bổ sung: 28 kiểm thử sẵn sàng xuất hóa đơn, 9 kiểm thử sổ kho và hai luồng trình duyệt đều đạt. Đã kiểm tra kỳ tồn đầu mới nhất, hoàn tác, lượng giữ cho dự thảo khác, chọn đúng mã, thử lại khi lỗi mạng, đóng cửa sổ và màn hình nhỏ. API mới chỉ đọc dữ liệu.

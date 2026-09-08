@@ -56,6 +56,7 @@ except ImportError:
 
 try:
     from outgoing_readiness import (
+        batch_product_stock_trace,
         OutgoingReadinessError,
         batch_readiness_payload,
         canonical_available_stock,
@@ -67,6 +68,7 @@ try:
     )
 except ImportError:
     from .outgoing_readiness import (
+        batch_product_stock_trace,
         OutgoingReadinessError,
         batch_readiness_payload,
         canonical_available_stock,
@@ -7874,6 +7876,15 @@ def register_contract_routes(app, ctx):
             except OutgoingReadinessError as exc:
                 return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
             return jsonify({"ok": True, **payload})
+
+    @app.get("/api/outgoing-invoices/readiness/<int:batch_id>/stock/<path:product_code>")
+    def api_outgoing_product_stock_trace(batch_id, product_code):
+        with db_factory() as conn:
+            conn.execute('BEGIN')
+            try:
+                return jsonify(ok=True, **batch_product_stock_trace(conn, batch_id, product_code))
+            except OutgoingReadinessError as exc:
+                return jsonify(ok=False, error=str(exc), code=exc.code), exc.status
 
     @app.get("/api/outgoing-invoices/shortages")
     def api_outgoing_invoice_shortages():

@@ -21,10 +21,10 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.page import PageMargins
 
 try:
-    from invoice_inventory import invoice_stock_rows, _minimum_balance_from
+    from invoice_inventory import invoice_stock_rows, _minimum_balance_from, selected_opening_snapshot
     from template_workbook import safe_workbook_bytes
 except ImportError:  # pragma: no cover - package invocation
-    from .invoice_inventory import invoice_stock_rows, _minimum_balance_from
+    from .invoice_inventory import invoice_stock_rows, _minimum_balance_from, selected_opening_snapshot
     from .template_workbook import safe_workbook_bytes
 
 
@@ -515,6 +515,73 @@ def _contractor_summaries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _replaceable_batch_holds(conn, batch_id: int) -> dict[str, float]:
+    return {r['product_code']: float(r['qty']) for r in conn.execute(
+        "SELECT t.product_code,SUM(t.qty_out) qty FROM inventory_transactions t "
+        "JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id "
+        "WHERE t.source_type='OUTGOING_DRAFT' AND t.status='reserved' AND d.batch_id=? AND d.status='draft' "
+        "AND COALESCE(d.draft_kind,'standard')='standard' "
+        "AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') GROUP BY t.product_code", (batch_id,))}
+
+
+def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[str, Any]:
+    """Explain the exact stock basis used by the selected batch, without writes."""
+    if not conn.execute('SELECT 1 FROM batches WHERE id=?', (batch_id,)).fetchone():
+        raise OutgoingReadinessError('Không tìm thấy đơn hàng.', status=404)
+    if not conn.execute('SELECT 1 FROM orders WHERE batch_id=? AND product_code=?',
+                        (batch_id, product_code)).fetchone():
+        raise OutgoingReadinessError('Mặt hàng không có trong đơn đang chọn.', status=404)
+    stock = canonical_available_stock(conn).get(product_code)
+    if not stock:
+        raise OutgoingReadinessError('Không tìm thấy mặt hàng trong kho.', status=404)
+    opening = selected_opening_snapshot(conn, '9999-12-31')
+    start = opening[1] if opening else '0001-01-01'
+    events = []
+    if opening:
+        for row in conn.execute(
+            "SELECT txn_date,qty_in-qty_out qty_delta,note FROM inventory_transactions "
+            "WHERE source_type='OPENING' AND status='posted' AND source_id=? AND product_code=? ORDER BY id",
+            (opening[0], product_code),
+        ):
+            events.append({'date': row['txn_date'], 'label': 'Tồn đầu kỳ',
+                           'reference': row['note'] or 'Tồn đầu kỳ đã nhập', 'qty_delta': float(row['qty_delta'])})
+    movements = conn.execute(
+        """SELECT l.txn_date,l.direction,l.event_type,l.qty_delta,l.source_line_index,
+                  COALESCE(i.invoice_series,o.invoice_series,'') invoice_series,
+                  COALESCE(i.invoice_number,o.invoice_number,'') invoice_number,
+                  COALESCE(c.note,'') note
+           FROM invoice_inventory_ledger l
+           LEFT JOIN msmi_invoices i ON l.source_invoice_table='msmi_invoices' AND i.id=l.source_invoice_id
+           LEFT JOIN outgoing_source_invoices o ON l.source_invoice_table='outgoing_source_invoices' AND o.id=l.source_invoice_id
+           LEFT JOIN invoice_inventory_confirmations c ON c.id=l.confirmation_id
+           WHERE l.status='posted' AND l.product_code=? AND l.txn_date>=? ORDER BY l.txn_date,l.id""",
+        (product_code, start),
+    ).fetchall()
+    for row in movements:
+        label = 'Nhập kho' if row['direction'] == 'input' else 'Xuất kho'
+        if row['event_type'] == 'REVERSAL':
+            label = 'Hoàn tác nhập' if row['direction'] == 'input' else 'Hoàn tác xuất'
+        reference = (f"{row['invoice_series']} / {row['invoice_number']} · Dòng {row['source_line_index']}"
+                     if row['invoice_number'] else row['note'])
+        events.append({'date': row['txn_date'], 'label': label, 'reference': reference,
+                       'qty_delta': float(row['qty_delta'])})
+    balance = 0.0
+    for event in events:
+        balance += event['qty_delta']
+        event['balance_qty'] = balance
+    released = _replaceable_batch_holds(conn, batch_id).get(product_code, 0)
+    reserved = stock['reserved_qty'] - released
+    available = stock['raw_available_qty'] + released
+    return {'batch_id': batch_id, 'product_code': product_code, 'product_name': stock['product_name'],
+            'unit': stock['unit'], 'opening_date': opening[1] if opening else '',
+            'opening_qty': stock.get('opening_qty', 0), 'input_qty': stock.get('input_qty', 0),
+            'output_qty': stock.get('output_qty', 0), 'reversal_qty': stock.get('reversal_qty', 0),
+            'closing_qty': stock['canonical_qty'], 'reserved_qty': reserved,
+            'pending_sync_issued_qty': stock['pending_sync_issued_qty'], 'available_qty': available,
+            'negative_opening_only': stock.get('opening_qty', 0) < -EPSILON and not movements,
+            'events': events, 'read_only': True}
+
+
 def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
@@ -526,17 +593,14 @@ def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:
     ]
     rows = _project_rows(conn, orders, [batch_id])
     stock = canonical_available_stock(conn)
-    released = {r['product_code']:float(r['qty']) for r in conn.execute(
-        "SELECT t.product_code,SUM(t.qty_out) qty FROM inventory_transactions t "
-        "JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id "
-        "WHERE t.source_type='OUTGOING_DRAFT' AND t.status='reserved' AND d.batch_id=? AND d.status='draft' "
-        "AND COALESCE(d.draft_kind,'standard')='standard' "
-        "AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') GROUP BY t.product_code",(batch_id,))}
+    released = _replaceable_batch_holds(conn, batch_id)
     blocking_issues = []
     for code in sorted({o['product_code'] for o in orders}):
         remaining = stock.get(code,{}).get('raw_available_qty',0) + released.get(code,0)
         if remaining < -EPSILON:
             blocking_issues.append({'product_code':code,'qty':remaining,
+                                    'product_name': stock.get(code, {}).get('product_name', ''),
+                                    'unit': stock.get(code, {}).get('unit', ''),
                                     'message':f'Tồn {code} đang âm {abs(remaining):g}. Cần đối chiếu kho trước khi tạo file.'})
     return {
         "batch_id": batch_id,

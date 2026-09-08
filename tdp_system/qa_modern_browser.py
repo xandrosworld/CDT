@@ -10,6 +10,7 @@ import time
 from urllib.request import urlopen
 
 CASES = {
+    'stock_cause': ('invoice_issuance_server', 18854, 'ISSUANCE'),
     'invoice_issuance': ('invoice_issuance_server', 18854, 'ISSUANCE'),
     'output_names': ('date_picker_server', 18805, 'INVOICE'),
     'catalog_worksheet': ('catalog_worksheet', 18852, 'CATALOG'),
@@ -48,6 +49,7 @@ def main():
                    MINVOICE_API_BASE_URL='http://127.0.0.1:9', MINVOICE_USERNAME='offline-test', MINVOICE_PASSWORD='offline-test')
         env[f'TDP_{prefix}_TEST_URL'] = f'http://127.0.0.1:{port}'
         env['TDP_FIXTURE_OUTPUT'] = str(folder)
+        if name == 'stock_cause': env['TDP_FIXTURE_STOCK_CAUSE']='1'
         if name == 'receipt_period_scope': env['TDP_FIXTURE_OLD_PENDING']='1'
         if name == 'output_names': env['TDP_FIXTURE_OUTPUT_NAMES']='1'
         for key in ('EXPENSE', 'PENDING', 'REVIEW', 'INVENTORY'):

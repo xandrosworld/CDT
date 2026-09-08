@@ -1,4 +1,7 @@
 """Isolated invoice-file and local issued-number workflow; no connector writes."""
+import os
+
+
 def main():
     from flask import request
     from waitress import serve
@@ -11,8 +14,16 @@ def main():
     with server.db() as conn:
         conn.execute("INSERT OR REPLACE INTO contractors(code,name,price_group,pricing_mode) VALUES('NT-A','Khách kiểm thử','NT-A','group')")
         conn.execute("INSERT OR REPLACE INTO products(code,name,unit,tax) VALUES('HH-01','Hàng kiểm thử','kg','0%')")
-        OutgoingReadinessTests.add_opening(conn, 20)
-        batch_id, ids = OutgoingReadinessTests.add_batch(conn, today, [{'qty':4},{'qty':6}])
+        stock_cause = os.environ.get('TDP_FIXTURE_STOCK_CAUSE') == '1'
+        OutgoingReadinessTests.add_opening(conn, -1.5 if stock_cause else 20)
+        rows = [{'qty':4},{'qty':6}]
+        if stock_cause:
+            conn.execute("UPDATE products SET name='Quả me tươi' WHERE code='HH-01'")
+            conn.execute("UPDATE inventory_transactions SET note='Tồn kiểm thử.xlsx; sheet Tồn đầu; dòng 168'")
+            conn.execute("INSERT INTO products(code,name,unit,tax) VALUES('HH-02','Rau <kiểm tra>','kg','0%')")
+            OutgoingReadinessTests.add_opening(conn, -2, product_code='HH-02')
+            rows.append({'qty':1,'product_code':'HH-02'})
+        batch_id, ids = OutgoingReadinessTests.add_batch(conn, today, rows)
         conn.execute("UPDATE orders SET tax='KKKNT' WHERE id=?", (ids[0],))
         conn.execute("UPDATE orders SET tax='8%' WHERE id=?", (ids[1],))
         for key,value in {'company':'Công ty thử','company_tax_code':'0100000001','company_address':'Địa chỉ thử',

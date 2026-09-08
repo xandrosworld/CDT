@@ -316,6 +316,56 @@ class OutgoingReadinessTests(unittest.TestCase):
         self.assertEqual(preview.json['blocking_issues'][0]['qty'],-1.5)
         self.assertEqual(self.client.post(f'/api/outgoing-invoices/draft/{batch_id}').status_code,409)
 
+    def test_stock_trace_explains_negative_opening_and_preserves_database(self):
+        with server.db() as conn:
+            self.add_opening(conn, -1.5)
+            conn.execute("UPDATE inventory_transactions SET note='Tồn đầu từ tồn.xlsx; dòng 168'")
+            batch_id, _ = self.add_batch(conn, '2026-09-04', [{'qty': 2}])
+            before = list(conn.iterdump())
+        response = self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}/stock/HH-01')
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        trace = response.json
+        self.assertTrue(trace['negative_opening_only'])
+        self.assertTrue(trace['read_only'])
+        self.assertEqual((trace['opening_qty'], trace['available_qty']), (-1.5, -1.5))
+        self.assertEqual(len(trace['events']), 1)
+        self.assertEqual(trace['events'][0]['reference'], 'Tồn đầu từ tồn.xlsx; dòng 168')
+        self.assertEqual(trace['events'][0]['balance_qty'], -1.5)
+        self.assertEqual(self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}/stock/UNKNOWN').status_code, 404)
+        self.assertEqual(self.client.get('/api/outgoing-invoices/readiness/999999/stock/HH-01').status_code, 404)
+        with server.db() as conn:
+            self.assertEqual(list(conn.iterdump()), before)
+
+    def test_stock_trace_uses_selected_opening_and_canonical_events_only(self):
+        with server.db() as conn:
+            self.add_opening(conn, -100, work_date='2026-07-01')
+            conn.execute("UPDATE inventory_transactions SET source_id='OLD'")
+            self.add_opening(conn, 10)
+            self.add_canonical_event(conn, 999, 'input', 'OLD', work_date='2026-07-10')
+            self.add_canonical_event(conn, 4, 'input', 'INPUT')
+            self.add_canonical_event(conn, -6, 'output', 'OUTPUT')
+            self.add_canonical_event(conn, 1, 'output', 'UNDO')
+            conn.execute("UPDATE invoice_inventory_ledger SET event_type='REVERSAL' WHERE event_key='UNDO'")
+            self.add_opening(conn, 999, product_code='OTHER')
+            batch_id, _ = self.add_batch(conn, '2026-09-04', [{'qty': 2}])
+        trace = self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}/stock/HH-01').json
+        self.assertFalse(trace['negative_opening_only'])
+        self.assertEqual((trace['opening_qty'], trace['input_qty'], trace['output_qty'], trace['reversal_qty']), (10, 4, 6, 1))
+        self.assertEqual([r['balance_qty'] for r in trace['events']], [10, 14, 8, 9])
+        self.assertEqual(trace['closing_qty'], 9)
+        self.assertEqual(trace['available_qty'], 9)
+        self.assertEqual(trace['events'][-1]['label'], 'Hoàn tác xuất')
+
+    def test_stock_trace_excludes_own_replaceable_hold_and_keeps_other_holds(self):
+        with server.db() as conn:
+            self.add_opening(conn, 10)
+            own, _ = self.add_batch(conn, '2026-08-20', [{'qty': 4}])
+            other, _ = self.add_batch(conn, '2026-08-21', [{'qty': 2}])
+        self.assertEqual(self.client.post(f'/api/outgoing-invoices/draft/{own}').status_code, 200)
+        self.assertEqual(self.client.post(f'/api/outgoing-invoices/draft/{other}').status_code, 200)
+        trace = self.client.get(f'/api/outgoing-invoices/readiness/{own}/stock/HH-01').json
+        self.assertEqual((trace['closing_qty'], trace['reserved_qty'], trace['available_qty']), (10, 2, 8))
+
     def test_allocation_can_use_later_input_but_actual_backdated_issue_is_blocked(self):
         from .outgoing_readiness import OutgoingReadinessError, validate_issued_draft_stock
         with server.db() as conn:

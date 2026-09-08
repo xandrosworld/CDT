@@ -352,6 +352,44 @@
       dialog.querySelector('[data-identity-cancel]').focus();
     });
   }
+  async function showStockCause(button) {
+    if (document.querySelector('.stock-cause-dialog[open]')) return;
+    var batchId = state.batchId, code = button.dataset.code;
+    var dialog = document.createElement('dialog');
+    dialog.className = 'inventory-totals-dialog stock-cause-dialog';
+    dialog.setAttribute('aria-labelledby', 'stock-cause-title');
+    dialog.innerHTML = '<div class="inventory-totals-heading"><h3 id="stock-cause-title">Kiểm tra tồn · ' + esc(code) + '</h3></div><div class="stock-cause-body" aria-live="polite">Đang tải lịch sử mặt hàng…</div><div class="stock-cause-actions"><button type="button" class="btn btn-outline">Quay lại</button></div>';
+    dialog.querySelector('.stock-cause-actions button').onclick = function() { dialog.close(); };
+    dialog.addEventListener('close', function() { dialog.remove(); if (button.isConnected) button.focus({preventScroll:true}); }, {once:true});
+    document.body.appendChild(dialog); dialog.showModal();
+    var body = dialog.querySelector('.stock-cause-body');
+    async function loadTrace() {
+      body.textContent = 'Đang tải lịch sử mặt hàng…';
+      try {
+        var trace = await api('/api/outgoing-invoices/readiness/' + batchId + '/stock/' + encodeURIComponent(code));
+        if (!dialog.open || !dialog.isConnected) return;
+        var unit = esc(trace.unit), quantity = function(value) { return stockQty(value) + ' ' + unit; };
+        dialog.querySelector('h3').textContent = trace.product_name + ' · ' + trace.product_code;
+        var totals = [['Tồn đầu kỳ',trace.opening_qty],['Nhập',trace.input_qty],['Xuất',trace.output_qty],['Tồn trên sổ',trace.closing_qty]];
+        var holds = [];
+        if (n(trace.reserved_qty)) holds.push('Đang giữ cho dự thảo: <strong>' + quantity(trace.reserved_qty) + '</strong>');
+        if (n(trace.pending_sync_issued_qty)) holds.push('Đã phát hành, chờ ghi kho: <strong>' + quantity(trace.pending_sync_issued_qty) + '</strong>');
+        body.innerHTML = '<p class="' + (n(trace.available_qty) < 0 ? 'error-summary' : 'ok-summary') + '"><strong>' + (n(trace.available_qty) < 0 ? 'Đang âm ' + quantity(-trace.available_qty) : 'Còn có thể lập ' + quantity(trace.available_qty)) + '</strong></p>' +
+          (trace.negative_opening_only ? '<p>Âm ngay từ tồn đầu kỳ. Chưa có dòng nhập/xuất sau đó. Kiểm tra số tồn trong nguồn bên dưới.</p>' : '') +
+          '<div class="stock-cause-totals">' + totals.map(function(t) { return '<div><span>' + t[0] + '</span><strong>' + quantity(t[1]) + '</strong></div>'; }).join('') + '</div>' +
+          (n(trace.reversal_qty) ? '<p>Hoàn tác: ' + quantity(trace.reversal_qty) + '</p>' : '') +
+          (holds.length ? '<p>' + holds.join(' · ') + '</p>' : '') +
+          '<h4>Nguồn tính tồn' + (trace.opening_date ? ' từ ' + dateVN(trace.opening_date) : '') + '</h4><div class="stock-cause-scroll"><table><thead><tr><th>Ngày</th><th>Nguồn</th><th>Tăng / giảm</th><th>Tồn sau dòng</th></tr></thead><tbody>' +
+          (trace.events || []).map(function(row) { return '<tr><td>' + dateVN(row.date) + '</td><td><strong>' + esc(row.label) + '</strong><div>' + esc(row.reference) + '</div></td><td class="num-cell">' + quantity(row.qty_delta) + '</td><td class="num-cell">' + quantity(row.balance_qty) + '</td></tr>'; }).join('') +
+          (!(trace.events || []).length ? '<tr><td colspan="4">Chưa có tồn đầu hoặc dòng nhập/xuất đã ghi sổ.</td></tr>' : '') + '</tbody></table></div>';
+      } catch(error) {
+        if (!dialog.open || !dialog.isConnected) return;
+        body.innerHTML = '<p class="error-summary">' + esc(error.message) + '</p><button class="btn btn-outline" type="button">Thử lại</button>';
+        body.querySelector('button').onclick = loadTrace;
+      }
+    }
+    await loadTrace();
+  }
   function recordIssuedInvoice(draft) {
     return new Promise(function(resolve) {
       var dialog = document.createElement('dialog'), busy = false, result = null;
@@ -2544,7 +2582,7 @@
       '</strong><span>', money(readiness.invoiceable_value), '</span></div><div class="waiting"><span>Còn chờ hóa đơn đầu vào</span><strong>', num(readiness.pending_qty),
       '</strong><span>', money(readiness.pending_value), '</span></div></div>',
       stockBlocks.length
-        ? '<div class="error-summary" style="margin-top:14px">' + stockBlocks.map(function(r) { return esc(r.message); }).join('<br>') + ' <button class="btn btn-outline" data-view="inventory">Mở kho</button></div>'
+        ? '<div class="error-summary" style="margin-top:14px">' + stockBlocks.map(function(r) { return '<div class="stock-block-row"><span>' + esc(r.product_name || r.product_code) + ' (' + esc(r.product_code) + ') đang âm <strong>' + stockQty(-r.qty) + ' ' + esc(r.unit || '') + '</strong>. Cần kiểm tra trước khi tạo file.</span><button class="btn btn-outline" data-action="show-stock-cause" data-code="' + esc(r.product_code) + '">Xem vì sao âm</button></div>'; }).join('') + '</div>'
         : allReady
         ? '<div class="ok-summary" style="margin-top:14px">Đã đủ đầu vào cho toàn bộ phần còn lại.</div>'
         : '<div class="warning-summary" style="margin-top:14px">Có thể lập phần màu xanh trước. Phần còn chờ sẽ giữ lại để tính tiếp khi có hóa đơn đầu vào.</div>',
@@ -6359,6 +6397,7 @@
       return;
     }
     if (action === 'open-minvoice-files') { navigate('documents'); return; }
+    if (action === 'show-stock-cause') { await showStockCause(button); return; }
     if (action === 'edit-invoice-buyer') {
       state.paymentFilters = Object.assign({}, state.paymentFilters, {contractor:button.dataset.contractor});
       renderDocuments();
