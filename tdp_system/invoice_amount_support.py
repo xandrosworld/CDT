@@ -176,7 +176,8 @@ def register_amount_support_routes(app, ctx):
             report = inspect_amounts(row, raw, fresh=fresh)
             if request.args.get('download') == '1':
                 return send_file(support_workbook(report), as_attachment=True,
-                                 download_name=f"Kiem-tra-hoa-don-{invoice_id}.xlsx")
+                                 download_name=f"Kiem-tra-hoa-don-{invoice_id}.xlsx",
+                                 mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             return jsonify(ok=True, expected=expected, **report)
         except AmountReviewError as error:
             return jsonify(ok=False, error=str(error)), 409

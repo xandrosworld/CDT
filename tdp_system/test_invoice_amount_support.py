@@ -58,7 +58,11 @@ class AmountSupportTests(unittest.TestCase):
         self.assertEqual(report['comparisons'][0]['difference'], 20000)
         self.assertIn('Chưa xác định', report['message']); self.assertEqual(report['lines'][0]['note'], '')
         self.assertFalse(self.check(True)['can_apply'])
-        response = self.client.get(self.url + '?download=1'); self.assertEqual(response.status_code, 200)
+        # Minimal Linux containers do not necessarily know the .xlsx MIME type.
+        with patch('mimetypes.guess_type', return_value=(None, None)):
+            response = self.client.get(self.url + '?download=1')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         wb = load_workbook(BytesIO(response.data)); ws = wb.active
         self.assertEqual(ws['D8'].value, 20000); self.assertEqual(ws['F13'].value, 100000)
         self.assertEqual(ws['D8'].font.color.rgb, '00B42318')
