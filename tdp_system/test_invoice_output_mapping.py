@@ -44,6 +44,10 @@ class OutputCatalogMappingTests(unittest.TestCase):
     def line(self):
         return self.conn.execute('SELECT * FROM outgoing_source_invoice_items ORDER BY id').fetchone()
 
+    def confirm_latest(self, code):
+        item_id=self.conn.execute('SELECT id FROM outgoing_source_invoice_items ORDER BY id DESC').fetchone()[0]
+        save_mapping(self.conn,direction='output',item_id=item_id,product_code=code,now_iso=now_iso,confirm_identity=True)
+
     def test_sync_matches_exact_code_and_creates_valid_revision_without_posting(self):
         self.product()
         self.sync(' i000127 ')
@@ -137,6 +141,7 @@ class OutputCatalogMappingTests(unittest.TestCase):
     def test_confirmed_short_name_reused_for_another_buyer_and_is_idempotent(self):
         self.product()
         self.sync(name='Quất', buyer='FIRST')
+        self.confirm_latest('I000127')
         self.sync(code='', name='Quất', buyer='SECOND', number=2)
         rows=self.conn.execute('SELECT * FROM outgoing_source_invoice_items ORDER BY id').fetchall()
         self.assertEqual(['I000127','I000127'], [r['product_code'] for r in rows])
@@ -149,7 +154,9 @@ class OutputCatalogMappingTests(unittest.TestCase):
         self.product()
         self.product('OTHER')
         self.sync(name='Quất',buyer='FIRST')
+        self.confirm_latest('I000127')
         self.sync(code='OTHER',name='Quất',buyer='SECOND',number=2)
+        self.confirm_latest('OTHER')
         self.sync(code='',name='Quất',buyer='THIRD',number=3)
         rows=self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items ORDER BY id').fetchall()
         self.assertEqual(['I000127','OTHER',''],[r[0] for r in rows])
@@ -167,6 +174,7 @@ class OutputCatalogMappingTests(unittest.TestCase):
         self.product()
         self.conn.execute("INSERT INTO products(code,name,unit) VALUES('OTHER','Tên khác','Kg')")
         self.sync(code='OTHER',buyer='FIRST')
+        self.confirm_latest('OTHER')
         self.sync(code='',buyer='SECOND',number=2)
         self.assertEqual('',self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items ORDER BY id DESC').fetchone()[0])
 
@@ -176,6 +184,7 @@ class OutputCatalogMappingTests(unittest.TestCase):
                 self.conn.execute('SAVEPOINT scenario')
                 self.product()
                 self.sync(name='Quất',buyer='FIRST')
+                self.confirm_latest('I000127')
                 if scenario=='revision':self.conn.execute('DELETE FROM invoice_mapping_revisions')
                 if scenario=='unit':self.conn.execute("UPDATE products SET unit='Hộp'")
                 if scenario=='expired':self.conn.execute("UPDATE invoice_line_mappings SET effective_to='2026-08-01'")
@@ -190,6 +199,68 @@ class OutputCatalogMappingTests(unittest.TestCase):
         self.conn.execute("UPDATE outgoing_source_invoices SET sync_status='review_required',stock_status='blocked',error_message='Nguồn lệch tổng'")
         before=list(self.conn.iterdump());self.match()
         self.assertEqual(before,list(self.conn.iterdump()))
+
+    def test_same_source_code_with_different_goods_never_automatches_even_same_unit(self):
+        self.product()
+        self.sync(name='Bánh đa đỏ ướt (sợi nhỏ)')
+        self.assertEqual('',self.line()['product_code'])
+        self.assertEqual(0,self.match()['matched_lines'])
+
+    def test_legacy_code_collision_blocks_stock_and_its_learned_uncoded_copy(self):
+        from .invoice_mapping import InvoiceMappingError
+        from .invoice_inventory import post_output_invoice,InvoiceInventoryError
+        from .invoice_output_sync import output_invoice_payload
+        from .invoice_product_identity import output_identity_warning
+        self.product()
+        self.sync(name='Bánh đa đỏ ướt (sợi nhỏ)')
+        row=self.line()
+        save_mapping(self.conn,direction='output',item_id=row['id'],product_code='I000127',now_iso=now_iso)
+        self.assertEqual('ready',self.conn.execute('SELECT stock_status FROM outgoing_source_invoices').fetchone()[0])
+        before=list(self.conn.iterdump())
+        with self.assertRaises(InvoiceMappingError) as error:validated_output_stock_snapshot(self.conn,row['id'])
+        self.assertEqual('product_identity_confirmation_required',error.exception.code)
+        with self.assertRaises(InvoiceInventoryError) as error:post_output_invoice(self.conn,row['invoice_id'],confirmed=True,now_iso=now_iso)
+        self.assertEqual('product_identity_confirmation_required',error.exception.code)
+        payload=output_invoice_payload(self.conn,invoice_ids=[row['invoice_id']])['items'][0]
+        self.assertEqual('pending_mapping',payload['stock_status'])
+        self.assertIn('Tên không khớp',payload['items'][0]['identity_warning'])
+        self.assertEqual(before,list(self.conn.iterdump()))
+        self.sync(code='',name='Bánh đa đỏ ướt (sợi nhỏ)',buyer='OTHER',number=2)
+        copied=self.conn.execute('SELECT id FROM outgoing_source_invoice_items ORDER BY id DESC').fetchone()[0]
+        self.assertEqual('',self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items WHERE id=?',(copied,)).fetchone()[0])
+        save_mapping(self.conn,direction='output',item_id=copied,product_code='I000127',now_iso=now_iso)
+        self.assertTrue(output_identity_warning(self.conn,copied))
+
+    def test_fix_collision_preserves_original_code_and_uses_correct_catalog_product(self):
+        self.product()
+        self.sync(name='Bánh đa đỏ ướt (sợi nhỏ)')
+        row=self.line()
+        self.conn.execute("INSERT INTO products(code,name,unit) VALUES('G000007','Bánh đa đỏ ướt (sợi nhỏ)','Kg')")
+        save_mapping(self.conn,direction='output',item_id=row['id'],product_code='G000007',now_iso=now_iso)
+        self.assertEqual('G000007',validated_output_stock_snapshot(self.conn,row['id'])['product_code'])
+        self.assertEqual('I000127',self.line()['source_item_code'])
+        for k in ('source_item_name','source_unit','qty','unit_price','amount'):self.assertEqual(row[k],self.line()[k])
+
+    def test_explicit_identity_confirmation_is_required_by_route_and_catalog_change_revokes_it(self):
+        from .invoice_mapping import InvoiceMappingError,register_invoice_mapping_routes
+        self.product();self.sync(name='Quất')
+        @contextmanager
+        def db():
+            with self.conn:yield self.conn
+        self.conn.commit()
+        app=Flask(__name__);app.config['TESTING']=True
+        register_invoice_mapping_routes(app,{'db':db,'now_iso':now_iso})
+        client=app.test_client();url='/api/invoice-workbench/items/output/'+str(self.line()['id'])+'/mapping'
+        before=list(self.conn.iterdump())
+        response=client.put(url,json={'product_code':'I000127'})
+        self.assertEqual(409,response.status_code)
+        self.assertEqual('product_identity_confirmation_required',response.json['code'])
+        self.assertEqual(before,list(self.conn.iterdump()))
+        response=client.put(url,json={'product_code':'I000127','confirm_identity':True})
+        self.assertEqual(200,response.status_code)
+        validated_output_stock_snapshot(self.conn,self.line()['id'])
+        self.conn.execute("UPDATE products SET name='Hàng khác'")
+        with self.assertRaises(InvoiceMappingError):validated_output_stock_snapshot(self.conn,self.line()['id'])
 
     def test_manual_choice_and_other_period_rules_take_priority(self):
         self.product('MANUAL')

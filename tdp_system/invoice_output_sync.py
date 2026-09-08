@@ -1032,6 +1032,15 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
                WHERE li.invoice_id=? ORDER BY li.line_index""",
             (row["id"],),
         )]
+        try:
+            from .invoice_product_identity import output_identity_warning
+        except ImportError:
+            from invoice_product_identity import output_identity_warning
+        if invoice['stock_status'] not in {'posted', 'reversed', 'reversal_required'}:
+            for item in invoice['items']:
+                item['identity_warning'] = output_identity_warning(conn, item['id'])
+            if any(item['identity_warning'] for item in invoice['items']) and invoice['stock_status'] == 'ready':
+                invoice['stock_status'] = 'pending_mapping'
         items.append(invoice)
     return {
         "batch_id": int(batch_id) if batch_id is not None else None,

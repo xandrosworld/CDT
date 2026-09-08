@@ -21,15 +21,15 @@ with tempfile.TemporaryDirectory(prefix='tdp_date_picker_') as root:
             original=dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(ids['output_line'],)).fetchone())
             ids['output_name_lines']={'blank':original['id']}
             conn.executemany('INSERT INTO products(code,name,unit) VALUES(?,?,?)',[
-                ('AMB-1','Tên trùng','Kg'),('AMB-2','Tên trùng','Kg'),('ALIAS','Tên trong danh mục','Kg')])
+                ('AMB-1','Tên trùng','Kg'),('AMB-2','Tên trùng','Kg'),('ALIAS','Tên trong danh mục','Kg'),('G000007','Bánh đa đỏ ướt (sợi nhỏ)','Kg')])
             conn.execute("INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES('ALIAS','Tên trên hóa đơn',?)",(now_iso(),))
-            for key,code,name in [('coded','R1-KG','Hàng kiểm thử kg'),('ambiguous','','Tên trùng'),('alias','','Tên trên hóa đơn')]:
+            for key,code,name in [('coded','R1-KG','Hàng kiểm thử kg'),('ambiguous','','Tên trùng'),('alias','','Tên trên hóa đơn'),('collision','R1-KG','Bánh đa đỏ ướt (sợi nhỏ)')]:
                 row={k:v for k,v in original.items() if k!='id'}
                 row.update(line_index=len(ids['output_name_lines'])+1,source_item_code=code,source_item_name=name)
                 cur=conn.execute('INSERT INTO outgoing_source_invoice_items('+','.join(row)+') VALUES('+','.join('?' for _ in row)+')',tuple(row.values()))
                 ids['output_name_lines'][key]=cur.lastrowid
-                if key=='coded':save_mapping(conn,direction='output',item_id=cur.lastrowid,product_code='R1-KG',now_iso=now_iso)
-            conn.execute('UPDATE outgoing_source_invoices SET subtotal=subtotal*4,tax_amount=tax_amount*4,total_amount=total_amount*4 WHERE id=?',(ids['output_id'],))
+                if key in {'coded','collision'}:save_mapping(conn,direction='output',item_id=cur.lastrowid,product_code='R1-KG',now_iso=now_iso)
+            conn.execute('UPDATE outgoing_source_invoices SET subtotal=subtotal*5,tax_amount=tax_amount*5,total_amount=total_amount*5 WHERE id=?',(ids['output_id'],))
             # A blocked source must explain why a known code cannot be edited.
             parent=dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(ids['output_id'],)).fetchone())
             parent.pop('id')

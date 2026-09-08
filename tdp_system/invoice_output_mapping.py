@@ -131,6 +131,12 @@ def match_output_catalog_codes(conn, *, tenant, now_iso, invoice_id=None,
             source_code = str(context['source_item_code'] or '').strip()
             if source_code:
                 product = _product(conn, source_code)
+                try:
+                    from .invoice_product_identity import catalog_name_matches
+                except ImportError:
+                    from invoice_product_identity import catalog_name_matches
+                if not catalog_name_matches(conn, context['source_item_name'], product['code']):
+                    continue
             else:
                 code = _name_candidate(context, canonical, names, evidence)
                 if not code:

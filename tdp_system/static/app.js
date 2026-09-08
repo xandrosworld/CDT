@@ -6750,12 +6750,16 @@
         var conversionOnly = mappingBody.product_code === mappingBody.expected.product_code && mappingBody.conversion_factor != null;
         var savingFields=Array.from(button.closest('.invoice-mapping-cell').querySelectorAll('input'));
         savingFields.forEach(function(field){field.disabled=true;});
-        var mappingResult = await api("/api/invoice-workbench/items/" + mappingDirection + "/" +
-          button.dataset.id + (conversionOnly ? "/conversion" : "/mapping"), {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(mappingBody)
-        });
+        var mappingUrl = "/api/invoice-workbench/items/" + mappingDirection + "/" + button.dataset.id + (conversionOnly ? "/conversion" : "/mapping");
+        var saveChosenMapping = function () { return api(mappingUrl, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(mappingBody)}); };
+        var mappingResult;
+        try { mappingResult = await saveChosenMapping(); }
+        catch (identityError) {
+          if (identityError.payload?.code !== 'product_identity_confirmation_required') throw identityError;
+          if (!window.confirm(identityError.message + '\n\nChỉ xác nhận nếu hai tên trên thực sự là cùng một mặt hàng. Tiếp tục dùng mã này?')) throw new Error('Chưa lưu mã. Hãy chọn đúng mặt hàng trong danh mục.');
+          mappingBody.confirm_identity = true;
+          mappingResult = await saveChosenMapping();
+        }
         state.operations = null;
         await refreshSavedInvoiceMapping(mappingDirection, button.dataset.id);
         await revealSavedInvoiceLine(mappingDirection, button.dataset.id, mappingResult.requires_unit_conversion);

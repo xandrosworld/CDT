@@ -48,7 +48,7 @@
       var candidates = item.candidate_products || [];
       var hint = (product ? product.code + ' · ' + product.name + ' · ' + product.unit + '. ' : '') + 'Tìm và chọn mã. Esc để bỏ sửa.';
       var editor = '<input class="input-date invoice-mapping-input" role="combobox" aria-autocomplete="list" aria-controls="msmiProductOptions" aria-expanded="false" autocomplete="off" data-id="' + item.id + '" data-direction="' + direction + '" data-source-name="' + esc(item.source_item_name) + '"' + (product ? ' data-selected-code="' + esc(product.code) + '"' : '') + ' id="map_' + direction + '_' + item.id + '" value="' + esc(product ? product.code : candidates.length > 1 ? '' : (item.suggested_product_code || '')) + '" placeholder="Tìm mã / tên" title="' + esc(hint) + '" aria-label="Mã kho dòng ' + item.line_index + '">';
-      return '<div class="invoice-mapping-compact' + (input ? '' : ' invoice-mapping-code-only') + '">' + editor + (input ? '<span class="invoice-draft-conversion">' + window.TdpInvoiceDraftConversion(item, product) + '</span>' : '') + button('save-invoice-mapping', item.id, 'Lưu') + '</div>';
+      return '<div class="invoice-mapping-compact' + (input ? '' : ' invoice-mapping-code-only') + '">' + editor + (input ? '<span class="invoice-draft-conversion">' + window.TdpInvoiceDraftConversion(item, product) + '</span>' : '') + button('save-invoice-mapping', item.id, 'Lưu') + '</div>' + (!input && product ? '<small class="invoice-selected-product">Mã kho: ' + esc(product.code + ' · ' + product.name + ' · ' + product.unit) + '</small>' : '') + (!input && item.identity_warning ? '<div class="invoice-issue-text">' + esc(item.identity_warning) + '</div>' : '');
     }
     window.TdpInvoiceMappingCell = mapping;
     function actions(invoice) {

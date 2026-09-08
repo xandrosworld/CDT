@@ -43,6 +43,8 @@ def invoice_state(invoice, direction):
         return 'needs_mapping'
     if direction == "output" and invoice.get("source_status_class") != "issued":
         return "error"
+    if any(item.get('identity_warning') for item in invoice.get('items', [])):
+        return 'needs_mapping'
     if stock == "ready":
         return "ready"
     if stock == "not_inventory":
@@ -58,6 +60,8 @@ def line_issue(item, invoice, status):
         return 'Nguồn chi phí đã thay đổi; xác nhận lại phân loại chi phí trên hóa đơn'
     if status == "error":
         return invoice.get("error_message") or item.get("validation_note") or "Kiểm tra trạng thái hóa đơn trước khi ghi kho"
+    if item.get('identity_warning'):
+        return item['identity_warning']
     if item.get("inventory_eligible") and item.get("mapping_status") != "mapped":
         return "Cần quy đổi đơn vị" if item.get("mapping_status") == "unit_review" else "Chưa ghép mã trong danh mục"
     return ""
@@ -157,7 +161,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
                 or (line_filter == "needs_attention" and bool(issue))
                 or (line_filter == "unmapped" and eligible and mapping == "unmapped")
                 or (line_filter == "unit_review" and eligible and mapping == "unit_review")
-                or (line_filter == "mapped" and eligible and mapping == "mapped")
+                or (line_filter == "mapped" and eligible and mapping == "mapped" and not item.get('identity_warning'))
                 or (line_filter == "expense" and item.get('is_expense'))
                 or (line_filter == "error" and (state == "error" or mapping == "review"))
             )

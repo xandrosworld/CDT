@@ -443,6 +443,13 @@ def validated_output_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
         raise InvoiceMappingError("Dòng hóa đơn không đủ điều kiện ghi kho", code="not_inventory")
     if context["mapping_status"] != "mapped" or not context["product_code"]:
         raise InvoiceMappingError("Dòng đầu ra chưa ghép mã hoặc chưa quy đổi xong", code="mapping_incomplete")
+    try:
+        from .invoice_product_identity import output_identity_warning
+    except ImportError:
+        from invoice_product_identity import output_identity_warning
+    warning = output_identity_warning(conn, item_id, context=context)
+    if warning:
+        raise InvoiceMappingError(warning, code='product_identity_confirmation_required', status=409)
     scope = _scope_key(
         context["source_item_code"], context["source_item_name"], context["source_unit"]
     )
@@ -550,6 +557,7 @@ def save_mapping(
     product_code: Any,
     now_iso,
     expected=None,
+    confirm_identity=False,
 ) -> dict[str, Any]:
     safe_direction = _direction(direction)
     try:
@@ -607,6 +615,15 @@ def save_mapping(
         mapping_status = existing[0]['mapping_status']
         factor = existing[0]['conversion_factor']
     timestamp = now_iso()
+    if safe_direction == 'output' and confirm_identity is True:
+        try:
+            from .invoice_product_identity import identity_key
+        except ImportError:
+            from invoice_product_identity import identity_key
+        conn.execute("INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at) "
+                     "VALUES('invoice_mapping.identity_confirmed','invoice_line_mapping',?,'ok','',?,?)",
+                     (identity_key(context, product), json.dumps({'item_id':safe_item_id, 'product_code':product['code'],
+                      'source_name':context['source_item_name'], 'product_name':product['name']},ensure_ascii=False),timestamp))
     conn.execute(
         """INSERT INTO invoice_line_mappings(
                tenant,source,invoice_type,partner_key,scope_key,source_item_code,
@@ -876,6 +893,16 @@ def register_invoice_mapping_routes(app, ctx) -> None:
         try:
             with db_factory() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                if direction == 'output':
+                    try:
+                        from .invoice_product_identity import output_identity_warning
+                    except ImportError:
+                        from invoice_product_identity import output_identity_warning
+                    context = _line_context(conn, 'output', item_id)
+                    if context:
+                        warning = output_identity_warning(conn, item_id, context=context, product_code=body.get('product_code'))
+                        if warning and body.get('confirm_identity') is not True:
+                            raise InvoiceMappingError(warning, code='product_identity_confirmation_required', status=409)
                 result = save_mapping(
                     conn,
                     direction=direction,
@@ -883,6 +910,7 @@ def register_invoice_mapping_routes(app, ctx) -> None:
                     product_code=body.get("product_code"),
                     now_iso=now_iso,
                     expected=body.get('expected'),
+                    confirm_identity=body.get('confirm_identity') is True,
                 )
                 # A standalone row can confirm its code and unit conversion together.
                 # Both writes share the lock/transaction, so a rejected factor cannot
