@@ -1,6 +1,6 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
-> **Sửa gõ mã và giữ vị trí bảng lớn — 08/09/2026:** đang kiểm tra/triển khai theo phản ánh bảng hơn 23.000 dòng bị đơ và tự nhảy sau lưu. Bằng chứng, phạm vi và trạng thái mới tại **13.44**.
+> **Sửa gõ mã và giữ vị trí bảng lớn — 08/09/2026:** đã deploy Railway và kiểm tra trực tiếp danh sách 4.776 hóa đơn / 23.901 dòng. Gõ/chọn mã, giữ nháp khi cuộn và tìm toàn bảng đạt; thử lưu chậm/giữ vị trí trên fixture riêng. Xem **13.44**.
 
 > **Danh mục đủ 1.255 mã, sửa trực tiếp trong Excel — 08/09/2026:** đã triển khai
 > và kiểm tra Railway. Danh sách ngoài nằm trong khung cuộn, Excel lấy toàn bộ
@@ -1316,3 +1316,8 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - `mapping-large-05` đạt trên fixture **23.901 dòng**: gõ/chọn mã, lưu chậm rồi nhập dòng khác, giữ con trỏ/vị trí, lưu dòng sau trước, cuộn đầu/giữa/cuối, tìm dòng 17.000, giữ chữ/tích, mở/hủy hộp gộp hai dòng, lỗi mạng 503 và xung đột 409 không ghi đè. Mở bảng 1,78 giây, gõ/chọn 0,39 giây trên máy kiểm tra; đây không phải cam kết tốc độ mọi máy/mạng. Các lượt 02–03 phát hiện độ cao dòng đổi sau ghép mã gây lệch vị trí; đã giữ theo vị trí dòng đang làm, lượt 04–05 đạt.
 - `mapping-real-large-01` dùng chính payload riêng **4.776 hóa đơn / 23.901 dòng hàng**, gồm 16 dòng báo hóa đơn không có hàng: gõ tiếng Việt ở hai ô, cuộn đầu/giữa/cuối và giữ nháp tại 1920/1024; không JavaScript exception hoặc yêu cầu ghi. Mở khoảng 4,22 giây, gõ 0,29 giây trên máy kiểm tra. Payload và ảnh nằm ngoài Git. Thao tác này dùng bản sao dữ liệu, chưa phải kiểm tra ghi trên production.
 - Hồi quy `mapping-stable-regression-02`: **690 bài / 91 module**, 689 đạt và 1 bài khóa chuỗi chữ ký observer cũ. Cập nhật marker theo observer đã lọc phạm vi và chạy lại nhóm ngôn ngữ riêng; kết quả cuối và trạng thái Railway được bổ sung khi có bằng chứng. Lượt regression-01 bị ngắt giữa chừng, không ghi thành hoàn tất.
+
+- Sau sửa marker, nhóm `mapping-stable-language-01` **14/14 đạt**; kết hợp lượt hồi quy rộng, toàn bộ 690 bài đã có kết quả đạt, không cộng thêm thành 704 bài độc lập. Browser cuối `mapping-stable-factor-02`, `mapping-stable-scope-02`, `mapping-stable-pending-01`, `mapping-stable-stock-01` đều đạt, gồm đầu vào/đầu ra, quy đổi, nhập đúng kỳ, mọi kỳ chủ động và chốt/mở kho.
+- Source **`3c2c915`**, deployment **`4f1bc502-3911-4d55-b6ee-906291ab401a`** trên Railway **SUCCESS**. Browser production **`mapping-stable-hosted-02` đạt**: 4.776 hóa đơn / 23.901 dòng, gõ tiếng Việt, lấy gợi ý thật, chọn thử chưa lưu, gõ dòng khác, tích dòng, cuộn giữa/cuối/quay lại giữ nháp và lựa chọn, Ctrl+F toàn dữ liệu, đóng/mở toàn màn hình, khổ 1920/1024. Mở bảng khoảng 4,39 giây và gõ khoảng 0,25 giây trên máy kiểm tra; không JavaScript exception, HTTP 5xx hay request ghi nghiệp vụ. Đã xem ảnh. Hosted-01 dừng vì công cụ đọc lại phản hồi lớn bị trình duyệt loại khỏi bộ nhớ inspector; sửa công cụ kiểm tra nội dung đã hiển thị rồi chạy lại, không thay dữ liệu để vượt test.
+
+- Snapshot `mapping-stable-after` lấy sau browser production, đối chiếu `mapping-stable-predeploy`: **85/85 bảng nguyên nội dung và schema**, hai DB toàn vẹn `ok`. Bằng chứng `mapping-stable-after/full-preservation.json`. Không có mapping, kho, tiền hoặc dữ liệu thử được ghi vào production trong lượt kiểm tra này.

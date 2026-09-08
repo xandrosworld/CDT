@@ -70,3 +70,10 @@ Các phần còn trống phải được cập nhật bằng kết quả thực 
 Source `20e7729`, Railway deployment `2f8504ee-d4cc-49a2-9d37-3102f7c22063` **SUCCESS**. Hai lượt browser phạm vi `customer-pending-scope-browser-02` và `customer-pending-manual-browser-02` đạt sau bổ sung chuyển bộ lọc cũ về ngày đã chọn, đổi Đến ngày thoát mọi kỳ và bỏ số đếm chuẩn hóa ngày toàn lịch sử khỏi thông báo kỳ này.
 
 `customer-pending-hosted-01` kiểm tra production chỉ đọc: bộ lọc cũ trở về tháng 8; API và màn hình khớp **266 hóa đơn, 261 đã nhập kho, 5 không nhập tồn, 0 dòng cần xử lý**, tổng **919.234.874đ**. Phạm vi ngày rõ ở toàn màn hình 1440/1024; đóng/mở và tải lại đạt, không tự yêu cầu dữ liệu mọi kỳ, không yêu cầu ghi nghiệp vụ, không JavaScript exception/HTTP 5xx. Đã xem ảnh. Kết quả này xác nhận lỗi phạm vi vừa sửa, không thay thế các phần toàn luồng còn mở ở trên.
+
+
+## Sửa bảng lớn bị đơ và nhảy vị trí sau lưu
+
+Theo phản ánh khách tiếp theo, đã sửa cơ chế dựng bảng hơn 2.000 dòng theo vùng đang cuộn, giữ toàn bộ dữ liệu/tìm kiếm; cho nhập nhiều dòng nháp, lưu không tự đổi chỗ hay giành con trỏ. Dòng đang gõ được giữ cả khi phản hồi chậm, kiểm tra phiên cũ vẫn chặn ghi đè. Source `3c2c915`, Railway deployment `4f1bc502-3911-4d55-b6ee-906291ab401a` SUCCESS; chi tiết tại README-new-2.md mục 13.44.
+
+`mapping-large-05` đạt fixture 23.901 dòng, gồm thứ tự lưu khác thứ tự nhập, lỗi mạng, xung đột, gộp xem trước/hủy, Ctrl+F ngoài vùng đang dựng và cuộn giữ nháp/tích. `mapping-real-large-01` đạt bản sao payload thật; `mapping-stable-hosted-02` đạt trực tiếp production 4.776 hóa đơn / 23.901 dòng, 1920/1024, không ghi thử. Bốn browser quy đổi/phạm vi/kho cuối đều đạt. Hồi quy 690 bài có một marker observer cũ, đã sửa và chạy lại cả nhóm 14/14 đạt. Đây là bằng chứng cho phần sửa mới; các mục toàn luồng còn mở phía trên vẫn giữ trạng thái riêng.
