@@ -18,3 +18,9 @@ Hóa đơn 1C26TYY/781, dòng 7 (ID 7718), có tên nguồn “Bánh đa đỏ �
 Chrome fixture đạt: hiện đủ tên kho và cảnh báo; hủy xác nhận không ghi; chọn G000007 sửa đúng bánh đa; tải lại giữ mã; lỗi mạng và thử lại vẫn hoạt động; không có request ghi kho. Trên bản sao dữ liệu thật sau sửa 781, phát hiện 12 dòng khác cần kiểm tra tên, gồm một dòng đã học lại từ lựa chọn cũ. Tất cả dòng có mapping hoàn chỉnh trong nhóm này đều bị chốt mới từ chối ghi kho; không kết luận cả 12 dòng đều sai hàng khi chưa được khách xác nhận. Đọc toàn bộ 89 hóa đơn mất khoảng 0,12 giây trên bản sao.
 
 Chứng cứ và dữ liệu riêng: `D:/TDP_RAILWAY_PRIVATE/evidence/output-wrong-code-01`, `output-wrong-code-before`, `identity-regression-*`, `output-identity-browser-01`.
+
+## Xác nhận sau triển khai
+
+Source `ac2f4b4198776ed961a88c40346b451f29daefb0`, deployment `75a4ec58-c9aa-4a39-ad27-558bb717a19a`, Railway SUCCESS. Trình duyệt web thật đã mở toàn màn hình: 781 dòng 7 hiện G000007, đúng tên bánh đa và đơn vị Kg. 12 dòng khác hiện cảnh báo tên không khớp; API GET chuẩn bị xuất kho loại toàn bộ 9 hóa đơn chứa các dòng đó khỏi danh sách được xuất. Không JavaScript exception, HTTP 5xx hay request ghi kho trong lần kiểm tra.
+
+Snapshot trước/sau đủ 85 bảng, integrity OK, 78 bảng giữ nguyên, bao gồm sổ kho. Các bảng còn lại chỉ thay đổi mapping, revision/audit và trạng thái tổng hợp cho thao tác sửa mã. So từng trường: duy nhất dòng 7718 đổi snapshot ghép mã và đầu hóa đơn 546 đổi trạng thái; mã nguồn, tên nguồn, số lượng, đơn giá, tiền và toàn bộ dòng khác giữ nguyên. Hóa đơn 546 vẫn không có bút toán xuất kho. Không có thao tác tự xác nhận 12 dòng còn cần khách đối chiếu.
