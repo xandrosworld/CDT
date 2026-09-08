@@ -154,6 +154,15 @@ class OutputCatalogMappingTests(unittest.TestCase):
         rows=self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items ORDER BY id').fetchall()
         self.assertEqual(['I000127','OTHER',''],[r[0] for r in rows])
 
+    def test_verified_choice_resolves_shared_alias_without_guessing_other_names(self):
+        self.product()
+        self.conn.execute("INSERT INTO products(code,name,unit) VALUES('VARIANT','Quả quất loại to','Kg')")
+        self.conn.executemany('INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES(?,?,?)',
+                             [('I000127','Quất',now_iso()),('VARIANT','Quất',now_iso())])
+        self.sync(name='Quất',buyer='FIRST')
+        self.sync(code='',name='Quất',buyer='SECOND',number=2)
+        self.assertEqual('I000127',self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items ORDER BY id DESC').fetchone()[0])
+
     def test_history_cannot_override_a_conflicting_canonical_name(self):
         self.product()
         self.conn.execute("INSERT INTO products(code,name,unit) VALUES('OTHER','Tên khác','Kg')")

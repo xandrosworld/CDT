@@ -81,12 +81,10 @@ def _name_candidate(context, canonical, names, evidence):
     if len(candidates) == 1:
         code = next(iter(candidates))
         return code if not codes or codes == {code} else None
-    if len(candidates) > 1:
-        return None
     day = context['invoice_date']
     active = {code for code, start, end in history
               if (not start or start <= day) and (not end or day <= end)}
-    return next(iter(active)) if len(active) == 1 else None
+    return next(iter(active)) if len(active) == 1 and (not candidates or active <= candidates) else None
 
 
 def match_output_catalog_codes(conn, *, tenant, now_iso, invoice_id=None,
