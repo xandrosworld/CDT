@@ -4,7 +4,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const {chromium} = require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
 (async()=>{
- const output=process.argv[2]; fs.mkdirSync(output,{recursive:true});
+ const output=process.argv[2]||process.env.TDP_FIXTURE_OUTPUT; fs.mkdirSync(output,{recursive:true});
  const browser=await chromium.launch({channel:'chrome',headless:true});
  const context=await browser.newContext({viewport:{width:1440,height:900},permissions:['clipboard-read','clipboard-write']});
  const page=await context.newPage(); const errors=[],writes=[],checks=[];
