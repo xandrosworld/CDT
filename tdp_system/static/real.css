@@ -814,7 +814,16 @@ body { min-width: 320px; }
 .invoice-output-conversion { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:6px 0; }
 .invoice-output-conversion .invoice-draft-factor { width:90px; min-width:70px; flex:0 1 90px; }
 .invoice-mapping-state { display:block; margin-top:4px; font-weight:600; }
-.invoice-source-review-note { display:block; margin-top:6px; }
+.invoice-color-guide { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 12px; color:#202a32; }
+.invoice-error-legend, .invoice-amount-difference { color:#a32323; }
+.invoice-amount-reviews { margin:0 12px 8px; padding:10px 12px; border:1px solid #e2b1a2; border-radius:6px; background:#fff7f1; color:#202a32; }
+.invoice-amount-reviews > summary { cursor:pointer; color:#92321d; }
+.invoice-amount-reviews p { margin:8px 0; }
+.invoice-amount-review-scroll { max-height:240px; overflow:auto; }
+.invoice-amount-reviews table { width:100%; min-width:720px; }
+.invoice-amount-reviews th, .invoice-amount-reviews td { padding:8px; border:1px solid #dfd6d2; background:white; }
+.invoice-amount-reviews th { position:sticky; top:0; background:#f3efed; color:#202a32; }
+.invoice-amount-difference { font-weight:700; }
 .invoice-mapping-compact .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 .invoice-line-classification .btn { padding:0; min-height:24px; font-size:12px; color:#366478; background:transparent; border:0; text-decoration:underline; }
 .invoice-expense-label { color:#366478; font-size:13px; }

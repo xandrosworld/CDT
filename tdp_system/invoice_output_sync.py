@@ -1021,10 +1021,11 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
     for row in rows:
         invoice = dict(row)
         try:
-            from .invoice_output_editing import output_mapping_allowed
+            from .invoice_output_editing import output_mapping_allowed, output_amount_review
         except ImportError:
-            from invoice_output_editing import output_mapping_allowed
+            from invoice_output_editing import output_mapping_allowed, output_amount_review
         invoice['can_edit_mapping'] = output_mapping_allowed(invoice)
+        invoice['amount_review'] = output_amount_review(invoice)
         for key in ("identity_key", "remote_id", "business_key", "raw_json"):
             invoice.pop(key, None)
         invoice["items"] = [dict(item) for item in conn.execute(

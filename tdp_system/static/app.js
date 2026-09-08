@@ -6074,6 +6074,12 @@
     if (!button) return;
     var action = button.dataset.action;
     if (action === 'preview-inventory-report') { await previewInventoryReport(button); return; }
+    if (action === 'filter-invoice-issues') {
+      state.invoiceLineFilter = state.invoiceLineFilter === 'needs_attention' ? 'all' : 'needs_attention';
+      persistInvoiceWorkbenchFilters();
+      await loadInvoiceWorkbench(true); render();
+      return;
+    }
     if (action === "jump-invoice-issue") {
       var firstIssue = (state.invoiceListing?.lines || []).find(function(r) { return r.issue; });
       if (firstIssue && invoiceVirtual) invoiceVirtual.reveal(firstIssue.id == null ? 'empty-'+firstIssue.invoice_id : firstIssue.id);
@@ -6766,7 +6772,7 @@
         await refreshSavedInvoiceMapping(mappingDirection, button.dataset.id);
         await revealSavedInvoiceLine(mappingDirection, button.dataset.id, mappingResult.requires_unit_conversion);
         var savedInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === invoiceEditingLine(button.dataset.id)?.invoice_id; });
-        showToast(mappingDirection === 'output' ? (mappingResult.requires_unit_conversion ? 'Đã lưu mã. Cần nhập quy đổi để hoàn tất dòng này.' : 'Đã lưu mã và quy đổi.' + (savedInvoice && savedInvoice.sync_status !== 'synced' ? ' Hóa đơn còn lệch tiền nên chưa xuất kho.' : '')) : mappingResult.requires_unit_conversion
+        showToast(mappingDirection === 'output' ? (mappingResult.requires_unit_conversion ? 'Đã lưu mã. Cần nhập quy đổi để hoàn tất dòng này.' : 'Đã lưu mã và quy đổi.' + (savedInvoice?.amount_review ? ' HĐ ' + savedInvoice.invoice_number + ' chờ đối chiếu tiền; xem cảnh báo phía trên bảng.' : '')) : mappingResult.requires_unit_conversion
           ? "Đã nhớ mã nhưng đơn vị tính khác nhau — cần nhập quy đổi trước khi ghi kho"
           : "Đã ghép mã và ghi nhớ đúng loại hóa đơn, đúng đối tác");
       } catch (error) {
@@ -7257,7 +7263,7 @@
     syncInvoiceMappingFullscreen();
     enhanceMappingSearch();
     content.querySelectorAll('table').forEach(function(table) {
-      if(table.closest('.inventory-nxt-scroll')) return;
+      if(table.closest('.inventory-nxt-scroll, .invoice-amount-reviews')) return;
       if(table.dataset.worksheetReady) return;
       table.dataset.worksheetReady='1';
       var wrap=table.closest('.table-wrap,.invoice-lines-scroll')||table;

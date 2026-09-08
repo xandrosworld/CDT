@@ -6,6 +6,29 @@ from decimal import Decimal, InvalidOperation
 PORTAL_TOTAL_MISMATCH = 'Tổng dòng hàng/thuế trên portal lệch tổng hóa đơn; giữ số nguồn, cần đối chiếu trước khi ghi kho hoặc lập hồ sơ VAT'
 
 
+def output_amount_review(invoice):
+    """Explain a monetary hold using source detail and header totals, without changing either."""
+    row = dict(invoice)
+    if row.get('error_message') != PORTAL_TOTAL_MISMATCH or not output_mapping_allowed(row):
+        return None
+    raw = json.loads(row['raw_json'])
+    line_amount = sum(Decimal(str(line['amountWithoutVAT'])) for line in raw['invoiceDetail'])
+    line_tax = sum(Decimal(str(line['vatAmount'])) for line in raw['invoiceDetail'])
+    header_amount, header_tax, header_total = (
+        Decimal(str(raw[key])) for key in ('totalAmountWithoutVAT', 'vatAmount', 'totalAmount'))
+    return {
+        'line_count': len(raw['invoiceDetail']),
+        'comparisons': [
+            {'kind': kind, 'detail': float(detail), 'header': float(header), 'difference': float(header - detail)}
+            for kind, detail, header in (
+                ('subtotal', line_amount, header_amount),
+                ('tax', line_tax, header_tax),
+                ('total', line_amount + line_tax, header_total),
+            )
+        ],
+    }
+
+
 def output_mapping_allowed(invoice):
     row = dict(invoice)
     if (row.get('source', row.get('mapping_source')) != 'minvoice'

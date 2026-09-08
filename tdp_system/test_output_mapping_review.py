@@ -12,6 +12,7 @@ from .invoice_output_sync import upsert_output_invoice, output_invoice_payload
 from .invoice_output_editing import output_mapping_allowed
 from .invoice_mapping import apply_saved_mappings, save_mapping, save_conversion, register_invoice_mapping_routes, InvoiceMappingError
 from .invoice_inventory import post_output_invoice, InvoiceInventoryError
+from .invoice_workbench_listing import invoice_range_payload
 
 NOW = '2026-09-08T20:00:00'
 
@@ -46,6 +47,55 @@ class OutputReviewMappingTests(unittest.TestCase):
 
     def header(self):
         return self.conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(self.iid,)).fetchone()
+
+    def listing(self, **filters):
+        return invoice_range_payload(self.conn, tenant='TDP', invoice_type='output',
+                                     date_from='2026-08-01', date_to='2026-08-31', **filters)
+
+    def test_completed_line_is_clear_but_invoice_total_hold_remains(self):
+        save_mapping(self.conn, direction='output', item_id=self.item, product_code='A', now_iso=lambda:NOW)
+        before = list(self.conn.iterdump())
+        data = self.listing()
+        self.assertEqual(data['lines'][0]['issue'], '')
+        self.assertEqual(data['totals']['issue_count'], 0)
+        self.assertEqual(data['items'][0]['workbench_status'], 'error')
+        self.assertEqual(data['items'][0]['stock_status'], 'blocked')
+        self.assertEqual(data['counts']['ready'], 0)
+        self.assertEqual(len(data['amount_reviews']), 1)
+        self.assertEqual(data['amount_reviews'][0]['comparisons'], [
+            {'kind':'subtotal', 'detail':100000, 'header':120000, 'difference':20000},
+            {'kind':'tax', 'detail':8000, 'header':8000, 'difference':0},
+            {'kind':'total', 'detail':108000, 'header':128000, 'difference':20000},
+        ])
+        for line_filter in ['needs_attention', 'error']:
+            filtered = self.listing(line_filter=line_filter)
+            self.assertEqual(filtered['lines'], [])
+            self.assertEqual(filtered['amount_reviews'], data['amount_reviews'])
+        self.assertEqual(self.listing(status='ready')['amount_reviews'], [])
+        self.assertEqual(list(self.conn.iterdump()), before)
+        with self.assertRaises(InvoiceInventoryError):
+            post_output_invoice(self.conn, self.iid, confirmed=True, now_iso=lambda:NOW)
+
+    def test_monetary_hold_does_not_hide_missing_code_or_conversion(self):
+        data = self.listing()
+        self.assertEqual(data['lines'][0]['issue'], 'Chưa ghép mã trong danh mục')
+        self.assertEqual(data['totals']['issue_count'], 1)
+        save_mapping(self.conn, direction='output', item_id=self.item, product_code='CUP', now_iso=lambda:NOW)
+        self.assertEqual(self.listing()['lines'][0]['issue'], 'Cần quy đổi đơn vị')
+        save_conversion(self.conn, direction='output', item_id=self.item, conversion_factor=2, now_iso=lambda:NOW)
+        self.assertEqual(self.listing()['lines'][0]['issue'], '')
+        self.assertEqual(self.header()['stock_status'], 'blocked')
+
+    def test_amount_summary_handles_tax_and_total_only_differences(self):
+        for subtotal, tax, total in [(100000, 9000, 109000), (100000, 8000, 110000), (90000, 8000, 98000)]:
+            raw = document()
+            raw.update(totalAmountWithoutVAT=subtotal, vatAmount=tax, totalAmount=total)
+            self.sync(raw)
+            review = self.listing()['amount_reviews'][0]
+            self.assertEqual([r['difference'] for r in review['comparisons']],
+                             [subtotal - 100000, tax - 8000, total - 108000])
+        self.sync(document())
+        self.assertEqual(self.listing()['amount_reviews'], [])
 
     def test_amount_review_can_save_and_resync_but_cannot_post_stock(self):
         self.assertTrue(output_mapping_allowed(self.header()))

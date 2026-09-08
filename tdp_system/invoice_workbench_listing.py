@@ -62,7 +62,9 @@ def line_issue(item, invoice, status):
         return invoice['cost_warning']
     if invoice.get('expense_review_count'):
         return 'Nguồn chi phí đã thay đổi; xác nhận lại phân loại chi phí trên hóa đơn'
-    if status == "error":
+    # A source-total hold blocks the whole invoice, not a completed product/unit
+    # choice. Keep the monetary warning separately visible at invoice level.
+    if status == "error" and not invoice.get('amount_review'):
         return invoice.get("error_message") or item.get("validation_note") or "Kiểm tra trạng thái hóa đơn trước khi ghi kho"
     if item.get('identity_warning'):
         return item['identity_warning']
@@ -140,7 +142,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
     fetch = input_invoice_payload if direction == "input" else output_invoice_payload
     invoices = fetch(conn, invoice_ids=ids)["items"]
     counts = {key: 0 for key in STATUS_LABELS}
-    lines, visible_invoices = [], []
+    lines, visible_invoices, amount_reviews = [], [], []
     qty_by_unit, line_amount, invoice_amount = {}, Decimal(0), Decimal(0)
     for invoice in invoices:
         state = invoice_state(invoice, direction)
@@ -154,6 +156,12 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
         counts[state] += 1
         if status != "all" and status != state:
             continue
+        if invoice.get('amount_review'):
+            amount_reviews.append({
+                'invoice_id': invoice['id'], 'invoice_number': invoice['invoice_number'],
+                'invoice_series': invoice['invoice_series'], 'invoice_date': invoice['invoice_date'],
+                **invoice['amount_review'],
+            })
         selected = []
         # Preserve visibility of invoices whose source sent no detail rows.
         for item in invoice["items"] or [{"id": None, "source_item_name": "Hóa đơn chưa có chi tiết hàng"}]:
@@ -167,7 +175,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
                 or (line_filter == "unit_review" and eligible and mapping == "unit_review")
                 or (line_filter == "mapped" and eligible and mapping == "mapped" and not item.get('identity_warning'))
                 or (line_filter == "expense" and item.get('is_expense'))
-                or (line_filter == "error" and (state == "error" or mapping == "review"))
+                or (line_filter == "error" and bool(issue) and (state == "error" or mapping == "review"))
             )
             if not visible:
                 continue
@@ -204,7 +212,8 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
     return {
         "direction": direction, "source": source, "date_from": start, "date_to": end,
         "status": status, "line_filter": line_filter, "scope": scope, "items": visible_invoices,
-        "lines": lines, "group_warnings":group_warnings,"source_line_count":source_line_count,
+        "lines": lines, "amount_reviews": amount_reviews,
+        "group_warnings":group_warnings,"source_line_count":source_line_count,
         "counts": counts, "status_labels": STATUS_LABELS, "line_labels": LINE_LABELS,
         "totals": {
             "invoice_count": len(visible_invoices), "line_count": sum(item.get("id") is not None for item in lines),
