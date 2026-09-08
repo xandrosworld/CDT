@@ -3989,6 +3989,12 @@ def export_invoices_zip(conn, batch, orders):
         raise InvoiceTaxExportError(str(error), code=error.code, status=error.status) from None
     for line in lines:
         line["vat_percent"] = invoice_vat_percent(line["tax"])
+    tax_groups = defaultdict(set)
+    for line in lines:
+        tax_groups[line['draft_id']].add(line['vat_percent'])
+    if any(len(taxes) > 1 for taxes in tax_groups.values()):
+        raise InvoiceTaxExportError('Dự thảo cũ có nhiều nhóm thuế. Bấm Tính lại dự thảo để tách đúng từng file hóa đơn.',
+                                    code='invoice_tax_split_required')
     return export_invoice_drafts_zip(
         lines,
         work_date=batch["work_date"],

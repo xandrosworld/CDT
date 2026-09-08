@@ -525,12 +525,26 @@ def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:
         ) if _net_delivered(dict(row)) > EPSILON
     ]
     rows = _project_rows(conn, orders, [batch_id])
+    stock = canonical_available_stock(conn)
+    released = {r['product_code']:float(r['qty']) for r in conn.execute(
+        "SELECT t.product_code,SUM(t.qty_out) qty FROM inventory_transactions t "
+        "JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id "
+        "WHERE t.source_type='OUTGOING_DRAFT' AND t.status='reserved' AND d.batch_id=? AND d.status='draft' "
+        "AND COALESCE(d.draft_kind,'standard')='standard' "
+        "AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') GROUP BY t.product_code",(batch_id,))}
+    blocking_issues = []
+    for code in sorted({o['product_code'] for o in orders}):
+        remaining = stock.get(code,{}).get('raw_available_qty',0) + released.get(code,0)
+        if remaining < -EPSILON:
+            blocking_issues.append({'product_code':code,'qty':remaining,
+                                    'message':f'Tồn {code} đang âm {abs(remaining):g}. Cần đối chiếu kho trước khi tạo file.'})
     return {
         "batch_id": batch_id,
         "work_date": batch["work_date"],
         **_totals(rows),
         "contractors": _contractor_summaries(rows),
         "rows": rows,
+        "blocking_issues": blocking_issues,
         "stock_basis": "OPENING + invoice_inventory_ledger − active local holds",
     }
 

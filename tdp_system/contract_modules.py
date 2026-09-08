@@ -4592,17 +4592,26 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso) -> dict:
         qty = min(remaining, have)
         available[item["product_code"]] = max(have - qty, 0)
         if qty > 1e-9:
-            allocations[item["contractor"]].append((item, qty))
+            # Each tax workbook is imported and issued separately. Keep its
+            # number, buyer snapshot and stock hold on a separate local draft.
+            allocations[(item["contractor"], invoice_tax_percent(item["tax"]))].append((item, qty))
         pending_qty += max(remaining - qty, 0)
 
-    reusable_by_contractor = {}
+    reusable_by_tax = {}
     for draft in replaceable:
-        current = reusable_by_contractor.get(draft["contractor"])
+        taxes = {invoice_tax_percent(row['tax']) for row in conn.execute(
+            'SELECT tax FROM outgoing_invoice_lines WHERE draft_id=?', (draft['id'],))}
+        if len(taxes) != 1:
+            # Old mixed-tax drafts are cancelled below, never silently issued
+            # against one invoice number for several upload files.
+            continue
+        key = (draft['contractor'], next(iter(taxes)))
+        current = reusable_by_tax.get(key)
         if current is None or draft["id"] > current["id"]:
-            reusable_by_contractor[draft["contractor"]] = draft
+            reusable_by_tax[key] = draft
     used_ids = set()
     created = []
-    for contractor, lines in allocations.items():
+    for (contractor, tax_group), lines in allocations.items():
         subtotal = tax_amount = 0
         calculated = []
         for item, qty in lines:
@@ -4614,7 +4623,7 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso) -> dict:
             subtotal += amount
             tax_amount += line_tax
         total = subtotal + tax_amount
-        draft = reusable_by_contractor.get(contractor)
+        draft = reusable_by_tax.get((contractor, tax_group))
         if draft:
             draft_id = draft["id"]
             round_no = draft.get("round_no") or 1
@@ -8090,6 +8099,10 @@ def register_contract_routes(app, ctx):
             if draft["status"] == "cancelled":
                 return jsonify({"ok": False, "error": "Dự thảo đã hủy; cần tạo lại trước khi xác nhận phát hành"}), 409
             if draft["status"] == "issued":
+                if (clean_text(body.get('invoice_number')) != clean_text(draft['issued_invoice_number'])
+                        or clean_text(body.get('invoice_series')).upper() != clean_text(draft['issued_invoice_series']).upper()
+                        or as_date(body.get('invoice_date')) != (draft['issued_invoice_date'] or draft['invoice_date'])):
+                    return jsonify(ok=False, error='Dự thảo này đã ghi nhận một số hóa đơn khác. Tải lại để kiểm tra.'), 409
                 return jsonify({
                     "ok": True,
                     "idempotent": True,
@@ -8110,6 +8123,11 @@ def register_contract_routes(app, ctx):
                 return jsonify({"ok": False, "error": "Cần ký hiệu hóa đơn hợp lệ, tối đa 50 ký tự"}), 400
             if not invoice_date:
                 return jsonify({"ok": False, "error": "Ngày hóa đơn phải hợp lệ dạng YYYY-MM-DD"}), 400
+            tax_groups = {invoice_tax_percent(r['tax']) for r in conn.execute(
+                'SELECT tax FROM outgoing_invoice_lines WHERE draft_id=?', (draft_id,))}
+            if len(tax_groups) > 1 and clean_text(draft['minvoice_status']) not in {'saved', 'saving', 'unknown'}:
+                return jsonify(ok=False, error='Dự thảo cũ có nhiều nhóm thuế. Bấm Tính lại dự thảo trước khi tạo file.',
+                               code='invoice_tax_split_required'), 409
             try:
                 validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, invoice_number)
             except OutgoingReadinessError as exc:
@@ -8244,16 +8262,27 @@ def register_contract_routes(app, ctx):
 
     @app.get("/api/outgoing-invoices")
     def api_outgoing_invoices():
+        batch_id = request.args.get('batch_id', type=int)
+        if 'batch_id' in request.args and (batch_id is None or batch_id <= 0):
+            return jsonify(ok=False, error='Đơn hàng không hợp lệ.'), 400
         with db_factory() as conn:
             rows = [dict(row) for row in conn.execute(
-                "SELECT * FROM outgoing_invoice_drafts ORDER BY invoice_date DESC,id DESC LIMIT 200"
+                'SELECT * FROM outgoing_invoice_drafts ' +
+                ('WHERE batch_id=? ORDER BY invoice_date DESC,id DESC' if batch_id else
+                 'ORDER BY invoice_date DESC,id DESC LIMIT 200'), (batch_id,) if batch_id else ()
             )]
+            taxes = defaultdict(set)
+            for line in conn.execute('SELECT draft_id,tax FROM outgoing_invoice_lines WHERE draft_id IN '
+                                     '(SELECT value FROM json_each(?))', (json.dumps([r['id'] for r in rows]),)):
+                taxes[line['draft_id']].add(invoice_tax_percent(line['tax']))
             profiles = {
                 row["contractor"]: dict(row)
                 for row in conn.execute("SELECT * FROM outgoing_buyer_profiles")
             }
             for row in rows:
                 row["buyer"] = profiles.get(row["contractor"])
+                row['tax_label'] = ', '.join('KKKNT' if tax == -2 else 'KCT' if tax == -1 else f'{tax:g}%'
+                                            for tax in sorted(taxes[row['id']]))
             return jsonify({"ok": True, "items": rows, "buyer_profiles": profiles})
 
     @app.put("/api/outgoing-buyers/<contractor>")

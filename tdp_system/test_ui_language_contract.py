@@ -217,7 +217,7 @@ class UnifiedUiLanguageContractTests(unittest.TestCase):
             "new MutationObserver(function (records)",
             "Ngày làm việc (dd/mm/yyyy):",
             "Ngày hoàn tác bảng kê (dd/mm/yyyy):",
-            "Nhập ngày hóa đơn dạng dd/mm/yyyy:",
+            '<label>Ngày hóa đơn<input name="invoice_date" type="date"',
         ):
             self.assertIn(marker, self.script)
         self.assertNotIn("Ngày làm việc (YYYY-MM-DD):", self.script)

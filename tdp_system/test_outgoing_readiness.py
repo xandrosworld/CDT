@@ -1,4 +1,5 @@
 import io
+import zipfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -219,6 +220,101 @@ class OutgoingReadinessTests(unittest.TestCase):
                     WHERE source_type='OUTGOING_DRAFT' AND status='reserved'"""
             ).fetchone()["qty"]
             self.assertEqual(qty, 3)
+
+    def test_tax_files_have_separate_drafts_and_independent_issue_confirmations(self):
+        with server.db() as conn:
+            self.add_opening(conn, 20)
+            batch_id, order_ids = self.add_batch(conn, '2026-08-20', [{'qty': 4}, {'qty': 6}])
+            conn.execute("UPDATE orders SET tax='KKKNT' WHERE id=?", (order_ids[0],))
+            conn.execute("UPDATE orders SET tax='8%' WHERE id=?", (order_ids[1],))
+        response = self.client.post(f'/api/outgoing-invoices/draft/{batch_id}')
+        self.assertEqual(response.status_code, 200, response.json)
+        drafts = response.json['drafts']
+        self.assertEqual(len(drafts), 2, 'One separately uploaded tax file must have its own invoice number')
+        exported = self.client.get(f'/api/export/invoices/{batch_id}')
+        self.assertEqual(exported.status_code, 200, exported.get_data()[:200])
+        with zipfile.ZipFile(io.BytesIO(exported.data)) as archive:
+            files = [n for n in archive.namelist() if n.endswith('.xlsx')]
+            self.assertEqual(len(files), len(drafts))
+            for draft in drafts:
+                workbook = load_workbook(io.BytesIO(archive.read(next(n for n in files if f"lan_{draft['round_no']}_" in n))), data_only=True)
+                self.assertEqual(sum(row[8] or 0 for row in list(workbook.active.values)[1:]), draft['subtotal'])
+                self.assertEqual(sum(row[10] or 0 for row in list(workbook.active.values)[1:]), draft['tax_amount'])
+                workbook.close()
+        replay = self.client.post(f'/api/outgoing-invoices/draft/{batch_id}').json['drafts']
+        self.assertEqual({d['id'] for d in replay}, {d['id'] for d in drafts})
+        with server.db() as conn:
+            conn.execute("UPDATE outgoing_invoice_drafts SET buyer_name_snapshot='Buyer',buyer_tax_code_snapshot='0200000001',"
+                         "buyer_address_snapshot='Address',company_name_snapshot='TDP',company_tax_code_snapshot='0100000001',"
+                         "company_address_snapshot='Address',payment_requester_snapshot='Requester',"
+                         "payment_bank_name_snapshot='Bank',payment_bank_account_snapshot='Account' WHERE batch_id=?", (batch_id,))
+        for index, draft in enumerate(drafts):
+            issued = self.client.post(f"/api/outgoing-invoices/{draft['id']}/confirm-issued", json={
+                'confirmed': True, 'invoice_number': str(900+index), 'invoice_series': '1C26TDP', 'invoice_date': '2026-08-20'})
+            self.assertEqual(issued.status_code, 200, issued.json)
+            repeated = self.client.post(f"/api/outgoing-invoices/{draft['id']}/confirm-issued", json={
+                'confirmed': True, 'invoice_number': str(900+index), 'invoice_series': '1C26TDP', 'invoice_date': '2026-08-20'})
+            self.assertTrue(repeated.json['idempotent'])
+            changed_number = self.client.post(f"/api/outgoing-invoices/{draft['id']}/confirm-issued", json={
+                'confirmed': True, 'invoice_number': '999', 'invoice_series': '1C26TDP', 'invoice_date': '2026-08-20'})
+            self.assertEqual(changed_number.status_code, 409)
+            if index == 0:
+                remaining = self.client.get(f'/api/export/invoices/{batch_id}')
+                self.assertEqual(remaining.status_code, 200)
+                with zipfile.ZipFile(io.BytesIO(remaining.data)) as archive:
+                    self.assertEqual(len([n for n in archive.namelist() if n.endswith('.xlsx')]), 1)
+        with server.db() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND status='posted'").fetchone()[0], 10)
+
+    def test_old_mixed_tax_draft_must_be_split_before_file_or_local_issue(self):
+        with server.db() as conn:
+            self.add_opening(conn, 20)
+            batch_id, orders = self.add_batch(conn, '2026-08-20', [{'qty': 4}, {'qty': 6}])
+            conn.execute("UPDATE orders SET tax='8%' WHERE id=?", (orders[1],))
+        drafts = self.client.post(f'/api/outgoing-invoices/draft/{batch_id}').json['drafts']
+        first, second = [r['id'] for r in drafts]
+        with server.db() as conn:
+            conn.execute('UPDATE outgoing_invoice_lines SET draft_id=? WHERE draft_id=?', (first, second))
+            conn.execute("UPDATE inventory_transactions SET source_id=? WHERE source_type='OUTGOING_DRAFT' AND source_id=?", (str(first), str(second)))
+            conn.execute("UPDATE outgoing_invoice_drafts SET status='cancelled' WHERE id=?", (second,))
+        blocked = self.client.get(f'/api/export/invoices/{batch_id}')
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json['code'], 'invoice_tax_split_required')
+        blocked = self.client.post(f'/api/outgoing-invoices/{first}/confirm-issued', json={
+            'confirmed': True, 'invoice_number': '100', 'invoice_series': '1C26TDP', 'invoice_date': '2026-08-20'})
+        self.assertEqual(blocked.json['code'], 'invoice_tax_split_required')
+        rebuilt = self.client.post(f'/api/outgoing-invoices/draft/{batch_id}')
+        self.assertEqual(rebuilt.status_code, 200, rebuilt.json)
+        self.assertEqual(len(rebuilt.json['drafts']), 2)
+        self.assertEqual(self.client.get(f'/api/export/invoices/{batch_id}').status_code, 200)
+        with server.db() as conn:
+            self.assertEqual(conn.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND status='reserved'").fetchone()[0], 10)
+
+    def test_selected_batch_invoices_remain_visible_after_200_newer_invoices(self):
+        with server.db() as conn:
+            self.add_opening(conn, 20)
+            old, _ = self.add_batch(conn, '2026-08-20', [{'qty': 4}])
+            new, _ = self.add_batch(conn, '2026-08-21', [{'qty': 1}])
+        old_id = self.client.post(f'/api/outgoing-invoices/draft/{old}').json['drafts'][0]['id']
+        with server.db() as conn:
+            for round_no in range(1,202):
+                conn.execute("INSERT INTO outgoing_invoice_drafts(batch_id,contractor,invoice_date,status,subtotal,tax_amount,total_amount,created_at,round_no) VALUES(?,'NT-A','2026-08-21','cancelled',0,0,0,?,?)", (new,server.now_iso(),round_no))
+        result = self.client.get(f'/api/outgoing-invoices?batch_id={old}')
+        self.assertEqual([r['id'] for r in result.json['items']], [old_id])
+        self.assertEqual(result.json['items'][0]['tax_label'], '0%')
+        self.assertEqual(self.client.get('/api/outgoing-invoices?batch_id=bad').status_code, 400)
+
+    def test_negative_stock_is_explained_before_creating_files(self):
+        with server.db() as conn:
+            self.add_opening(conn, 0.5)
+            self.add_canonical_event(conn,-2,'output','NEGATIVE-OPENING')
+            batch_id, _ = self.add_batch(conn,'2026-08-20',[{'qty':4}])
+        preview = self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}')
+        self.assertEqual(preview.status_code,200)
+        self.assertEqual(preview.json['blocking_issues'][0]['product_code'],'HH-01')
+        self.assertEqual(preview.json['blocking_issues'][0]['qty'],-1.5)
+        self.assertEqual(self.client.post(f'/api/outgoing-invoices/draft/{batch_id}').status_code,409)
 
     def test_allocation_can_use_later_input_but_actual_backdated_issue_is_blocked(self):
         from .outgoing_readiness import OutgoingReadinessError, validate_issued_draft_stock

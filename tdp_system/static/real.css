@@ -834,6 +834,11 @@ body { min-width: 320px; }
 .invoice-tax-adjustment-dialog section p { margin:6px 0; }
 .invoice-tax-adjustment-check { display:flex; gap:12px; align-items:flex-start; padding:14px; background:#eef8f6; border:1px solid #9dcfc4; border-radius:8px; font-weight:600; }
 .invoice-tax-adjustment-check input { flex:none; width:22px; height:22px; margin-top:2px; }
+.invoice-issue-dialog label { display:grid; gap:6px; }
+.invoice-issue-dialog .payment-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.invoice-issue-dialog input { width:100%; min-height:44px; padding:8px; border:1px solid #b9cbd8; border-radius:6px; }
+.invoice-issue-error { color:#a32323; }
+@media(max-width:520px) { .invoice-issue-dialog .payment-grid { grid-template-columns:1fr; } }
 .invoice-color-guide { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 12px; color:#202a32; }
 .invoice-error-legend, .invoice-amount-difference { color:#a32323; }
 .invoice-amount-reviews { margin:0 12px 8px; padding:10px 12px; border:1px solid #e2b1a2; border-radius:6px; background:#fff7f1; color:#202a32; }

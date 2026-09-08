@@ -313,14 +313,12 @@ class GoalAEndToEndSmoke(unittest.TestCase):
                 conn, direction="input", item_id=input_item_id,
                 conversion_factor=5, now_iso=server.now_iso,
             )
-            self.assertTrue(save_mapping(
+            self.assertFalse(save_mapping(
                 conn, direction="output", item_id=output_item_id,
                 product_code="A000001", now_iso=server.now_iso,
             )["requires_unit_conversion"])
-            save_conversion(
-                conn, direction="output", item_id=output_item_id,
-                conversion_factor=6, now_iso=server.now_iso,
-            )
+            # Outgoing invoices preserve source quantity; only incoming lines
+            # use a conversion factor under the confirmed customer workflow.
             create_input_receipt(conn, input_invoice_id, server.now_iso)
             post_output_invoice(
                 conn, output_invoice_id, confirmed=True, now_iso=server.now_iso,
@@ -350,7 +348,7 @@ class GoalAEndToEndSmoke(unittest.TestCase):
             self.assertEqual(
                 (a_stock["opening_qty"], a_stock["input_qty"],
                  a_stock["output_qty"], a_stock["closing_qty"]),
-                (10, 10, 6, 14),
+                (10, 10, 1, 19),
             )
 
         first_readiness = self.client.get(

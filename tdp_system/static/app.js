@@ -1,7 +1,12 @@
 (function () {
   "use strict";
 
-  var todayIso = new Date().toISOString().slice(0, 10);
+  function currentWorkDate() {
+    var parts = {};
+    new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).forEach(function(part) { parts[part.type] = part.value; });
+    return parts.year + '-' + parts.month + '-' + parts.day;
+  }
+  var todayIso = currentWorkDate();
   var storedInvoiceFilters = {};
   var storedPayableFilters = {};
   var storedReceivableFilters = {};
@@ -136,8 +141,8 @@
     outgoingShortageTo: todayIso,
     outgoingShortageContractor: "",
     outgoingShortageLoading: false,
-    opsDate: new Date().toISOString().slice(0, 10),
-    opsMonth: new Date().toISOString().slice(0, 7),
+    opsDate: todayIso,
+    opsMonth: todayIso.slice(0, 7),
     reportPeriod: "",
     reportData: null, reportLoading: false, reportError: "", reportSerial: 0,
     debtSerial: 0, debtError: "", receiptHistory: [], receivableOffset: 0, payableOffset: 0, payableHistoryOffset: 0,
@@ -345,6 +350,35 @@
       dialog.addEventListener('close', function() { var confirmed = dialog.returnValue === 'confirm'; dialog.remove(); resolve(confirmed); }, {once:true});
       document.body.appendChild(dialog); dialog.showModal();
       dialog.querySelector('[data-identity-cancel]').focus();
+    });
+  }
+  function recordIssuedInvoice(draft) {
+    return new Promise(function(resolve) {
+      var dialog = document.createElement('dialog'), busy = false, result = null;
+      dialog.className = 'invoice-identity-dialog invoice-issue-dialog';
+      dialog.setAttribute('aria-labelledby','invoice-issue-title');
+      dialog.innerHTML = '<h3 id="invoice-issue-title">Ghi nhận hóa đơn đã phát hành</h3><p><strong>' + esc(draft.contractor) + ' · Lượt ' + esc(draft.round_no || 1) + ' · ' + esc(draft.tax_label || '') + '</strong><br>Tổng tiền: ' + money(draft.total_amount) + '</p>' +
+        '<form><p>Nhập đúng thông tin đã phát hành trên M-Invoice.</p><div class="payment-grid">' +
+        '<label>Ký hiệu hóa đơn<input name="invoice_series" required maxlength="50" value="' + esc(draft.minvoice_series || '') + '" placeholder="VD: 1C26TYY"></label>' +
+        '<label>Số hóa đơn<input name="invoice_number" required inputmode="numeric" pattern="[0-9]{1,20}" maxlength="20"></label>' +
+        '<label>Ngày hóa đơn<input name="invoice_date" type="date" required value="' + esc(currentWorkDate()) + '"></label></div>' +
+        '<p class="invoice-issue-error" role="alert"></p><div class="invoice-identity-dialog-actions"><button type="button" class="btn btn-outline" data-issue-cancel>Quay lại</button><button type="submit" class="btn btn-primary">Lưu số hóa đơn</button></div></form>';
+      dialog.querySelector('[data-issue-cancel]').onclick = function() { if (!busy) dialog.close(); };
+      dialog.addEventListener('cancel', function(event) { if (busy) event.preventDefault(); });
+      dialog.addEventListener('close', function() { dialog.remove(); resolve(result); }, {once:true});
+      dialog.querySelector('form').onsubmit = async function(event) {
+        event.preventDefault(); if (busy) return;
+        var body = Object.fromEntries(new FormData(event.target).entries()); body.confirmed = true;
+        busy = true; dialog.querySelectorAll('button,input').forEach(function(el) { el.disabled = true; });
+        try {
+          result = await api('/api/outgoing-invoices/' + draft.id + '/confirm-issued', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          busy = false; dialog.close();
+        } catch (error) {
+          dialog.querySelector('.invoice-issue-error').textContent = error.message;
+          busy = false; dialog.querySelectorAll('button,input').forEach(function(el) { el.disabled = false; });
+        }
+      };
+      document.body.appendChild(dialog); dialog.showModal(); dialog.querySelector('input').focus();
     });
   }
   function confirmOutputTaxAdjustment(review) {
@@ -2433,7 +2467,7 @@
         contractorRows || '<tr><td colspan="6"><div class="empty">Chưa có công nợ phải thu trong kỳ.</div></td></tr>', '</tbody>', accountTotalRows(contractorDebt), '</table></div></div>',
         '<div class="card"><div class="card-head"><div><h3>Ghi nhận khách hàng đã thanh toán</h3><p>Lưu số tiền đã nhận từ nhà thầu</p></div></div><div class="card-body"><form id="receiptForm" class="payment-grid">',
         '<div class="form-field"><label>Người ghi nhận</label><input name="actor" maxlength="120" required></div>',
-        '<div class="form-field"><label>Ngày nhận tiền</label><input name="payment_date" type="date" value="', new Date().toISOString().slice(0, 10), '" required></div>',
+        '<div class="form-field"><label>Ngày nhận tiền</label><input name="payment_date" type="date" value="', currentWorkDate(), '" required></div>',
         '<input name="kind" type="hidden" value="receipt"><div class="form-field"><label>Mã nhà thầu</label><input name="party_code" placeholder="VD: HATRAN" required></div>',
         '<div class="form-field"><label>Số tiền</label><input name="amount" type="number" min="1" step="1" required></div>',
         '<div class="form-field"><label>Nội dung</label><input name="note" placeholder="Ví dụ: Chuyển khoản"></div>',
@@ -2498,6 +2532,7 @@
         '</td><td class="num-cell invoice-wait-qty">' + num(item.pending_qty) + '<div class="muted">' + money(item.pending_value) + '</div></td></tr>';
     }).join("");
     var allReady = n(readiness.pending_qty) <= 0;
+    var stockBlocks = readiness.blocking_issues || [];
     return html([
       '<div class="card fade-in invoice-readiness"><div class="card-head"><div><h3>Được xuất và chưa được xuất theo nhà thầu</h3>',
       '<p>Xem số tổng trước; chỉ mở chi tiết mặt hàng khi cần kiểm tra.</p></div>',
@@ -2508,7 +2543,9 @@
       '</strong></div><div class="ready"><span>Có thể lập bây giờ</span><strong>', num(readiness.invoiceable_qty),
       '</strong><span>', money(readiness.invoiceable_value), '</span></div><div class="waiting"><span>Còn chờ hóa đơn đầu vào</span><strong>', num(readiness.pending_qty),
       '</strong><span>', money(readiness.pending_value), '</span></div></div>',
-      allReady
+      stockBlocks.length
+        ? '<div class="error-summary" style="margin-top:14px">' + stockBlocks.map(function(r) { return esc(r.message); }).join('<br>') + ' <button class="btn btn-outline" data-view="inventory">Mở kho</button></div>'
+        : allReady
         ? '<div class="ok-summary" style="margin-top:14px">Đã đủ đầu vào cho toàn bộ phần còn lại.</div>'
         : '<div class="warning-summary" style="margin-top:14px">Có thể lập phần màu xanh trước. Phần còn chờ sẽ giữ lại để tính tiếp khi có hóa đơn đầu vào.</div>',
       '</div><div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Tổng cần</th><th>Đã dự thảo</th><th>Đã phát hành</th><th>Có thể lập</th><th>Còn thiếu</th></tr></thead><tbody>',
@@ -2713,7 +2750,7 @@
   function paymentRequestFormHtml() {
     var d = state.data;
     if (!state.paymentFilters) {
-      var day = (d.batch && d.batch.work_date) || new Date().toLocaleDateString('sv-SE');
+      var day = (d.batch && d.batch.work_date) || currentWorkDate();
       state.paymentFilters = {from: day.slice(0, 7) + '-01', to: day, contractor: ''};
     }
     var filters = state.paymentFilters;
@@ -2776,7 +2813,7 @@
              encodeURIComponent(item.contractor) + '?from=' + encodeURIComponent(item.issued_invoice_date) +
              '&to=' + encodeURIComponent(item.issued_invoice_date) + '">Tải hồ sơ thanh toán</button>'
           : "";
-      return '<tr><td><strong>' + esc(item.contractor) + '</strong></td><td>' + dateVN(item.invoice_date) +
+      return '<tr><td><strong>' + esc(item.contractor) + '</strong><div>Lượt ' + esc(item.round_no || 1) + ' · ' + esc(item.tax_label || '') + '</div><button class="btn btn-small btn-outline" data-action="edit-invoice-buyer" data-contractor="' + esc(item.contractor) + '">Hồ sơ người mua</button></td><td>' + dateVN(item.invoice_date) +
         '</td><td class="num-cell">' + money(item.subtotal) + '</td><td class="num-cell">' + money(item.tax_amount) +
         '</td><td class="num-cell"><strong>' + money(item.total_amount) + '</strong></td><td><span class="tag ' +
         statusClass + '">' + statusText + '</span>' +
@@ -2815,22 +2852,27 @@
           num(item.required) + '</strong></td></tr>';
       }).join(""), '</tbody></table></div></div>'
     ]) : "";
-    var activeDrafts = currentInvoices.filter(function (item) { return item.status === "draft"; });
+    var activeDrafts = currentInvoices.filter(function (item) { return item.status === "draft" && !['saved','saving','unknown'].includes(item.minvoice_status); });
+    var creationBlocked = (state.outgoingReadiness?.blocking_issues || []).length > 0;
     var invoiceFileAction = state.outgoingInvoices === null
       ? '<button class="btn btn-primary" disabled>Đang kiểm tra…</button>'
       : d.batch.status !== "approved"
-        ? '<button class="btn btn-primary" disabled>Cần duyệt đơn trước</button>'
+        ? '<button class="btn btn-primary" disabled>Cần duyệt đơn trước</button><button class="btn btn-outline" data-view="orders">Mở đơn để sửa / duyệt</button>'
         : activeDrafts.length
-          ? '<a class="btn btn-primary" href="' + exportUrl("invoices") + '">Tải ZIP vòng này</a>'
-          : '<button class="btn btn-primary" data-action="create-outgoing-drafts">Tạo file tải hóa đơn</button>';
+          ? '<button class="btn btn-primary" data-action="download-document" data-url="' + exportUrl("invoices") + '">Tải ZIP hóa đơn</button><button class="btn btn-outline" data-action="create-outgoing-drafts">Tính lại dự thảo</button>'
+          : '<button class="btn btn-primary" data-action="create-outgoing-drafts"' + (creationBlocked ? ' disabled' : '') + '>Tạo file tải hóa đơn</button>';
+    var invalidOrderCount = d.orders.filter(function(row) { return row.errors && row.errors.length; }).length;
+    if (invalidOrderCount) invoiceFileAction += '<p class="invoice-issue-error">Còn ' + invalidOrderCount + ' dòng đơn cần sửa trước khi duyệt.</p>';
+    var outgoingTable = currentInvoices.length ? html([
+      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Dự thảo hóa đơn đầu ra</h3>',
+      '<p>Mỗi lượt và nhóm thuế tương ứng một file. Nhập số hóa đơn sau khi phát hành trên M-Invoice.</p></div></div>',
+      '<div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Ngày</th><th>Trước thuế</th><th>Thuế</th><th>Tổng</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>',
+      outgoingRows || '<tr><td colspan="7"><div class="empty">' + (state.outgoingInvoices === null ? 'Đang kiểm tra…' : 'Chưa có dự thảo đầu ra.') + '</div></td></tr>',
+      '</tbody></table></div></div>'
+    ]) : '';
     var detailsHtml = state.documentDetailsOpen ? html([
       '<div class="document-detail-panel fade-in">', shortagePanel,
       outgoingSubstitutionHtml(), outgoingPeriodShortagesHtml(shortageContractors),
-      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Dự thảo hóa đơn đầu ra</h3>',
-      '<p>Chỉ ghi nhận phát hành sau khi người dùng đã kiểm tra trên M-Invoice.</p></div></div>',
-      '<div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Ngày</th><th>Trước thuế</th><th>Thuế</th><th>Tổng</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>',
-      outgoingRows || '<tr><td colspan="7"><div class="empty">' + (state.outgoingInvoices === null ? 'Đang kiểm tra…' : 'Chưa có dự thảo đầu ra.') + '</div></td></tr>',
-      '</tbody></table></div></div>',
       minvoiceForms ? '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Lưu bản nháp M-Invoice</h3><p>Kiểm tra thông tin người mua trước khi lưu nháp chờ ký.</p></div></div>' + minvoiceForms + '</div>' : '',
       '</div>'
     ]) : '';
@@ -2842,7 +2884,7 @@
       '<section class="document-primary-card"><div class="document-primary-icon">KÊ</div><div><h3>Bảng kê từ hóa đơn đỏ</h3>',
       '<p>Chọn nhà thầu để lấy đúng các hóa đơn Thành Đạt Phát đã phát hành.</p>',
       paymentRequestFormHtml(), '</div></section></div>',
-      invoicePaymentScopeHtml(),
+      outgoingTable, invoicePaymentScopeHtml(),
       '<div id="paymentDocumentPreview"></div>',
       '<div class="card"><div class="card-head"><div><h3>Bảng kê mua hàng và biên nhận</h3><p>Xem đúng hồ sơ người bán; thiếu hoặc trùng CCCD vẫn bị chặn.</p></div><button class="btn btn-outline" data-action="preview-purchase-documents">Xem bảng kê / biên nhận</button></div><div id="purchaseDocumentPreview"></div></div>',
       '<div class="secondary-action-row"><button class="btn btn-outline" data-action="toggle-document-details">',
@@ -3145,7 +3187,7 @@
       profile_code: paymentProfiles.length ? paymentProfiles[0].profile_code : "",
       date_from: state.opsMonth + "-01",
       date_to: state.opsDate,
-      issue_date: new Date().toISOString().slice(0, 10)
+      issue_date: currentWorkDate()
     };
     var paymentDocumentProfileOptions = paymentProfiles.map(function (profile) {
       return '<option value="' + esc(profile.profile_code) + '"' +
@@ -3653,7 +3695,7 @@
     var d = state.data;
     var item = id ? d.orders.find(function (row) { return row.id === Number(id); }) : null;
     item = item || {
-      work_date: d.batch ? d.batch.work_date : new Date().toISOString().slice(0, 10),
+      work_date: d.batch ? d.batch.work_date : currentWorkDate(),
       contractor: "", kitchen: "", product_code: "", product_name: "", qty: 0,
       actual_received: 0, actual_delivered: 0, unit: "", supplier: "",
       damaged_qty: 0, supplier_return_qty: 0, customer_return_qty: 0,
@@ -3865,7 +3907,7 @@
         sheet.headerRow + issues + "</small></span></label>";
     }).join("");
     var fallback = state.data && state.data.batch
-      ? state.data.batch.work_date : new Date().toISOString().slice(0, 10);
+      ? state.data.batch.work_date : currentWorkDate();
     if (payload.strictDaily && payload.detectedWorkDate) {
       fallback = payload.detectedWorkDate;
     } else if (fileDate) {
@@ -4014,7 +4056,7 @@
   }
 
   async function newBatch() {
-    var workDateText = window.prompt("Ngày làm việc (dd/mm/yyyy):", dateVN(new Date().toISOString().slice(0, 10)));
+    var workDateText = window.prompt("Ngày làm việc (dd/mm/yyyy):", dateVN(currentWorkDate()));
     if (!workDateText) return;
     var workDate = parseLocalizedTemporal(workDateText, "date");
     if (!workDate) { showToast("Ngày làm việc chưa đúng dạng dd/mm/yyyy", true); return; }
@@ -4685,13 +4727,18 @@
   async function fetchOutgoingInvoices() {
     if (state.outgoingInvoicesLoading) return;
     state.outgoingInvoicesLoading = true;
+    var outgoingBatchId = state.batchId;
     try {
-      var payload = await api("/api/outgoing-invoices");
+      var payload = await api('/api/outgoing-invoices' + (outgoingBatchId ? '?batch_id=' + encodeURIComponent(outgoingBatchId) : ''));
+      if (outgoingBatchId !== state.batchId) return;
       state.outgoingInvoices = payload.items || [];
       state.buyerProfiles = payload.buyer_profiles || {};
       if (state.view === "documents") renderDocuments();
     } catch (error) { showToast(error.message, true); }
-    finally { state.outgoingInvoicesLoading = false; }
+    finally {
+      state.outgoingInvoicesLoading = false;
+      if (outgoingBatchId !== state.batchId && state.view === 'documents') setTimeout(fetchOutgoingInvoices, 0);
+    }
   }
 
   async function fetchOutgoingReadiness() {
@@ -6312,6 +6359,13 @@
       return;
     }
     if (action === 'open-minvoice-files') { navigate('documents'); return; }
+    if (action === 'edit-invoice-buyer') {
+      state.paymentFilters = Object.assign({}, state.paymentFilters, {contractor:button.dataset.contractor});
+      renderDocuments();
+      var buyerForm = document.getElementById('buyerProfileForm');
+      if (buyerForm) { buyerForm.closest('details').open = true; buyerForm.scrollIntoView({block:'center'}); buyerForm.querySelector('input').focus({preventScroll:true}); }
+      return;
+    }
     if (action === 'open-inventory-close') {
       if (!state.inventoryClosePeriod) {
         var chosen = (state.inventoryFrom || todayIso).slice(0,7);
@@ -7084,19 +7138,9 @@
       }
     }
     if (action === "confirm-outgoing-issued") {
-      if (!window.confirm("Thao tác này chỉ ghi nhận số, ký hiệu và ngày hóa đơn; hàng trong kho vẫn được giữ để chờ đối soát. Muốn trừ kho, hãy tải hóa đơn tại phần Đầu ra M-Invoice, ghép mã rồi bấm “Xác nhận trừ kho theo hóa đơn”. Tiếp tục?")) return;
-      var issuedNumber = window.prompt("Nhập số hóa đơn đã phát hành (bắt buộc):", "");
-      if (!issuedNumber || !issuedNumber.trim()) { showToast("Cần nhập số hóa đơn đã phát hành", true); return; }
-      var issuedSeries = window.prompt("Nhập ký hiệu hóa đơn (nếu có):", "") || "";
-      var issuedDateText = window.prompt("Nhập ngày hóa đơn dạng dd/mm/yyyy:", dateVN(state.opsDate || ""));
-      var issuedDate = parseLocalizedTemporal(issuedDateText, "date");
-      if (!issuedDate) { showToast("Ngày hóa đơn chưa đúng dạng dd/mm/yyyy", true); return; }
       try {
-        await api("/api/outgoing-invoices/" + button.dataset.id + "/confirm-issued", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ confirmed: true, invoice_number: issuedNumber.trim(),
-            invoice_series: issuedSeries.trim(), invoice_date: issuedDate })
-        });
+        var issueDraft = (state.outgoingInvoices || []).find(function(item) { return String(item.id) === button.dataset.id; });
+        if (!issueDraft || !await recordIssuedInvoice(issueDraft)) return;
         state.outgoingInvoices = null;
         state.outgoingSubstitutionActions = null;
         state.operations = null;
