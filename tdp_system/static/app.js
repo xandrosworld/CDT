@@ -6238,7 +6238,19 @@
     var action = button.dataset.action;
     if (action === 'review-invoice-amount') {
       await window.TdpInvoiceAmountReview(button.dataset.id, {esc: esc, money: money,
-        refresh: async function () { await loadInvoiceWorkbench(true); render(); }});
+        beforeApply: function () {
+          var nodes = invoiceVirtual ? invoiceVirtual.nodes() : Array.from(content.querySelectorAll('tr'));
+          if (nodes.some(function (row) { return row.querySelector('.invoice-mapping-cell[data-editing-id]'); })) {
+            throw new Error('Còn mã hàng đang gõ chưa lưu. Đóng bảng này, Lưu hoặc nhấn Esc để bỏ phần đang sửa, rồi kiểm tra lại.');
+          }
+        },
+        refresh: async function () {
+          var scroll = content.querySelector('.invoice-lines-scroll');
+          var top = scroll?.scrollTop || 0, left = scroll?.scrollLeft || 0;
+          await loadInvoiceWorkbench(true); render();
+          scroll = content.querySelector('.invoice-lines-scroll');
+          if (scroll) { scroll.scrollTop = top; scroll.scrollLeft = left; }
+        }});
       return;
     }
     if (action === 'preview-inventory-report') { await previewInventoryReport(button); return; }

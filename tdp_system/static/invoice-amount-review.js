@@ -65,6 +65,8 @@
     };
     dialog.querySelector('[data-apply]').onclick = async function () {
       if (!report || !report.can_apply) return;
+      try { if (context.beforeApply) context.beforeApply(); }
+      catch (error) { dialog.querySelector('[data-error]').dataset.success = 'false'; dialog.querySelector('[data-error]').textContent = error.message; return; }
       saving = true;
       controls(true); dialog.querySelector('[data-error]').textContent = ''; dialog.querySelector('[data-error]').dataset.success = 'false';
       try {

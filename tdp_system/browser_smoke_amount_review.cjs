@@ -30,6 +30,8 @@ const {chromium} = require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
     await modal.screenshot({path:'amount-review-unresolved.png'});
     await page.keyboard.press('Escape');await modal.waitFor({state:'detached'});
     assert.deepEqual(await get('/fixture/snapshot'),before);assert.equal(writes.length,0);
+    const mappingInput=page.locator('.invoice-mapping-input').first();
+    await mappingInput.fill('CHUA-LUU');
     await open();
     await page.route('**/amount-review?fresh=1', r=>r.fulfill({status:502,contentType:'application/json',body:JSON.stringify({ok:false,error:'Mất kết nối thử nghiệm'})}));
     await modal.locator('[data-recheck]').click();await idle();
@@ -41,8 +43,14 @@ const {chromium} = require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
     assert(await modal.locator('[data-apply]').isEnabled());assert.match(await modal.innerText(),/So với lần tải trước/);
     assert.deepEqual(await get('/fixture/snapshot'),before);
     await modal.screenshot({path:'amount-review-ready.png'});
+    // Inspecting is allowed while typing a code; source refresh cannot discard that edit.
+    await modal.locator('[data-apply]').click();
+    assert.match(await modal.locator('[data-error]').innerText(),/đang gõ chưa lưu/);
+    assert.equal(writes.length,0);assert.deepEqual(await get('/fixture/snapshot'),before);
     // Close after a good check still does not save anything.
-    await modal.locator('[data-close]').click();await open();
+    await modal.locator('[data-close]').click();
+    assert.equal(await mappingInput.inputValue(),'CHUA-LUU');await mappingInput.press('Escape');
+    await open();
     assert(await modal.locator('[data-apply]').isDisabled());
     await modal.locator('[data-recheck]').click();await idle();
     const applied=page.waitForResponse(r=>r.url().endsWith('/amount-review/apply'));
