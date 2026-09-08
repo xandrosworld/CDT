@@ -193,3 +193,10 @@ Dữ liệu kết nối thử cũ được giữ tại Hóa đơn đầu ra → 
 - Muốn tìm dòng đã làm: chọn đúng khoảng ngày, **Tất cả hóa đơn / Tất cả dòng**, rồi tìm tên hoặc mã bằng ô **Tìm mã/tên** hoặc Ctrl+F. Dòng chưa nhập kho có hai ô mã/quy đổi để sửa trực tiếp rồi **Lưu**; nếu đã gộp, bấm **Tách lại** trước. Không dùng các nút sửa mã để hoàn tác hóa đơn đã nhập kho.
 - Chọn nhầm thì bấm **Tách lại** ở dòng đã gộp; sau đó chọn lại hoặc dùng hai ô mã/quy đổi để sửa trực tiếp rồi **Lưu** khi chưa nhập kho. **Xem dòng gốc** mở phần đối chiếu ngay tại nhóm. **Excel đúng bộ lọc** cũng chỉ hiện một dòng nhóm ở sheet chính, có sheet **Dong goc da gop** giữ chi tiết. Gộp/tách chưa nhập kho. **Kiểm tra** vẫn cho xem tổng của cả hóa đơn; giá bình quân kho còn tính tồn cũ.
 - Không ghép cùng mã chỉ để cộng số lượng nếu tên/loại hàng chưa xác nhận đúng: cần phân biệt dầu hào MISA/Quê Tôi và tương ớt/tương cà.
+# Danh mục hàng hóa: xem và sửa toàn bộ mã — 08/09/2026
+
+- Vào **Danh mục & sao lưu → Danh mục hàng hóa**. Danh sách hiện toàn bộ mã trong một khung cuộn; tiêu đề đứng yên khi cuộn. Ô tìm kiếm tìm trên toàn danh mục.
+- Bấm **Mở bảng Excel toàn màn hình · sửa toàn bộ danh mục**. Bảng lấy toàn bộ danh mục, kể cả khi danh sách bên ngoài đang tìm một mã; không giới hạn 50 dòng.
+- Sửa trực tiếp hoặc dán nhiều ô ở **Tên hàng, ĐVT, Thuế, Tên trên hóa đơn**. Bấm Enter/Tab và chờ **Đã lưu**. Thuế nhận KKKNT, KCT, 0%, 5%, 8%, 10%; tên trên hóa đơn để trống thì dùng tên hàng.
+- **Mã hàng** chỉ xem để giữ liên kết chứng từ. Thêm mã bằng nút **Thêm mã hàng**. ĐVT của mã đã sử dụng vẫn phải đối chiếu trước khi đổi; bảng báo rõ mã bị chặn.
+- Ctrl+F tìm được cả những mã ngoài vùng đang nhìn thấy. Khi mất mạng, phần đang nhập được giữ; bấm **Thử lưu lại** khi có mạng. Nếu người khác đã sửa cùng mã, dùng **Đọc lại / đối chiếu**; phần chưa lưu được tải thành file trước khi đọc bản mới.

@@ -11,6 +11,11 @@ const hasErrors = row => !!(row?.errors?.length || row?.worksheet_error);
 
 async function open(options) {
   if (opened) return;
+  const catalog = options.kind === 'catalog';
+  const saveUrl = catalog ? '/api/catalog/worksheet' : '/api/orders/worksheet';
+  const readUrl = catalog ? saveUrl : saveUrl + '?batch_id=' + options.batchId;
+  const responseRows = payload => catalog ? payload.items : payload.orders;
+  const responseEditable = payload => catalog || payload.batch.status !== 'approved';
   const origin = document.activeElement;
   const shell = make('div', '', 'tdp-sheet-shell');
   shell.setAttribute('role', 'dialog'); shell.setAttribute('aria-modal', 'true');
@@ -27,14 +32,14 @@ async function open(options) {
     }
   });
   if (options.onImport) { const upload = button('Nạp bản mới', async () => { await shutdown(); if (disposed) options.onImport(); }); top.insertBefore(upload, close); }
-  const notice = make('div', options.editable ? 'Nhập trực tiếp hoặc dán nhiều ô. Enter / Tab để chuyển ô và tự lưu. Cột tính toán chỉ xem.' : 'Bảng chỉ xem · có thể chọn và sao chép ô, kéo rộng cột, phóng to.', 'tdp-sheet-notice');
+  const notice = make('div', catalog ? 'Sửa tên hàng, ĐVT, thuế (KKKNT, KCT, 0%, 5%, 8%, 10%) và tên trên hóa đơn. Enter / Tab để tự lưu. Mã hàng chỉ xem; ĐVT đã sử dụng cần đối chiếu trước khi đổi.' : options.editable ? 'Nhập trực tiếp hoặc dán nhiều ô. Enter / Tab để chuyển ô và tự lưu. Cột tính toán chỉ xem.' : 'Bảng chỉ xem · có thể chọn và sao chép ô, kéo rộng cột, phóng to.', 'tdp-sheet-notice');
   const normalNotice = notice.textContent;
-  const updateNotice = () => { notice.textContent = (options.batchId ?
+  const updateNotice = () => { notice.textContent = (catalog ? `${rows.length} mã hàng · ` : options.batchId ?
     `${rows.length} dòng · ${rows.filter(row => row.errors?.length).length} dòng lỗi · ${rows.filter(row => row.warnings?.length).length} dòng cảnh báo. ` : '') + normalNotice; };
   const controls = make('div', '', 'tdp-sheet-controls');
   const actor = make('input'); actor.placeholder = 'Người sửa giá'; actor.setAttribute('aria-label', actor.placeholder); actor.maxLength = 120;
   const reason = make('input'); reason.placeholder = 'Lý do sửa giá'; reason.setAttribute('aria-label', reason.placeholder); reason.maxLength = 500;
-  if (options.editable) { controls.append(actor, reason); }
+  if (options.editable && !catalog) { controls.append(actor, reason); }
   const host = make('div', '', 'tdp-sheet-host');
   shell.append(top, notice, controls, host); document.body.append(shell);
   const previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
@@ -131,6 +136,9 @@ async function open(options) {
     if (running) { await running; if (!failed && pending.size) return flush(); return !failed; }
     if (failed && !retry) return false;
     if (!pending.size && !failed) return true;
+    if (!pending.size && failed && !failed.uncertain) {
+      failed = null; updateNotice(); setStatus('Đã giữ dữ liệu đang lưu'); return true;
+    }
     const previousFailed = failed;
     let sent;
     try { sent = previousFailed?.uncertain ? previousFailed : { body: buildRequest(), cells: [...pending.values()] }; }
@@ -143,14 +151,14 @@ async function open(options) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 20000);
         let response;
-        try { response = await fetch('/api/orders/worksheet', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sent.body), signal: controller.signal }); }
+        try { response = await fetch(saveUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sent.body), signal: controller.signal }); }
         catch (error) { sent.uncertain = true; throw error; }
         finally { clearTimeout(timeout); }
         if (response.status >= 500) sent.uncertain = true;
         const payload = await response.json();
         if (!response.ok || !payload.ok) throw new Error(payload.error || 'Không lưu được dữ liệu');
         const current = sheet.getRange(1, 0, rows.length, columns.length).getRawValues();
-        const byId = new Map(payload.orders.map(row => [row.id, row]));
+        const byId = new Map(responseRows(payload).map(row => [row.id, row]));
         // Keep edits made while the request was in flight; only acknowledge sent values.
         const newer = new Map();
         pending.forEach((entry, key) => {
@@ -208,9 +216,9 @@ async function open(options) {
         const link = make('a'); link.href = url; link.download = 'Phan_sua_chua_luu.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       try {
-        const response = await fetch('/api/orders/worksheet?batch_id=' + options.batchId);
+        const response = await fetch(readUrl);
         const payload = await response.json(); if (!response.ok) throw Error(payload.error || 'Không đọc được dữ liệu');
-        options.rows = payload.orders; options.editable = payload.batch.status !== 'approved';
+        options.rows = responseRows(payload); options.editable = responseEditable(payload);
         options.onSaved?.(payload); await shutdown(true); await open(options);
       } catch (error) { setStatus(error.message, true); }
     };
@@ -232,7 +240,7 @@ async function open(options) {
     const permitted = new Set(['sheet.command.set-range-values', 'sheet.mutation.set-range-values', 'sheet.command.clear-selection-content']);
     book.onBeforeCommandExecute(command => {
       if (muting) return;
-      if (/sheet\.(command|mutation)\.(insert|remove|move|sort|rename|set-name|set-sheet-order|set-range-sort)/.test(command.id)) throw new Error('Thay đổi dòng qua chức năng nhập đơn để giữ liên kết chứng từ');
+      if (/sheet\.(command|mutation)\.(insert|remove|move|sort|rename|set-name|set-sheet-order|set-range-sort)/.test(command.id)) throw new Error(catalog ? 'Thêm mã qua nút Thêm mã hàng trong Danh mục.' : 'Thay đổi dòng qua chức năng nhập đơn để giữ liên kết chứng từ');
       if (permitted.has(command.id) && !options.editable) throw new Error('Bảng chỉ xem');
     });
     if (!options.editable) await book.getWorkbookPermission().setReadOnly();
@@ -251,18 +259,18 @@ async function open(options) {
     if (disposed) return;
     setStatus(options.editable ? 'Đã tải · tự lưu khi sửa ô' : 'Chỉ xem');
     updateNotice();
-    if (options.batchId) pollTimer = setInterval(async () => {
+    if (options.batchId || catalog) pollTimer = setInterval(async () => {
       if (disposed || polling || running || pending.size || failed || book.isCellEditing()) return;
       polling = true;
       try {
-        const response = await fetch('/api/orders/worksheet?batch_id=' + options.batchId);
+        const response = await fetch(readUrl);
         const payload = await response.json();
         if (!response.ok || disposed || running || pending.size || failed || book.isCellEditing()) return;
-        const byId = new Map(payload.orders.map(row => [row.id, row]));
-        const replaced = rows.length !== payload.orders.length || rows.some(row => !byId.has(row.id));
-        const editable = payload.batch.status !== 'approved';
+        const byId = new Map(responseRows(payload).map(row => [row.id, row]));
+        const replaced = rows.length !== responseRows(payload).length || rows.some(row => !byId.has(row.id));
+        const editable = responseEditable(payload);
         if (replaced || editable !== options.editable) {
-          options.rows = payload.orders; options.editable = editable;
+          options.rows = responseRows(payload); options.editable = editable;
           await shutdown(); await open(options); return;
         }
         if (rows.some(row => row.worksheet_revision !== byId.get(row.id).worksheet_revision)) {

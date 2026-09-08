@@ -3355,14 +3355,38 @@
     var serial = ++state.catalogRequest;
     table.textContent = 'Đang tải danh mục…';
     try {
-      var data = await api('/api/catalog/products?q=' + encodeURIComponent(state.catalogQuery) + '&offset=' + state.catalogOffset);
+      var data = await api('/api/catalog/products?q=' + encodeURIComponent(state.catalogQuery) + '&all=1');
       if (serial !== state.catalogRequest || table !== document.getElementById('catalogProducts')) return;
       state.catalogItems = data.items;
       state.catalogOffset = data.offset;
-      table.innerHTML = '<p class="catalog-count">Tìm trên toàn bộ ' + stockQty(data.catalog_total) + ' mã · ' + (data.total ? (data.offset + 1) + '–' + (data.offset + data.items.length) + ' / ' : '') + data.total + ' kết quả</p><div class="table-wrap"><table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>ĐVT</th><th>Thuế</th><th>Tên trên hóa đơn</th><th></th></tr></thead><tbody>' + data.items.map(function(item) {
+      table.innerHTML = '<p class="catalog-count">Tìm trên toàn bộ ' + stockQty(data.catalog_total) + ' mã · ' + data.total + ' kết quả · cuộn trong bảng để xem tiếp</p><div class="table-wrap catalog-products-scroll"><table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>ĐVT</th><th>Thuế</th><th>Tên trên hóa đơn</th><th></th></tr></thead><tbody>' + data.items.map(function(item) {
         return '<tr><td>' + esc(item.code) + '</td><td>' + esc(item.name) + '</td><td>' + esc(item.unit) + '</td><td>' + esc(taxText(item.tax)) + '</td><td>' + esc(item.invoice_name || item.name) + '</td><td><button class="btn btn-small btn-outline" data-action="edit-catalog-product" data-code="' + esc(item.code) + '">Sửa</button></td></tr>';
-      }).join('') + (!data.items.length ? '<tr><td colspan="6">Không tìm thấy mã hàng.</td></tr>' : '') + '</tbody></table></div><div class="form-actions"><button class="btn btn-small btn-outline" data-action="catalog-previous"' + (!data.offset ? ' disabled' : '') + '>Trang trước</button><button class="btn btn-small btn-outline" data-action="catalog-next"' + (data.offset + data.items.length >= data.total ? ' disabled' : '') + '>Trang sau</button></div>';
+      }).join('') + (!data.items.length ? '<tr><td colspan="6">Không tìm thấy mã hàng.</td></tr>' : '') + '</tbody></table></div>';
     } catch (error) { if (serial === state.catalogRequest) table.textContent = error.message; }
+  }
+
+  async function openCatalogWorksheet() {
+    if (!window.TDPWorksheet || window.TDPWorksheet.isOpen()) return;
+    try {
+      var data = await api('/api/catalog/worksheet');
+      var saved = false;
+      await window.TDPWorksheet.open({kind:'catalog', title:'Danh mục hàng hóa · ' + data.total + ' mã', editable:true, rows:data.items,
+        columns:[
+          {key:'code',title:'Mã hàng',width:150,editable:false},
+          {key:'name',title:'Tên hàng',width:360,editable:true},
+          {key:'unit',title:'ĐVT',width:90,editable:true},
+          {key:'tax',title:'Thuế',width:110,editable:true},
+          {key:'invoice_name',title:'Tên trên hóa đơn (trống = dùng tên hàng)',width:360,editable:true}
+        ],
+        onSaved:function(){ saved = true; },
+        onClose:async function(){
+          if (saved) {
+            state.catalogImportPreview=null; state.invoiceWorkbench=null; state.invoiceListing=null;
+            try { await loadData(state.batchId,true); } catch(error){ showToast('Đã lưu danh mục. Tải lại trang để cập nhật các màn khác.',true); }
+          } else await loadCatalogProducts();
+        }
+      });
+    } catch(error) { showToast(error.message,true); }
   }
 
   function openCatalogProductDialog(product) {
@@ -7146,9 +7170,10 @@
       var wrap=table.closest('.table-wrap,.invoice-lines-scroll')||table;
       var button=document.createElement('button'); button.type='button'; button.className='tdp-open-sheet';
       var isOrders=Boolean(table.closest('#orderTable'));
+      var isCatalog=Boolean(table.closest('#catalogProducts'));
       var isMapping=Boolean(table.closest('.invoice-lines-card'));
-      button.textContent=isMapping?(state.invoiceDirection === 'input' ? 'Ghép mã / Quy đổi' : 'Ghép mã') + ' · toàn màn hình':isOrders?'Mở bảng Excel · tự lưu':'Xem bảng Excel toàn màn hình · chỉ xem';
-      button.onclick=function(){if(isOrders) openOrderWorksheet(); else openTableWorksheet(table);};
+      button.textContent=isCatalog?'Mở bảng Excel toàn màn hình · sửa toàn bộ danh mục':isMapping?(state.invoiceDirection === 'input' ? 'Ghép mã / Quy đổi' : 'Ghép mã') + ' · toàn màn hình':isOrders?'Mở bảng Excel · tự lưu':'Xem bảng Excel toàn màn hình · chỉ xem';
+      button.onclick=function(){if(isCatalog) openCatalogWorksheet(); else if(isOrders) openOrderWorksheet(); else openTableWorksheet(table);};
       var head = wrap.parentNode.querySelector(':scope > .card-head');
       if (isMapping && mappingSearch) mappingSearch.element.appendChild(button);
       else if (head) head.appendChild(button);
