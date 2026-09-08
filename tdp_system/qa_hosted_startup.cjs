@@ -14,6 +14,8 @@ const [credentialFile,output]=process.argv.slice(2),base='https://tdp.up.railway
   await page.route('**/static/app.js?**',async route=>{await new Promise(r=>setTimeout(r,2500));appReleased=true;await route.continue();});
   for(const width of [1440,1024]){
    await page.setViewportSize({width,height:900});appReleased=false;await page.reload({waitUntil:'commit'});await page.locator('#sidebar').waitFor();
+   // DOM geometry can be queried before blocking stylesheets permit any paint.
+   await page.waitForFunction(()=>performance.getEntriesByType('paint').length>0);
    const height=await page.locator('#sidebar').evaluate(e=>e.getBoundingClientRect().height);assert.equal(height,42);assert.equal(appReleased,false);assert.equal(engineRequests,0);
    report.frames.push({width,sidebarHeight:height,appStillDelayed:true});await page.screenshot({path:path.join(output,'early-'+width+'.png')});
    await page.waitForFunction(()=>document.querySelector('#content')?.textContent.length>300);assert.equal(engineRequests,0);

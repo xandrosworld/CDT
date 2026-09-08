@@ -13,6 +13,7 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
    await new Promise(r=>{release=r;});await route.continue();
   });
   await page.goto(base,{waitUntil:'commit'});await page.locator('#sidebar').waitFor();
+  await page.waitForFunction(()=>performance.getEntriesByType('paint').length>0);
   report.earlySidebarHeight=await page.locator('#sidebar').evaluate(e=>e.getBoundingClientRect().height);
   assert.equal(report.earlySidebarHeight,42);assert.equal(engineRequests,0);
   assert.equal(appReleased,false,'The compact layout is already applied before app.js can run');

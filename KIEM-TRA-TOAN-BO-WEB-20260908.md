@@ -77,3 +77,8 @@ Source `20e7729`, Railway deployment `2f8504ee-d4cc-49a2-9d37-3102f7c22063` **SU
 Theo phản ánh khách tiếp theo, đã sửa cơ chế dựng bảng hơn 2.000 dòng theo vùng đang cuộn, giữ toàn bộ dữ liệu/tìm kiếm; cho nhập nhiều dòng nháp, lưu không tự đổi chỗ hay giành con trỏ. Dòng đang gõ được giữ cả khi phản hồi chậm, kiểm tra phiên cũ vẫn chặn ghi đè. Source `3c2c915`, Railway deployment `4f1bc502-3911-4d55-b6ee-906291ab401a` SUCCESS; chi tiết tại README-new-2.md mục 13.44.
 
 `mapping-large-05` đạt fixture 23.901 dòng, gồm thứ tự lưu khác thứ tự nhập, lỗi mạng, xung đột, gộp xem trước/hủy, Ctrl+F ngoài vùng đang dựng và cuộn giữ nháp/tích. `mapping-real-large-01` đạt bản sao payload thật; `mapping-stable-hosted-02` đạt trực tiếp production 4.776 hóa đơn / 23.901 dòng, 1920/1024, không ghi thử. Bốn browser quy đổi/phạm vi/kho cuối đều đạt. Hồi quy 690 bài có một marker observer cũ, đã sửa và chạy lại cả nhóm 14/14 đạt. Đây là bằng chứng cho phần sửa mới; các mục toàn luồng còn mở phía trên vẫn giữ trạng thái riêng.
+
+
+## Bố cục ngay từ lần vẽ đầu và tải Excel khi cần
+
+Source `f48da6a`, deployment `97f90c13-ee9c-449c-a575-e49701930788` SUCCESS. CSS bố cục được đưa lên head; thay tải sớm engine Excel 10.878.271 byte bằng loader nhỏ, chỉ tải engine khi mở Excel. Browser fixture kiểm tra tải chậm/lỗi/hủy/thử lại và mở lại đạt; bốn báo cáo kho và sửa/dán/lưu danh mục 1.255 mã đạt. `startup-layout-hosted-02` xác nhận lần vẽ đầu ở 1440/1024 đúng menu 42px khi app.js còn bị giữ chậm; không engine trên trang chính, mở Excel mới tải. Không ghi thử production. Chi tiết và bảo toàn dữ liệu tại README-new-2.md 13.45.
