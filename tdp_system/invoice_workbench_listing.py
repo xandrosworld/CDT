@@ -39,6 +39,8 @@ def invoice_state(invoice, direction):
         return "error"
     if stock in {"posted", "reversed"}:
         return stock
+    if invoice.get('cost_warning'):
+        return 'error'
     if invoice.get('expense_review_count'):
         return 'needs_mapping'
     if direction == "output" and invoice.get("source_status_class") != "issued":
@@ -56,6 +58,8 @@ def invoice_state(invoice, direction):
 
 
 def line_issue(item, invoice, status):
+    if invoice.get('cost_warning'):
+        return invoice['cost_warning']
     if invoice.get('expense_review_count'):
         return 'Nguồn chi phí đã thay đổi; xác nhận lại phân loại chi phí trên hóa đơn'
     if status == "error":

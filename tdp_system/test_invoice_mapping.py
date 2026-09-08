@@ -126,6 +126,29 @@ class InvoiceDirectionMappingTests(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
+    def test_catalog_unit_change_invalidates_input_and_output_until_reconfirmed(self):
+        from .invoice_mapping import InvoiceMappingError, validated_input_stock_snapshot
+        for direction, table, code, validate in [
+            ('input', 'msmi_invoice_items', 'P-IN', validated_input_stock_snapshot),
+            ('output', 'outgoing_source_invoice_items', 'P-OUT', validated_output_stock_snapshot),
+        ]:
+            with self.subTest(direction=direction):
+                item = self.conn.execute(f'SELECT id FROM {table}').fetchone()[0]
+                save_mapping(self.conn, direction=direction, item_id=item, product_code=code, now_iso=now_iso)
+                self.assertEqual(validate(self.conn, item)['conversion_factor'], 1)
+                self.conn.execute("UPDATE products SET unit='gói' WHERE code=?", (code,))
+                before = list(self.conn.iterdump())
+                with self.assertRaises(InvoiceMappingError) as error:
+                    validate(self.conn, item)
+                self.assertEqual(error.exception.code, 'catalog_unit_changed')
+                with self.assertRaises(InvoiceMappingError) as error:
+                    save_conversion(self.conn, direction=direction, item_id=item, conversion_factor=2, now_iso=now_iso)
+                self.assertEqual(error.exception.code, 'catalog_unit_changed')
+                self.assertEqual(list(self.conn.iterdump()), before)
+                save_mapping(self.conn, direction=direction, item_id=item, product_code=code, now_iso=now_iso)
+                save_conversion(self.conn, direction=direction, item_id=item, conversion_factor=2, now_iso=now_iso)
+                self.assertEqual(validate(self.conn, item)['conversion_factor'], 2)
+
     def test_combined_output_mapping_preserves_input_and_freezes_after_posting(self):
         self.conn.commit()
         @contextmanager

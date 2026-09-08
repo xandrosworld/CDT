@@ -99,6 +99,16 @@ def mapping_units_match(source_unit: Any, target_unit: Any) -> bool:
     return _mapping_status(source_unit, target_unit) == "confirmed"
 
 
+def _validate_target_unit(conn, mapping):
+    product = _product(conn, mapping['product_code'])
+    if not mapping_units_match(mapping['target_unit'], product['unit']):
+        raise InvoiceMappingError(
+            f"Đơn vị của mã {product['code']} trong danh mục đã đổi từ {mapping['target_unit']} "
+            f"sang {product['unit']}. Hãy lưu lại mã và xác nhận quy đổi trước khi ghi kho.",
+            code='catalog_unit_changed', status=409,
+        )
+
+
 def mapping_scope_key(source_code: Any, source_name: Any, source_unit: Any) -> str:
     """Expose the persisted mapping identity without duplicating its normalization."""
     return _scope_key(source_code, source_name, source_unit)
@@ -397,6 +407,7 @@ def validated_input_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
             code="mapping_conflict",
         )
     mapping = rows[0]
+    _validate_target_unit(conn, mapping)
     factor = float(mapping["conversion_factor"] or 0)
     if not math.isfinite(factor) or factor <= 0:
         raise InvoiceMappingError("Mapping chưa có hệ số quy đổi hợp lệ", code="conversion_missing")
@@ -472,6 +483,7 @@ def validated_output_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
             code="mapping_conflict",
         )
     mapping = rows[0]
+    _validate_target_unit(conn, mapping)
     factor = float(mapping["conversion_factor"] or 0)
     expected_qty, expected_price = _stock_values(context["qty"], context["amount"], factor)
     if (
@@ -792,6 +804,7 @@ def save_conversion(
             status=409,
         )
     mapping = mappings[0]
+    _validate_target_unit(conn, mapping)
     timestamp = now_iso()
     try:
         conn.execute(

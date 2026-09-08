@@ -109,7 +109,11 @@ def set_expenses(conn, *, tenant, invoice_id, expense, item_ids, expected, now):
             if index not in choices:
                 continue
             conn.execute('DELETE FROM invoice_input_expense_choices WHERE invoice_id=? AND line_index=?',(invoice_id,index))
-            eligible = row['qty'] > 0 and (row['unit_price'] > 0 or row['amount'] == 0)
+            try:
+                from .invoice_input_integrity import is_goods_line
+            except ImportError:
+                from invoice_input_integrity import is_goods_line
+            eligible = is_goods_line(row['qty'], row['unit_price'], row['amount'], row['source_nature'])
             conn.execute("""UPDATE msmi_invoice_items SET inventory_eligible=?,product_code='',mapping_status=?,
                 conversion_factor=NULL,stock_qty=0,stock_unit_price=0,validation_note='' WHERE id=?""",
                 (int(eligible),'unmapped' if eligible else 'not_inventory',row['id']))

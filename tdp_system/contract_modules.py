@@ -4791,7 +4791,11 @@ def normalize_invoice_item(remote_item: dict, line_index: int) -> dict:
         raise MsmiError(
             f"Dòng {line_index} mSMI có số lượng, đơn giá hoặc thành tiền âm; cần đối chiếu thủ công"
         )
-    inventory_eligible = not financial_adjustment and qty > 0 and (unit_price > 0 or amount == 0)
+    try:
+        from .invoice_input_integrity import is_goods_line
+    except ImportError:
+        from invoice_input_integrity import is_goods_line
+    inventory_eligible = not financial_adjustment and is_goods_line(qty, unit_price, amount, nature)
     if financial_adjustment:
         validation_note = (
             "Không ghi kho: dòng chiết khấu/điều chỉnh tài chính âm, được giữ nguyên để đối chiếu tổng hóa đơn"
