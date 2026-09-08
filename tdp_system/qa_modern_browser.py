@@ -10,6 +10,7 @@ import time
 from urllib.request import urlopen
 
 CASES = {
+    'output_names': ('date_picker_server', 18805, 'INVOICE'),
     'catalog_worksheet': ('catalog_worksheet', 18852, 'CATALOG'),
     'startup_layout': ('date_picker_server', 18805, 'INVOICE'),
     'mapping_real_large': ('date_picker_server', 18805, 'INVOICE'),
@@ -47,6 +48,7 @@ def main():
         env[f'TDP_{prefix}_TEST_URL'] = f'http://127.0.0.1:{port}'
         env['TDP_FIXTURE_OUTPUT'] = str(folder)
         if name == 'receipt_period_scope': env['TDP_FIXTURE_OLD_PENDING']='1'
+        if name == 'output_names': env['TDP_FIXTURE_OUTPUT_NAMES']='1'
         for key in ('EXPENSE', 'PENDING', 'REVIEW', 'INVENTORY'):
             env[f'TDP_{key}_SCREENSHOT'] = str(folder / f'{key.lower()}.png')
         # Load the fixture as a module with connector-file lookup disabled first.

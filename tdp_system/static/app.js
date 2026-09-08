@@ -6848,7 +6848,7 @@
           body:JSON.stringify({from:state.invoiceFrom,to:state.invoiceTo})
         });
         await loadInvoiceWorkbench(true); render();
-        showToast('Đã khớp ' + matched.matched_lines + ' dòng theo mã danh mục; ' + matched.unit_review_lines + ' dòng trong đó cần quy đổi đơn vị. Chưa xuất kho.');
+        showToast('Đã khớp ' + matched.matched_lines + ' dòng theo mã hoặc tên và đơn vị trùng khớp; ' + matched.unit_review_lines + ' dòng trong đó cần quy đổi đơn vị. Chưa xuất kho.');
       } catch (error) {
         showToast(error.message, true); button.disabled = false; button.textContent = matchLabel;
       }

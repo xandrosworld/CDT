@@ -76,6 +76,46 @@ class OutputCatalogMappingTests(unittest.TestCase):
         self.assertEqual(0, row['stock_qty'])
         self.assertEqual('pending_mapping', self.conn.execute('SELECT stock_status FROM outgoing_source_invoices').fetchone()[0])
 
+    def test_missing_code_matches_unique_name_unit_and_keeps_source_blank(self):
+        self.product()
+        self.sync(code='')
+        row=self.line()
+        self.assertEqual(('', 'I000127', 'mapped', 1),
+                         (row['source_item_code'],row['product_code'],row['mapping_status'],row['conversion_factor']))
+        self.assertEqual(0,self.conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0])
+        before=list(self.conn.iterdump());self.match()
+        self.assertEqual(before,list(self.conn.iterdump()))
+
+    def test_invoice_alias_matches_without_overriding_ambiguous_or_different_units(self):
+        self.product()
+        self.conn.execute("UPDATE products SET name='Tên danh mục riêng'")
+        self.conn.execute("INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES('I000127','  QUẢ   QUẤT  ',?)",(now_iso(),))
+        self.sync(code='')
+        self.assertEqual('I000127',self.line()['product_code'])
+
+    def test_missing_code_does_not_guess_ambiguous_name_or_conversion(self):
+        self.product()
+        self.product('OTHER')
+        self.sync(code='')
+        self.assertEqual('unmapped',self.line()['mapping_status'])
+        self.conn.execute("DELETE FROM products WHERE code='OTHER'")
+        self.conn.execute("UPDATE products SET unit='Thùng'")
+        self.assertEqual(0,self.match()['matched_lines'])
+        self.assertEqual('unmapped',self.line()['mapping_status'])
+
+    def test_missing_code_preserves_manual_choice_and_frozen_lines(self):
+        self.sync(code='')
+        self.product('MANUAL')
+        save_mapping(self.conn,direction='output',item_id=self.line()['id'],product_code='MANUAL',now_iso=now_iso)
+        self.product()
+        before=list(self.conn.iterdump());self.match()
+        self.assertEqual(before,list(self.conn.iterdump()))
+        self.conn.execute("UPDATE invoice_line_mappings SET effective_from='2026-09-01'")
+        self.sync(code='')
+        self.assertEqual('unmapped',self.line()['mapping_status'])
+        before=list(self.conn.iterdump());self.match()
+        self.assertEqual(before,list(self.conn.iterdump()))
+
     def test_unknown_or_ambiguous_code_does_not_match_by_name(self):
         self.product('OTHER')
         self.sync()
