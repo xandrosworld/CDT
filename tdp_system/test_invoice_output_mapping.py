@@ -26,9 +26,11 @@ class OutputCatalogMappingTests(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
-    def sync(self, code='I000127', unit='Kg', status='FIXTURE_ISSUED', number=1):
+    def sync(self, code='I000127', unit='Kg', status='FIXTURE_ISSUED', number=1,
+             name='Quả quất', buyer='0209999999'):
         remote = output_invoice(number, status=status)
-        remote['hdhhdvu'][0].update(ma=code, ten='Quả quất', dvtinh=unit)
+        remote['mstNmua'] = buyer
+        remote['hdhhdvu'][0].update(ma=code, ten=name, dvtinh=unit)
         return sync_output_batch(self.conn, OutputFixtureMinvoice([remote]), self.batch['id'],
             now_iso, status_map=STATUS_MAP, status_fields=['fixtureStatus'])
 
@@ -124,6 +126,61 @@ class OutputCatalogMappingTests(unittest.TestCase):
         self.product('i000127')
         self.assertEqual(0, self.match()['matched_lines'])
         self.assertEqual('unmapped', self.line()['mapping_status'])
+
+    def test_unique_canonical_name_wins_over_shared_invoice_alias(self):
+        self.product()
+        self.conn.execute("INSERT INTO products(code,name,unit) VALUES('VARIANT','Quả quất loại to','Kg')")
+        self.conn.execute("INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES('VARIANT','Quả quất',?)", (now_iso(),))
+        self.sync(code='')
+        self.assertEqual('I000127', self.line()['product_code'])
+
+    def test_confirmed_short_name_reused_for_another_buyer_and_is_idempotent(self):
+        self.product()
+        self.sync(name='Quất', buyer='FIRST')
+        self.sync(code='', name='Quất', buyer='SECOND', number=2)
+        rows=self.conn.execute('SELECT * FROM outgoing_source_invoice_items ORDER BY id').fetchall()
+        self.assertEqual(['I000127','I000127'], [r['product_code'] for r in rows])
+        self.assertEqual('',rows[1]['source_item_code'])
+        validated_output_stock_snapshot(self.conn,rows[1]['id'])
+        before=list(self.conn.iterdump());self.match()
+        self.assertEqual(before,list(self.conn.iterdump()))
+
+    def test_conflicting_buyer_choices_do_not_teach_other_buyers(self):
+        self.product()
+        self.product('OTHER')
+        self.sync(name='Quất',buyer='FIRST')
+        self.sync(code='OTHER',name='Quất',buyer='SECOND',number=2)
+        self.sync(code='',name='Quất',buyer='THIRD',number=3)
+        rows=self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items ORDER BY id').fetchall()
+        self.assertEqual(['I000127','OTHER',''],[r[0] for r in rows])
+
+    def test_history_cannot_override_a_conflicting_canonical_name(self):
+        self.product()
+        self.conn.execute("INSERT INTO products(code,name,unit) VALUES('OTHER','Tên khác','Kg')")
+        self.sync(code='OTHER',buyer='FIRST')
+        self.sync(code='',buyer='SECOND',number=2)
+        self.assertEqual('',self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items ORDER BY id DESC').fetchone()[0])
+
+    def test_history_requires_valid_revision_current_unit_and_active_period(self):
+        for scenario in ('revision','unit','expired','factor'):
+            with self.subTest(scenario=scenario):
+                self.conn.execute('SAVEPOINT scenario')
+                self.product()
+                self.sync(name='Quất',buyer='FIRST')
+                if scenario=='revision':self.conn.execute('DELETE FROM invoice_mapping_revisions')
+                if scenario=='unit':self.conn.execute("UPDATE products SET unit='Hộp'")
+                if scenario=='expired':self.conn.execute("UPDATE invoice_line_mappings SET effective_to='2026-08-01'")
+                if scenario=='factor':self.conn.execute('UPDATE invoice_line_mappings SET conversion_factor=2')
+                self.sync(code='',name='Quất',buyer='SECOND',number=2)
+                self.assertEqual('',self.conn.execute('SELECT product_code FROM outgoing_source_invoice_items ORDER BY id DESC').fetchone()[0])
+                self.conn.execute('ROLLBACK TO scenario');self.conn.execute('RELEASE scenario')
+
+    def test_blocked_source_with_known_code_remains_untouched(self):
+        self.sync()
+        self.product()
+        self.conn.execute("UPDATE outgoing_source_invoices SET sync_status='review_required',stock_status='blocked',error_message='Nguồn lệch tổng'")
+        before=list(self.conn.iterdump());self.match()
+        self.assertEqual(before,list(self.conn.iterdump()))
 
     def test_manual_choice_and_other_period_rules_take_priority(self):
         self.product('MANUAL')

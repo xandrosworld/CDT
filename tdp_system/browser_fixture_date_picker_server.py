@@ -30,6 +30,15 @@ with tempfile.TemporaryDirectory(prefix='tdp_date_picker_') as root:
                 ids['output_name_lines'][key]=cur.lastrowid
                 if key=='coded':save_mapping(conn,direction='output',item_id=cur.lastrowid,product_code='R1-KG',now_iso=now_iso)
             conn.execute('UPDATE outgoing_source_invoices SET subtotal=subtotal*4,tax_amount=tax_amount*4,total_amount=total_amount*4 WHERE id=?',(ids['output_id'],))
+            # A blocked source must explain why a known code cannot be edited.
+            parent=dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(ids['output_id'],)).fetchone())
+            parent.pop('id')
+            parent.update(identity_key='FIXTURE-BLOCKED-717',remote_id='FIXTURE-BLOCKED-717',invoice_number='717',sync_status='review_required',
+                          stock_status='blocked',error_message='Tổng dòng 1.938.000 đ lệch tổng hóa đơn 2.058.000 đ')
+            blocked=conn.execute('INSERT INTO outgoing_source_invoices('+','.join(parent)+') VALUES('+','.join('?' for _ in parent)+')',tuple(parent.values())).lastrowid
+            row={k:v for k,v in original.items() if k!='id'}
+            row.update(invoice_id=blocked,source_item_code='R1-KG',source_item_name='Hàng kiểm thử kg',line_index=1)
+            ids['output_name_lines']['blocked']=conn.execute('INSERT INTO outgoing_source_invoice_items('+','.join(row)+') VALUES('+','.join('?' for _ in row)+')',tuple(row.values())).lastrowid
         if os.environ.get('TDP_FIXTURE_OLD_PENDING') == '1':
             conn.execute("UPDATE msmi_invoices SET invoice_date='2022-07-31' WHERE id=?",(ids['input_ids']['3'],))
     @server.app.get('/fixture/ids')
