@@ -22,6 +22,7 @@ def main():
             conn.execute("UPDATE inventory_transactions SET note='Tồn kiểm thử.xlsx; sheet Tồn đầu; dòng 168'")
             conn.execute("INSERT INTO products(code,name,unit,tax) VALUES('HH-02','Rau <kiểm tra>','kg','0%')")
             OutgoingReadinessTests.add_opening(conn, -2, product_code='HH-02')
+            conn.execute("UPDATE inventory_transactions SET source_id='2026-08' WHERE source_type='OPENING'")
             rows.append({'qty':1,'product_code':'HH-02'})
         batch_id, ids = OutgoingReadinessTests.add_batch(conn, today, rows)
         conn.execute("UPDATE orders SET tax='KKKNT' WHERE id=?", (ids[0],))
@@ -39,6 +40,7 @@ def main():
             return {'batch_id':batch_id,'orders':[dict(r) for r in conn.execute('SELECT * FROM orders WHERE batch_id=?',(batch_id,))],
                     'drafts':[dict(r) for r in conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE batch_id=?',(batch_id,))],
                     'ledger_count':conn.execute('SELECT count(*) FROM invoice_inventory_ledger').fetchone()[0],
+                    'opening':[dict(r) for r in conn.execute("SELECT product_code,qty_in,qty_out,unit_cost,note FROM inventory_transactions WHERE source_type='OPENING' ORDER BY id")],
                     'holds':[dict(r) for r in conn.execute("SELECT source_id,status,SUM(qty_out) qty FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' GROUP BY source_id,status")]}
     serve(server.app,host='127.0.0.1',port=18854,threads=4)
 

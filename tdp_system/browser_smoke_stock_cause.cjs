@@ -7,8 +7,13 @@ const base=process.env.TDP_ISSUANCE_TEST_URL,out=process.env.TDP_FIXTURE_OUTPUT;
  page.setDefaultTimeout(20000);const result={ok:false,errors:[],writes:[]};
  page.on('pageerror',e=>result.errors.push(e.message));
  const before=await (await page.request.get(base+'/fixture/state')).json();
+ let allowOpeningSave=false;
  await page.route('**/api/**',route=>{
-  if(route.request().method()!=='GET'){result.writes.push(route.request().url());return route.abort();}
+  if(route.request().method()!=='GET'){
+   result.writes.push(route.request().url());
+   if(allowOpeningSave && route.request().url().endsWith('/api/inventory/opening'))return route.continue();
+   return route.abort();
+  }
   return route.continue();
  });
  try{
@@ -46,7 +51,30 @@ const base=process.env.TDP_ISSUANCE_TEST_URL,out=process.env.TDP_FIXTURE_OUTPUT;
   await dialog.waitFor({state:'detached'});
   const after=await (await page.request.get(base+'/fixture/state')).json();
   assert.deepEqual(after,before);assert.deepEqual(result.errors,[]);assert.deepEqual(result.writes,[]);
-  result.ok=true;result.correctProduct=true;result.sourceUnchanged=true;
+  await first.click();await dialog.getByRole('button',{name:'Sửa tồn đầu',exact:true}).click();
+  const form=dialog.locator('.stock-opening-form');await form.waitFor();
+  assert((await form.innerText()).includes('08/2026'));
+  assert.equal(await form.locator('[name=qty]').inputValue(),'-1.5');
+  await form.locator('[name=qty]').fill('2.5');
+  await form.getByRole('button',{name:'Hủy sửa',exact:true}).click();
+  assert.deepEqual(await (await page.request.get(base+'/fixture/state')).json(),before);
+  await dialog.getByRole('button',{name:'Sửa tồn đầu',exact:true}).click();
+  await form.locator('[name=qty]').fill('2.5');
+  await dialog.screenshot({path:path.join(out,'opening-edit.png'),animations:'disabled'});
+  allowOpeningSave=true;
+  await form.getByRole('button',{name:'Lưu tồn đầu',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Đã lưu tồn đầu kỳ.'}).waitFor();
+  await dialog.getByText('Còn có thể lập 2,5 kg',{exact:true}).waitFor();
+  const edited=await (await page.request.get(base+'/fixture/state')).json();
+  assert.equal(edited.opening[0].qty_in,2.5);assert.equal(edited.opening[0].qty_out,0);
+  assert.equal(edited.opening[0].unit_cost,before.opening[0].unit_cost);
+  assert(edited.opening[0].note.includes(before.opening[0].note));
+  assert.deepEqual(edited.opening[1],before.opening[1]);assert.deepEqual(edited.orders,before.orders);
+  assert.equal(edited.ledger_count,before.ledger_count);assert.equal(result.writes.length,1);
+  await dialog.getByRole('button',{name:'Quay lại',exact:true}).click();
+  assert.equal(await first.count(),0);assert.equal(await page.locator('[data-action=show-stock-cause]').count(),1);
+  assert.deepEqual(result.errors,[]);
+  result.ok=true;result.correctProduct=true;result.sourceUnchangedBeforeSave=true;result.explicitOpeningEdit=true;
  }catch(e){result.error=e.stack;process.exitCode=1;await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}
  finally{fs.writeFileSync(path.join(out,'proof.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));await browser.close();}
 })();

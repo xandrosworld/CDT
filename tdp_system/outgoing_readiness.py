@@ -537,14 +537,22 @@ def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[st
     opening = selected_opening_snapshot(conn, '9999-12-31')
     start = opening[1] if opening else '0001-01-01'
     events = []
+    opening_editor = None
     if opening:
-        for row in conn.execute(
-            "SELECT txn_date,qty_in-qty_out qty_delta,note FROM inventory_transactions "
+        opening_rows = conn.execute(
+            "SELECT id,txn_date,product_code,source_id,source_line,qty_in,qty_out,unit_cost,note,updated_at FROM inventory_transactions "
             "WHERE source_type='OPENING' AND status='posted' AND source_id=? AND product_code=? ORDER BY id",
             (opening[0], product_code),
-        ):
+        ).fetchall()
+        for row in opening_rows:
             events.append({'date': row['txn_date'], 'label': 'Tồn đầu kỳ',
-                           'reference': row['note'] or 'Tồn đầu kỳ đã nhập', 'qty_delta': float(row['qty_delta'])})
+                           'reference': row['note'] or 'Tồn đầu kỳ đã nhập',
+                           'qty_delta': float(row['qty_in']) - float(row['qty_out'])})
+        if len(opening_rows) == 1:
+            row = dict(opening_rows[0])
+            if (row['source_id'] == row['txn_date'][:7] and row['txn_date'].endswith('-01')
+                    and row['source_line'] == product_code):
+                opening_editor = {'period': row['source_id'], 'qty': events[0]['qty_delta'], 'expected': row}
     movements = conn.execute(
         """SELECT l.txn_date,l.direction,l.event_type,l.qty_delta,l.source_line_index,
                   COALESCE(i.invoice_series,o.invoice_series,'') invoice_series,
@@ -579,7 +587,7 @@ def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[st
             'closing_qty': stock['canonical_qty'], 'reserved_qty': reserved,
             'pending_sync_issued_qty': stock['pending_sync_issued_qty'], 'available_qty': available,
             'negative_opening_only': stock.get('opening_qty', 0) < -EPSILON and not movements,
-            'events': events, 'read_only': True}
+            'events': events, 'opening_editor': opening_editor, 'read_only': True}
 
 
 def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:

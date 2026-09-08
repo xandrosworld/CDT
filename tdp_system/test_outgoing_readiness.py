@@ -366,6 +366,51 @@ class OutgoingReadinessTests(unittest.TestCase):
         trace = self.client.get(f'/api/outgoing-invoices/readiness/{own}/stock/HH-01').json
         self.assertEqual((trace['closing_qty'], trace['reserved_qty'], trace['available_qty']), (10, 2, 8))
 
+    def test_opening_edit_preserves_cost_source_and_rejects_stale_window(self):
+        with server.db() as conn:
+            self.add_opening(conn, -1.5)
+            conn.execute("UPDATE inventory_transactions SET source_id='2026-08',unit_cost=12345,note='Tồn nguồn.xlsx; dòng 168'")
+            self.add_opening(conn, 8, product_code='OTHER')
+            conn.execute("UPDATE inventory_transactions SET source_id='2026-08' WHERE product_code='OTHER'")
+            batch_id, _ = self.add_batch(conn, '2026-09-04', [{'qty': 2}])
+            others_before = [tuple(r) for r in conn.execute("SELECT * FROM inventory_transactions WHERE product_code='OTHER'")]
+            orders_before = [tuple(r) for r in conn.execute('SELECT * FROM orders')]
+        trace = self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}/stock/HH-01').json
+        editor = trace['opening_editor']
+        self.assertEqual(editor['period'], '2026-08')
+        self.assertEqual(editor['qty'], -1.5)
+        body = {'period': editor['period'], 'expected_opening': editor['expected'],
+                'items': [{'product_code': 'HH-01', 'qty': 2.5}]}
+        saved = self.client.post('/api/inventory/opening', json=body)
+        self.assertEqual(saved.status_code, 200, saved.get_data(as_text=True))
+        self.assertEqual(self.client.post('/api/inventory/opening', json=body).status_code, 409)
+        with server.db() as conn:
+            row = conn.execute("SELECT * FROM inventory_transactions WHERE product_code='HH-01'").fetchone()
+            self.assertEqual((row['qty_in'], row['qty_out'], row['unit_cost']), (2.5, 0, 12345))
+            self.assertIn('Tồn nguồn.xlsx; dòng 168', row['note'])
+            self.assertEqual(others_before, [tuple(r) for r in conn.execute("SELECT * FROM inventory_transactions WHERE product_code='OTHER'")])
+            self.assertEqual(orders_before, [tuple(r) for r in conn.execute('SELECT * FROM orders')])
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
+            audit = conn.execute("SELECT metadata_json FROM audit_log WHERE event_type='inventory.opening'").fetchall()
+            self.assertEqual(len(audit), 1)
+            self.assertIn('before_qty', audit[0][0])
+        self.assertEqual(self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}').json['blocking_issues'], [])
+
+    def test_opening_edit_rejects_a_newer_opening_period(self):
+        with server.db() as conn:
+            self.add_opening(conn, -1.5)
+            conn.execute("UPDATE inventory_transactions SET source_id='2026-08'")
+            batch_id, _ = self.add_batch(conn, '2026-09-04', [{'qty': 2}])
+        editor = self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}/stock/HH-01').json['opening_editor']
+        with server.db() as conn:
+            self.add_opening(conn, 10, work_date='2026-09-01')
+            before = list(conn.iterdump())
+        result = self.client.post('/api/inventory/opening', json={'period': '2026-08',
+            'expected_opening': editor['expected'], 'items': [{'product_code': 'HH-01', 'qty': 2}]})
+        self.assertEqual(result.status_code, 409)
+        with server.db() as conn:
+            self.assertEqual(list(conn.iterdump()), before)
+
     def test_allocation_can_use_later_input_but_actual_backdated_issue_is_blocked(self):
         from .outgoing_readiness import OutgoingReadinessError, validate_issued_draft_stock
         with server.db() as conn:

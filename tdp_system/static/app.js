@@ -354,16 +354,18 @@
   }
   async function showStockCause(button) {
     if (document.querySelector('.stock-cause-dialog[open]')) return;
-    var batchId = state.batchId, code = button.dataset.code;
+    var batchId = state.batchId, code = button.dataset.code, saving = false;
     var dialog = document.createElement('dialog');
     dialog.className = 'inventory-totals-dialog stock-cause-dialog';
     dialog.setAttribute('aria-labelledby', 'stock-cause-title');
     dialog.innerHTML = '<div class="inventory-totals-heading"><h3 id="stock-cause-title">Kiểm tra tồn · ' + esc(code) + '</h3></div><div class="stock-cause-body" aria-live="polite">Đang tải lịch sử mặt hàng…</div><div class="stock-cause-actions"><button type="button" class="btn btn-outline">Quay lại</button></div>';
-    dialog.querySelector('.stock-cause-actions button').onclick = function() { dialog.close(); };
+    dialog.querySelector('.stock-cause-actions button').onclick = function() { if (!saving) dialog.close(); };
+    dialog.addEventListener('cancel', function(event) { if (saving) event.preventDefault(); });
     dialog.addEventListener('close', function() { dialog.remove(); if (button.isConnected) button.focus({preventScroll:true}); }, {once:true});
     document.body.appendChild(dialog); dialog.showModal();
     var body = dialog.querySelector('.stock-cause-body');
     async function loadTrace() {
+      dialog.querySelector('[data-edit-opening]')?.remove();
       body.textContent = 'Đang tải lịch sử mặt hàng…';
       try {
         var trace = await api('/api/outgoing-invoices/readiness/' + batchId + '/stock/' + encodeURIComponent(code));
@@ -382,6 +384,38 @@
           '<h4>Nguồn tính tồn' + (trace.opening_date ? ' từ ' + dateVN(trace.opening_date) : '') + '</h4><div class="stock-cause-scroll"><table><thead><tr><th>Ngày</th><th>Nguồn</th><th>Tăng / giảm</th><th>Tồn sau dòng</th></tr></thead><tbody>' +
           (trace.events || []).map(function(row) { return '<tr><td>' + dateVN(row.date) + '</td><td><strong>' + esc(row.label) + '</strong><div>' + esc(row.reference) + '</div></td><td class="num-cell">' + quantity(row.qty_delta) + '</td><td class="num-cell">' + quantity(row.balance_qty) + '</td></tr>'; }).join('') +
           (!(trace.events || []).length ? '<tr><td colspan="4">Chưa có tồn đầu hoặc dòng nhập/xuất đã ghi sổ.</td></tr>' : '') + '</tbody></table></div>';
+        if (trace.opening_editor && trace.negative_opening_only) {
+          var edit = document.createElement('button'); edit.type = 'button'; edit.className = 'btn btn-primary';
+          edit.dataset.editOpening = '1'; edit.textContent = 'Sửa tồn đầu';
+          dialog.querySelector('.stock-cause-actions').appendChild(edit);
+          edit.onclick = function() {
+            if (dialog.querySelector('.stock-opening-form')) return;
+            edit.disabled = true;
+            var editor = trace.opening_editor, form = document.createElement('form');
+            form.className = 'stock-opening-form';
+            form.innerHTML = '<h4>Sửa tồn đầu tháng ' + esc(editor.period.slice(5) + '/' + editor.period.slice(0,4)) + '</h4><p>' + esc(trace.product_name) + ' · ' + esc(code) + '</p>' +
+              '<label>Số tồn đúng đã đối chiếu (' + unit + ')<input name="qty" type="number" step="any" required value="' + esc(editor.qty) + '"></label><p class="stock-opening-error" role="alert"></p>' +
+              '<div class="form-actions"><button type="button" class="btn btn-outline" data-cancel-edit>Hủy sửa</button><button type="submit" class="btn btn-primary">Lưu tồn đầu</button></div>';
+            body.appendChild(form); form.scrollIntoView({block:'nearest'}); form.querySelector('input').focus(); form.querySelector('input').select();
+            form.querySelector('[data-cancel-edit]').onclick = function() { form.remove(); edit.disabled = false; edit.focus(); };
+            form.onsubmit = async function(event) {
+              event.preventDefault(); if (saving) return;
+              var qty = Number(form.elements.qty.value); if (!Number.isFinite(qty)) return;
+              saving = true; dialog.querySelectorAll('button,input').forEach(function(el) { el.disabled = true; });
+              try {
+                await api('/api/inventory/opening', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+                  period:editor.period,expected_opening:editor.expected,items:[{product_code:code,qty:qty}]
+                })});
+              } catch(error) {
+                form.querySelector('[role=alert]').textContent = error.message;
+                saving = false; dialog.querySelectorAll('button,input').forEach(function(el) { el.disabled = false; }); edit.disabled = true; return;
+              }
+              saving = false; dialog.querySelectorAll('button,input').forEach(function(el) { el.disabled = false; });
+              state.inventoryValuation = null; state.inventoryMonthClose = null; state.outgoingReadiness = null;
+              await fetchOutgoingReadiness(); await loadTrace(); showToast('Đã lưu tồn đầu kỳ.');
+            };
+          };
+        }
       } catch(error) {
         if (!dialog.open || !dialog.isConnected) return;
         body.innerHTML = '<p class="error-summary">' + esc(error.message) + '</p><button class="btn btn-outline" type="button">Thử lại</button>';

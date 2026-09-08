@@ -7077,6 +7077,30 @@ def register_contract_routes(app, ctx):
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         with db_factory() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            opening_change = None
+            if 'expected_opening' in body:
+                expected = body['expected_opening']
+                if not isinstance(expected, dict) or len(normalized_items) != 1:
+                    return jsonify(ok=False, error='Cần tải lại dòng tồn đầu trước khi sửa.'), 400
+                current = conn.execute(
+                    "SELECT id,txn_date,product_code,source_id,source_line,qty_in,qty_out,unit_cost,note,updated_at "
+                    "FROM inventory_transactions WHERE id=? AND source_type='OPENING' AND status='posted' "
+                    "AND source_id=? AND source_line=? AND product_code=? AND txn_date=?",
+                    (expected.get('id'), period, clean_text(normalized_items[0].get('product_code')).upper(),
+                     clean_text(normalized_items[0].get('product_code')).upper(), txn_date),
+                ).fetchone()
+                newer_opening = conn.execute(
+                    "SELECT 1 FROM inventory_transactions WHERE source_type='OPENING' AND status='posted' "
+                    "AND (txn_date>? OR (txn_date=? AND source_id<>?)) LIMIT 1", (txn_date, txn_date, period),
+                ).fetchone()
+                if not current or dict(current) != expected or newer_opening:
+                    return jsonify(ok=False, error='Tồn đầu đã thay đổi. Đóng cửa sổ rồi mở lại để kiểm tra.'), 409
+                normalized_items[0]['_unit_cost'] = current['unit_cost']
+                normalized_items[0]['note'] = (current['note'] or '') + ' · Đã sửa số tồn trên web'
+                opening_change = {'product_code': current['product_code'],
+                                  'before_qty': current['qty_in'] - current['qty_out'],
+                                  'after_qty': normalized_items[0]['_qty'], 'source_note': current['note']}
             known_codes = {
                 row["code"] for row in conn.execute("SELECT code FROM products")
             }
@@ -7108,7 +7132,7 @@ def register_contract_routes(app, ctx):
                 )
                 saved += 1
             audit(conn, now_iso, "inventory.opening", "ok", entity_type="period", entity_id=period,
-                  metadata={"items": saved})
+                  metadata={"items": saved, **({'change': opening_change} if opening_change else {})})
             return jsonify({"ok": True, "saved": saved, "items": inventory_rows(conn, date.today().isoformat())})
 
     @app.post("/api/inventory/adjustments")

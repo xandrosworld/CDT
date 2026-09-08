@@ -44,3 +44,5 @@ Nút “Xem vì sao âm” mở ngay mặt hàng đang báo lỗi trong một c�
 Đã xác định I000091 âm ngay từ tồn đầu 01/08/2026: dữ liệu nhập từ Excel ghi -1,5 kg, dòng 168; chưa có phát sinh nhập/xuất sau mốc tồn đầu. Không tự sửa hoặc cộng bù tồn.
 
 Kiểm tra bổ sung: 28 kiểm thử sẵn sàng xuất hóa đơn, 9 kiểm thử sổ kho và hai luồng trình duyệt đều đạt. Đã kiểm tra kỳ tồn đầu mới nhất, hoàn tác, lượng giữ cho dự thảo khác, chọn đúng mã, thử lại khi lỗi mạng, đóng cửa sổ và màn hình nhỏ. API mới chỉ đọc dữ liệu.
+
+Với số âm bắt nguồn hoàn toàn từ tồn đầu, đã bổ sung “Sửa tồn đầu” ngay trong cửa sổ. Người dùng nhập số đã đối chiếu rồi bấm Lưu; kỳ và mã lấy đúng từ dòng nguồn. Giữ nguyên giá vốn, lưu nguồn cũ và lịch sử trước/sau, chặn lưu nếu dòng hoặc kỳ tồn đầu đã thay đổi trong lúc cửa sổ đang mở. 30 kiểm thử sẵn sàng xuất hóa đơn và hai luồng trình duyệt sửa tồn/công cụ kho đã đạt; thao tác lưu chỉ được thử trên dữ liệu riêng.

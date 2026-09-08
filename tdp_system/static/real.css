@@ -887,5 +887,10 @@ body { min-width: 320px; }
 .stock-cause-scroll td:first-child,.stock-cause-scroll .num-cell { white-space:nowrap; }
 .stock-cause-scroll td:nth-child(2) { min-width:220px; }
 .stock-cause-scroll td:nth-child(2) div { margin-top:4px; overflow-wrap:anywhere; }
-.stock-cause-actions { display:flex; justify-content:flex-end; padding:12px 20px; border-top:1px solid #d6e4ea; }
+.stock-cause-actions { display:flex; flex-wrap:wrap; gap:10px; justify-content:flex-end; padding:12px 20px; border-top:1px solid #d6e4ea; }
+.stock-opening-form { padding:16px; margin-top:16px; border:1px solid #c6dde0; background:#f2f8f8; border-radius:8px; }
+.stock-opening-form h4 { margin-top:0; }
+.stock-opening-form label { display:grid; gap:8px; max-width:360px; }
+.stock-opening-form input { min-height:44px; padding:10px; font-size:18px; }
+.stock-opening-error { color:#a52b23; }
 @media(max-width:600px) { .stock-cause-totals { grid-template-columns:repeat(2,minmax(0,1fr)); } }
