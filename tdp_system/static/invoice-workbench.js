@@ -67,10 +67,12 @@
       return '<div class="invoice-line-classification">' + button(item.is_expense ? 'invoice-expense-undo' : 'invoice-expense-all',invoice.id,'Phân loại…','btn-link') +
         (item.expense_needs_review ? button('invoice-expense-all',invoice.id,'Xác nhận lại chi phí','btn-link') : '') + '</div>';
     }
-    var rows = (data.lines || []).map(function (item) {
+    function renderRow(item) {
       var invoice = invoices[item.invoice_id];
       return '<tr id="invoice-line-' + direction + '-' + (item.id || 'empty-' + invoice.id) + '" data-issue="' + (item.issue ? '1' : '0') + '" class="' + (item.issue ? 'invoice-row-issue' : '') + '">' + selection(item, invoice) + '<td><strong>' + esc(invoice.invoice_series + ' / ' + invoice.invoice_number) + '</strong><div>' + dateVN(invoice.invoice_date) + '</div><small>' + esc(invoice.seller_name || invoice.buyer_name || '') + '</small></td><td>' + esc(item.line_index || '—') + '</td><td>' + esc(item.source_item_code || '—') + '</td><td>' + esc(item.source_item_name) + (input && item.issue ? '<div class="invoice-issue-text">' + esc(item.issue) + '</div>' : '') + expenseControl(item,invoice) + '</td><td class="num-cell invoice-source-qty">' + num(item.qty) + '</td><td class="invoice-source-unit">' + esc(item.source_unit || '') + '</td><td class="num-cell invoice-unit-price">' + (item.unit_price == null ? '—' : money(item.unit_price)) + '</td><td class="num-cell">' + money(item.amount) + '</td><td class="invoice-mapping-cell">' + mapping(item, invoice) + '</td>' + (input ? '<td><div class="invoice-row-actions">' + actions(invoice) + '</div></td>' : '') + '</tr>';
-    }).join('');
+    }
+    window.TdpInvoiceRenderRow = renderRow;
+    var rows = (data.lines || []).slice(0, (data.lines || []).length > 2000 ? 80 : undefined).map(renderRow).join('');
     var batchLabels = {prepared:'Đã chuẩn bị', syncing:'Đang tải', needs_mapping:'Chưa ghép mã',ready:'Sẵn sàng',posted:'Đã ghi kho',partial:'Còn phần cần xử lý',error:'Lỗi tải',quarantined:'Cần kiểm tra'};
     var batches = ((state.invoiceWorkbench || {}).batches || []).map(function (batch) {
       if (batch.archived) return '<tr><td>' + batch.id + '</td><td>' + dateVN(batch.date_from) + ' → ' + dateVN(batch.date_to) + '</td><td>Kết nối thử cũ · chỉ xem</td><td>' + num(batch.fetched_count) + '</td><td><a class="btn btn-small btn-outline" href="/api/invoice-workbench/output-archive" target="_blank" rel="noopener">Xem dữ liệu cũ</a></td></tr>';

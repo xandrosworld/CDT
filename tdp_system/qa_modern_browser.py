@@ -10,6 +10,8 @@ import time
 from urllib.request import urlopen
 
 CASES = {
+    'mapping_real_large': ('date_picker_server', 18805, 'INVOICE'),
+    'mapping_large': ('date_picker_server', 18805, 'INVOICE'),
     'receipt_period_scope': ('date_picker_server', 18805, 'INVOICE'),
     'inventory_tools': ('inventory_tools_server', 18853, 'TOOLS'),
     'invoice_factor': ('date_picker_server', 18805, 'INVOICE'),

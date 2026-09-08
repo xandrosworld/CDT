@@ -46,7 +46,7 @@
       });
     });
   }
-  new MutationObserver(schedule).observe(content,{childList:true,subtree:true});
+  new MutationObserver(records => { if(records.some(r => !r.target.closest?.('.invoice-mapping-cell, #msmiProductOptions, .invoice-lines-card tbody'))) schedule(); }).observe(content,{childList:true,subtree:true});
   window.addEventListener('resize',schedule);
   content.addEventListener('toggle',schedule,true);
   schedule();

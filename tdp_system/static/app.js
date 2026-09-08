@@ -228,13 +228,8 @@
   function chooseMsmiProductOption(option) {
     var input = msmiProductSearchInput;
     if (!input || !input.isConnected) return;
-    var active = content.querySelector('.invoice-mapping-cell[data-editing-id]');
-    if (active && active !== input.closest('.invoice-mapping-cell')) {
-      closeMsmiProductOptions();
-      showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa dòng đang mở trước.', true);
-      active.querySelector('input')?.focus();
-      return;
-    }
+    var editingCell = input.closest('.invoice-mapping-cell');
+    if (!editingCell.mappingExpected) editingCell.mappingExpected = invoiceMappingExpected(input.dataset.id);
     input.value = option.dataset.productCode;
     input.dataset.selectedCode = option.dataset.productCode;
     var cell = input.closest('.invoice-mapping-cell');
@@ -258,7 +253,8 @@
     // Keep a factor entered before choosing a code, or when reselecting the same
     // code. A different product must get its own conversion/default.
     if (product && draft?.product && draft.product !== product.code) draft = null;
-    conversion.innerHTML = window.TdpInvoiceDraftConversion(line,product,draft);
+    var html = window.TdpInvoiceDraftConversion(line,product,draft);
+    if (conversion.innerHTML !== html) conversion.innerHTML = html;
   }
 
   function esc(value) {
@@ -3007,9 +3003,19 @@
     }
   }
 
+  var invoiceVirtual = null;
+  function invoiceCheckedRows() {
+    return invoiceVirtual ? invoiceVirtual.checked() : Array.from(content.querySelectorAll('.invoice-group-select:checked'));
+  }
+  function invoicePendingEdit() {
+    if (invoiceVirtual) return invoiceVirtual.nodes().map(function(r){return r.querySelector('.invoice-mapping-cell[data-editing-id]');}).find(Boolean);
+    return content.querySelector('.invoice-mapping-cell[data-editing-id]');
+  }
   function renderMsmi() {
     if (!state.invoiceWorkbench || !state.invoiceListing) { loadInvoiceWorkbench(); return; }
+    invoiceVirtual?.dispose();
     content.innerHTML = window.TdpInvoiceWorkbench(state, {esc:esc, num:stockQty, money:stockMoney, dateVN:dateVN});
+    invoiceVirtual = window.TdpInvoiceVirtualTable(content.querySelector('.invoice-lines-card .invoice-lines-scroll'), state.invoiceListing.lines || [], window.TdpInvoiceRenderRow);
   }
 
   async function loadMsmiProductOptions(input) {
@@ -5651,7 +5657,9 @@
 
   content.addEventListener("input", function (event) {
     if (event.target.matches('.unit-conversion-input, .invoice-draft-factor')) {
-      event.target.closest('.invoice-mapping-cell').dataset.editingId = event.target.dataset.id;
+      var editingCell = event.target.closest('.invoice-mapping-cell');
+      if (!editingCell.mappingExpected) editingCell.mappingExpected = invoiceMappingExpected(event.target.dataset.id);
+      editingCell.dataset.editingId = event.target.dataset.id;
       if (event.target.matches('.invoice-draft-factor')) {
         event.target.dataset.userEntered = 'true';
         event.target.dataset.factorProduct = event.target.dataset.productCode || '';
@@ -5712,7 +5720,7 @@
 
   content.addEventListener("change", function (event) {
     if (event.target.matches('.invoice-group-select')) {
-      var checked = Array.from(content.querySelectorAll('.invoice-group-select:checked'));
+      var checked = invoiceCheckedRows();
       if (checked.some(function(e) { return e.dataset.invoiceId !== event.target.dataset.invoiceId; })) {
         event.target.checked = false; showToast('Chỉ chọn các dòng trong cùng một hóa đơn để gộp.', true); return;
       }
@@ -5862,13 +5870,6 @@
   });
 
   content.addEventListener("focusin", function (event) {
-    var mappingField = event.target.closest('.invoice-mapping-input, .invoice-draft-factor');
-    var pendingCell = content.querySelector('.invoice-mapping-cell[data-editing-id]');
-    if (mappingField && pendingCell && mappingField.closest('.invoice-mapping-cell') !== pendingCell) {
-      showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa dòng đang mở trước.', true);
-      pendingCell.querySelector('input:not(:disabled)')?.focus();
-      return;
-    }
     var input = event.target.closest(".invoice-mapping-input");
     if (input) {
       closeMsmiProductOptions();
@@ -5919,6 +5920,7 @@
     var draftLine = invoiceEditingLine(input.dataset.id);
     if (draftCell && draftLine) {
       refreshInvoiceDraftConversion(draftCell,draftLine,null);
+      if (!draftCell.mappingExpected) draftCell.mappingExpected = invoiceMappingExpected(input.dataset.id);
       draftCell.dataset.editingId = input.dataset.id;
     }
     closeMsmiProductOptions();
@@ -5926,6 +5928,7 @@
   });
 
   content.addEventListener("keydown", function (event) {
+    if (event.isComposing || event.keyCode === 229) return;
     var payableAllocation = event.target.closest(".payable-allocation-input");
     if (payableAllocation && event.key === "Enter") {
       event.preventDefault();
@@ -5988,6 +5991,7 @@
         var originalLine = invoiceEditingLine(cancelField.dataset.id);
         var originalInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === originalLine?.invoice_id; });
         if (originalLine && originalInvoice) {
+          delete cancelCell.mappingExpected;
           delete cancelCell.dataset.editingId;
           cancelCell.innerHTML = window.TdpInvoiceMappingCell(originalLine, originalInvoice);
         }
@@ -6009,24 +6013,57 @@
   function invoiceMappingExpected(id) {
     var row = invoiceEditingLine(id);
     if (!row) throw new Error('Dòng đang xem đã thay đổi. Hãy mở lại bảng.');
+    var draft = document.getElementById('map_' + state.invoiceDirection + '_' + id)?.closest('.invoice-mapping-cell');
+    if (draft?.mappingExpected) return draft.mappingExpected;
     var expected = {};
     ['product_code', 'mapping_status', 'conversion_factor', 'source_unit', 'qty', 'amount'].forEach(function(k) { expected[k] = row[k]; });
     return expected;
   }
+  async function refreshSavedInvoiceMapping(direction, savedId) {
+    var scope = [state.invoiceDirection,state.invoiceFrom,state.invoiceTo,state.invoiceStatus,state.invoiceLineFilter,state.invoicePending].join('|');
+    var previousListing=state.invoiceListing, previousWorkbench=state.invoiceWorkbench;
+    var oldLines = state.invoiceListing.lines || [], order = new Map(oldLines.map(function(r,i) { return [r.id,i]; }));
+    await loadInvoiceWorkbench(true);
+    if (state.view !== 'msmi' || scope !== [state.invoiceDirection,state.invoiceFrom,state.invoiceTo,state.invoiceStatus,state.invoiceLineFilter,state.invoicePending].join('|')) return;
+    if (state.invoiceListing.error) {
+      state.invoiceListing=previousListing;state.invoiceWorkbench=previousWorkbench;
+      throw new Error('Đã lưu mã nhưng chưa tải lại được bảng. Phần đang gõ được giữ lại; hãy tải lại khi kết nối ổn định.');
+    }
+    // Capture immediately before rendering: the user may type or scroll while saving.
+    var scroll = content.querySelector('.invoice-lines-card .invoice-lines-scroll');
+    var top = scroll?.scrollTop || 0, left = scroll?.scrollLeft || 0;
+    var viewport = invoiceVirtual?.snapshot(), focused=document.activeElement;
+    var caret=focused?.selectionStart, caretEnd=focused?.selectionEnd;
+    var nodes = invoiceVirtual ? invoiceVirtual.nodes() : Array.from(scroll?.querySelectorAll('tbody tr') || []);
+    var scrollBox=scroll?.getBoundingClientRect(), anchor=focused?.closest?.('tr');
+    function visibleAnchor(row){if(!row?.isConnected||!scroll?.contains(row))return false;var box=row.getBoundingClientRect();return box.bottom>scrollBox.top+48&&box.top<scrollBox.bottom;}
+    if(!visibleAnchor(anchor)) anchor=nodes.find(visibleAnchor);
+    var anchorId=anchor?.id, anchorOffset=anchor ? anchor.getBoundingClientRect().top-scrollBox.top : 0;
+    var drafts = nodes.map(function(r) { return r.querySelector('.invoice-mapping-cell[data-editing-id]'); }).filter(function(c) { return c && c.dataset.editingId !== String(savedId); });
+    var choices = invoiceCheckedRows().map(function(e) { return e.dataset.id; });
+    // Server totals/status stay fresh; keep the rows in place during this edit session.
+    state.invoiceListing.lines.sort(function(a,b) { return (order.get(a.id) ?? 1e12) - (order.get(b.id) ?? 1e12); });
+    render();
+    if (invoiceVirtual) invoiceVirtual.restore(top,left,drafts,choices,viewport);
+    else {
+      drafts.forEach(function(cell) { var row=document.getElementById('invoice-line-'+direction+'-'+cell.dataset.editingId); var target=row?.querySelector('.invoice-mapping-cell'); if(target) target.replaceWith(cell); });
+      choices.forEach(function(id) { var box=document.querySelector('.invoice-group-select[data-id="'+id+'"]'); if(box) box.checked=true; });
+      scroll=content.querySelector('.invoice-lines-card .invoice-lines-scroll');if(scroll){scroll.scrollTop=top;scroll.scrollLeft=left;}
+    }
+    var groupButton=content.querySelector('[data-action="preview-invoice-group"]');
+    var chosen=invoiceCheckedRows().length;
+    if(groupButton){groupButton.disabled=chosen<2;groupButton.textContent='Gộp '+chosen+' dòng đã chọn';}
+    scroll=content.querySelector('.invoice-lines-card .invoice-lines-scroll');
+    var restoredAnchor=anchorId&&document.getElementById(anchorId);
+    if(scroll&&restoredAnchor) scroll.scrollTop+=restoredAnchor.getBoundingClientRect().top-scroll.getBoundingClientRect().top-anchorOffset;
+    if(focused?.isConnected){focused.focus({preventScroll:true});if(caret!=null)try{focused.setSelectionRange(caret,caretEnd);}catch(ignore){}}
+  }
   async function revealSavedInvoiceLine(direction, id, needsConversion) {
     if (state.invoiceDirection !== direction) return;
-    if (!invoiceEditingLine(id)) {
-      state.invoiceStatus = 'all';
-      state.invoiceLineFilter = 'all';
-      await loadInvoiceWorkbench(true);
-      render();
-    }
     var row = document.getElementById('invoice-line-' + direction + '-' + id);
     if (!row) return;
     row.classList.add('invoice-just-saved');
-    row.scrollIntoView({block:'center', inline:'nearest'});
-    var next = needsConversion ? row.querySelector('.invoice-draft-factor') : row.querySelector('[data-action="save-invoice-mapping"]');
-    if (next) next.focus({preventScroll:true});
+    // Saving keeps the current working position. Only explicit navigation scrolls.
   }
   content.addEventListener("click", async function (event) {
     var viewButton = event.target.closest("[data-view]");
@@ -6036,6 +6073,8 @@
     var action = button.dataset.action;
     if (action === 'preview-inventory-report') { await previewInventoryReport(button); return; }
     if (action === "jump-invoice-issue") {
+      var firstIssue = (state.invoiceListing?.lines || []).find(function(r) { return r.issue; });
+      if (firstIssue && invoiceVirtual) invoiceVirtual.reveal(firstIssue.id == null ? 'empty-'+firstIssue.invoice_id : firstIssue.id);
       var issueRow = document.querySelector('.invoice-lines-card tr[data-issue="1"]');
       if (issueRow) {
         issueRow.scrollIntoView({block:"center", inline:"nearest"});
@@ -6616,17 +6655,11 @@
       await fetchOutgoingPeriodShortages();
     }
     if (['edit-invoice-mapping', 'edit-invoice-conversion', 'cancel-invoice-mapping-edit'].includes(action)) {
-      var activeEdit = content.querySelector('.invoice-mapping-cell[data-editing-id]');
-      if (activeEdit && activeEdit.dataset.editingId !== button.dataset.id) {
-        showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa dòng đang mở trước.', true);
-        activeEdit.querySelector('input')?.focus();
-        return;
-      }
       var editLine = invoiceEditingLine(button.dataset.id);
       var editInvoice = (state.invoiceListing?.items || []).find(function(r) { return r.id === editLine?.invoice_id; });
       if (!editLine || !editInvoice) return;
       var editCell = button.closest('.invoice-mapping-cell');
-      if (action === 'cancel-invoice-mapping-edit') delete editCell.dataset.editingId;
+      if (action === 'cancel-invoice-mapping-edit') {delete editCell.dataset.editingId;delete editCell.mappingExpected;}
       else editCell.dataset.editingId = button.dataset.id;
       editCell.innerHTML = window.TdpInvoiceMappingCell(editLine, editInvoice,
         action === 'edit-invoice-mapping' ? 'code' : action === 'edit-invoice-conversion' ? 'conversion' : '');
@@ -6635,16 +6668,15 @@
       return;
     }
     if (['save-invoice-mapping', 'save-invoice-conversion', 'create-msmi-receipt', 'review-input-receipts', 'review-output-postings', 'post-invoice-output', 'preview-invoice-group','split-invoice-group'].includes(action)) {
-      var pendingEdit = content.querySelector('.invoice-mapping-cell[data-editing-id]');
-      var savingThisEdit = action.startsWith('save-invoice-') && pendingEdit?.dataset.editingId === button.dataset.id;
+      var pendingEdit = invoicePendingEdit();
+      var savingThisEdit = action.startsWith('save-invoice-');
       if (pendingEdit && !savingThisEdit) {
         showToast('Đang sửa mã/quy đổi. Hãy Lưu hoặc nhấn Esc để bỏ sửa trước.', true);
-        pendingEdit.querySelector('input')?.focus();
         return;
       }
     }
     if (['invoice-expense-all','invoice-expense-undo','invoice-expense-line','invoice-expense-line-undo'].includes(action)) {
-      if (content.querySelector('.invoice-mapping-cell[data-editing-id]')) {
+      if (invoicePendingEdit()) {
         showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa mã trước khi phân loại.',true); return;
       }
       var expenseLine = action.includes('-line') ? invoiceEditingLine(button.dataset.id) : null;
@@ -6669,7 +6701,7 @@
       return;
     }
     if (action === 'preview-invoice-group') {
-      var groupIds = Array.from(content.querySelectorAll('.invoice-group-select:checked')).map(function(e) { return Number(e.dataset.id); });
+      var groupIds = invoiceCheckedRows().map(function(e) { return Number(e.dataset.id); });
       try {
         button.disabled = true;
         await window.TdpInvoiceGroupEditor(groupIds, {
@@ -6716,19 +6748,16 @@
           mappingBody.conversion_factor = factorValue;
         }
         var conversionOnly = mappingBody.product_code === mappingBody.expected.product_code && mappingBody.conversion_factor != null;
+        var savingFields=Array.from(button.closest('.invoice-mapping-cell').querySelectorAll('input'));
+        savingFields.forEach(function(field){field.disabled=true;});
         var mappingResult = await api("/api/invoice-workbench/items/" + mappingDirection + "/" +
           button.dataset.id + (conversionOnly ? "/conversion" : "/mapping"), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(mappingBody)
         });
-        if (mappingDirection === "input") {
-          state.operations = null;
-          await loadOperations(true);
-        } else {
-          await loadInvoiceWorkbench(true);
-          render();
-        }
+        state.operations = null;
+        await refreshSavedInvoiceMapping(mappingDirection, button.dataset.id);
         await revealSavedInvoiceLine(mappingDirection, button.dataset.id, mappingResult.requires_unit_conversion);
         showToast(mappingDirection === 'output' ? 'Đã lưu mã.' : mappingResult.requires_unit_conversion
           ? "Đã nhớ mã nhưng đơn vị tính khác nhau — cần nhập quy đổi trước khi ghi kho"
@@ -6736,6 +6765,8 @@
       } catch (error) {
         showToast(error.message, true);
         button.disabled = false;
+      } finally {
+        (savingFields || []).forEach(function(field){field.disabled=false;});
       }
       return;
     }
@@ -6755,13 +6786,8 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ conversion_factor: conversionFactor, expected: invoiceMappingExpected(button.dataset.id) })
         });
-        if (conversionDirection === "input") {
-          state.operations = null;
-          await loadOperations(true);
-        } else {
-          await loadInvoiceWorkbench(true);
-          render();
-        }
+        state.operations = null;
+        await refreshSavedInvoiceMapping(conversionDirection, button.dataset.id);
         await revealSavedInvoiceLine(conversionDirection, button.dataset.id, false);
         showToast("Đã lưu: 1 " + conversionResult.source_unit + " = " + conversionResult.conversion_factor +
           " " + conversionResult.target_unit + " · số lượng vào kho " + conversionResult.stock_qty);
@@ -7056,8 +7082,8 @@
   });
 
   enhanceLocalizedDateInputs(document);
-  new MutationObserver(function () {
-    enhanceLocalizedDateInputs(document);
+  new MutationObserver(function (records) {
+    if (records.some(function(r) { return !r.target.closest?.('.invoice-mapping-cell, #msmiProductOptions, .invoice-lines-card tbody'); })) enhanceLocalizedDateInputs(document);
   }).observe(document.body, { childList: true, subtree: true });
 
   function openOrderWorksheet() {
@@ -7185,6 +7211,12 @@
       scope: 'Trong các dòng đúng bộ lọc ngày / trạng thái',
       active: function () { return !window.TDPWorksheet?.isOpen() && backdrop.hidden && !document.querySelector('dialog[open]'); },
       cells: function () {
+        if (invoiceVirtual) {
+          var invoices = new Map((state.invoiceListing.items || []).map(r=>[r.id,r]));
+          return state.invoiceListing.lines.map(function(r) { var inv=invoices.get(r.invoice_id)||{};
+            var id=r.id==null?'empty-'+r.invoice_id:r.id;
+            return {key:String(id),id:id,values:[r.source_item_name,r.product_code,r.product_name,r.source_item_code,r.source_unit,r.product_unit,r.qty,stockQty(r.qty),r.amount,stockMoney(r.amount),inv.invoice_number,inv.invoice_series,inv.seller_name,inv.buyer_name,dateVN(inv.invoice_date)]}; });
+        }
         var cells = [];
         card.querySelectorAll('.invoice-lines-scroll tbody tr').forEach(function (row, r) {
           Array.from(row.cells).slice(0, state.invoiceDirection === 'input' ? -1 : undefined).forEach(function (cell, c) {
@@ -7199,7 +7231,9 @@
       },
       clear: function () { if (selectedCell) selectedCell.classList.remove('tdp-search-hit'); selectedCell = null; },
       select: function (hit) {
-        selectedCell = hit.element; selectedCell.classList.add('tdp-search-hit');
+        selectedCell = invoiceVirtual ? invoiceVirtual.reveal(hit.id)?.cells[state.invoiceDirection === 'input' ? 4 : 3] : hit.element;
+        if (!selectedCell) return;
+        selectedCell.classList.add('tdp-search-hit');
         var scroll = card.querySelector('.invoice-lines-scroll');
         var head = scroll.querySelector('thead').getBoundingClientRect().height;
         scroll.scrollTop += selectedCell.getBoundingClientRect().top - scroll.getBoundingClientRect().top - head - 12;
@@ -7232,7 +7266,7 @@
       else wrap.parentNode.insertBefore(button,wrap);
     });
   }
-  new MutationObserver(function() { clearTimeout(sheetEnhanceTimer); sheetEnhanceTimer=setTimeout(addWorksheetButtons,50); })
+  new MutationObserver(function(records) { if(records.every(function(r) { return r.target.closest?.('.invoice-mapping-cell, #msmiProductOptions, .invoice-lines-card tbody'); })) return; clearTimeout(sheetEnhanceTimer); sheetEnhanceTimer=setTimeout(addWorksheetButtons,50); })
     .observe(content,{childList:true,subtree:true});
   content.addEventListener('click',function(event) {
     if(event.target.closest('[data-action="view-invoice-unit-totals"]')) { showInvoiceUnitTotals(); return; }

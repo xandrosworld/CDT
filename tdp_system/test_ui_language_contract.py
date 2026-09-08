@@ -214,7 +214,7 @@ class UnifiedUiLanguageContractTests(unittest.TestCase):
             'input[type="date"], input[type="month"]',
             'display.placeholder = kind === "month" ? "mm/yyyy" : "dd/mm/yyyy"',
             'enhanceLocalizedDateInputs(document)',
-            "new MutationObserver(function ()",
+            "new MutationObserver(function (records)",
             "Ngày làm việc (dd/mm/yyyy):",
             "Ngày hoàn tác bảng kê (dd/mm/yyyy):",
             "Nhập ngày hóa đơn dạng dd/mm/yyyy:",
