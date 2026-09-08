@@ -36,6 +36,15 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
       const options=await page.evaluate(()=>({editable:window.__reportOptions.editable,book:window.__reportOptions.workbookData}));
       assert.equal(options.editable,false);
       const book=options.book,first=book.sheets[book.sheetOrder[0]];
+      if(kind==='input') {
+        const rows=Object.values(first.cellData);
+        for(const [code,qty,amount] of [['QA-OIL',30,1288889],['QA-CHILI',107,3264815]]) {
+          const matching=rows.filter(r=>r[6]?.v===code);
+          assert.equal(matching.length,1,'Selected promotion group appears once in the input report');
+          assert.equal(matching[0][10].v,qty);assert.equal(matching[0][12].v,amount);
+          assert(Math.abs(matching[0][11].v-amount/qty)<0.000001);
+        }
+      }
       assert(first.mergeData.length>0);assert(first.cellData[0][0].v);
       assert.equal(downloads.length,0,'Viewing must not trigger a download');
       const bounds=await shell.boundingBox();assert.equal(bounds.x,0);assert.equal(bounds.y,0);assert.equal(bounds.width,1440);assert.equal(bounds.height,1000);

@@ -1,5 +1,9 @@
 # TỔNG HỢP ĐẦU VIỆC SAU CUỘC GỌI KHÁCH HÀNG 04/09/2026
 
+> **Đồng bộ nhóm hàng sang bảng Nhập — 08/09/2026:** sửa bản xem và Excel Nhập
+> để giữ đúng nhóm khách đã chọn; lượng, tiền và sổ kho gốc không đổi.
+> Kết quả kiểm tra và trạng thái triển khai tại **13.46**.
+
 > **Sửa gõ mã và giữ vị trí bảng lớn — 08/09/2026:** đã deploy Railway và kiểm tra trực tiếp danh sách 4.776 hóa đơn / 23.901 dòng. Gõ/chọn mã, giữ nháp khi cuộn và tìm toàn bảng đạt; thử lưu chậm/giữ vị trí trên fixture riêng. Xem **13.44**.
 
 > **Danh mục đủ 1.255 mã, sửa trực tiếp trong Excel — 08/09/2026:** đã triển khai
@@ -1333,3 +1337,11 @@ Chín hóa đơn bị lọc ra ngoài tháng 8 trong DB local:
 - Source **`f48da6a`**, deployment **`97f90c13-ee9c-449c-a575-e49701930788`**, Railway **SUCCESS**. `startup-layout-hosted-02` đạt trực tiếp: lúc trình duyệt đã có lần vẽ đầu và app.js còn bị công cụ giữ chậm, thanh menu đúng **42px tại 1440/1024**; trang chính không yêu cầu engine Excel. Chỉ khi mở danh mục mới tải một lần và bảng 1.255 mã mở bình thường. Không JavaScript exception, HTTP 5xx hoặc request ghi. Đã xem ảnh. Hosted-01 đo hình học DOM trước khi CSS chặn vẽ tải xong nên bắt trạng thái chưa được vẽ; sửa công cụ chờ mốc paint rồi chạy lại toàn bài đạt, không đổi sản phẩm để che lỗi.
 
 - Snapshot `startup-layout-after` lấy sau browser, đối chiếu `startup-layout-predeploy`: **85/85 bảng nguyên nội dung/schema**, hai DB toàn vẹn `ok` (`startup-layout-after/full-preservation.json`). Lượt sửa và kiểm tra này không ghi dữ liệu nghiệp vụ của khách.
+
+
+### 13.46. Nhóm đã gộp chưa xuất hiện trong bảng Nhập — 08/09/2026
+
+- Khách báo hóa đơn **C26TNG/1215 ngày 28/08/2026** đã gộp dầu hào **30 Can** và tương ớt **107 Can** ở bảng ghép mã, nhưng bảng Nhập vẫn có bốn dòng 24/6 và 86/21. Đối chiếu DB xác nhận đã nhập đủ lượng; sổ lưu bốn dòng nguồn, còn báo cáo Nhập chưa áp dụng nhóm khách đã chọn. Đây là thiếu đồng bộ cách trình bày, không phải mất lượng nhập.
+- Báo cáo Nhập dùng nhóm còn hiệu lực, đúng dấu vết nguồn, mã/ĐVT, lượng đã ghi và cùng lần xác nhận kho. Mỗi nhóm hiện một dòng, cộng lượng/tiền và chia lại đơn giá vốn; bản xem và file Excel dùng chung dữ liệu. Dòng không được chọn, nhóm đã tách hoặc không còn khớp giữ riêng; không tự gộp mọi dòng cùng mã. Không sửa sổ kho, không cần nhập lại hóa đơn.
+- **24/24 bài** nhóm dòng và xuất kho đạt (`grouped-receipt-tests-02`, `grouped-receipt-export-tests-01`). Browser `grouped-receipt-browser-01` đạt bốn báo cáo kho, kiểm tra trực tiếp dữ liệu workbook Nhập chỉ còn một dòng mỗi nhóm 30/107, giá vốn đúng; tìm kiếm, lỗi/thử lại, đổi khoảng ngày, tải ZIP, không ghi dữ liệu và DB fixture nguyên vẹn.
+- Đối chiếu bản sao mới `grouped-receipt-predeploy`: 1.099 dòng nhập thành 1.095 dòng trình bày với **4 nhóm khách đã chọn**; bung nhóm khớp toàn bộ sự kiện nhập ban đầu. Từng mã, tổng nhập/xuất/tồn và bảng Xuất nguyên giá trị. Bản xem và Excel có dầu hào 30 Can / 1.288.889 đồng / 42.962,966667 đồng mỗi Can; tương ớt 107 Can / 3.264.815 đồng / 30.512,289720 đồng mỗi Can. Hash DB không đổi. Bằng chứng riêng `grouped-receipt-copy-01/comparison.json`; trạng thái triển khai được bổ sung sau kiểm tra trực tiếp.

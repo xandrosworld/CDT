@@ -25,6 +25,7 @@ from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.views import Selection
 
 try:
+    from invoice_line_groups import _fingerprint as group_fingerprint, _rows as group_source_rows
     from invoice_valuation import InvoiceValuationError, moving_average_report
     from document_totals import quantity_totals
     from template_workbook import (
@@ -36,6 +37,7 @@ try:
         write_literal,
     )
 except ImportError:  # pragma: no cover - package invocation
+    from .invoice_line_groups import _fingerprint as group_fingerprint, _rows as group_source_rows
     from .invoice_valuation import InvoiceValuationError, moving_average_report
     from .document_totals import quantity_totals
     from .template_workbook import (
@@ -241,6 +243,49 @@ def _verify_item_balance(item: Mapping[str, Any]) -> None:
         )
 
 
+def _group_input_movements(conn: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project only explicitly chosen, still-valid groups; never rewrite ledger events."""
+    if not _table_exists(conn, "invoice_input_line_groups"):
+        return rows
+    groups = conn.execute("""SELECT g.* FROM invoice_input_line_groups g
+        JOIN msmi_invoices i ON i.id=g.invoice_id AND i.tenant=g.tenant
+        WHERE g.active=1 ORDER BY g.id""").fetchall()
+    result = list(rows)
+    for group in groups:
+        indices = json.loads(group["member_indices"])
+        positions = [i for i, row in enumerate(result)
+                     if row["source_invoice_table"] == "msmi_invoices"
+                     and row["source_invoice_id"] == group["invoice_id"]
+                     and row["source_line_index"] in indices and row["movement_label"] == "Nhập"
+                     and not row.get("group_id")]
+        if len(positions) != len(indices):
+            continue
+        members = [result[i] for i in positions]
+        source = group_source_rows(conn, [row["source_line_id"] for row in members])
+        if len(source) != len(indices) or group_fingerprint(source) != group["fingerprint"]:
+            continue
+        if len({(r["product_code"], r["unit"], r["txn_date"], r["confirmation_id"]) for r in members}) != 1:
+            continue
+        # Historical posted quantities/codes must agree with the choice being displayed.
+        by_id = {r["id"]: r for r in source}
+        if any(r["product_code"] != by_id[r["source_line_id"]]["product_code"]
+               or r["unit"] != by_id[r["source_line_id"]]["product_unit"]
+               or abs(_decimal(r["quantity"], "Lượng nhập") - _decimal(by_id[r["source_line_id"]]["stock_qty"], "Lượng quy đổi")) > QTY_SCALE
+               for r in members):
+            continue
+        quantity = sum((_decimal(r["quantity"], "Lượng nhập") for r in members), Decimal(0))
+        amount = sum((_decimal(r["amount"], "Tiền nhập") for r in members), Decimal(0))
+        if quantity <= 0:
+            continue
+        merged = dict(members[0], group_id=int(group["id"]), group_members=members,
+                      invoice_name=members[0]["product_name"], quantity=_excel_number(quantity, QTY_SCALE),
+                      amount=_excel_number(amount, MONEY_SCALE), unit_cost=_average(amount, quantity))
+        selected = set(positions)
+        result = [merged if i == positions[0] else row for i, row in enumerate(result)
+                  if i == positions[0] or i not in selected]
+    return result
+
+
 def collect_inventory_export_model(
     conn: Any, *, date_from: Any, date_to: Any,
 ) -> dict[str, Any]:
@@ -350,8 +395,13 @@ def collect_inventory_export_model(
             "movement_label": movement_label,
             "source_invoice_id": int(event["source_invoice_id"]),
             "source_line_id": int(event["source_line_id"]),
+            "source_line_index": int(event["source_line_index"]),
+            "source_invoice_table": str(event["source_invoice_table"]),
+            "confirmation_id": int(event["confirmation_id"]),
         })
         event_identity.append(int(event["ledger_event_id"]))
+
+    input_rows = _group_input_movements(conn, input_rows)
 
     item_map = {str(item["product_code"]): item for item in items}
     for code, item in item_map.items():
@@ -388,6 +438,8 @@ def collect_inventory_export_model(
             for item in items
         ],
         "ledger_event_ids": event_identity,
+        "input_groups": [{"id": r["group_id"], "events": [m["ledger_event_id"] for m in r["group_members"]]}
+                         for r in input_rows if r.get("group_id")],
     }
     contract_id = hashlib.sha256(
         json.dumps(signature, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -13,6 +13,9 @@ with tempfile.TemporaryDirectory(prefix='tdp_inventory_reports_') as root:
     from tdp_system.invoice_mapping import save_mapping
     from tdp_system.invoice_inventory import post_output_invoice
     from tdp_system.test_invoice_input_sync import now_iso
+    from tdp_system.test_invoice_receipt_summary import seed_promotion
+    from tdp_system.invoice_line_groups import preview_group, create_group
+    from tdp_system.invoice_receipt import create_input_receipt
     from flask import request
     from waitress import serve
     server.init_database(sync_master=False)
@@ -23,6 +26,12 @@ with tempfile.TemporaryDirectory(prefix='tdp_inventory_reports_') as root:
                 VALUES('2026-08-01',?,?,0,100,'OPENING','2026-08',?,'posted','fixture',?,?)""",(code,qty,code,now_iso(),now_iso()))
         save_mapping(conn,direction='output',item_id=ids['output_line'],product_code='R1-KG',now_iso=now_iso)
         post_output_invoice(conn,ids['output_id'],confirmed=True,now_iso=now_iso)
+        promotion=seed_promotion(conn)
+        for kind in ('OIL','CHILI'):
+            members=[promotion['promotion_lines'][f'QA-{kind}-{suffix}'] for suffix in ('PAID','FREE')]
+            preview=preview_group(conn,'TDP',members)
+            create_group(conn,'TDP',members,preview['token'],now_iso())
+        create_input_receipt(conn,promotion['promotion_invoice'],now_iso)
     @server.app.get('/fixture/digest')
     def digest():
         with server.db() as conn:

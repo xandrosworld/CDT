@@ -13,6 +13,8 @@ from openpyxl import load_workbook
 from . import invoice_line_groups as groups
 from .invoice_receipt import create_input_receipt
 from .invoice_valuation import moving_average_report
+from .inventory_export import collect_inventory_export_model, build_movement_workbook, _group_input_movements
+from .inventory_preview import workbook_preview
 from .invoice_workbench_listing import invoice_range_payload, range_workbook
 from .test_invoice_input_sync import init_test_database, now_iso
 from .test_invoice_receipt_summary import seed_promotion
@@ -82,6 +84,49 @@ class SelectedGroupTests(unittest.TestCase):
         response=self.client.post('/api/invoice-workbench/input-groups/selection-preview',json=body)
         self.assertEqual(200,response.status_code,response.json)
         return {**body,'token':response.json['token']},response.json
+
+    def test_posted_selected_groups_match_input_workbook_and_preview_without_ledger_changes(self):
+        self.create()
+        self.ids=[self.fixture['promotion_lines'][key] for key in ('QA-CHILI-PAID','QA-CHILI-FREE')]
+        self.create()
+        create_input_receipt(self.conn,self.fixture['promotion_invoice'],now_iso)
+        before=list(self.conn.iterdump())
+        model=collect_inventory_export_model(self.conn,date_from='2026-08-01',date_to='2026-08-31')
+        rows=model['input_rows'];self.assertEqual(2,len(rows))
+        self.assertEqual([(30,1288889),(107,3264815)],[(r['quantity'],r['amount']) for r in rows])
+        self.assertAlmostEqual(1288889/30,rows[0]['unit_cost'],places=5)
+        self.assertAlmostEqual(3264815/107,rows[1]['unit_cost'],places=5)
+        self.assertEqual(4,sum(len(r['group_members']) for r in rows))
+        wb=build_movement_workbook(model,direction='input')
+        self.assertEqual((30,1288889,107,3264815),(wb.active['K5'].value,wb.active['M5'].value,wb.active['K6'].value,wb.active['M6'].value))
+        preview=workbook_preview(wb,'input.xlsx')
+        cells=preview['sheets'][preview['sheetOrder'][0]]['cellData']
+        self.assertEqual((30,1288889,107,3264815),(cells[4][10]['v'],cells[4][12]['v'],cells[5][10]['v'],cells[5][12]['v']))
+        wb.close()
+        self.assertEqual(before,list(self.conn.iterdump()))
+        self.assertEqual(4,self.conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0])
+
+    def test_input_report_does_not_merge_unselected_or_split_rows(self):
+        group=self.create()
+        create_input_receipt(self.conn,self.fixture['promotion_invoice'],now_iso)
+        model=collect_inventory_export_model(self.conn,date_from='2026-08-01',date_to='2026-08-31')
+        self.assertEqual(3,len(model['input_rows']))
+        totals=model['totals']
+        groups.split_group(self.conn,'TDP',group['id'],now_iso())
+        after=collect_inventory_export_model(self.conn,date_from='2026-08-01',date_to='2026-08-31')
+        self.assertEqual(4,len(after['input_rows']));self.assertEqual(totals,after['totals'])
+
+    def test_input_report_rejects_stale_partial_or_cross_confirmation_groups(self):
+        self.create();create_input_receipt(self.conn,self.fixture['promotion_invoice'],now_iso)
+        model=collect_inventory_export_model(self.conn,date_from='2026-08-01',date_to='2026-08-31')
+        merged=next(r for r in model['input_rows'] if r.get('group_id'))
+        members=merged['group_members']
+        self.assertEqual(1,len(_group_input_movements(self.conn,members)))
+        self.assertEqual(1,len(_group_input_movements(self.conn,members[:1])))
+        modified=[dict(r) for r in members];modified[1]['confirmation_id']+=1
+        self.assertEqual(2,len(_group_input_movements(self.conn,modified)))
+        self.conn.execute('UPDATE msmi_invoice_items SET source_item_name=source_item_name||? WHERE id=?',(' changed',self.ids[0]))
+        self.assertEqual(2,len(_group_input_movements(self.conn,members)))
 
     def test_select_unmapped_first_cancel_then_atomic_mapping_merge_retry_split(self):
         self.conn.execute("UPDATE msmi_invoice_items SET product_code=NULL,mapping_status='unmapped',conversion_factor=NULL,stock_qty=0 WHERE id IN (?,?)",self.ids)
