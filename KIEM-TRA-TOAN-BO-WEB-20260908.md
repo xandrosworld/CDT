@@ -64,3 +64,9 @@ Gốc riêng: `D:/TDP_RAILWAY_PRIVATE/evidence/full-site-20260908-*`.
 - `trial-business-06`: các phần quy đổi Omachi 8 thùng → 240 gói, gộp dầu hào 24+6 → 30 can và sữa 480+40 → 520 hộp, hủy/gộp/tách giữ tiền nguồn đã đạt. Lượt ghi kho thực sự ghi vào bản thử rồi dừng khi tìm đường mở lại sau tự chuyển mọi kỳ; không chạy lại như thể chưa có ghi. Các lần sau dùng hóa đơn thử khác và lưu log riêng. Đây cũng là lý do phải đối chiếu trạng thái trước mỗi lần chạy lại.
 
 Các phần còn trống phải được cập nhật bằng kết quả thực thi; không tự chuyển thành “đạt” theo suy đoán hoặc theo việc đã có source.
+
+## Sửa khẩn phạm vi hóa đơn đã triển khai
+
+Source `20e7729`, Railway deployment `2f8504ee-d4cc-49a2-9d37-3102f7c22063` **SUCCESS**. Hai lượt browser phạm vi `customer-pending-scope-browser-02` và `customer-pending-manual-browser-02` đạt sau bổ sung chuyển bộ lọc cũ về ngày đã chọn, đổi Đến ngày thoát mọi kỳ và bỏ số đếm chuẩn hóa ngày toàn lịch sử khỏi thông báo kỳ này.
+
+`customer-pending-hosted-01` kiểm tra production chỉ đọc: bộ lọc cũ trở về tháng 8; API và màn hình khớp **266 hóa đơn, 261 đã nhập kho, 5 không nhập tồn, 0 dòng cần xử lý**, tổng **919.234.874đ**. Phạm vi ngày rõ ở toàn màn hình 1440/1024; đóng/mở và tải lại đạt, không tự yêu cầu dữ liệu mọi kỳ, không yêu cầu ghi nghiệp vụ, không JavaScript exception/HTTP 5xx. Đã xem ảnh. Kết quả này xác nhận lỗi phạm vi vừa sửa, không thay thế các phần toàn luồng còn mở ở trên.
