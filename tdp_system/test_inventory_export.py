@@ -422,9 +422,13 @@ class InventoryExportTests(unittest.TestCase):
             "Tải đủ 4 file ZIP",
         ):
             self.assertIn(contract, script)
-        renderer = script[script.index('  function renderInventory()'):script.index('  var inventoryPreviewSerial')]
+        renderer = script[script.index('  function renderInventory()'):script.index('  function inventoryDataToolsHtml()')]
         for removed in ('inventoryMonthCloseHtml', 'stats-grid', 'openingForm', 'inventoryAdjustmentForm', 'inventory-detail-toggle'):
             self.assertNotIn(removed, renderer)
+        self.assertIn('inventoryDataToolsHtml()', renderer)
+        self.assertIn('<details id="inventoryDataTools"', script)
+        self.assertIn('data-action="choose-opening-workbook"', script)
+        self.assertIn('data-action="choose-bk-workbook"', script)
         self.assertNotIn("Q-005", script)
         self.assertIn("Báo cáo vật tư hàng hóa", page)
         self.assertNotIn("Kho hóa đơn", page)

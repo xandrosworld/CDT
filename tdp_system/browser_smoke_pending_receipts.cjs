@@ -21,7 +21,7 @@ const {chromium} = require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
     await page.locator('[data-view="msmi"]').click();
     await page.locator('#invoice-list-count').waitFor();
     assert.equal(await page.locator('tr[id^="invoice-line-input-"]').count(), 0);
-    await page.getByRole('button', {name: 'Còn chưa nhập', exact: true}).click();
+    await page.getByRole('button', {name: 'Còn chưa nhập · mọi kỳ', exact: true}).click();
     await page.getByRole('heading', {name: 'Hóa đơn còn chưa nhập', exact: true}).waitFor();
     assert.equal(await page.locator('tr[id^="invoice-line-input-"]').count(), 3);
     const ids = await get('/fixture/ids');

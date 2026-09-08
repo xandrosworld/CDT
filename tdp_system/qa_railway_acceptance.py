@@ -27,10 +27,23 @@ def main():
                           MINVOICE_PASSWORD='offline-test', MINVOICE_API_MODE='legacy')
         from . import server
         server.connector_config_paths = lambda: []
+        # Observe actual HTTP test-client requests; this is route evidence, not
+        # a claim that every behavior behind a reached endpoint was exercised.
+        from flask import Flask, request
+        from collections import Counter
+        routes = Counter()
+        original_process_response = Flask.process_response
+        def observe_response(app, response):
+            response = original_process_response(app, response)
+            routes[(str(request.url_rule or request.path), request.method, response.status_code)] += 1
+            return response
+        Flask.process_response = observe_response
         suite = unittest.defaultTestLoader.loadTestsFromName('tdp_system.' + args.module)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         summary = {'module': args.module, 'tests': result.testsRun, 'failures': len(result.failures),
                    'errors': len(result.errors), 'skipped': len(result.skipped), 'ok': result.wasSuccessful()}
+        summary['http_routes'] = [{'route': route, 'method': method, 'status': status, 'requests': count}
+                                  for (route, method, status), count in sorted(routes.items())]
         (output / 'result.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
         return 0 if result.wasSuccessful() else 1
     modules = sorted(p.stem for p in Path(__file__).parent.glob('test_*.py'))

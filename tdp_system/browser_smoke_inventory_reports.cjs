@@ -23,7 +23,9 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
     await page.locator('[data-view="inventory"]').click();await page.locator('.inventory-export-grid').waitFor();
     await date('inventoryFrom','2026-08-01');await date('inventoryTo','2026-08-31');
     assert.equal(await page.locator('.inventory-export-grid button').count(),5);
-    assert.equal(await page.locator('.inventory-month-close,.inventory-close-history,.stats-grid,#openingForm,#inventoryAdjustmentForm,.inventory-detail-toggle,.inventory-nxt-card').count(),0);
+    assert.equal(await page.locator('.inventory-month-close,.inventory-close-history,.stats-grid,.inventory-detail-toggle,.inventory-nxt-card').count(),0);
+    assert.equal(await page.locator('#openingForm:visible,#inventoryAdjustmentForm:visible').count(),0);
+    assert.equal(await page.locator('#inventoryDataTools > summary').count(),1,'Data entry remains reachable in the collapsed panel');
     assert(!requests.some(url=>url.includes('/month-close/') || url.includes('/bk-import/')));
     for(const kind of ['opening','input','output','nxt']) {
       const button=page.locator('[data-action="preview-inventory-report"][data-kind="'+kind+'"]');

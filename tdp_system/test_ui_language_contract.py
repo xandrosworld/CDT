@@ -178,7 +178,7 @@ class UnifiedUiLanguageContractTests(unittest.TestCase):
             'quoteDetailsOpen: true', 'quoteHistoryOpen: false',
             'inventoryDetailsOpen: true', 'documentDetailsOpen: false',
             "Báo giá tổng", "Báo giá chi tiết", "tổng hợp theo nhà thầu và từng bếp trong tháng",
-            "Tải đủ 4 file ZIP", "File tải hóa đơn", "Bảng kê từ hóa đơn đỏ",
+            "Tải đủ 4 file ZIP", "File đưa lên M-Invoice", "Bảng kê từ hóa đơn đỏ",
         ):
             self.assertIn(marker, self.script)
 

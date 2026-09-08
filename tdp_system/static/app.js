@@ -34,6 +34,7 @@
     physicalSearch: "",
     physicalStatus: "all",
     physicalEntry: null,
+    inventoryDataToolsOpen: false,
     quickAddContext: null,
     homeFrom: "",
     homeTo: "",
@@ -92,7 +93,7 @@
     invoiceTo: storedInvoiceFilters.date_to || todayIso,
     invoiceStatus: ["all", "needs_mapping", "ready", "posted", "error", "reversed", "not_inventory"].indexOf(storedInvoiceFilters.status) >= 0 ? storedInvoiceFilters.status : "all",
     invoiceLineFilter: storedInvoiceFilters.line_filter || "all",
-    invoicePending: storedInvoiceFilters.pending === true,
+    invoicePending: storedInvoiceFilters.scope_version === 2 && storedInvoiceFilters.pending === true,
     supplierNeeds: null,
     purchaseOrderPreview: null,
     deliveryDetailsOpen: false,
@@ -840,7 +841,8 @@
         date_to: state.invoiceTo,
         status: state.invoiceStatus,
         line_filter: state.invoiceLineFilter,
-        pending: state.invoicePending
+        pending: state.invoicePending,
+        scope_version: 2
       }));
     } catch (ignore) {
       // The workbench remains usable when browser storage is disabled.
@@ -2934,6 +2936,10 @@
   }
 
   function renderInventory() {
+    if (state.inventoryDataToolsOpen && state.bkDocuments == null) {
+      state.bkDocuments = [];
+      loadBkDocuments();
+    }
     var valid = state.inventoryFrom && state.inventoryTo && state.inventoryFrom <= state.inventoryTo;
     var exportQuery = "?from=" + encodeURIComponent(state.inventoryFrom) + "&to=" + encodeURIComponent(state.inventoryTo);
     content.innerHTML = inventoryTraceHtml() + html([
@@ -2947,7 +2953,40 @@
       [['opening','Tồn đầu kỳ'],['input','Nhập'],['output','Xuất'],['nxt','Nhập – xuất – tồn']].map(function(item) {
         return '<button class="btn btn-outline" data-action="preview-inventory-report" data-kind="' + item[0] + '"' + (valid ? '' : ' disabled') + '>' + item[1] + '</button>';
       }).join(''),
-      '</div>', valid ? '' : '<p class="error-summary">Chọn đủ ngày; Từ ngày không được lớn hơn Đến ngày.</p>', '</div>'
+      '</div>', valid ? '' : '<p class="error-summary">Chọn đủ ngày; Từ ngày không được lớn hơn Đến ngày.</p>', '</div>',
+      inventoryDataToolsHtml()
+    ]);
+    var dataTools = document.getElementById('inventoryDataTools');
+    dataTools.ontoggle = function() {
+      state.inventoryDataToolsOpen = dataTools.open;
+      if (dataTools.open && state.bkDocuments == null) { state.bkDocuments=[]; loadBkDocuments(); }
+    };
+  }
+
+  function inventoryDataToolsHtml() {
+    return html([
+      '<details id="inventoryDataTools" class="card inventory-data-tools"', state.inventoryDataToolsOpen || state.openingImportPreview || state.bkImportPreview ? ' open' : '', '>',
+      '<summary class="card-head">Nhập tồn đầu, bảng kê mua vào và lịch sử</summary><div class="card-body">',
+      '<h3>Nhập tồn đầu kỳ</h3><p>Chọn đúng kỳ cần nhập. Có thể nhập từng mã hoặc nạp Excel; hệ thống kiểm tra trước khi ghi.</p>',
+      '<form id="openingForm" class="payment-grid"><div class="form-field"><label>Kỳ<input name="period" type="month" value="', esc(state.opsMonth), '" required></label></div>',
+      '<div class="form-field"><label>Mã hàng<input name="product_code" required></label></div>',
+      '<div class="form-field"><label>Số lượng<input name="qty" type="number" step="any" required></label></div>',
+      '<div class="form-field"><label>Đơn giá vốn<input name="unit_cost" type="number" step="any" min="0"></label></div>',
+      '<button class="btn btn-primary" type="submit">Lưu tồn đầu</button>',
+      '<button class="btn btn-outline" type="button" data-action="choose-opening-workbook">Nạp Excel tồn đầu kỳ</button></form>',
+      openingImportPreviewHtml(),
+      '<h3>Bảng kê mua vào không có hóa đơn</h3><p>Tải mẫu, điền dữ liệu rồi chọn file để kiểm tra trước khi xác nhận nhập kho.</p><div class="form-actions">',
+      '<button class="btn btn-outline" data-action="download-document" data-url="/api/bk-import/template">Tải mẫu trắng</button>',
+      state.batchId ? '<button class="btn btn-outline" data-action="download-document" data-url="/api/bk-import/template?batch_id=' + encodeURIComponent(state.batchId) + '">Tải theo đơn đang chọn</button>' : '',
+      '<button class="btn btn-primary" data-action="choose-bk-workbook">Chọn file bảng kê đã sửa</button>',
+      '<button class="btn btn-outline" data-action="reload-bk-documents">Tải lại lịch sử bảng kê</button></div>',
+      bkImportPreviewHtml(), bkDocumentsHtml(),
+      '<details><summary>Điều chỉnh dùng nội bộ</summary><p>Điều chỉnh này có lịch sử, không dùng để mở khóa xuất hóa đơn.</p>',
+      '<form id="inventoryAdjustmentForm" class="payment-grid"><div class="form-field"><label>Ngày<input name="txn_date" type="date" value="',esc(state.opsDate),'" required></label></div>',
+      '<div class="form-field"><label>Mã hàng<input name="product_code" required></label></div>',
+      '<div class="form-field"><label>Số lượng (+ tăng / − giảm)<input name="qty" type="number" step="any" required></label></div>',
+      '<div class="form-field"><label>Lý do<input name="note" required></label></div><button class="btn btn-outline" type="submit">Ghi điều chỉnh</button></form></details>',
+      '</div></details>'
     ]);
   }
 
@@ -3382,6 +3421,9 @@
         onClose:async function(){
           if (saved) {
             state.catalogImportPreview=null; state.invoiceWorkbench=null; state.invoiceListing=null;
+            state.catalogItems=[];
+            var catalog = document.getElementById('catalogProducts');
+            if (catalog) catalog.textContent='Đang cập nhật danh mục đã lưu…';
             try { await loadData(state.batchId,true); } catch(error){ showToast('Đã lưu danh mục. Tải lại trang để cập nhật các màn khác.',true); }
           } else await loadCatalogProducts();
         }
@@ -5383,6 +5425,8 @@
     if (event.target.id === "openingForm") {
       event.preventDefault();
       var opening = Object.fromEntries(new FormData(event.target).entries());
+      state.opsMonth = opening.period;
+      state.opsDate = opening.period + '-01';
       jsonWrite("/api/inventory/opening", "POST", { period: opening.period, items: [{
         product_code: opening.product_code, qty: n(opening.qty), unit_cost: n(opening.unit_cost)
       }] }, "Đã lưu tồn đầu kỳ");
@@ -5755,7 +5799,7 @@
     }
     if (["invoiceFrom", "invoiceTo", "invoiceStatus", "invoiceLineFilter"].indexOf(event.target.id) >= 0) {
       if (event.target.id === "invoiceFrom") { state.invoiceFrom = event.target.value; state.invoicePending = false; state.legacyInvoiceMappingPreview = null; }
-      if (event.target.id === "invoiceTo") { state.invoiceTo = event.target.value; state.legacyInvoiceMappingPreview = null; }
+      if (event.target.id === "invoiceTo") { state.invoiceTo = event.target.value; state.invoicePending = false; state.legacyInvoiceMappingPreview = null; }
       if (event.target.id === "invoiceStatus") {
         state.invoiceStatus = event.target.value;
         if (['posted','reversed','not_inventory'].includes(state.invoiceStatus)) state.invoicePending = false;
@@ -5995,7 +6039,8 @@
       var issueRow = document.querySelector('.invoice-lines-card tr[data-issue="1"]');
       if (issueRow) {
         issueRow.scrollIntoView({block:"center", inline:"nearest"});
-        var editor = issueRow.querySelector("input,select,button");
+        var editor = issueRow.querySelector('.invoice-mapping-input:not([disabled]), .invoice-draft-factor:not([disabled]), input[id^="conversion_"]:not([disabled])') ||
+          issueRow.querySelector('input:not([type="checkbox"]):not([disabled]),select:not([disabled]),button:not([disabled])');
         if (editor) { editor.focus(); editor.scrollIntoView({block:"center", inline:"center"}); }
       }
       return;
@@ -6332,6 +6377,7 @@
       state.bkImportPreview = null;
       bkWorkbookInput.click();
     }
+    if (action === 'reload-bk-documents') await loadBkDocuments();
     if (action === "choose-payables-workbook") {
       state.payablesImportPreview = null;
       payablesWorkbookInput.click();
@@ -6888,7 +6934,7 @@
         onPosted:async function(result, rows) {
           state.inventoryValuation = null; state.inventoryMonthClose = null; state.outgoingReadiness = null;
           state.invoiceLastPosted = {direction:'output', id:rows[0].id};
-          state.invoicePending = true; state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all';
+          state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all';
           persistInvoiceWorkbenchFilters(); await loadInvoiceWorkbench(true); render();
           showToast('Đã ghi xuất kho ' + result.posted_count + ' hóa đơn' + (result.already_posted_count ? ' · ' + result.already_posted_count + ' hóa đơn đã ghi trước đó' : '') + '. Hóa đơn chưa đủ điều kiện vẫn được giữ lại.');
         }});
@@ -6904,7 +6950,7 @@
           state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
           state.invoiceLastPosted = {direction:'input', id:rows[0].id};
           state.invoiceLastPostedGroup = rows;
-          state.invoicePending = true; state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all';
+          state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all';
           persistInvoiceWorkbenchFilters();
           try { await loadInvoiceWorkbench(true); render(); }
           catch(error) { showToast('Đã nhập kho. Chưa tải lại được bảng; hãy tải lại trang.', true); return; }
@@ -7087,6 +7133,12 @@
     content.classList.remove('invoice-mapping-fullscreen');
     document.body.style.overflow = invoiceMappingPreviousOverflow;
     var bar = content.querySelector('.invoice-mapping-fullscreen-bar');
+    // Search and its reopen button are moved into the fullscreen bar. Keep
+    // those live controls when removing the bar, including any typed query.
+    if (bar && mappingSearch && bar.contains(mappingSearch.element)) {
+      var card = bar.closest('.invoice-lines-card');
+      card.insertBefore(mappingSearch.element, card.querySelector('.invoice-lines-scroll'));
+    }
     if (bar) bar.remove();
   }
   function syncInvoiceMappingFullscreen() {

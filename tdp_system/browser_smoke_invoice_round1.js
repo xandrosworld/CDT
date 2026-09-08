@@ -29,7 +29,7 @@ async function main() {
     const fixture=(await request('/fixture/ids')).body;
     const initial=(await request('/api/invoice-workbench/invoices?from=2026-08-01&to=2026-08-31')).body;
     const checkPrices=async (direction,payload)=>{
-      assert.equal(await evaluate(`document.querySelector('.invoice-lines-card thead th:nth-child(7)').textContent`),'Đơn giá');
+      assert.equal(await evaluate(`[...document.querySelectorAll('.invoice-lines-card thead th')].filter(th=>th.textContent.trim()==='Đơn giá').length`),1);
       for(const line of payload.lines) {
         const cell=await evaluate(`(()=>{const cell=document.querySelector('#invoice-line-${direction}-${line.id} .invoice-unit-price');return {text:cell.textContent,editable:!!cell.querySelector('input,select,textarea,[contenteditable=true]'),align:getComputedStyle(cell).textAlign};})()`);
         assert.equal(Number(cell.text.replace(/[^0-9-]/g,'')),Math.sign(line.unit_price)*Math.floor(Math.abs(line.unit_price)+0.5));

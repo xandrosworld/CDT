@@ -32,14 +32,15 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
     await dialog.getByText(/Lỗi mạng kiểm thử/).waitFor();
     await page.unroute('**/api/invoice-workbench/output-postings');
     await dialog.locator('.receipt-confirm').click();await dialog.waitFor({state:'detached'});
-    await page.getByRole('heading',{name:'Hóa đơn còn chưa xuất',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Hóa đơn trong khoảng ngày đã chọn',exact:true}).waitFor();
+    assert.equal(await page.locator('[data-action=toggle-pending-invoices]').getAttribute('aria-pressed'),'false');
     let pending=await get('/api/invoice-workbench/invoices?invoice_type=output&from=2026-09-01&to=2026-09-02&scope=pending');
     assert.equal(pending.items.length,2);assert(!pending.items.some(r=>r.invoice_number==='90'));
     await page.screenshot({path:'tmp/stock-output-workflow.png'});
     await page.getByRole('button',{name:'Tạo file đưa lên M-Invoice',exact:true}).click();
     await page.getByRole('heading',{name:'File đưa lên M-Invoice',exact:true}).waitFor();
     assert.match(await page.locator('#content').innerText(),/Tải ZIP về máy, giải nén/);
-    assert.equal(await page.getByRole('button',{name:'Cần duyệt đơn trước',exact:true}).count(),1);
+    await page.getByRole('button',{name:'Cần duyệt đơn trước',exact:true}).waitFor();
     // Month actions remain out of the compact report landing until opened.
     await page.locator('[data-view="inventory"]').click();
     assert.equal(await page.locator('.inventory-month-close').count(),0);

@@ -14,6 +14,8 @@ with tempfile.TemporaryDirectory(prefix='tdp_date_picker_') as root:
     server.init_database(sync_master=False)
     with server.db() as conn:
         ids = seed_round1(conn)
+        if os.environ.get('TDP_FIXTURE_OLD_PENDING') == '1':
+            conn.execute("UPDATE msmi_invoices SET invoice_date='2022-07-31' WHERE id=?",(ids['input_ids']['3'],))
     @server.app.get('/fixture/ids')
     def fixture_ids():
         return ids

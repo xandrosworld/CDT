@@ -120,23 +120,36 @@ def main():
         (output/(name+'.json')).write_text(json.dumps(p,ensure_ascii=False),encoding='utf-8')
         wb=workbook('/api/invoice-workbench/invoices/export?'+query,name)
         ws=wb.active
+        columns = {cell.value: cell.column for cell in ws[2]}
+        fields = {'Tên hàng':'source_item_name','ĐVT':'source_unit','Số lượng':'qty',
+                  'Đơn giá':'unit_price','Thành tiền dòng (chưa thuế)':'amount',
+                  'Mã kho':'product_code','Lượng kho':'stock_qty','ĐVT kho':'product_unit'}
         for index,line in enumerate(p['lines'],3):
-            for column,field in [(5,'source_item_name'),(6,'source_unit'),(7,'qty'),(8,'amount'),(9,'product_code'),(10,'stock_qty')]:
+            for label,field in fields.items():
+                column = columns[label]
                 actual=ws.cell(index,column).value
                 expected=line.get(field)
-                if column in (7,8,10): assert abs(dec(actual)-dec(expected))<Decimal('0.000001'),(index,field)
+                if field in ('qty','unit_price','amount','stock_qty'): assert abs(dec(actual)-dec(expected))<Decimal('0.000001'),(index,field,actual,expected)
                 else: assert (actual or '') == (expected or ''),(index,field)
         line_amount=sum((dec(line.get('amount')) for line in p['lines']),Decimal(0))
         invoice_amount=sum((dec(invoice.get('total_amount')) for invoice in p['items']),Decimal(0))
         assert abs(dec(p['totals']['line_amount'])-line_amount)<Decimal('0.000001')
         assert abs(dec(p['totals']['invoice_amount'])-invoice_amount)<Decimal('0.000001')
-        assert abs(dec(ws.cell(len(p['lines'])+3,8).value)-line_amount)<Decimal('0.000001')
-        assert abs(dec(ws.cell(ws.max_row,8).value)-invoice_amount)<Decimal('0.000001')
+        amount_column = columns['Thành tiền dòng (chưa thuế)']
+        assert abs(dec(ws.cell(len(p['lines'])+3,amount_column).value)-line_amount)<Decimal('0.000001')
+        assert abs(dec(ws.cell(ws.max_row,amount_column).value)-invoice_amount)<Decimal('0.000001')
         with server.db() as conn:
             table='msmi_invoices' if direction=='input' else 'outgoing_source_invoices'
             sql='SELECT * FROM '+table+' WHERE invoice_date BETWEEN ? AND ?'
+            params=[start,end]
             if direction=='input': sql+=" AND invoice_type='INPUT_ELECTRONIC_INVOICE'"
-            rows=[dict(r) for r in conn.execute(sql,(start,end))]
+            else:
+                tenant=conn.execute("SELECT value FROM settings WHERE key='tenant_code'").fetchone()
+                sql+=" AND source='minvoice' AND tenant=?"
+                params.append(tenant[0] if tenant else 'TDP')
+                excluded=conn.execute("SELECT source,COUNT(*) FROM outgoing_source_invoices WHERE invoice_date BETWEEN ? AND ? AND source!='minvoice' GROUP BY source",(start,end)).fetchall()
+                report['source_issues'].append({'kind':'excluded_nonproduction_output_sources','period':start,'sources':[dict(source=r[0],invoices=r[1]) for r in excluded]})
+            rows=[dict(r) for r in conn.execute(sql,params)]
         assert {r['id'] for r in rows} == {r['id'] for r in p['items']}
         for row in rows:
             api_row=next(r for r in p['items'] if r['id']==row['id'])
