@@ -13,9 +13,20 @@ def number(value):
         return None
 
 
+def tax_rate_label(value):
+    """M-Invoice's -1/-2 are categories, not negative percentages."""
+    rate = '' if value is None else str(value).strip()
+    numeric = number(rate.removesuffix('%').replace(',', '.').strip())
+    if numeric == Decimal('-1'):
+        return 'KCT'
+    if numeric == Decimal('-2'):
+        return 'KKKNT'
+    return rate
+
+
 def tax_fields(line, raw_line=None):
     raw_line = raw_line if isinstance(raw_line, dict) else {}
-    rate = str(line.get('tax_rate') or '').strip()
+    rate = tax_rate_label(line.get('tax_rate'))
     tax, note = None, 'Chưa có tiền thuế nguồn'
     for key in ('vatAmount', 'tthue', 'taxAmount', 'tax_amount'):
         if key in raw_line and raw_line[key] is not None and raw_line[key] != '':

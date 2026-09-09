@@ -23,6 +23,7 @@ from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.views import Selection
 
 try:
+    from invoice_line_tax import tax_rate_label
     from inventory_report_company import report_company
     from invoice_line_groups import _fingerprint as group_fingerprint, _rows as group_source_rows
     from invoice_valuation import InvoiceValuationError, moving_average_report
@@ -36,6 +37,7 @@ try:
         write_literal,
     )
 except ImportError:  # pragma: no cover - package invocation
+    from .invoice_line_tax import tax_rate_label
     from .inventory_report_company import report_company
     from .invoice_line_groups import _fingerprint as group_fingerprint, _rows as group_source_rows
     from .invoice_valuation import InvoiceValuationError, moving_average_report
@@ -162,7 +164,8 @@ def _product_metadata(conn: Any) -> dict[str, dict[str, Any]]:
                    {invoice_expression} invoice_name
               FROM products p {outgoing_join} ORDER BY p.code"""
     ).fetchall()
-    return {str(row["code"]): dict(row) for row in rows}
+    return {str(row["code"]): dict(row, tax=tax_rate_label(row['tax'])
+            if tax_rate_label(row['tax']) in {'KCT', 'KKKNT'} else row['tax']) for row in rows}
 
 
 def _source_trace(conn: Any, event: Mapping[str, Any], tax_cache=None) -> dict[str, Any]:

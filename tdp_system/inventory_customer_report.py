@@ -6,9 +6,11 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.worksheet.views import Selection
 
 try:
+    from .invoice_line_tax import tax_rate_label
     from .inventory_report_company import write_company_header
     from .template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 except ImportError:
+    from invoice_line_tax import tax_rate_label
     from inventory_report_company import write_company_header
     from template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 
@@ -33,11 +35,13 @@ def literal(ws, row, col, value):
 def tax_value(item, lines):
     catalog = item.get('tax')
     if catalog not in (None, ''):
+        if tax_rate_label(catalog) in {'KCT', 'KKKNT'}:
+            return tax_rate_label(catalog)
         try:
             return float(Decimal(str(catalog)))
         except InvalidOperation:
             return str(catalog)
-    rates = list(dict.fromkeys(str(r.get('tax_rate') or '').strip() for r in lines))
+    rates = list(dict.fromkeys(tax_rate_label(r.get('tax_rate')) for r in lines))
     if len(rates) == 1 and rates[0]:
         try:
             return float(Decimal(rates[0].replace('%', '')) / 100)

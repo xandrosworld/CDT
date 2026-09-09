@@ -2979,10 +2979,10 @@
     var close = state.inventoryMonthClose;
     dialog.innerHTML = '<div class="inventory-totals-heading"><h3>Chuyển tồn sang tháng sau</h3><button class="icon-button close-period-dialog" aria-label="Đóng">×</button></div>' +
       '<label class="inventory-close-period">Tháng cần chuyển <input id="inventoryClosePeriod" type="month" value="' + esc(state.inventoryClosePeriod) + '"></label>' +
-      '<p>Kiểm tra và ghi kho các hóa đơn trước, sau đó chuyển tồn cuối tháng thành tồn đầu tháng kế tiếp.</p>' + inventoryMonthCloseHtml(close) +
+      '<p>Chuyển tồn cuối tháng đã ghi kho thành tồn đầu tháng kế tiếp. Hóa đơn còn chờ có thể ghi kho hàng loạt ngay bên dưới.</p>' + inventoryMonthCloseHtml(close) +
       (close && !close.error && (close.unposted_input_count || close.unposted_output_count) ? '<div class="compact-controls">' +
-        (close.unposted_input_count ? '<button class="btn btn-outline" data-pending-direction="input">Xử lý đầu vào còn chờ</button>' : '') +
-        (close.unposted_output_count ? '<button class="btn btn-outline" data-pending-direction="output">Xử lý đầu ra còn chờ</button>' : '') + '</div>' : '') +
+        (close.unposted_input_count ? '<button class="btn btn-primary" data-bulk-direction="input">Ghi kho đầu vào hàng loạt</button><button class="btn btn-outline" data-pending-direction="input">Xem đầu vào còn chờ</button>' : '') +
+        (close.unposted_output_count ? '<button class="btn btn-primary" data-bulk-direction="output">Ghi kho đầu ra hàng loạt</button><button class="btn btn-outline" data-pending-direction="output">Xem đầu ra còn chờ</button>' : '') + '</div>' : '') +
       (close && close.problem_items && close.problem_items.length ? '<div class="table-wrap"><table><thead><tr><th>Mã cần kiểm tra</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th></tr></thead><tbody>' + close.problem_items.map(function(item) {
         return '<tr class="invoice-row-issue"><td>' + esc(item.product_code) + '</td><td>' + esc(item.product_name) + '</td><td>' + esc(item.unit) + '</td><td>' + stockQty(item.closing_qty) + '</td><td>' + stockMoney(item.closing_value) + '</td></tr>';
       }).join('') + '</tbody></table></div>' : '');
@@ -3002,6 +3002,18 @@
       state.invoiceDirection = button.dataset.pendingDirection; state.invoiceFrom = close.date_from; state.invoiceTo = close.date_to;
       state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all'; state.invoicePending = true;
       state.invoiceWorkbench = null; state.invoiceListing = null; persistInvoiceWorkbenchFilters(); dialog.close(); navigate('msmi');
+    }; });
+    dialog.querySelectorAll('[data-bulk-direction]').forEach(function(button) { button.onclick = async function() {
+      if (state.inventoryCloseBusy) return;
+      var direction = button.dataset.bulkDirection;
+      var query = '?from=' + encodeURIComponent(close.date_from) + '&to=' + encodeURIComponent(close.date_to) + '&status=all&line_filter=all';
+      await window.TdpReceiptReview({direction:direction, api:api, query:query, esc:esc, money:stockMoney, qty:stockQty, date:dateVN,
+        onPosted:async function(result) {
+          state.inventoryValuation = null; state.inventoryMonthClose = null; state.outgoingReadiness = null;
+          state.invoiceWorkbench = null; state.invoiceListing = null;
+          await loadInventoryMonthClose();
+          showToast('Đã ghi kho ' + result.posted_count + ' hóa đơn. Đã tính lại tồn cuối tháng.');
+        }});
     }; });
     if (state.inventoryCloseBusy) dialog.querySelectorAll('button,input').forEach(function(el) { el.disabled = true; });
   }

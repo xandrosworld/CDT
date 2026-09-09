@@ -16,6 +16,14 @@ from .invoice_output_register import output_sales_workbook
 
 
 class LineTaxTests(unittest.TestCase):
+    def test_minvoice_category_codes_display_as_labels_without_negative_tax(self):
+        for code, label in [('-2', 'KKKNT'), (-2, 'KKKNT'), ('-2.0', 'KKKNT'), ('-1', 'KCT'), ('-1%', 'KCT')]:
+            line = dict(amount=100000, tax_rate=code)
+            self.assertEqual((label, 0, 100000), tuple(tax_fields(line)[k] for k in ('tax_rate', 'line_tax_amount', 'amount_with_tax')))
+            self.assertEqual(code, line['tax_rate'])
+            self.assertEqual(123, tax_fields(line, {'vatAmount': 123})['line_tax_amount'])
+        self.assertEqual(('0', 0), tuple(tax_fields(dict(amount=100, tax_rate=0))[k] for k in ('tax_rate', 'line_tax_amount')))
+
     def test_explicit_zero_and_signed_source_tax_override_rate_arithmetic(self):
         for tax in (0, -8001.25, 8123):
             fields = tax_fields(dict(amount=100000, tax_rate='8'), {'vatAmount': tax})
@@ -124,6 +132,19 @@ class CustomerReportTests(unittest.TestCase):
             response = self.client.get('/api/invoice-valuation/' + route + '/closing?from=2026-08-02&to=2026-08-31')
             self.assertEqual(400, response.status_code)
             self.assertEqual('full_calendar_month_required', response.json['code'])
+
+    def test_special_tax_labels_reach_download_and_preview_without_source_edits(self):
+        self.conn.execute("UPDATE outgoing_source_invoice_items SET tax_rate='-2'")
+        before = list(self.conn.iterdump())
+        response = self.client.get('/api/invoice-valuation/export/output' + self.query)
+        self.assertEqual(200, response.status_code)
+        book = load_workbook(io.BytesIO(response.data))
+        self.assertEqual('KKKNT', book.active['K8'].value)
+        self.assertEqual(72, book.active['L8'].value)
+        book.close()
+        response = self.client.get('/api/invoice-valuation/preview/output' + self.query)
+        self.assertIn('KKKNT', json.dumps(response.json))
+        self.assertEqual(before, list(self.conn.iterdump()))
 
 
 class SignedSalesTaxTests(unittest.TestCase):

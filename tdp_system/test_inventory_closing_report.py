@@ -6,12 +6,19 @@ from openpyxl import load_workbook
 from . import test_inventory_export as fixtures
 from .inventory_export import monthly_customer_model
 from .inventory_customer_report import customer_nxt_workbook
+from .inventory_customer_report import tax_value
 from .inventory_closing_report import customer_closing_workbook, TEMPLATE_PATH
 from .invoice_workbench_listing import invoice_range_payload
 from .inventory_report_company import DEFAULT_COMPANY
 
 
 class ClosingReportTests(unittest.TestCase):
+    def test_stock_tax_category_codes_are_not_rendered_as_negative_percentages(self):
+        self.assertEqual('KKKNT', tax_value({'tax': -2}, []))
+        self.assertEqual('KCT', tax_value({'tax': '-1'}, []))
+        self.assertEqual('KKKNT', tax_value({'tax': ''}, [{'tax_rate': '-2'}]))
+        self.assertEqual(0.08, tax_value({'tax': 0.08}, []))
+
     def setUp(self):
         self.fixture = fixtures.InventoryExportTests()
         self.fixture.setUp()
