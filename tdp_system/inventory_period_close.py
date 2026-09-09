@@ -275,8 +275,10 @@ def inventory_period_close_preview(
         (date_from, date_to),
     ).fetchone()[0])
     unposted_output_count = int(conn.execute(
-        """SELECT COUNT(*) FROM outgoing_source_invoices WHERE source='minvoice' AND invoice_date>=? AND invoice_date<=?
-           AND stock_status NOT IN ('posted','reversed','not_inventory')""",
+        """SELECT COUNT(*) FROM outgoing_source_invoices i WHERE i.source='minvoice' AND i.invoice_date>=? AND i.invoice_date<=?
+           AND i.stock_status NOT IN ('posted','reversed','not_inventory')
+           AND EXISTS (SELECT 1 FROM outgoing_source_invoice_items li
+                       WHERE li.invoice_id=i.id AND li.inventory_eligible=1)""",
         (date_from, date_to),
     ).fetchone()[0])
     return {

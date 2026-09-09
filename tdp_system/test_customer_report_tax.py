@@ -146,6 +146,20 @@ class CustomerReportTests(unittest.TestCase):
         self.assertIn('KKKNT', json.dumps(response.json))
         self.assertEqual(before, list(self.conn.iterdump()))
 
+    def test_month_transfer_does_not_request_stock_posting_for_financial_only_invoices(self):
+        from .inventory_period_close import init_inventory_period_close_schema, inventory_period_close_preview
+        from datetime import date
+        init_inventory_period_close_schema(self.conn)
+        self.conn.execute("UPDATE outgoing_source_invoices SET stock_status='blocked'")
+        self.conn.execute('UPDATE outgoing_source_invoice_items SET inventory_eligible=0')
+        before = list(self.conn.iterdump())
+        preview = inventory_period_close_preview(self.conn, '2026-08', today=date(2026,9,9))
+        self.assertEqual(0, preview['unposted_output_count'])
+        self.assertEqual(before, list(self.conn.iterdump()))
+        self.conn.execute('UPDATE outgoing_source_invoice_items SET inventory_eligible=1')
+        preview = inventory_period_close_preview(self.conn, '2026-08', today=date(2026,9,9))
+        self.assertEqual(1, preview['unposted_output_count'])
+
 
 class SignedSalesTaxTests(unittest.TestCase):
     def test_negative_source_tax_and_mismatched_header_survive_excel_export(self):
