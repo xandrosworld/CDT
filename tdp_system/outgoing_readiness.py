@@ -555,8 +555,11 @@ def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[st
                 opening_editor = {'period': row['source_id'], 'qty': events[0]['qty_delta'], 'expected': row}
     movements = conn.execute(
         """SELECT l.txn_date,l.direction,l.event_type,l.qty_delta,l.source_line_index,
+                  l.source_invoice_table,l.source_invoice_id,l.source_line_id,
                   COALESCE(i.invoice_series,o.invoice_series,'') invoice_series,
                   COALESCE(i.invoice_number,o.invoice_number,'') invoice_number,
+                  COALESCE(i.invoice_date,o.invoice_date,l.txn_date) invoice_date,
+                  COALESCE(i.id,o.id) linked_invoice_id,
                   COALESCE(c.note,'') note
            FROM invoice_inventory_ledger l
            LEFT JOIN msmi_invoices i ON l.source_invoice_table='msmi_invoices' AND i.id=l.source_invoice_id
@@ -572,7 +575,11 @@ def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[st
         reference = (f"{row['invoice_series']} / {row['invoice_number']} · Dòng {row['source_line_index']}"
                      if row['invoice_number'] else row['note'])
         events.append({'date': row['txn_date'], 'label': label, 'reference': reference,
-                       'qty_delta': float(row['qty_delta'])})
+                       'qty_delta': float(row['qty_delta']),
+                       'direction': row['direction'], 'invoice_id': row['source_invoice_id'],
+                       'invoice_date': row['invoice_date'],
+                       'line_id': row['source_line_id'],
+                       'can_open_invoice': row['linked_invoice_id'] is not None})
     balance = 0.0
     for event in events:
         balance += event['qty_delta']

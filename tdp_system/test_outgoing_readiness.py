@@ -336,6 +336,23 @@ class OutgoingReadinessTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual(list(conn.iterdump()), before)
 
+    def test_stock_trace_links_to_source_invoice_even_when_ledger_date_differs(self):
+        with server.db() as conn:
+            self.add_opening(conn, 1)
+            batch_id, _ = self.add_batch(conn, '2026-09-04', [{'qty': 2}])
+            source_id = self.add_posted_source(conn, source='minvoice', number='TRACE-1', qty=3)
+            conn.execute("UPDATE invoice_inventory_ledger SET txn_date='2026-08-21'")
+            before = list(conn.iterdump())
+        trace = self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}/stock/HH-01').json
+        event = trace['events'][-1]
+        self.assertTrue(event['can_open_invoice'])
+        self.assertEqual(event['invoice_id'], source_id)
+        self.assertEqual(event['invoice_date'], '2026-08-20')
+        self.assertEqual(event['date'], '2026-08-21')
+        self.assertEqual(event['direction'], 'output')
+        with server.db() as conn:
+            self.assertEqual(list(conn.iterdump()), before)
+
     def test_stock_trace_uses_selected_opening_and_canonical_events_only(self):
         with server.db() as conn:
             self.add_opening(conn, -100, work_date='2026-07-01')

@@ -360,6 +360,9 @@
     dialog.setAttribute('aria-labelledby', 'stock-cause-title');
     dialog.innerHTML = '<div class="inventory-totals-heading"><h3 id="stock-cause-title">Kiểm tra tồn · ' + esc(code) + '</h3></div><div class="stock-cause-body" aria-live="polite">Đang tải lịch sử mặt hàng…</div><div class="stock-cause-actions"><button type="button" class="btn btn-outline">Quay lại</button></div>';
     dialog.querySelector('.stock-cause-actions button').onclick = function() { if (!saving) dialog.close(); };
+    var recheck = document.createElement('button'); recheck.type = 'button'; recheck.className = 'btn btn-outline'; recheck.textContent = 'Kiểm tra lại';
+    recheck.onclick = async function() { if (saving) return; await fetchOutgoingReadiness(); await loadTrace(); };
+    dialog.querySelector('.stock-cause-actions').appendChild(recheck);
     dialog.addEventListener('cancel', function(event) { if (saving) event.preventDefault(); });
     dialog.addEventListener('close', function() { dialog.remove(); if (button.isConnected) button.focus({preventScroll:true}); }, {once:true});
     document.body.appendChild(dialog); dialog.showModal();
@@ -384,7 +387,40 @@
           '<h4>Nguồn tính tồn' + (trace.opening_date ? ' từ ' + dateVN(trace.opening_date) : '') + '</h4><div class="stock-cause-scroll"><table><thead><tr><th>Ngày</th><th>Nguồn</th><th>Tăng / giảm</th><th>Tồn sau dòng</th></tr></thead><tbody>' +
           (trace.events || []).map(function(row) { return '<tr><td>' + dateVN(row.date) + '</td><td><strong>' + esc(row.label) + '</strong><div>' + esc(row.reference) + '</div></td><td class="num-cell">' + quantity(row.qty_delta) + '</td><td class="num-cell">' + quantity(row.balance_qty) + '</td></tr>'; }).join('') +
           (!(trace.events || []).length ? '<tr><td colspan="4">Chưa có tồn đầu hoặc dòng nhập/xuất đã ghi sổ.</td></tr>' : '') + '</tbody></table></div>';
-        if (trace.opening_editor && trace.negative_opening_only) {
+        body.insertAdjacentHTML('beforeend', '<div class="stock-source-actions"><p>Đối chiếu nguồn trước khi sửa. Chỉ sửa tồn đầu khi số đầu kỳ sai; nếu dòng nhập/xuất sai, mở đúng hóa đơn bên dưới.</p>' +
+          (trace.events || []).filter(function(row) { return row.can_open_invoice; }).map(function(row, index) {
+            return '<button type="button" class="btn btn-outline" data-stock-source="' + index + '">Mở ' + esc(row.label.toLowerCase()) + ' · ' + esc(row.reference) + '</button>';
+          }).join('') + '</div>');
+        var sourceRows = (trace.events || []).filter(function(row) { return row.can_open_invoice; });
+        body.querySelectorAll('[data-stock-source]').forEach(function(link) {
+          link.onclick = async function() {
+            var row = sourceRows[Number(link.dataset.stockSource)];
+            link.disabled = true;
+            state.stockResolutionReturn = batchId;
+            state.invoiceDirection = row.direction;
+            state.invoiceFrom = row.invoice_date || row.date; state.invoiceTo = state.invoiceFrom;
+            state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all'; state.invoicePending = false;
+            await loadInvoiceWorkbench(true);
+            if (state.invoiceListing?.error) { link.disabled = false; showToast(state.invoiceListing.error, true); return; }
+            if (!state.operations) await loadOperations(true);
+            dialog.close(); navigate('msmi');
+            var target = invoiceVirtual?.reveal(row.line_id) || document.getElementById('invoice-line-' + row.direction + '-' + row.line_id);
+            if (target) { target.classList.add('invoice-just-saved'); target.scrollIntoView({block:'center'}); }
+            showToast('Đã mở ngày hóa đơn ' + row.reference + '. Đối chiếu mã ' + code + '.');
+          };
+        });
+        var inputLink = document.createElement('button'); inputLink.type = 'button'; inputLink.className = 'btn btn-outline';
+        inputLink.textContent = 'Kiểm tra hóa đơn đầu vào';
+        inputLink.onclick = async function() {
+          inputLink.disabled = true; state.stockResolutionReturn = batchId;
+          state.invoiceDirection = 'input'; state.invoiceFrom = trace.opening_date || currentWorkDate().slice(0,7) + '-01';
+          state.invoiceTo = todayIso; state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all'; state.invoicePending = false;
+          await loadInvoiceWorkbench(true);
+          if (!state.operations) await loadOperations(true);
+          dialog.close(); navigate('msmi');
+        };
+        body.querySelector('.stock-source-actions').appendChild(inputLink);
+        if (trace.opening_editor) {
           var edit = document.createElement('button'); edit.type = 'button'; edit.className = 'btn btn-primary';
           edit.dataset.editOpening = '1'; edit.textContent = 'Sửa tồn đầu';
           dialog.querySelector('.stock-cause-actions').appendChild(edit);
@@ -396,6 +432,7 @@
             form.innerHTML = '<h4>Sửa tồn đầu tháng ' + esc(editor.period.slice(5) + '/' + editor.period.slice(0,4)) + '</h4><p>' + esc(trace.product_name) + ' · ' + esc(code) + '</p>' +
               '<label>Số tồn đúng đã đối chiếu (' + unit + ')<input name="qty" type="number" step="any" required value="' + esc(editor.qty) + '"></label><p class="stock-opening-error" role="alert"></p>' +
               '<div class="form-actions"><button type="button" class="btn btn-outline" data-cancel-edit>Hủy sửa</button><button type="submit" class="btn btn-primary">Lưu tồn đầu</button></div>';
+            form.querySelector('p').insertAdjacentHTML('afterend', '<p>Chỉ nhập số tồn đầu đã đối chiếu với nguồn. Không cộng bù để làm hết âm. Lịch sử nhập/xuất giữ nguyên.</p>');
             body.appendChild(form); form.scrollIntoView({block:'nearest'}); form.querySelector('input').focus(); form.querySelector('input').select();
             form.querySelector('[data-cancel-edit]').onclick = function() { form.remove(); edit.disabled = false; edit.focus(); };
             form.onsubmit = async function(event) {
@@ -2569,6 +2606,16 @@
       esc(href) + '">' + esc(button) + "</button></div>";
   }
 
+  function readinessQuantity(rows, field) {
+    var units = {};
+    (rows || []).forEach(function(row) {
+      var unit = row.unit || 'Chưa có ĐVT';
+      units[unit] = (units[unit] || 0) + n(row[field]);
+    });
+    return Object.keys(units).filter(function(unit) { return Math.abs(units[unit]) > 1e-9; }).map(function(unit) {
+      return stockQty(units[unit]) + ' ' + esc(unit);
+    }).join(' · ') || '0';
+  }
   function outgoingReadinessHtml() {
     var readiness = state.outgoingReadiness;
     if (readiness === null) {
@@ -2576,13 +2623,13 @@
     }
     if (readiness.error) {
       return '<div class="card fade-in invoice-readiness"><div class="card-body"><div class="error-summary">Chưa tính được khả năng xuất: ' +
-        esc(readiness.error) + '</div><div class="form-actions"><button class="btn btn-outline" data-action="refresh-outgoing-readiness">Thử lại</button></div></div></div>';
+        esc(readiness.error) + '</div><div class="form-actions"><button class="btn btn-outline" data-action="refresh-outgoing-readiness">Thử lại</button><button class="btn btn-outline" data-view="orders">Mở đơn để kiểm tra mã hàng</button><button class="btn btn-outline" data-view="inventory">Đối chiếu tồn kho</button></div></div></div>';
     }
     var rows = (readiness.rows || []).map(function (item) {
       var status = n(item.pending_qty) > 0
         ? '<span class="tag tag-warn">Còn chờ</span>'
         : n(item.invoiceable_qty) > 0
-          ? '<span class="tag tag-ok">Lập được</span>'
+          ? '<span class="tag tag-ok">Đủ lượng</span>'
           : n(item.drafted_qty) > 0
             ? '<span class="tag">Đang giữ trong dự thảo</span>'
             : '<span class="tag tag-ok">Đã phát hành</span>';
@@ -2597,33 +2644,37 @@
         num(item.pending_qty) + '<div class="muted">' + money(item.pending_value) + '</div></td><td>' + status + '</td></tr>';
     }).join("");
     var contractorRows = (readiness.contractors || []).map(function (item) {
+      var group = (readiness.rows || []).filter(function(row) { return row.contractor === item.contractor; });
       return '<tr><td><strong>' + esc(item.contractor) + '</strong></td><td class="num-cell">' +
-        num(item.demand_qty) + '</td><td class="num-cell">' + num(item.drafted_qty) +
-        '</td><td class="num-cell">' + num(item.issued_qty) +
-        '</td><td class="num-cell invoice-ready-qty">' + num(item.invoiceable_qty) + '<div class="muted">' + money(item.invoiceable_value) + '</div>' +
-        '</td><td class="num-cell invoice-wait-qty">' + num(item.pending_qty) + '<div class="muted">' + money(item.pending_value) + '</div></td></tr>';
+        readinessQuantity(group,'demand_qty') + '</td><td class="num-cell">' + readinessQuantity(group,'drafted_qty') +
+        '</td><td class="num-cell">' + readinessQuantity(group,'issued_qty') +
+        '</td><td class="num-cell invoice-ready-qty">' + readinessQuantity(group,'invoiceable_qty') + '<div class="muted">' + money(item.invoiceable_value) + '</div>' +
+        '</td><td class="num-cell invoice-wait-qty">' + readinessQuantity(group,'pending_qty') + '<div class="muted">' + money(item.pending_value) + '</div></td></tr>';
     }).join("");
     var allReady = n(readiness.pending_qty) <= 0;
     var stockBlocks = readiness.blocking_issues || [];
+    var approved = state.data?.batch?.status === 'approved';
     return html([
       '<div class="card fade-in invoice-readiness"><div class="card-head"><div><h3>Được xuất và chưa được xuất theo nhà thầu</h3>',
       '<p>Xem số tổng trước; chỉ mở chi tiết mặt hàng khi cần kiểm tra.</p></div>',
-      '<button class="btn btn-small btn-outline" data-action="refresh-outgoing-readiness">Tính lại</button></div>',
-      '<div class="card-body"><div class="readiness-totals"><div><span>Tổng cần lập</span><strong>', num(readiness.demand_qty),
-      '</strong></div><div><span>Đã dự thảo</span><strong>', num(readiness.drafted_qty),
-      '</strong></div><div><span>Đã phát hành</span><strong>', num(readiness.issued_qty),
-      '</strong></div><div class="ready"><span>Có thể lập bây giờ</span><strong>', num(readiness.invoiceable_qty),
-      '</strong><span>', money(readiness.invoiceable_value), '</span></div><div class="waiting"><span>Còn chờ hóa đơn đầu vào</span><strong>', num(readiness.pending_qty),
+      '<button class="btn btn-small btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button></div>',
+      '<div class="card-body">',
+      !approved ? '<div class="warning-summary">Đơn chưa duyệt. <button class="btn btn-outline" data-view="orders">Mở đơn để sửa / duyệt</button></div>' : '',
+      '<div class="readiness-totals"><div><span>Tổng cần lập</span><strong>', readinessQuantity(readiness.rows,'demand_qty'),
+      '</strong></div><div><span>Đã dự thảo</span><strong>', readinessQuantity(readiness.rows,'drafted_qty'),
+      '</strong></div><div><span>Đã phát hành</span><strong>', readinessQuantity(readiness.rows,'issued_qty'),
+      '</strong></div><div class="', stockBlocks.length || !approved ? 'waiting' : 'ready', '"><span>Phần đủ lượng</span><strong>', readinessQuantity(readiness.rows,'invoiceable_qty'),
+      '</strong><span>', money(readiness.invoiceable_value), '</span></div><div class="waiting"><span>Phần còn thiếu tồn</span><strong>', readinessQuantity(readiness.rows,'pending_qty'),
       '</strong><span>', money(readiness.pending_value), '</span></div></div>',
       stockBlocks.length
-        ? '<div class="error-summary" style="margin-top:14px">' + stockBlocks.map(function(r) { return '<div class="stock-block-row"><span>' + esc(r.product_name || r.product_code) + ' (' + esc(r.product_code) + ') đang âm <strong>' + stockQty(-r.qty) + ' ' + esc(r.unit || '') + '</strong>. Cần kiểm tra trước khi tạo file.</span><button class="btn btn-outline" data-action="show-stock-cause" data-code="' + esc(r.product_code) + '">Xem vì sao âm</button></div>'; }).join('') + '</div>'
+        ? '<div class="error-summary" id="outgoing-stock-blocks" style="margin-top:14px"><strong>Chưa tạo được file: ' + stockBlocks.length + ' mã tồn âm.</strong><p>Mở từng mã, đối chiếu tồn đầu và nhập/xuất, sửa đúng nguồn rồi bấm Kiểm tra lại.</p>' + stockBlocks.map(function(r) { return '<div class="stock-block-row"><span>' + esc(r.product_name || r.product_code) + ' (' + esc(r.product_code) + ') đang âm <strong>' + stockQty(-r.qty) + ' ' + esc(r.unit || '') + '</strong>. Cần kiểm tra trước khi tạo file.</span><button class="btn btn-outline" data-action="show-stock-cause" data-code="' + esc(r.product_code) + '">Xử lý ' + esc(r.product_code) + '</button></div>'; }).join('') + '</div>'
         : allReady
         ? '<div class="ok-summary" style="margin-top:14px">Đã đủ đầu vào cho toàn bộ phần còn lại.</div>'
-        : '<div class="warning-summary" style="margin-top:14px">Có thể lập phần màu xanh trước. Phần còn chờ sẽ giữ lại để tính tiếp khi có hóa đơn đầu vào.</div>',
+        : '<div class="warning-summary" style="margin-top:14px">' + (approved ? 'Có thể tạo dự thảo cho phần đủ lượng.' : 'Duyệt đơn trước khi tạo dự thảo cho phần đủ lượng.') + ' Phần còn thiếu giữ lại để lập tiếp.</div>',
       '</div><div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Tổng cần</th><th>Đã dự thảo</th><th>Đã phát hành</th><th>Có thể lập</th><th>Còn thiếu</th></tr></thead><tbody>',
       contractorRows || '<tr><td colspan="6"><div class="empty">Không có nhà thầu cần lập hóa đơn trong đơn hàng này.</div></td></tr>',
       '</tbody></table></div><details class="readiness-line-details"><summary>Xem chi tiết từng mặt hàng</summary><div class="table-wrap"><table><thead><tr><th>Nhà thầu / bếp</th><th>Mặt hàng</th><th>Khách đã chốt</th>',
-      '<th>Đã dự thảo</th><th>Đã phát hành</th><th>Có thể lập bây giờ</th><th>Còn chờ đầu vào</th><th>Trạng thái</th></tr></thead><tbody>',
+      '<th>Đã dự thảo</th><th>Đã phát hành</th><th>Phần đủ lượng</th><th>Còn chờ đầu vào</th><th>Trạng thái</th></tr></thead><tbody>',
       rows || '<tr><td colspan="8"><div class="empty">Không có dòng cần lập hóa đơn trong đơn hàng này.</div></td></tr>',
       '</tbody></table></div></details></div>'
     ]);
@@ -2925,7 +2976,7 @@
       }).join(""), '</tbody></table></div></div>'
     ]) : "";
     var activeDrafts = currentInvoices.filter(function (item) { return item.status === "draft" && !['saved','saving','unknown'].includes(item.minvoice_status); });
-    var creationBlocked = (state.outgoingReadiness?.blocking_issues || []).length > 0;
+    var creationBlocked = !state.outgoingReadiness || !!state.outgoingReadiness.error || (state.outgoingReadiness.blocking_issues || []).length > 0 || n(state.outgoingReadiness.invoiceable_qty) <= 0;
     var invoiceFileAction = state.outgoingInvoices === null
       ? '<button class="btn btn-primary" disabled>Đang kiểm tra…</button>'
       : d.batch.status !== "approved"
@@ -2950,6 +3001,7 @@
     ]) : '';
     content.innerHTML = html([
       outgoingReadinessHtml(),
+      state.outgoingActionError && state.outgoingActionError.batchId === state.batchId ? '<div class="error-summary" role="alert">' + esc(state.outgoingActionError.message) + '<div class="form-actions"><button class="btn btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button><button class="btn btn-outline" data-view="orders">Mở đơn để kiểm tra</button></div></div>' : '',
       '<div class="document-primary-grid fade-in"><section class="document-primary-card"><div class="document-primary-icon">13</div>',
       '<div><h3>File đưa lên M-Invoice</h3><p>Tải ZIP về máy, giải nén rồi nhập file Excel vào M-Invoice để kiểm tra, ký và phát hành.</p></div><div class="document-primary-action">',
       invoiceFileAction, '</div></section>',
@@ -3187,7 +3239,7 @@
   function renderMsmi() {
     if (!state.invoiceWorkbench || !state.invoiceListing) { loadInvoiceWorkbench(); return; }
     invoiceVirtual?.dispose();
-    content.innerHTML = window.TdpInvoiceWorkbench(state, {esc:esc, num:stockQty, money:stockMoney, dateVN:dateVN});
+    content.innerHTML = (state.stockResolutionReturn ? '<div class="warning-summary">Đang đối chiếu nguồn tồn cho phiên đơn. <button class="btn btn-primary" data-action="return-stock-resolution">Quay lại bảng kê · Kiểm tra lại</button></div>' : '') + window.TdpInvoiceWorkbench(state, {esc:esc, num:stockQty, money:stockMoney, dateVN:dateVN});
     invoiceVirtual = window.TdpInvoiceVirtualTable(content.querySelector('.invoice-lines-card .invoice-lines-scroll'), state.invoiceListing.lines || [], window.TdpInvoiceRenderRow);
   }
 
@@ -6494,6 +6546,10 @@
       return;
     }
     if (action === 'open-minvoice-files') { navigate('documents'); return; }
+    if (action === 'return-stock-resolution') {
+      state.stockResolutionReturn = null; state.outgoingReadiness = null; state.outgoingInvoices = null;
+      navigate('documents'); await Promise.all([fetchOutgoingReadiness(), fetchOutgoingInvoices()]); return;
+    }
     if (action === 'show-stock-cause') { await showStockCause(button); return; }
     if (action === 'edit-invoice-buyer') {
       state.paymentFilters = Object.assign({}, state.paymentFilters, {contractor:button.dataset.contractor});
@@ -6808,6 +6864,7 @@
     }
     if (action === "check-minvoice") checkMinvoice(button);
     if (action === "refresh-outgoing-readiness") {
+      state.outgoingActionError = null;
       state.outgoingReadiness = null;
       renderDocuments();
       await fetchOutgoingReadiness();
@@ -7198,6 +7255,10 @@
         await downloadFile(button.dataset.url);
         showToast("Đã tải file về máy");
       } catch (error) {
+        if (state.view === 'documents' && (button.dataset.url || '').indexOf('/api/export/invoices/') === 0) {
+          state.outgoingActionError = {batchId:state.batchId, message:error.message};
+          await fetchOutgoingReadiness();
+        }
         showToast(error.message, true);
       } finally {
         button.disabled = false;
@@ -7254,6 +7315,8 @@
     }
     if (action === "create-outgoing-drafts") {
       try {
+        button.disabled = true;
+        state.outgoingActionError = null;
         var drafts = await api("/api/outgoing-invoices/draft/" + state.batchId, { method: "POST" });
         state.outgoingShortages = [];
         state.outgoingInvoices = null;
@@ -7270,7 +7333,10 @@
           await fetchOutgoingReadiness();
           renderDocuments();
           showToast("Thiếu tồn vật tư cho " + state.outgoingShortages.length + " mã · xem danh sách bên dưới", true);
-        } else showToast(error.message, true);
+        } else {
+          state.outgoingActionError = {batchId:state.batchId, message:error.message};
+          await fetchOutgoingReadiness(); showToast(error.message, true);
+        }
       }
     }
     if (action === "confirm-outgoing-issued") {
