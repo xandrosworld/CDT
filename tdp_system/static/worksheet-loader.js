@@ -6,7 +6,7 @@
     if(engine)return Promise.resolve(engine);
     if(loading)return loading;
     loading=new Promise(function(resolve,reject){
-      var script=document.createElement('script');script.src='/static/worksheet-bundle/worksheet.js?v=20260908-2';
+      var script=document.createElement('script');script.src='/static/worksheet-bundle/worksheet.js?v=20260909-2200';
       script.onload=function(){
         if(window.TDPWorksheet!==facade){engine=window.TDPWorksheet;window.TDPWorksheet=facade;resolve(engine);}
         else {loading=null;script.remove();reject(new Error('Chưa mở được bảng Excel. Chị thử lại giúp em.'));}

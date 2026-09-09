@@ -32,7 +32,7 @@ async function open(options) {
     }
   });
   if (options.onImport) { const upload = button('Nạp bản mới', async () => { await shutdown(); if (disposed) options.onImport(); }); top.insertBefore(upload, close); }
-  const notice = make('div', catalog ? 'Sửa tên hàng, ĐVT, thuế (KKKNT, KCT, 0%, 5%, 8%, 10%) và tên trên hóa đơn. Enter / Tab để tự lưu. Mã hàng chỉ xem; ĐVT đã sử dụng cần đối chiếu trước khi đổi.' : options.editable ? 'Nhập trực tiếp hoặc dán nhiều ô. Enter / Tab để chuyển ô và tự lưu. Cột tính toán chỉ xem.' : 'Bảng chỉ xem · có thể chọn và sao chép ô, kéo rộng cột, phóng to.', 'tdp-sheet-notice');
+  const notice = make('div', catalog ? 'Sửa tên hàng, ĐVT, thuế (KKKNT, KCT, 0%, 5%, 8%, 10%) và tên trên hóa đơn. Enter / Tab để tự lưu. Mã hàng chỉ xem; ĐVT đã sử dụng cần đối chiếu trước khi đổi.' : options.editable ? 'Nhập trực tiếp hoặc dán nhiều ô. Enter / Tab để chuyển ô và tự lưu. Cột tính toán chỉ xem.' : 'Bảng chỉ xem · chọn ô hoặc vùng ô rồi nhấn Ctrl+C (Mac: ⌘C) hoặc bấm Sao chép ô đã chọn.', 'tdp-sheet-notice');
   const normalNotice = notice.textContent;
   const updateNotice = () => { notice.textContent = (catalog ? `${rows.length} mã hàng · ` : options.batchId ?
     `${rows.length} dòng · ${rows.filter(row => row.errors?.length).length} dòng lỗi · ${rows.filter(row => row.warnings?.length).length} dòng cảnh báo. ` : '') + normalNotice; };
@@ -52,6 +52,19 @@ async function open(options) {
   const pending = new Map();
   const columns = options.columns || [];
   const setStatus = (message, error = false) => { status.textContent = message; status.classList.toggle('is-error', error); };
+  if (!options.editable) {
+    const copy = button('Sao chép ô đã chọn', async () => {
+      try {
+        const range = book?.getActiveSheet().getActiveRange();
+        if (!range) throw new Error('Chọn ô hoặc vùng ô cần sao chép trước.');
+        const quote = value => /[\t\r\n"]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
+        const text = range.getDisplayValues().map(row => row.map(quote).join('\t')).join('\n');
+        await navigator.clipboard.writeText(text);
+        setStatus('Đã sao chép · có thể dán vào Excel hoặc tin nhắn');
+      } catch (error) { setStatus('Chưa sao chép được: ' + error.message, true); }
+    });
+    top.insertBefore(copy, close);
+  }
   const cell = (value, col, header = false, row = null) => ({ v: textValue(value), t: typeof value === 'number' ? 2 : 1,
     s: { ff: 'Arial', fs: 11, ht: col.numeric ? 3 : 1, vt: 2,
       bd: { b: { s: 1, cl: { rgb: '#dfe5e8' } }, r: { s: 1, cl: { rgb: '#dfe5e8' } } },
@@ -243,7 +256,13 @@ async function open(options) {
       if (/sheet\.(command|mutation)\.(insert|remove|move|sort|rename|set-name|set-sheet-order|set-range-sort)/.test(command.id)) throw new Error(catalog ? 'Thêm mã qua nút Thêm mã hàng trong Danh mục.' : 'Thay đổi dòng qua chức năng nhập đơn để giữ liên kết chứng từ');
       if (permitted.has(command.id) && !options.editable) throw new Error('Bảng chỉ xem');
     });
-    if (!options.editable) await book.getWorkbookPermission().setReadOnly();
+    if (!options.editable) {
+      const permission = book.getWorkbookPermission();
+      await permission.setReadOnly();
+      // Viewer mode disables copying by default. Allow copying visible cells
+      // explicitly while keeping all edit/structure permissions disabled.
+      await permission.setPoint(api.Enum.WorkbookPermissionPoint.CopyContent, true);
+    }
     else {
       const ranges = [[0, 0, 1, columns.length], ...columns.flatMap((col, c) => col.editable ? [] : [[1, c, rows.length, 1]])];
       for (const [r, c, nr, nc] of ranges) {

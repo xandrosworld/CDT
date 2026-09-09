@@ -8,6 +8,7 @@ from .inventory_export import monthly_customer_model
 from .inventory_customer_report import customer_nxt_workbook
 from .inventory_closing_report import customer_closing_workbook, TEMPLATE_PATH
 from .invoice_workbench_listing import invoice_range_payload
+from .inventory_report_company import DEFAULT_COMPANY
 
 
 class ClosingReportTests(unittest.TestCase):
@@ -70,3 +71,24 @@ class ClosingReportTests(unittest.TestCase):
         self.model['valuation_method'] = 'moving_average'
         with self.assertRaises(ValueError):
             customer_closing_workbook(self.model, self.sales)
+
+    def test_reports_use_current_company_settings_instead_of_sample_identity(self):
+        for key, value in DEFAULT_COMPANY.items():
+            self.fixture.conn.execute('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)', (key, value))
+        model = monthly_customer_model(self.fixture.conn, self.fixture._model())
+        for builder in (customer_closing_workbook, customer_nxt_workbook):
+            book = builder(model, self.sales)
+            try:
+                self.assertEqual(DEFAULT_COMPANY['company'], book.active['A1'].value)
+                self.assertEqual('Địa chỉ: ' + DEFAULT_COMPANY['company_address'], book.active['A2'].value)
+                self.assertEqual('MST: 0202265016', book.active['A3'].value)
+                value_col = 8 if builder == customer_closing_workbook else 17
+                self.assertEqual(1600, next(row[value_col] for row in list(book.active.values) if row[1] == model['items'][0]['product_code']))
+                self.assertNotIn('0201650135', str(list(book.active.values)))
+            finally:
+                book.close()
+        self.fixture.conn.execute("UPDATE settings SET value='Tên công ty đã cập nhật' WHERE key='company'")
+        model = monthly_customer_model(self.fixture.conn, self.fixture._model())
+        book = customer_closing_workbook(model, self.sales)
+        self.assertEqual('Tên công ty đã cập nhật', book.active['A1'].value)
+        book.close()

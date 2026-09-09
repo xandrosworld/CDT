@@ -23,6 +23,7 @@ from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.views import Selection
 
 try:
+    from inventory_report_company import report_company
     from invoice_line_groups import _fingerprint as group_fingerprint, _rows as group_source_rows
     from invoice_valuation import InvoiceValuationError, moving_average_report
     from document_totals import quantity_totals
@@ -35,6 +36,7 @@ try:
         write_literal,
     )
 except ImportError:  # pragma: no cover - package invocation
+    from .inventory_report_company import report_company
     from .invoice_line_groups import _fingerprint as group_fingerprint, _rows as group_source_rows
     from .invoice_valuation import InvoiceValuationError, moving_average_report
     from .document_totals import quantity_totals
@@ -502,6 +504,7 @@ def collect_inventory_export_model(
         "read_only": True,
         "layout_id": OFFICIAL_LAYOUT_ID,
         "visual_status": "official_customer_tdk_derived_layout",
+        "company_info": report_company(conn),
     }
 
 

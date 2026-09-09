@@ -7,14 +7,16 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.worksheet.views import Selection
 
 try:
+    from .inventory_report_company import write_company_header
     from .inventory_customer_report import literal, number, tax_value
     from .template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 except ImportError:
+    from inventory_report_company import write_company_header
     from inventory_customer_report import literal, number, tax_value
     from template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / 'templates' / 'inventory_closing_template.xlsx'
-TEMPLATE_SHA256 = '3BDD4FE66A7B98CD2CA94CF2CB9197D2CC021C40F8AE98488451E06E6CD990D8'
+TEMPLATE_SHA256 = 'E293A00E9723FE4E0426F5F0A56CEF4225120B27122B06F0E408267C9DCE83DA'
 
 
 def customer_closing_workbook(model, sales):
@@ -27,6 +29,7 @@ def customer_closing_workbook(model, sales):
     wb = clone_template_workbook(TEMPLATE_PATH, sheet_names=['Ton 7 (2)'], expected_sha256=TEMPLATE_SHA256).workbook
     ws = wb.active
     ws.title = 'Tồn trong kỳ'
+    write_company_header(ws, model)
     for row, height in ((1, 26), (2, 24), (3, 22)):
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
         ws.cell(row, 1).alignment = Alignment(horizontal='left', vertical='center')

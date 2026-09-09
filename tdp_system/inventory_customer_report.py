@@ -6,12 +6,14 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.worksheet.views import Selection
 
 try:
+    from .inventory_report_company import write_company_header
     from .template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 except ImportError:
+    from inventory_report_company import write_company_header
     from template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / 'templates' / 'inventory_nxt_template.xlsx'
-TEMPLATE_SHA256 = '435412EEDC9CD4F9FAAC8FA30ED3B25FE73F19E3D490EE8DD5B7887E66E20EC9'
+TEMPLATE_SHA256 = 'DFBBE6AE4730C3A35ADA6D17B20E3C71F6AC0B0A3D967E264C6B1CCA5471F6AB'
 
 
 def number(value):
@@ -61,9 +63,9 @@ def customer_nxt_workbook(model, sales):
                 closing_qty=0, closing_value=0, average_unit_cost=0, tax='', valuation_status='ok')
     wb = clone_template_workbook(TEMPLATE_PATH, sheet_names=['Ton 7 (2)'], expected_sha256=TEMPLATE_SHA256).workbook
     ws = wb.active; ws.title = 'NXT'
-    # The source file has wrapped company text in the narrow STT column and
-    # 359/410-point first rows. Normalize those accidental row heights while
-    # preserving the customer's company text and four-group header.
+    # The sample's company is obsolete. Only reuse its layout; write the
+    # current company identity from settings and normalize oversized rows.
+    write_company_header(ws, model)
     for row, height in ((1, 26), (2, 24), (3, 22)):
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=18)
         ws.cell(row, 1).alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
