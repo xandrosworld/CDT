@@ -23,6 +23,18 @@ const base='http://127.0.0.1:18801',out=path.join(__dirname,'exports','documents
   assert.equal(await page.getByText('Có thể lập bây giờ',{exact:true}).count(),0);
   const totals=await page.locator('.readiness-totals').innerText();
   assert(totals.includes('kg')&&totals.includes('chai'));
+  await page.locator('#invoice-order-issues [data-action=resolve-invoice-order]').click();
+  assert.equal(await page.locator('[data-order-row]').filter({hasText:'TEST-7'}).locator('.tag-tax').innerText(),'Thuế chưa hợp lệ');
+  const taxSelect=page.locator('#orderForm select[name=tax]');
+  await taxSelect.waitFor();assert.equal(await taxSelect.inputValue(),'');
+  assert.equal(await taxSelect.evaluate(e=>e.checkValidity()),false);
+  await taxSelect.selectOption('KKKNT');
+  const savedTax=page.waitForResponse(r=>/\/api\/orders\/\d+$/.test(r.url())&&r.request().method()==='PUT');
+  await page.locator('#orderForm').evaluate(form=>form.requestSubmit());
+  assert.equal((await savedTax).status(),200);
+  await page.locator('#nav [data-view=documents]').click();
+  await page.locator('#outgoing-stock-blocks').waitFor();
+  await page.locator('#invoice-order-issues').waitFor({state:'hidden'});
   await page.screenshot({path:path.join(out,'01_seven_blockers.png'),fullPage:true});
   await page.locator('[data-action=show-stock-cause][data-code="TEST-1"]').click();
   await page.locator('[data-stock-source]').first().click();
@@ -51,7 +63,9 @@ const base='http://127.0.0.1:18801',out=path.join(__dirname,'exports','documents
   await approve.click();assert.equal((await approved).status(),200);
   await page.locator('#nav [data-view=documents]').click();
   const create=page.locator('[data-action=create-outgoing-drafts]');
-  await create.waitFor();assert.equal(await create.isEnabled(),true);
+  await create.waitFor();
+  await page.waitForFunction(()=>document.querySelector('[data-action=create-outgoing-drafts]')?.disabled===false);
+  assert.equal(await create.isEnabled(),true);
   const created=page.waitForResponse(r=>r.url().includes('/outgoing-invoices/draft/')&&r.request().method()==='POST');
   await create.click();assert.equal((await created).status(),200);
   await page.getByRole('button',{name:'Tải ZIP hóa đơn',exact:true}).waitFor();
@@ -68,8 +82,12 @@ const base='http://127.0.0.1:18801',out=path.join(__dirname,'exports','documents
   await page.getByRole('button',{name:'Tính lại dự thảo',exact:true}).click();assert.equal((await recalculated).status(),200);
   const after=await (await page.request.get(base+'/api/outgoing-invoices/readiness/'+batch)).json();
   assert.equal(after.drafted_qty,14);assert.equal(after.drafted_value,280);
-  const cancelled=page.waitForResponse(r=>r.url().endsWith('/cancel')&&r.request().method()==='POST');
-  await page.locator('[data-action=cancel-outgoing-draft]').click();assert.equal((await cancelled).status(),200);
+  while(await page.locator('[data-action=cancel-outgoing-draft]').count()){
+   const count=await page.locator('[data-action=cancel-outgoing-draft]').count();
+   const cancelled=page.waitForResponse(r=>r.url().endsWith('/cancel')&&r.request().method()==='POST');
+   await page.locator('[data-action=cancel-outgoing-draft]').first().click();assert.equal((await cancelled).status(),200);
+   await page.waitForFunction(n=>document.querySelectorAll('[data-action=cancel-outgoing-draft]').length===n-1,count);
+  }
   await page.getByRole('button',{name:'Tạo file tải hóa đơn',exact:true}).waitFor();
   const released=await (await page.request.get(base+'/api/outgoing-invoices/readiness/'+batch)).json();
   assert.equal(released.drafted_qty,0);assert.equal(released.invoiceable_qty,14);
@@ -78,7 +96,7 @@ const base='http://127.0.0.1:18801',out=path.join(__dirname,'exports','documents
   await page.screenshot({path:path.join(out,'02_export_ready.png'),fullPage:true});
   assert.deepEqual(errors,[]);
   assert(!requests.some(p=>p.includes('minvoice')||p.includes('confirm-issued')));
-  fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({ok:true,seven_openings_corrected:true,source_navigation:true,movement_opening_edit:true,approved:true,downloaded:true,recalculate_stable:true,cancel_releases_stock:true,errors,requests},null,2));
+  fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({ok:true,invalid_tax_requires_choice:true,order_error_edit:true,seven_openings_corrected:true,source_navigation:true,movement_opening_edit:true,approved:true,downloaded:true,recalculate_stable:true,cancel_releases_stock:true,errors,requests},null,2));
   console.log('PASS: seven errors corrected via UI, approval, draft, ZIP download, recalculate; synthetic DB only.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import math
+import json
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -313,10 +314,50 @@ def canonical_available_stock(conn, as_of: str = "") -> dict[str, dict[str, Any]
     return stock
 
 
+def invoice_tax_error(value):
+    raw = str(value if value is not None else '').strip().upper().replace(' ', '')
+    if raw in {'KKKNT', 'KCT', 'KHÔNGKÊKHAI', 'KHONGKEKHAI', 'KHÔNGCHỊUTHUẾ', 'KHONGCHIUTHUE'}:
+        return ''
+    try:
+        number = Decimal(raw.rstrip('%'))
+        if not number.is_finite():
+            raise InvalidOperation
+        if not raw.endswith('%') and 0 < abs(number) < 1:
+            number *= 100
+        if number in {Decimal('-2'), Decimal('-1'), Decimal('0'), Decimal('5'), Decimal('8'), Decimal('10')}:
+            return ''
+    except (InvalidOperation, ValueError):
+        pass
+    return 'Thuế chưa hợp lệ; chọn 0%, 5%, 8%, 10%, KCT hoặc KKKNT'
+
+
+def invoice_order_issues(orders):
+    issues = []
+    for order in orders:
+        saved = order.get('errors') or []
+        if isinstance(saved, str):
+            try:
+                saved = json.loads(saved)
+            except (ValueError, TypeError):
+                saved = ['Dòng đơn cần kiểm tra lại']
+        messages = list(saved) if isinstance(saved, list) else ['Dòng đơn cần kiểm tra lại']
+        tax_error = invoice_tax_error(order.get('tax'))
+        if tax_error:
+            messages.append(tax_error)
+        if messages:
+            issues.append({'order_id': order['id'], 'product_code': order.get('product_code', ''),
+                           'product_name': order.get('product_name', ''), 'kitchen': order.get('kitchen', ''),
+                           'source_row': order.get('source_row'), 'messages': list(dict.fromkeys(messages))})
+    return issues
+
+
 def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     """Read-only recheck before handing off a file or saving a remote draft."""
     required = defaultdict(float)
-    for line in conn.execute("SELECT product_code,qty FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)):
+    for line in conn.execute("SELECT product_code,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)):
+        tax_error = invoice_tax_error(line['tax'])
+        if tax_error:
+            raise OutgoingReadinessError(f"Mã {line['product_code']}: {tax_error}", code='invalid_invoice_tax')
         qty = float(line["qty"])
         if not math.isfinite(qty) or qty <= 0:
             raise OutgoingReadinessError("Số lượng dự thảo không hợp lệ", code="invalid_draft_quantity")
@@ -601,6 +642,7 @@ def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
         raise OutgoingReadinessError("Không tìm thấy phiên đơn", code="batch_not_found", status=404)
+    all_orders = [dict(row) for row in conn.execute('SELECT * FROM orders WHERE batch_id=? ORDER BY contractor,id', (batch_id,))]
     orders = [
         dict(row) for row in conn.execute(
             "SELECT * FROM orders WHERE batch_id=? ORDER BY contractor,id", (batch_id,),
@@ -624,6 +666,7 @@ def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:
         "contractors": _contractor_summaries(rows),
         "rows": rows,
         "blocking_issues": blocking_issues,
+        "order_issues": invoice_order_issues(all_orders),
         "stock_basis": "OPENING + invoice_inventory_ledger − active local holds",
     }
 

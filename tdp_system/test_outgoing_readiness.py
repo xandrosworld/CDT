@@ -336,6 +336,38 @@ class OutgoingReadinessTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual(list(conn.iterdump()), before)
 
+    def test_invalid_tax_is_actionable_and_cannot_create_a_zero_tax_draft(self):
+        with server.db() as conn:
+            self.add_opening(conn, 20)
+            batch_id, ids = self.add_batch(conn, '2026-09-04', [{'qty': 2}])
+            conn.execute("UPDATE orders SET tax='INVALID',source_row=90 WHERE id=?", (ids[0],))
+            before = list(conn.iterdump())
+        readiness = self.client.get(f'/api/outgoing-invoices/readiness/{batch_id}').json
+        self.assertEqual(readiness['blocking_issues'], [])
+        self.assertEqual(readiness['order_issues'][0]['order_id'], ids[0])
+        self.assertEqual(readiness['order_issues'][0]['source_row'], 90)
+        response = self.client.post(f'/api/outgoing-invoices/draft/{batch_id}')
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json['code'], 'invalid_invoice_orders')
+        with server.db() as conn:
+            self.assertEqual(list(conn.iterdump()), before)
+
+    def test_invalid_draft_tax_blocks_export_without_rewriting_tax_or_stock(self):
+        with server.db() as conn:
+            self.add_opening(conn, 20)
+            batch_id, _ = self.add_batch(conn, '2026-09-04', [{'qty': 2}])
+        self.assertEqual(self.client.post(f'/api/outgoing-invoices/draft/{batch_id}').status_code, 200)
+        for invalid in ('INVALID', '#N/A', '', 'NaN', '99%'):
+            with self.subTest(tax=invalid):
+                with server.db() as conn:
+                    conn.execute('UPDATE outgoing_invoice_lines SET tax=?', (invalid,))
+                    before = list(conn.iterdump())
+                response = self.client.get(f'/api/export/invoices/{batch_id}')
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(response.json['code'], 'invalid_invoice_tax')
+                with server.db() as conn:
+                    self.assertEqual(list(conn.iterdump()), before)
+
     def test_stock_trace_links_to_source_invoice_even_when_ledger_date_differs(self):
         with server.db() as conn:
             self.add_opening(conn, 1)

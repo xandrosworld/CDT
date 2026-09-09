@@ -748,9 +748,15 @@
     } catch (ignore) {}
   }
   function taxText(value) {
-    var code = String(value).toUpperCase();
+    var code = String(value == null ? '' : value).trim().toUpperCase();
     if (code === "KKKNT" || code === "KCT") return code;
-    return Math.round(n(value) * 100) + "%";
+    if (!code) return 'Chưa có thuế';
+    var rate = Number(code.replace(/%$/, ''));
+    if (!Number.isFinite(rate)) return 'Thuế chưa hợp lệ';
+    if (rate === -2) return 'KKKNT';
+    if (rate === -1) return 'KCT';
+    if (!code.endsWith('%') && rate > 0 && rate < 1) rate *= 100;
+    return [0,5,8,10].includes(rate) ? rate + '%' : 'Thuế chưa hợp lệ';
   }
   function html(parts) { return parts.join(""); }
 
@@ -831,6 +837,11 @@
     try {
       var suffix = batchId ? "?batch_id=" + batchId : "";
       state.data = await api("/api/bootstrap" + suffix);
+      state.outgoingReadinessSerial = (state.outgoingReadinessSerial || 0) + 1;
+      state.outgoingInvoicesSerial = (state.outgoingInvoicesSerial || 0) + 1;
+      state.outgoingReadiness = null; state.outgoingReadinessLoading = false;
+      state.outgoingInvoices = null; state.outgoingInvoicesLoading = false;
+      state.outgoingPeriodShortages = null;
       state.printingListSerial++;
       state.printingRows = null;
       state.printingListLoading = false;
@@ -2653,6 +2664,7 @@
     }).join("");
     var allReady = n(readiness.pending_qty) <= 0;
     var stockBlocks = readiness.blocking_issues || [];
+    var orderIssues = readiness.order_issues || [];
     var approved = state.data?.batch?.status === 'approved';
     return html([
       '<div class="card fade-in invoice-readiness"><div class="card-head"><div><h3>Được xuất và chưa được xuất theo nhà thầu</h3>',
@@ -2660,10 +2672,13 @@
       '<button class="btn btn-small btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button></div>',
       '<div class="card-body">',
       !approved ? '<div class="warning-summary">Đơn chưa duyệt. <button class="btn btn-outline" data-view="orders">Mở đơn để sửa / duyệt</button></div>' : '',
+      orderIssues.length ? '<div class="error-summary" id="invoice-order-issues"><strong>Còn ' + orderIssues.length + ' dòng đơn cần sửa trước khi lập hóa đơn.</strong>' + orderIssues.map(function(item) {
+        return '<div class="stock-block-row"><span><strong>' + esc(item.product_name || item.product_code) + '</strong> · ' + esc(item.product_code) + ' · Bếp ' + esc(item.kitchen) + (item.source_row ? ' · Dòng Excel ' + esc(item.source_row) : '') + '<br>' + (item.messages || []).map(esc).join('<br>') + '</span><button class="btn btn-outline" data-action="resolve-invoice-order" data-id="' + item.order_id + '">Sửa dòng này</button></div>';
+      }).join('') + '</div>' : '',
       '<div class="readiness-totals"><div><span>Tổng cần lập</span><strong>', readinessQuantity(readiness.rows,'demand_qty'),
       '</strong></div><div><span>Đã dự thảo</span><strong>', readinessQuantity(readiness.rows,'drafted_qty'),
       '</strong></div><div><span>Đã phát hành</span><strong>', readinessQuantity(readiness.rows,'issued_qty'),
-      '</strong></div><div class="', stockBlocks.length || !approved ? 'waiting' : 'ready', '"><span>Phần đủ lượng</span><strong>', readinessQuantity(readiness.rows,'invoiceable_qty'),
+      '</strong></div><div class="', stockBlocks.length || orderIssues.length || !approved ? 'waiting' : 'ready', '"><span>Phần đủ lượng</span><strong>', readinessQuantity(readiness.rows,'invoiceable_qty'),
       '</strong><span>', money(readiness.invoiceable_value), '</span></div><div class="waiting"><span>Phần còn thiếu tồn</span><strong>', readinessQuantity(readiness.rows,'pending_qty'),
       '</strong><span>', money(readiness.pending_value), '</span></div></div>',
       stockBlocks.length
@@ -2976,7 +2991,7 @@
       }).join(""), '</tbody></table></div></div>'
     ]) : "";
     var activeDrafts = currentInvoices.filter(function (item) { return item.status === "draft" && !['saved','saving','unknown'].includes(item.minvoice_status); });
-    var creationBlocked = !state.outgoingReadiness || !!state.outgoingReadiness.error || (state.outgoingReadiness.blocking_issues || []).length > 0 || n(state.outgoingReadiness.invoiceable_qty) <= 0;
+    var creationBlocked = !state.outgoingReadiness || !!state.outgoingReadiness.error || (state.outgoingReadiness.blocking_issues || []).length > 0 || (state.outgoingReadiness.order_issues || []).length > 0 || n(state.outgoingReadiness.invoiceable_qty) <= 0;
     var invoiceFileAction = state.outgoingInvoices === null
       ? '<button class="btn btn-primary" disabled>Đang kiểm tra…</button>'
       : d.batch.status !== "approved"
@@ -3846,6 +3861,8 @@
     var contractorOptions = optionList(d.master.contractors, item.contractor, "code", "code");
     var kitchenOptions = optionList(d.master.kitchens, item.kitchen, "code", "code");
     var supplierOptions = optionList(d.master.suppliers, item.supplier, "code", "name");
+    var rawOrderTax = String(item.tax == null ? '' : item.tax).trim().toUpperCase();
+    var knownOrderTax = ['KKKNT','KCT'].includes(rawOrderTax) || (rawOrderTax !== '' && [0,0.05,0.08,0.1].includes(Number(rawOrderTax)));
     orderForm.innerHTML = html([
       '<div class="form-grid">',
       field("Ngày", "work_date", item.work_date, "date", "required"),
@@ -3865,10 +3882,12 @@
       field("Giá bán", "sell_price", item.sell_price, "number", state.editingId
         ? 'step="1" min="0" readonly title="Sửa giá trên bảng để lưu lịch sử thay đổi"'
         : 'step="1" min="0" required'),
-      '<div class="form-field"><label>Thuế</label><select name="tax"><option value="KKKNT"',
+      '<div class="form-field"><label>Thuế</label><select name="tax" required>',
+      !knownOrderTax ? '<option value="" selected disabled>Thuế chưa hợp lệ — cần chọn</option>' : '',
+      '<option value="KKKNT"',
       String(item.tax).toUpperCase() === "KKKNT" ? " selected" : "",
       '>KKKNT</option><option value="KCT"', String(item.tax).toUpperCase() === "KCT" ? " selected" : "",
-      '>KCT</option><option value="0"', String(item.tax).toUpperCase() !== "KCT" && String(item.tax).toUpperCase() !== "KKKNT" && n(item.tax) === 0 ? " selected" : "",
+      '>KCT</option><option value="0"', knownOrderTax && String(item.tax).toUpperCase() !== "KCT" && String(item.tax).toUpperCase() !== "KKKNT" && n(item.tax) === 0 ? " selected" : "",
       '>0%</option><option value="0.05"', n(item.tax) === 0.05 ? " selected" : "",
       '>5%</option><option value="0.08"', n(item.tax) === 0.08 ? " selected" : "",
       '>8%</option><option value="0.10"', n(item.tax) === 0.10 ? " selected" : "",
@@ -4891,31 +4910,42 @@
     if (state.outgoingInvoicesLoading) return;
     state.outgoingInvoicesLoading = true;
     var outgoingBatchId = state.batchId;
+    var serial = state.outgoingInvoicesSerial = (state.outgoingInvoicesSerial || 0) + 1;
     try {
       var payload = await api('/api/outgoing-invoices' + (outgoingBatchId ? '?batch_id=' + encodeURIComponent(outgoingBatchId) : ''));
-      if (outgoingBatchId !== state.batchId) return;
+      if (outgoingBatchId !== state.batchId || serial !== state.outgoingInvoicesSerial) return;
       state.outgoingInvoices = payload.items || [];
       state.buyerProfiles = payload.buyer_profiles || {};
       if (state.view === "documents") renderDocuments();
     } catch (error) { showToast(error.message, true); }
     finally {
-      state.outgoingInvoicesLoading = false;
-      if (outgoingBatchId !== state.batchId && state.view === 'documents') setTimeout(fetchOutgoingInvoices, 0);
+      if (serial === state.outgoingInvoicesSerial) {
+        state.outgoingInvoicesLoading = false;
+        if (outgoingBatchId !== state.batchId && state.view === 'documents') setTimeout(fetchOutgoingInvoices, 0);
+      }
     }
   }
 
   async function fetchOutgoingReadiness() {
     if (!state.batchId || state.outgoingReadinessLoading) return;
     state.outgoingReadinessLoading = true;
+    var batchId = state.batchId;
+    var serial = state.outgoingReadinessSerial = (state.outgoingReadinessSerial || 0) + 1;
     try {
-      state.outgoingReadiness = await api("/api/outgoing-invoices/readiness/" + state.batchId);
+      var payload = await api("/api/outgoing-invoices/readiness/" + batchId);
+      if (serial !== state.outgoingReadinessSerial || batchId !== state.batchId) return;
+      state.outgoingReadiness = payload;
     } catch (error) {
+      if (serial !== state.outgoingReadinessSerial || batchId !== state.batchId) return;
       state.outgoingReadiness = { error: error.message, rows: [], demand_qty: 0,
         allocated_qty: 0, invoiceable_qty: 0, pending_qty: 0 };
       showToast(error.message, true);
     } finally {
-      state.outgoingReadinessLoading = false;
-      if (state.view === "documents") renderDocuments();
+      if (serial === state.outgoingReadinessSerial) {
+        state.outgoingReadinessLoading = false;
+        if (batchId !== state.batchId) state.outgoingReadiness = null;
+        if (state.view === "documents") renderDocuments();
+      }
     }
   }
 
@@ -6546,6 +6576,12 @@
       return;
     }
     if (action === 'open-minvoice-files') { navigate('documents'); return; }
+    if (action === 'resolve-invoice-order') {
+      state.orderFilter = ''; state.orderIssueFilter = 'all'; navigate('orders');
+      var orderRow = content.querySelector('[data-order-row="' + button.dataset.id + '"]');
+      if (orderRow) orderRow.scrollIntoView({block:'center'});
+      openOrderModal(button.dataset.id); return;
+    }
     if (action === 'return-stock-resolution') {
       state.stockResolutionReturn = null; state.outgoingReadiness = null; state.outgoingInvoices = null;
       navigate('documents'); await Promise.all([fetchOutgoingReadiness(), fetchOutgoingInvoices()]); return;

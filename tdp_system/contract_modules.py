@@ -56,6 +56,7 @@ except ImportError:
 
 try:
     from outgoing_readiness import (
+        invoice_order_issues,
         batch_product_stock_trace,
         OutgoingReadinessError,
         batch_readiness_payload,
@@ -68,6 +69,7 @@ try:
     )
 except ImportError:
     from .outgoing_readiness import (
+        invoice_order_issues,
         batch_product_stock_trace,
         OutgoingReadinessError,
         batch_readiness_payload,
@@ -4518,6 +4520,10 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso) -> dict:
         raise ValueError("Không tìm thấy phiên đơn")
     if batch["status"] != "approved":
         raise ValueError("Phải duyệt phiên đơn trước khi lập hóa đơn đầu ra")
+    issues = invoice_order_issues([dict(r) for r in conn.execute('SELECT * FROM orders WHERE batch_id=?', (batch_id,))])
+    if issues:
+        details = '; '.join(f"Dòng {r['order_id']} · {r['product_code']}: {', '.join(r['messages'])}" for r in issues[:5])
+        raise OutgoingReadinessError(f"Còn {len(issues)} dòng đơn cần sửa trước khi tạo file. {details}", code='invalid_invoice_orders')
     orders = [
         dict(row) for row in conn.execute(
             "SELECT * FROM orders WHERE batch_id=? ORDER BY contractor,id", (batch_id,)

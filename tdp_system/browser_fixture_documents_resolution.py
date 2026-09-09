@@ -16,16 +16,19 @@ def main():
         server.app.config['TESTING'] = True
         with server.db() as conn:
             conn.execute("INSERT OR REPLACE INTO contractors(code,name,price_group,pricing_mode) VALUES('NT-A','Khách kiểm thử','NT-A','group')")
+            conn.execute("INSERT OR REPLACE INTO suppliers(code,name) VALUES('NCC-A','Nhà cung cấp kiểm thử')")
             rows=[]
             for i in range(1,8):
                 code=f'TEST-{i}'
                 unit='kg' if i<5 else 'chai'
+                conn.execute("INSERT OR REPLACE INTO kitchens(code,contractor,name) VALUES(?,'NT-A',?)",(f'BEP-{i}',f'Bếp kiểm thử {i}'))
                 conn.execute("INSERT OR REPLACE INTO products(code,name,unit,tax,buy_price) VALUES(?,?,?,'0%',10)", (code,f'Hàng kiểm thử {i}',unit))
                 Seed.add_opening(conn,-1,product_code=code)
                 rows.append({'product_code':code,'qty':2})
             conn.execute("UPDATE inventory_transactions SET source_id='2026-08',note='Nguồn kiểm thử đã đối chiếu'")
             batch_id,_=Seed.add_batch(conn,'2026-09-04',rows)
             conn.execute("UPDATE orders SET unit='chai' WHERE product_code IN ('TEST-5','TEST-6','TEST-7')")
+            conn.execute("UPDATE orders SET tax='INVALID',errors='[\"Thuế không hợp lệ\"]' WHERE product_code='TEST-7'")
             conn.execute("UPDATE batches SET status='draft',approved_at=NULL WHERE id=?",(batch_id,))
             # TEST-1 also has a movement: editing its opening must remain usable.
             source_id=Seed.add_posted_source(conn,source='minvoice',number='FIXTURE-1',product_code='TEST-1',qty=1)
