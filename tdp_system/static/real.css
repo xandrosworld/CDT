@@ -840,6 +840,11 @@ body { min-width: 320px; }
 .invoice-issue-error { color:#a32323; }
 @media(max-width:520px) { .invoice-issue-dialog .payment-grid { grid-template-columns:1fr; } }
 .invoice-color-guide { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 12px; color:#202a32; }
+.invoice-output-summary { margin:0 12px 8px; padding:10px 12px; }
+.invoice-output-summary > strong { display:block; font-size:14px; }
+.invoice-output-summary > div, .invoice-output-summary > small { display:block; margin-top:3px; }
+.invoice-output-summary > small { font-size:12px; line-height:1.45; }
+.invoice-output-summary > button { margin-top:6px; }
 .invoice-error-legend, .invoice-amount-difference { color:#a32323; }
 .invoice-amount-reviews { margin:0 12px 8px; padding:10px 12px; border:1px solid #e2b1a2; border-radius:6px; background:#fff7f1; color:#202a32; }
 .invoice-amount-reviews > summary { cursor:pointer; color:#92321d; }
