@@ -65,17 +65,23 @@ def correct_input_line_product(conn, *, item_id, expected, code, now):
 
 
 def correct_unconsumed_posted_input_product(conn, *, item_id, expected, code,
-                                           evidence, now):
+                                           evidence, now, revalue_outputs=False):
     """Exceptional, backed-up repair of an unused receipt's product identity.
 
     Not a normal mapping operation and deliberately not exposed as an HTTP
     endpoint. The caller must hold BEGIN IMMEDIATE and retain a backup. A
     complete before/after journal is recorded; source quantities/money and
-    unrelated mappings are unchanged. Any downstream issue requires a separate
-    valuation/reversal workflow and is rejected here.
+    unrelated mappings are unchanged. Downstream issues are rejected unless the
+    caller explicitly selects transactional revaluation of the affected codes.
     """
     if not conn.in_transaction:
         raise ValueError('Cần giao dịch độc quyền và bản sao trước khi sửa sổ.')
+    def same_revision(left, right):
+        fields = ('mapping_id', 'product_code', 'source_unit', 'target_unit',
+                  'conversion_factor', 'effective_from', 'effective_to')
+        a = conn.execute('SELECT * FROM invoice_mapping_revisions WHERE id=?', (left,)).fetchone()
+        b = conn.execute('SELECT * FROM invoice_mapping_revisions WHERE id=?', (right,)).fetchone()
+        return a is not None and b is not None and all(a[k] == b[k] for k in fields)
     if (not isinstance(evidence, dict)
             or not re.fullmatch(r'[0-9a-f]{64}', str(evidence.get('sha256', '')))
             or not str(evidence.get('reason', '')).strip()
@@ -101,10 +107,24 @@ def correct_unconsumed_posted_input_product(conn, *, item_id, expected, code,
     if conn.execute("""SELECT 1 FROM inventory_transactions WHERE source_type='OPENING'
         AND status='posted' AND txn_date>? LIMIT 1""", (invoice['invoice_date'],)).fetchone():
         raise ValueError('Đã chuyển tồn kỳ sau; cần đối chiếu lại kỳ đã chốt.')
-    if conn.execute("""SELECT 1 FROM invoice_inventory_ledger WHERE status='posted'
-        AND direction='output' AND product_code IN (?,?) AND txn_date>=? LIMIT 1""",
-        (old['product_code'], code, invoice['invoice_date'])).fetchone():
+    downstream = conn.execute("""SELECT * FROM invoice_inventory_ledger WHERE status='posted'
+        AND direction='output' AND product_code IN (?,?) AND txn_date>=? ORDER BY id""",
+        (old['product_code'], code, invoice['invoice_date'])).fetchall()
+    if downstream and revalue_outputs is not True:
         raise ValueError('Mã đã phát sinh xuất sau ngày nhập; cần tính lại giá vốn.')
+    before_report = None
+    if downstream:
+        from .invoice_valuation import moving_average_report
+        for output in downstream:
+            snapshot = mapping.validated_output_stock_snapshot(conn, output['source_line_id'])
+            if (snapshot['product_code'] != output['product_code']
+                    or abs(snapshot['stock_qty'] - abs(output['qty_delta'])) > 1e-6
+                    or not same_revision(snapshot['mapping_revision_id'], output['mapping_revision_id'])):
+                raise ValueError('Dòng xuất phụ thuộc không khớp snapshot; dừng sửa.')
+        report_from = invoice['invoice_date'][:7] + '-01'
+        report_to = conn.execute("SELECT MAX(txn_date) FROM invoice_inventory_ledger WHERE status='posted'").fetchone()[0]
+        before_report = moving_average_report(conn, date_from=report_from, date_to=report_to,
+                                              include_zero=True, include_events=True)
     events = conn.execute("""SELECT * FROM invoice_inventory_ledger
         WHERE source_invoice_table='msmi_invoices' AND source_invoice_id=?
         AND source_line_id=?""", (row['invoice_id'], item_id)).fetchall()
@@ -129,7 +149,7 @@ def correct_unconsumed_posted_input_product(conn, *, item_id, expected, code,
             or transaction['qty_out'] != 0
             or abs(event['unit_cost'] - old['stock_unit_price']) > 1e-6
             or abs(transaction['unit_cost'] - old['stock_unit_price']) > 1e-6
-            or event['mapping_revision_id'] != old['mapping_revision_id']):
+            or not same_revision(event['mapping_revision_id'], old['mapping_revision_id'])):
         raise ValueError('Bút toán không khớp snapshot hóa đơn; dừng sửa.')
     conn.execute('SAVEPOINT repair_unused_receipt')
     try:
@@ -146,18 +166,40 @@ def correct_unconsumed_posted_input_product(conn, *, item_id, expected, code,
         conn.execute("UPDATE msmi_invoices SET receipt_status='posted',updated_at=? WHERE id=?",
                      (now, row['invoice_id']))
         mapping.refresh_linked_batches(conn, 'input', {row['invoice_id']}, now)
+        repriced = []
+        if before_report is not None:
+            after_report = moving_average_report(conn, date_from=report_from, date_to=report_to,
+                                                 include_zero=True, include_events=True)
+            before_items = {x['product_code']:x for x in before_report['items']}
+            after_items = {x['product_code']:x for x in after_report['items']}
+            affected = {old['product_code'], code}
+            if any(before_items[k] != after_items[k] for k in before_items if k not in affected):
+                raise ValueError('Giá trị mã khác bị thay đổi; dừng sửa.')
+            balance = sum(after_items[k]['closing_value'] + after_items[k]['output_value']
+                          - before_items[k]['closing_value'] - before_items[k]['output_value']
+                          for k in affected)
+            if abs(balance) > 0.011:
+                raise ValueError('Tổng tồn và giá vốn không bảo toàn; dừng sửa.')
+            event_values = {x['ledger_event_id']:x for x in after_report['events']}
+            for output in downstream:
+                value = event_values[output['id']]['valuation_unit_cost']
+                if abs(value - output['unit_cost']) > 1e-6:
+                    repriced.append({'event_id':output['id'], 'before':output['unit_cost'], 'after':value})
+                    conn.execute('UPDATE invoice_inventory_ledger SET unit_cost=? WHERE id=?',
+                                 (value, output['id']))
         journal = {'evidence': evidence, 'before': {'snapshot': old, 'event': event,
                    'transaction': transaction}, 'after': {'snapshot': new,
                    'event': dict(conn.execute('SELECT * FROM invoice_inventory_ledger WHERE id=?',
                                               (event['id'],)).fetchone()),
                    'transaction': dict(conn.execute('SELECT * FROM inventory_transactions WHERE id=?',
-                                                    (transaction['id'],)).fetchone())}}
+                                                    (transaction['id'],)).fetchone())},
+                   'repriced_output_events': repriced}
         conn.execute("""INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at)
             VALUES('invoice_input.posted_product_correction','msmi_invoice_item',?,'ok','',?,?)""",
             (str(item_id), json.dumps(journal, ensure_ascii=False, sort_keys=True), now))
         conn.execute('RELEASE repair_unused_receipt')
         return {'item_id': item_id, 'before': old['product_code'], 'after': code,
-                'qty': new['stock_qty'], 'amount': new['amount']}
+                'qty': new['stock_qty'], 'amount': new['amount'], 'repriced_outputs':len(repriced)}
     except Exception:
         conn.execute('ROLLBACK TO repair_unused_receipt')
         conn.execute('RELEASE repair_unused_receipt')
