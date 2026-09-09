@@ -31,7 +31,7 @@ class InventoryPreviewTests(unittest.TestCase):
 
     def test_all_reports_match_download_cells_merges_and_formats_without_writes(self):
         before = self.conn.total_changes
-        for kind in ('opening', 'input', 'output', 'nxt'):
+        for kind in ('opening', 'input', 'output', 'nxt', 'closing'):
             with self.subTest(kind=kind):
                 query = '?from=2026-08-01&to=2026-08-31'
                 preview = self.client.get('/api/invoice-valuation/preview/' + kind + query)
@@ -63,7 +63,7 @@ class InventoryPreviewTests(unittest.TestCase):
     def test_invalid_kind_dates_empty_period_and_no_internal_sheet(self):
         self.assertEqual(404,self.client.get('/api/invoice-valuation/preview/unknown?from=2026-08-01&to=2026-08-31').status_code)
         self.assertEqual(400,self.client.get('/api/invoice-valuation/preview/nxt?from=2026-08-31&to=2026-08-01').status_code)
-        for kind in ('opening','input','output','nxt'):
+        for kind in ('opening','input','output','nxt','closing'):
             response=self.client.get('/api/invoice-valuation/preview/'+kind+'?from=2020-01-01&to=2020-01-31')
             self.assertEqual(200,response.status_code,response.json)
             self.assertNotIn('_ĐỐI_CHIẾU',[s['name'] for s in response.json['workbook']['sheets'].values()])

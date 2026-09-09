@@ -351,7 +351,7 @@ class InventoryExportTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertTrue(response.content_type.startswith("application/zip"))
         with zipfile.ZipFile(io.BytesIO(response.data)) as bundle:
-            self.assertEqual(4, len(bundle.namelist()))
+            self.assertEqual(5, len(bundle.namelist()))
             self.assertFalse(any(name.startswith("Xuat_gia_von_") for name in bundle.namelist()))
             self.assertTrue(any(name.startswith("Xuat_gia_ban_M-Invoice_") for name in bundle.namelist()))
         one = client.get(
@@ -409,7 +409,7 @@ class InventoryExportTests(unittest.TestCase):
         self.assertEqual(13, model["totals"]["closing_qty"])
         self.assertEqual(1733.33, model["totals"]["closing_value"])
 
-    def test_ui_shows_four_customer_reports_without_cost_export(self):
+    def test_ui_shows_five_customer_reports_without_cost_export(self):
         script = (Path(__file__).resolve().parent / "static" / "app.js").read_text(
             encoding="utf-8"
         )
@@ -421,7 +421,7 @@ class InventoryExportTests(unittest.TestCase):
             "/api/invoice-valuation/export",
             "/api/invoice-valuation/preview/",
             'data-action="preview-inventory-report"',
-            "Tải 4 báo cáo ZIP",
+            "Tải 5 báo cáo ZIP",
         ):
             self.assertIn(contract, script)
         renderer = script[script.index('  function renderInventory()'):script.index('  function inventoryDataToolsHtml()')]

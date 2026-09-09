@@ -22,3 +22,4 @@ tdp_system/qa_*.py
 !demo_tdp/styles.css
 
 !tdp_system/templates/inventory_nxt_template.xlsx
+!tdp_system/templates/inventory_closing_template.xlsx

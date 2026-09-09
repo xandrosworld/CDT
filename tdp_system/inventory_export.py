@@ -52,6 +52,7 @@ OPENING_TEMPLATE_SHEET = "Ton 7 (2)"
 OPENING_TEMPLATE_SHA256 = "36DF2BA86D13307F96BB5944FCECB19A4A81C093B4AC6A98EA71330D68204DA6"
 OFFICIAL_LAYOUT_ID = "TDP_TDK_NHAP_XUAT_NXT_V1"
 EXPORT_KINDS = ("opening", "input", "output", "nxt")
+CUSTOMER_EXPORT_KINDS = (*EXPORT_KINDS, "closing")
 MONEY_SCALE = Decimal("0.01")
 QTY_SCALE = Decimal("0.000001")
 EPSILON = Decimal("0.0000005")
@@ -954,6 +955,7 @@ def _filenames(model: Mapping[str, Any]) -> dict[str, str]:
         "input": f"Nhap_trong_ky_{suffix}.xlsx",
         "output": f"Xuat_gia_von_{suffix}.xlsx",
         "nxt": f"NXT_{suffix}.xlsx",
+        "closing": f"Ton_trong_ky_{suffix}.xlsx",
     }
 
 
@@ -1030,22 +1032,24 @@ def register_inventory_export_routes(app: Any, ctx: Mapping[str, Any]) -> None:
             conn.execute('BEGIN')
         if kind == 'output_sales':
             kind = 'output'
-        if kind not in EXPORT_KINDS:
+        if kind not in CUSTOMER_EXPORT_KINDS:
             raise InventoryExportError("Loại báo cáo không hợp lệ", code="invalid_export_kind", status=404)
-        if kind in {'output', 'nxt'}:
+        if kind in {'output', 'nxt', 'closing'}:
             sales = sales or sales_document(conn)
         if kind == 'output':
             return sales
         stock = stock or collect_inventory_export_model(conn,
             date_from=request.args.get('from'), date_to=request.args.get('to'))
-        if kind in {'nxt', 'opening'}:
+        if kind in {'nxt', 'opening', 'closing'}:
             stock = monthly_customer_model(conn, stock)
-        if kind == 'nxt':
+        if kind in {'nxt', 'closing'}:
             try:
                 from .inventory_customer_report import customer_nxt_workbook
+                from .inventory_closing_report import customer_closing_workbook
             except ImportError:
                 from inventory_customer_report import customer_nxt_workbook
-            book = customer_nxt_workbook(stock, sales[0])
+                from inventory_closing_report import customer_closing_workbook
+            book = (customer_nxt_workbook if kind == 'nxt' else customer_closing_workbook)(stock, sales[0])
             try:
                 content = safe_workbook_bytes(book)
             finally:
@@ -1065,7 +1069,7 @@ def register_inventory_export_routes(app: Any, ctx: Mapping[str, Any]) -> None:
                     date_from=request.args.get('from'), date_to=request.args.get('to'))
                 stock = monthly_customer_model(conn, stock)
                 sales = sales_document(conn)
-                documents = [customer_document(conn, kind, stock, sales) for kind in EXPORT_KINDS]
+                documents = [customer_document(conn, kind, stock, sales) for kind in CUSTOMER_EXPORT_KINDS]
             stream = io.BytesIO()
             with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
                 for _, name, content in documents:

@@ -85,9 +85,9 @@ class CustomerReportTests(unittest.TestCase):
         response = self.client.get('/api/invoice-valuation/export' + self.query)
         self.assertEqual(200, response.status_code)
         with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
-            self.assertEqual(4, len(archive.namelist()))
+            self.assertEqual(5, len(archive.namelist()))
             self.assertFalse(any('gia_von' in name for name in archive.namelist()))
-            for kind, prefix in [('input', 'Nhap_'), ('nxt', 'NXT_')]:
+            for kind, prefix in [('input', 'Nhap_'), ('nxt', 'NXT_'), ('closing', 'Ton_trong_ky_')]:
                 name = next(n for n in archive.namelist() if n.startswith(prefix))
                 zipped = load_workbook(io.BytesIO(archive.read(name)))
                 individual = load_workbook(io.BytesIO(self.client.get('/api/invoice-valuation/export/' + kind + self.query).data))
@@ -95,6 +95,9 @@ class CustomerReportTests(unittest.TestCase):
                 ws = zipped.active
                 if kind == 'input':
                     self.assertEqual(('8', 80, 1080), tuple(ws[c].value for c in ('O5', 'P5', 'Q5')))
+                elif kind == 'closing':
+                    self.assertEqual((12, 133.333333, 1600), tuple(ws.cell(7, c).value for c in (7, 8, 9)))
+                    self.assertEqual(1600, ws.cell(ws.max_row, 9).value)
                 else:
                     self.assertEqual((10, 5, 3, 12), tuple(ws.cell(10, c).value for c in (7, 10, 13, 16)))
                     self.assertEqual((100, 1000, 200, 1000, 300, 900, 133.333333, 1600), tuple(ws.cell(10, c).value for c in (8, 9, 11, 12, 14, 15, 17, 18)))
@@ -112,9 +115,15 @@ class CustomerReportTests(unittest.TestCase):
         wb.close()
 
     def test_invalid_dates_and_removed_cost_route(self):
-        for kind in ('input', 'output', 'nxt'):
+        for kind in ('input', 'output', 'nxt', 'closing'):
             self.assertEqual(400, self.client.get('/api/invoice-valuation/export/' + kind + '?from=2026-08-31&to=2026-08-01').status_code)
         self.assertEqual(404, self.client.get('/api/invoice-valuation/export/output_cost' + self.query).status_code)
+
+    def test_closing_requires_complete_month(self):
+        for route in ('export', 'preview'):
+            response = self.client.get('/api/invoice-valuation/' + route + '/closing?from=2026-08-02&to=2026-08-31')
+            self.assertEqual(400, response.status_code)
+            self.assertEqual('full_calendar_month_required', response.json['code'])
 
 
 class SignedSalesTaxTests(unittest.TestCase):
