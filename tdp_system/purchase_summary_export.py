@@ -269,6 +269,12 @@ def collect_purchase_summary_rows(
             sources.append((order, order, product, quantity, supplier, source_ref))
 
     excluded_count = 0
+    approved_prices = {}
+    if _table_exists(conn, 'batch_bk_approvals'):
+        approved_prices = {int(r['source_line']): dict(r) for r in conn.execute(
+            """SELECT l.source_line,l.qty,l.unit_cost,l.amount FROM batch_bk_approvals a
+               JOIN bk_import_documents d ON d.id=a.document_id AND d.status='posted'
+               JOIN bk_import_lines l ON l.document_id=d.id WHERE a.batch_id=?""", (batch_id,))}
     for line, order, product, quantity, supplier, source_ref in sources:
         seller, identity, address, identity_issues = _resolved_identity(order, product, people)
         if is_excluded_seller(seller):
@@ -277,6 +283,10 @@ def collect_purchase_summary_rows(
                 excluded_rows.append({"seller": seller, "source_ref": source_ref})
             continue
         buy_price = _decimal(line.get("buy_price"), "Giá mua")
+        approved_price = approved_prices.get(int(line.get('id') or 0))
+        if approved_price:
+            quantity = Decimal(str(approved_price['qty']))
+            buy_price = Decimal(str(approved_price['unit_cost']))
         if not canonical and buy_price == 0:
             sell_price = _decimal(line.get("sell_price", 0), "Giá bán")
             if sell_price > 0:
@@ -289,6 +299,8 @@ def collect_purchase_summary_rows(
             else Decimal(_vnd_product(quantity, buy_price))
         )
         expected = Decimal(_vnd_product(quantity, buy_price))
+        if approved_price:
+            amount = Decimal(str(approved_price['amount']))
         issues = list(identity_issues)
         if buy_price <= 0:
             issues.append("giá mua phải lớn hơn 0")

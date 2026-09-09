@@ -920,3 +920,6 @@ body { min-width: 320px; }
 
 .amount-review-table tbody th { background:#f5f8fa; color:#17324d; }
 .invoice-amount-dialog [data-error][data-success="true"] { color:#087c71; }
+.batch-bk-approval-dialog { font-size: 16px; line-height: 1.5; }
+.batch-bk-approval-dialog > p { margin: 16px 24px; }
+.batch-bk-approval-dialog td, .batch-bk-approval-dialog th { padding: 12px; font-size: 16px; }

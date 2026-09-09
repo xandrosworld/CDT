@@ -33,6 +33,11 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from waitress import serve
+
+try:
+    from . import batch_bk_approval
+except ImportError:
+    import batch_bk_approval
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
@@ -866,6 +871,7 @@ def init_database(*, sync_master=True):
         init_invoice_workbench_schema(conn)
         init_inventory_period_close_schema(conn)
         init_bk_import_schema(conn)
+        batch_bk_approval.init_schema(conn)
         init_payable_ledger_schema(conn)
         init_payable_payment_schema(conn)
         init_receivable_ledger_schema(conn)
@@ -2944,6 +2950,15 @@ def api_create_batch():
         return jsonify({"ok": True, **batch_payload(conn, cur.lastrowid)})
 
 
+@app.get("/api/batches/<int:batch_id>/approval-preview")
+def api_batch_approval_preview(batch_id):
+    try:
+        with db() as conn:
+            return jsonify({"ok": True, **batch_bk_approval.public_preview(batch_bk_approval.prepare(conn, batch_id))})
+    except batch_bk_approval.bk.BKImportError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+
+
 @app.post("/api/batches/<int:batch_id>/approve")
 def api_approve_batch(batch_id):
     with db() as conn:
@@ -2972,6 +2987,14 @@ def api_approve_batch(batch_id):
             return jsonify({"ok": False, "error": "Đơn đang trống"}), 400
         if bad:
             return jsonify({"ok": False, "error": f"Còn {bad} dòng lỗi cần xử lý"}), 400
+        try:
+            bk_result = batch_bk_approval.approve(conn, batch_id, request.get_json(silent=True) or {}, now_iso(), audit_event)
+        except batch_bk_approval.bk.BKImportError as exc:
+            conn.rollback()
+            return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return jsonify({"ok": False, "error": "Chưa ghi bảng kê: nguồn trùng hoặc dữ liệu đã đổi. Hãy kiểm tra lại.", "code": "batch_bk_write_failed"}), 409
         conn.execute(
             "UPDATE batches SET status='approved',approved_at=? WHERE id=?",
             (now_iso(), batch_id),
@@ -2981,6 +3004,7 @@ def api_approve_batch(batch_id):
         receivable_ledger = sync_receivable_ledger(conn, timestamp=now_iso())
         return jsonify({
             "ok": True, **batch_payload(conn, batch_id),
+            "bk": bk_result,
             "payable_ledger": payable_ledger,
             "receivable_ledger": receivable_ledger,
         })
@@ -3486,6 +3510,9 @@ def require_batch(conn, batch_id):
 
 def batch_mutation_blocker(conn, batch_id: int) -> str:
     """Explain why an order batch is immutable once downstream documents exist."""
+    bk_blocked = batch_bk_approval.mutation_blocker(conn, batch_id)
+    if bk_blocked:
+        return bk_blocked
     draft = conn.execute(
         """SELECT status,minvoice_status FROM outgoing_invoice_drafts
            WHERE batch_id=? AND status!='cancelled'

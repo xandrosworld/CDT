@@ -10,6 +10,7 @@ import time
 from urllib.request import urlopen
 
 CASES = {
+    'batch_bk': ('batch_bk_server', 18856, 'BK'),
     'amount_review': ('amount_review_server', 18855, 'AMOUNT'),
     'stock_cause': ('invoice_issuance_server', 18854, 'ISSUANCE'),
     'invoice_issuance': ('invoice_issuance_server', 18854, 'ISSUANCE'),

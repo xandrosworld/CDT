@@ -232,6 +232,18 @@ def _template_rows_for_batch(conn, batch_id: int) -> list[dict[str, Any]]:
         raise BKImportError(
             "Chỉ tạo mẫu BK tự điền từ phiên đơn đã duyệt", code="batch_not_approved", status=409,
         )
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='batch_bk_approvals'").fetchone():
+        posted = conn.execute("""SELECT l.* FROM batch_bk_approvals a
+            JOIN bk_import_documents d ON d.id=a.document_id AND d.status='posted'
+            JOIN bk_import_lines l ON l.document_id=d.id WHERE a.batch_id=? ORDER BY l.id""", (batch_id,)).fetchall()
+        if posted:
+            return [{
+                'document_date': r['document_date'], 'source_type': r['source_type'],
+                'source_reference': r['source_reference'], 'source_line': r['source_line'],
+                'product_code': r['product_code'], 'product_name': r['product_name_snapshot'],
+                'unit': r['unit_snapshot'], 'qty': r['qty'], 'unit_cost': r['unit_cost'],
+                'amount': r['amount'], 'source_party': r['source_party'], 'note': r['note'],
+            } for r in posted]
     rate = _purchase_rate(conn)
     canonical = conn.execute(
         "SELECT 1 FROM purchase_workbook_lines WHERE batch_id=? LIMIT 1", (batch_id,),
@@ -1047,6 +1059,9 @@ def _reverse_document(
                   reversal_reason=?,updated_at=? WHERE id=?""",
         (timestamp, reversal_date, reason, timestamp, document_id),
     )
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='batch_bk_approvals'").fetchone():
+        conn.execute("""UPDATE batches SET status='draft',approved_at=NULL WHERE id IN
+            (SELECT batch_id FROM batch_bk_approvals WHERE document_id=?)""", (document_id,))
     if audit_event is not None:
         audit_event(
             conn, "bk_import.inventory_reversal", entity_type="bk_import_document",

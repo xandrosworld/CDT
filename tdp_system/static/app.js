@@ -4053,8 +4053,9 @@
       if (!pending.continuous && useAsLatest && imported.finalized && imported.batch.status !== "approved" &&
           n(imported.summary && imported.summary.totals && imported.summary.totals.errors) === 0) {
         try {
-          imported = await api("/api/batches/" + imported.batch.id + "/approve", { method: "POST" });
-          automaticallyApproved = true;
+          var approvalResult = await confirmBatchApproval(imported.batch.id);
+          if (approvalResult) { imported = approvalResult; automaticallyApproved = true; }
+          else approvalWarning = "Đơn chưa duyệt. Kiểm tra bảng kê rồi bấm Duyệt đơn.";
         } catch (approvalError) {
           approvalWarning = approvalError.message;
         }
@@ -4308,12 +4309,37 @@
     }
   }
 
+  async function confirmBatchApproval(batchId) {
+      var preview = await api("/api/batches/" + batchId + "/approval-preview");
+      if (!preview.canApprove) {
+        var dialog = document.createElement('dialog');
+        dialog.className = 'inventory-totals-dialog batch-bk-approval-dialog';
+        dialog.setAttribute('aria-label', 'Bảng kê cần kiểm tra');
+        dialog.innerHTML = '<div class="inventory-totals-heading"><h3>Bảng kê cần kiểm tra</h3><button type="button" class="icon-button" aria-label="Đóng">×</button></div><p>Sửa các dòng dưới đây rồi duyệt lại. Đơn và kho chưa thay đổi.</p><div class="inventory-totals-body"><table><thead><tr><th>Dòng</th><th>Mặt hàng</th><th>Cần sửa</th><th></th></tr></thead><tbody>' +
+          (preview.issues || []).map(function (r) { return '<tr><td>' + esc(r.row) + '</td><td>' + esc(r.code) + ' · ' + esc(r.name || '') + '</td><td>' + esc((r.errors || []).join('; ')) + '</td><td>' + (r.orderId ? '<button type="button" class="btn btn-outline" data-bk-edit="' + esc(r.orderId) + '">Sửa dòng</button>' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+        dialog.querySelector('button').onclick = function () { dialog.close(); };
+        dialog.querySelectorAll('[data-bk-edit]').forEach(function (button) { button.onclick = function () { dialog.close(); openOrderModal(Number(button.getAttribute('data-bk-edit'))); }; });
+        dialog.addEventListener('close', function () { dialog.remove(); });
+        document.body.appendChild(dialog); dialog.showModal();
+        return null;
+      }
+      var text = preview.alreadyPosted ? "Đơn đã có bảng kê nhập kho. Kiểm tra lại trạng thái duyệt?" :
+        preview.rowCount ? "Duyệt đơn và ghi nhập kho " + preview.rowCount + " dòng bảng kê, " + money(preview.amount) + "?\nSố lượng dùng theo thực nhận trong đơn. Giá bảng kê bằng " + preview.ratePercent + "% giá bán." : "Duyệt đơn hàng này? Không có dòng bảng kê cần nhập kho.";
+      if (preview.excludedRows) text += "\n" + preview.excludedRows + " dòng thuộc người bán đã loại khỏi bảng kê.";
+      if ((preview.overlaps || []).length) text += "\n\nCác mã đã có hóa đơn nhập cùng ngày: " + Array.from(new Set(preview.overlaps.map(function (r) { return r.code; }))).join(', ') + ".\nChỉ đồng ý nếu hàng bảng kê là phần mua riêng, chưa nhập từ các hóa đơn đó.";
+      if (!window.confirm(text)) return null;
+      return api("/api/batches/" + batchId + "/approve", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_hash: preview.sourceHash, confirm_bk: true, confirm_separate_purchases: Boolean((preview.overlaps || []).length) }) });
+  }
+
   async function approveBatch() {
-    if (!state.batchId || !window.confirm("Duyệt đơn hàng này để chốt số liệu đầu ra?")) return;
+    if (!state.batchId) return;
     try {
-      await api("/api/batches/" + state.batchId + "/approve", { method: "POST" });
-      await loadData(state.batchId, true);
-      showToast("Đã duyệt đơn hàng · Các đầu ra đã sẵn sàng");
+      var batchId = state.batchId;
+      var approved = await confirmBatchApproval(batchId);
+      if (!approved) return;
+      await loadData(batchId, true);
+      showToast(approved.bk && approved.bk.inventoryLines ? "Đã duyệt đơn và ghi bảng kê vào kho" : "Đã duyệt đơn hàng");
     } catch (error) { showToast(error.message, true); }
   }
 

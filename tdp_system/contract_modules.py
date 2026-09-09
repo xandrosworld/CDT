@@ -3932,6 +3932,13 @@ def apply_purchase_order_preview(
     finalization flow so both entry points keep identical revision/payable
     semantics without ever updating customer orders.
     """
+    try:
+        from .batch_bk_approval import mutation_blocker
+    except ImportError:
+        from batch_bk_approval import mutation_blocker
+    blocked = mutation_blocker(conn, batch_id)
+    if blocked:
+        raise PurchaseOrderApplyError(blocked, code='batch_bk_posted')
     already = conn.execute(
         "SELECT 1 FROM purchase_order_imports WHERE batch_id=? AND source_hash=?",
         (batch_id, source_hash),
