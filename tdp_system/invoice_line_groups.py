@@ -32,7 +32,8 @@ class GroupError(ValueError):
 def _fingerprint(rows):
     fields = ('invoice_id','line_index','source_item_code','source_item_name','source_unit','qty','unit_price','amount',
               'tax_rate','product_code','product_name','product_unit','mapping_status','conversion_factor','stock_qty')
-    values = [[r.get(k) for k in fields] for r in sorted(rows, key=lambda r:r['line_index'])]
+    values = [[r.get('source_tax_rate', r.get(k)) if k == 'tax_rate' else r.get(k)
+               for k in fields] for r in sorted(rows, key=lambda r:r['line_index'])]
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 

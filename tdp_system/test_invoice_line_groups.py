@@ -48,6 +48,20 @@ class SelectedGroupTests(unittest.TestCase):
         self.assertEqual(200,result.status_code,result.json)
         return result.json
 
+    def test_special_tax_display_keeps_existing_group_fingerprint(self):
+        self.conn.execute("UPDATE msmi_invoice_items SET tax_rate='-2'")
+        self.conn.commit()
+        saved = self.create()
+        before = list(self.conn.iterdump())
+        payload = self.payload()
+        self.assertEqual([], payload['group_warnings'])
+        merged = next(r for r in payload['lines'] if r.get('group_id') == saved['id'])
+        self.assertEqual('KKKNT', merged['tax_rate'])
+        self.assertTrue(all(r['source_tax_rate'] == '-2' for r in merged['group_members']))
+        self.assertEqual(before, list(self.conn.iterdump()))
+        self.conn.execute("UPDATE msmi_invoice_items SET tax_rate='-1' WHERE id=?", (self.ids[0],))
+        self.assertTrue(self.payload()['group_warnings'])
+
     def test_selected_pair_one_row_excel_split_and_post(self):
         before=[tuple(r) for r in self.conn.execute('SELECT * FROM msmi_invoice_items')]
         changes=self.conn.total_changes

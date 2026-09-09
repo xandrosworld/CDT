@@ -42,7 +42,8 @@ def tax_fields(line, raw_line=None):
         elif rate.upper() in {'KCT', 'KKKNT', 'KKKNTTHUE'}:
             tax, note = Decimal(0), 'Theo ký hiệu thuế nguồn: ' + rate
     amount = number(line.get('amount'))
-    return dict(tax_rate=rate, line_tax_amount=float(tax) if tax is not None else None,
+    return dict(tax_rate=rate, source_tax_rate=line.get('source_tax_rate', line.get('tax_rate')),
+                line_tax_amount=float(tax) if tax is not None else None,
                 amount_with_tax=float(amount + tax) if amount is not None and tax is not None else None,
                 tax_note=note)
 
