@@ -6280,6 +6280,13 @@
       return;
     }
     if (action === 'preview-inventory-report') { await previewInventoryReport(button); return; }
+    if (action === 'show-all-output-invoices') {
+      state.invoiceDirection = 'output'; state.invoiceStatus = 'all';
+      state.invoiceLineFilter = 'all'; state.invoicePending = false;
+      persistInvoiceWorkbenchFilters();
+      await loadInvoiceWorkbench(true); render();
+      return;
+    }
     if (action === 'filter-invoice-issues') {
       state.invoiceLineFilter = state.invoiceLineFilter === 'needs_attention' ? 'all' : 'needs_attention';
       persistInvoiceWorkbenchFilters();

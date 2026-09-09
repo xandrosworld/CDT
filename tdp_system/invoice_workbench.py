@@ -623,6 +623,7 @@ def register_invoice_workbench_routes(app, ctx) -> None:
 
     @app.get("/api/invoice-workbench/invoices")
     @app.get("/api/invoice-workbench/invoices/export")
+    @app.get("/api/invoice-workbench/output-register/export")
     def api_invoice_range_rows():
         from flask import send_file
         try:
@@ -630,17 +631,26 @@ def register_invoice_workbench_routes(app, ctx) -> None:
         except ImportError:
             from .invoice_workbench_listing import invoice_range_payload, range_workbook
         try:
+            full_output = request.path == '/api/invoice-workbench/output-register/export'
             with db_factory() as conn:
                 if not conn.in_transaction:
                     # One read snapshot for invoice headers, detail rows and
                     # totals while another user may be syncing or mapping.
                     conn.execute("BEGIN")
                 payload = invoice_range_payload(
-                    conn, tenant=tenant_code(conn), invoice_type=request.args.get("invoice_type", "input"),
+                    conn, tenant=tenant_code(conn), invoice_type='output' if full_output else request.args.get("invoice_type", "input"),
                     date_from=request.args.get("from"), date_to=request.args.get("to"),
-                    status=request.args.get("status", "all"), line_filter=request.args.get("line_filter", "all"),
-                    scope=request.args.get("scope", "period"),
+                    status='all' if full_output else request.args.get("status", "all"), line_filter='all' if full_output else request.args.get("line_filter", "all"),
+                    scope='period' if full_output else request.args.get("scope", "period"),
                 )
+            if full_output:
+                try:
+                    from .invoice_output_register import output_sales_workbook
+                except ImportError:
+                    from invoice_output_register import output_sales_workbook
+                return send_file(output_sales_workbook(payload), as_attachment=True,
+                                 download_name=f"Dau_ra_M-Invoice_{payload['date_from']}_{payload['date_to']}.xlsx",
+                                 mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             if request.path.endswith("/export"):
                 return send_file(range_workbook(payload), as_attachment=True,
                                  download_name=f"Hoa_don_{payload['direction']}_{payload['date_from']}_{payload['date_to']}.xlsx",

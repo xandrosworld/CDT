@@ -122,8 +122,9 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
         raise InvoiceWorkbenchError("Phạm vi hóa đơn không hợp lệ")
     pending = scope == "pending"
     query_start = "0001-01-01" if pending else start
-    pending_guard = ("AND COALESCE(i.receipt_status,'') != 'posted'" if direction == 'input' else
-                     "AND COALESCE(i.stock_status,'') NOT IN ('posted','reversed','reversal_required')") if pending else ""
+    # Output reads the whole period for its source totals. The pending filter
+    # still applies to visible rows below, never to the M-Invoice summary.
+    pending_guard = "AND COALESCE(i.receipt_status,'') != 'posted'" if pending and direction == 'input' else ""
     table, links, source = (
         ("msmi_invoices", "invoice_sync_batch_invoices", "msmi") if direction == "input"
         else ("outgoing_source_invoices", "invoice_sync_batch_output_invoices", "minvoice")
@@ -147,6 +148,13 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
     )]
     fetch = input_invoice_payload if direction == "input" else output_invoice_payload
     invoices = fetch(conn, invoice_ids=ids)["items"]
+    output_summary = None
+    if direction == 'output':
+        try:
+            from .invoice_output_register import output_register_summary
+        except ImportError:
+            from invoice_output_register import output_register_summary
+        output_summary = output_register_summary(invoices, start, end)
     counts = {key: 0 for key in STATUS_LABELS}
     lines, visible_invoices, amount_reviews = [], [], []
     qty_by_unit, line_amount, invoice_amount = {}, Decimal(0), Decimal(0)
@@ -155,7 +163,8 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
         # Carry unfinished invoices forward, even outside the selected start
         # date. Never offer an already posted (including changed-source) invoice
         # or an all-expense invoice for another receipt.
-        if pending and (invoice.get("receipt_status") == "posted" or state in {"posted", "reversed", "not_inventory"}):
+        if pending and (invoice.get("receipt_status") == "posted" or state in {"posted", "reversed", "not_inventory"}
+                        or direction == 'output' and invoice.get('stock_status') in {'posted','reversed','reversal_required'}):
             continue
         invoice["workbench_status"] = state
         counts["all"] += 1
@@ -218,7 +227,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
     return {
         "direction": direction, "source": source, "date_from": start, "date_to": end,
         "status": status, "line_filter": line_filter, "scope": scope, "items": visible_invoices,
-        "lines": lines, "amount_reviews": amount_reviews,
+        "lines": lines, "amount_reviews": amount_reviews, "output_summary": output_summary,
         "group_warnings":group_warnings,"source_line_count":source_line_count,
         "counts": counts, "status_labels": STATUS_LABELS, "line_labels": LINE_LABELS,
         "totals": {
