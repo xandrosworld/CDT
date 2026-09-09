@@ -4326,7 +4326,7 @@
       var text = preview.alreadyPosted ? "Đơn đã có bảng kê nhập kho. Kiểm tra lại trạng thái duyệt?" :
         preview.rowCount ? "Duyệt đơn và ghi nhập kho " + preview.rowCount + " dòng bảng kê, " + money(preview.amount) + "?\nSố lượng dùng theo thực nhận trong đơn. Giá bảng kê bằng " + preview.ratePercent + "% giá bán." : "Duyệt đơn hàng này? Không có dòng bảng kê cần nhập kho.";
       if (preview.excludedRows) text += "\n" + preview.excludedRows + " dòng thuộc người bán đã loại khỏi bảng kê.";
-      if ((preview.overlaps || []).length) text += "\n\nCác mã đã có hóa đơn nhập cùng ngày: " + Array.from(new Set(preview.overlaps.map(function (r) { return r.code; }))).join(', ') + ".\nChỉ đồng ý nếu hàng bảng kê là phần mua riêng, chưa nhập từ các hóa đơn đó.";
+      if ((preview.overlaps || []).length) text += "\n\nCác mã đã nhập kho cùng ngày từ hóa đơn hoặc bảng kê: " + Array.from(new Set(preview.overlaps.map(function (r) { return r.code; }))).join(', ') + ".\nChỉ đồng ý nếu đây là lần mua riêng, chưa nằm trong phần đã nhập kho.";
       if (!window.confirm(text)) return null;
       return api("/api/batches/" + batchId + "/approve", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source_hash: preview.sourceHash, confirm_bk: true, confirm_separate_purchases: Boolean((preview.overlaps || []).length) }) });

@@ -65,9 +65,12 @@ def prepare(conn, batch_id):
     source_state_hash = bk._hash_json({'date': batch['work_date'], 'canonical': bool(canonical),
         'rows': [{k: r.get(k) for k in fields} for r in sources],
         'orders': [{k: r.get(k) for k in fields} for r in orders.values()]})
+    prior_bk = [dict(r) for r in conn.execute('''SELECT l.product_code,l.document_id,l.source_key,l.snapshot_hash,l.source_reference
+        FROM bk_import_lines l JOIN bk_import_documents d ON d.id=l.document_id
+        WHERE d.status='posted' AND l.document_date=? ORDER BY l.id''', (batch['work_date'],))]
     fingerprint = bk._hash_json({'source': source_state_hash, 'rate': str(rate),
         'products': {r.get('product_code'): products.get(r.get('product_code')) for r in sources},
-        'people': people})
+        'people': people, 'prior_bk': prior_bk})
     result = {'rows': [], 'issues': [], 'overlaps': [], 'excludedRows': 0, 'sourceHash': fingerprint,
               'alreadyPosted': False, 'documentId': None, 'amount': 0, 'ratePercent': float(rate * 100),
               '_source_state_hash': source_state_hash}
@@ -142,6 +145,11 @@ def prepare(conn, batch_id):
         if matches:
             result['overlaps'].append({'row': row_ref, 'code': product['code'],
                 'invoices': [f'{m[0]} / {m[1]}' for m in matches]})
+        existing_bk = sorted({r['document_id'] for r in prior_bk if r['product_code'] == product['code']
+                              and r['source_reference'].casefold() != reference.casefold()})
+        if existing_bk:
+            result['overlaps'].append({'row': row_ref, 'code': product['code'], 'kind': 'bk',
+                'invoices': [f'Bảng kê đã nhập #{doc_id}' for doc_id in existing_bk]})
     result['rowCount'] = len(result['rows'])
     if result['rows'] and not result['issues']:
         payload = bk.build_bk_import_template(result['rows'])
@@ -179,7 +187,7 @@ def approve(conn, batch_id, body, timestamp, audit_event):
     if result['rows'] and body.get('source_hash') != result['sourceHash']:
         raise bk.BKImportError('Hãy xem lại đơn và bảng kê trước khi duyệt.', code='batch_bk_stale', status=409)
     if result['overlaps'] and body.get('confirm_separate_purchases') is not True:
-        raise bk.BKImportError('Có mã đã nhập từ hóa đơn cùng ngày. Xác nhận phần bảng kê là lần mua riêng trước khi duyệt.',
+        raise bk.BKImportError('Có mã đã nhập kho cùng ngày từ hóa đơn hoặc bảng kê. Xác nhận đây là lần mua riêng trước khi duyệt.',
                                code='batch_bk_overlap', status=409)
     if not result['rows']:
         return {'inventoryLines': 0, 'newInventoryLines': 0, 'idempotent': False}

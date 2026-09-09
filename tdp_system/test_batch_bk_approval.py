@@ -185,6 +185,30 @@ class BatchBKApprovalTests(unittest.TestCase):
         r=self.post(confirm_separate_purchases=True);self.assertEqual(r.status_code,200,r.get_json())
         with server.db() as conn:self.assertEqual(conn.execute('SELECT sum(qty_delta) FROM invoice_inventory_ledger').fetchone()[0],7)
 
+    def test_historical_bk_requires_separate_purchase_and_invalidates_old_preview(self):
+        before = self.preview()
+        with server.db() as conn:
+            prepared = approval.prepare(conn, self.batch)
+            rows = prepared['rows']
+            for row in rows:
+                row['source_reference'] = 'HISTORICAL-PURCHASE'
+            parsed = approval.bk.parse_bk_preview(conn, approval.bk.build_bk_import_template(rows))
+            pending = dict(prepared['_pending'], rows=parsed['rows'], content_hash=parsed['contentHash'],
+                           database_state_hash=approval.bk._database_state_hash(conn, parsed['rows']))
+            approval.bk._post_pending(conn, pending, NOW, None)
+        # An independent import is not proof the order is an additional purchase.
+        preview = self.preview()
+        self.assertEqual(preview['overlaps'][0]['kind'], 'bk')
+        self.assertNotEqual(before['sourceHash'], preview['sourceHash'])
+        response = self.client.post(f'/api/batches/{self.batch}/approve', json={
+            'source_hash': before['sourceHash'], 'confirm_bk': True,
+            'confirm_separate_purchases': True})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.post().status_code, 409)
+        with server.db() as conn:
+            self.assertEqual(conn.execute('SELECT SUM(qty_delta) FROM invoice_inventory_ledger').fetchone()[0], 2)
+            self.assertEqual(conn.execute('SELECT status FROM batches WHERE id=?', (self.batch,)).fetchone()[0], 'draft')
+
     def test_purchase_workbook_import_cannot_replace_posted_bk_source(self):
         from .contract_modules import apply_purchase_order_preview, PurchaseOrderApplyError
         self.assertEqual(self.post().status_code,200)
