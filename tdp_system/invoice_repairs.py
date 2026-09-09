@@ -98,10 +98,10 @@ def correct_unconsumed_posted_input_product(conn, *, item_id, expected, code,
             'invoice_id', 'line_index', 'source_item_code', 'source_item_name', 'unit_price')):
         raise ValueError('Danh tính dòng nguồn đã thay đổi; dừng sửa sổ.')
     product = mapping._product(conn, code)
-    if (code == old['product_code'] or row['conversion_factor'] != 1
+    if (code == old['product_code']
             or not mapping.mapping_units_match(row['source_unit'], product['unit'])
             or not math.isfinite(old['stock_qty']) or old['stock_qty'] <= 0):
-        raise ValueError('Chỉ sửa mã khác, cùng đơn vị; không tự quy đổi.')
+        raise ValueError('Mã mới phải đúng đơn vị hóa đơn; không tự đoán quy đổi.')
     invoice = conn.execute('SELECT * FROM msmi_invoices WHERE id=?',
                            (row['invoice_id'],)).fetchone()
     if conn.execute("""SELECT 1 FROM inventory_transactions WHERE source_type='OPENING'
@@ -159,10 +159,10 @@ def correct_unconsumed_posted_input_product(conn, *, item_id, expected, code,
         correct_input_line_product(conn, item_id=item_id, expected=expected,
                                    code=code, now=now)
         new = mapping.validated_input_stock_snapshot(conn, item_id)
-        conn.execute('UPDATE invoice_inventory_ledger SET product_code=?,mapping_revision_id=? WHERE id=?',
-                     (code, new['mapping_revision_id'], event['id']))
-        conn.execute('UPDATE inventory_transactions SET product_code=?,updated_at=? WHERE id=?',
-                     (code, now, transaction['id']))
+        conn.execute('UPDATE invoice_inventory_ledger SET product_code=?,mapping_revision_id=?,qty_delta=?,unit_cost=? WHERE id=?',
+                     (code, new['mapping_revision_id'], new['stock_qty'], new['stock_unit_price'], event['id']))
+        conn.execute('UPDATE inventory_transactions SET product_code=?,qty_in=?,unit_cost=?,updated_at=? WHERE id=?',
+                     (code, new['stock_qty'], new['stock_unit_price'], now, transaction['id']))
         conn.execute("UPDATE msmi_invoices SET receipt_status='posted',updated_at=? WHERE id=?",
                      (now, row['invoice_id']))
         mapping.refresh_linked_batches(conn, 'input', {row['invoice_id']}, now)

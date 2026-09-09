@@ -172,5 +172,27 @@ class InvoiceRepairTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.repair(before)
         self.assertEqual('H000001', self.conn.execute('SELECT product_code FROM invoice_inventory_ledger').fetchone()[0])
 
+    def test_restores_original_package_unit_without_changing_source_money(self):
+        from .invoice_mapping import save_conversion
+        self.conn.executemany('INSERT INTO products(code,name,unit) VALUES(?,?,?)',
+                              [('OLD-P','Goods','Kg'), ('NEW-P','Goods pack','Túi')])
+        raw = remote_invoice(2)
+        raw['hdhhdvu'][0].update(dvtinh='Túi',sluong=2,dgia=5000,thtien=10000)
+        iid = upsert_msmi_invoice(self.conn,raw,'INPUT_ELECTRONIC_INVOICE','TDP',now_iso())[0]
+        item = self.conn.execute('SELECT id FROM msmi_invoice_items WHERE invoice_id=?',(iid,)).fetchone()[0]
+        save_mapping(self.conn,direction='input',item_id=item,product_code='OLD-P',now_iso=now_iso)
+        save_conversion(self.conn,direction='input',item_id=item,conversion_factor=0.5,now_iso=now_iso)
+        create_input_receipt(self.conn,iid,now_iso)
+        self.conn.commit();self.conn.execute('BEGIN IMMEDIATE')
+        before = dict(self.conn.execute('SELECT * FROM msmi_invoice_items WHERE id=?',(item,)).fetchone())
+        self.assertEqual(1,before['stock_qty'])
+        correct_unconsumed_posted_input_product(self.conn,item_id=item,expected=before,code='NEW-P',now=now_iso(),
+            evidence={'file':'invoice-report.xlsx','sha256':'b'*64,'row':3,'reason':'Mã gói theo chứng từ gốc'})
+        after = dict(self.conn.execute('SELECT * FROM msmi_invoice_items WHERE id=?',(item,)).fetchone())
+        self.assertEqual(2,after['stock_qty']);self.assertEqual(5000,after['stock_unit_price'])
+        for key in ('source_unit','qty','amount','unit_price'):self.assertEqual(before[key],after[key])
+        self.assertEqual(2,self.conn.execute('SELECT qty_delta FROM invoice_inventory_ledger WHERE source_line_id=?',(item,)).fetchone()[0])
+        create_input_receipt(self.conn,iid,now_iso)
+
 
 if __name__=='__main__':unittest.main()
