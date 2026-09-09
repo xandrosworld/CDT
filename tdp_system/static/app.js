@@ -3100,14 +3100,14 @@
     var exportQuery = "?from=" + encodeURIComponent(state.inventoryFrom) + "&to=" + encodeURIComponent(state.inventoryTo);
     content.innerHTML = inventoryTraceHtml() + html([
       '<div class="card inventory-primary-card"><div class="inventory-primary-range"><div><h3>Báo cáo vật tư hàng hóa</h3>',
-      '<p>Chọn báo cáo để xem Excel toàn màn hình theo khoảng ngày.</p></div><div class="compact-controls">',
+      '<p>NXT theo mẫu khách: giữ T/Suất, tồn cuối bình quân cả tháng theo từng mã, Xuất theo doanh thu M-Invoice. Chọn trọn một tháng để xem NXT và tải bộ ZIP.</p></div><div class="compact-controls">',
       '<button class="btn btn-primary" data-action="open-inventory-close">Chuyển tồn sang tháng sau</button>',
       '<label>Từ ngày <input id="inventoryFrom" class="input-date" type="date" value="', esc(state.inventoryFrom), '"></label>',
       '<label>Đến ngày <input id="inventoryTo" class="input-date" type="date" value="', esc(state.inventoryTo), '"></label>',
       '</div></div><div class="inventory-export-grid">',
-      '<button class="btn btn-primary" data-action="download-document" data-url="/api/invoice-valuation/export', exportQuery, '"', valid ? '' : ' disabled', '>Tải đủ 4 file ZIP</button>',
-      [['opening','Tồn đầu kỳ'],['input','Nhập'],['output','Xuất'],['nxt','Nhập – xuất – tồn']].map(function(item) {
-        return '<button class="btn btn-outline" data-action="preview-inventory-report" data-kind="' + item[0] + '"' + (valid ? '' : ' disabled') + '>' + item[1] + '</button>';
+      '<button class="btn btn-outline" data-action="download-document" data-url="/api/invoice-valuation/export', exportQuery, '"', valid ? '' : ' disabled', '>Tải 4 báo cáo ZIP</button>',
+      [['opening','Tồn đầu kỳ'],['input','Nhập'],['output','Xuất · giá bán hóa đơn'],['nxt','Nhập – xuất – tồn']].map(function(item) {
+        return '<button class="btn ' + (item[0] === 'output' ? 'btn-primary' : 'btn-outline') + '" data-action="preview-inventory-report" data-kind="' + item[0] + '"' + (valid ? '' : ' disabled') + '>' + item[1] + '</button>';
       }).join(''),
       '</div>', valid ? '' : '<p class="error-summary">Chọn đủ ngày; Từ ngày không được lớn hơn Đến ngày.</p>', '</div>',
       inventoryDataToolsHtml()

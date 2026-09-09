@@ -81,3 +81,5 @@ tdp_system/print_tools/SumatraPDF-settings.txt
 !tdp_system/templates/bot_payment_template.xlsx
 !tdp_system/templates/payroll_template.xlsx
 !tdp_system/templates/simple_payment_request_template.docx
+
+!tdp_system/templates/inventory_nxt_template.xlsx

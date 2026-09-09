@@ -61,7 +61,7 @@ def input_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=None
     invoices = [dict(row) for row in conn.execute(
         """SELECT i.id,i.invoice_type,i.seller_tax_code,i.seller_name,
                   i.invoice_number,i.invoice_series,i.invoice_date,i.subtotal,i.tax_amount,
-                  i.total_amount,i.sync_status,i.receipt_status,i.error_message,i.synced_at,
+                  i.total_amount,i.sync_status,i.receipt_status,i.error_message,i.synced_at,i.raw_json,
                   COUNT(li.id) item_count,
                   SUM(CASE WHEN li.inventory_eligible=1 THEN 1 ELSE 0 END) inventory_item_count,
                   SUM(CASE WHEN li.inventory_eligible=1 AND li.mapping_status='mapped' THEN 1 ELSE 0 END) mapped_count
@@ -86,6 +86,11 @@ def input_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=None
                 WHERE li.invoice_id=? ORDER BY li.line_index""",
             (invoice["id"],),
         )]
+        try:
+            from .invoice_line_tax import annotate_invoice_tax
+        except ImportError:
+            from invoice_line_tax import annotate_invoice_tax
+        annotate_invoice_tax(invoice, invoice.pop('raw_json', '{}'))
         for line in invoice["items"]:
             line["suggested_product_code"] = ""
             line["suggested_product_name"] = ""

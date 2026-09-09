@@ -1,7 +1,7 @@
 """Monthly inventory close and opening-balance carry-forward.
 
 The invoice inventory ledger stays immutable.  Closing a month materializes the
-read-only moving-average projection as the next month's ``OPENING`` snapshot.
+read-only monthly-average projection as the next month's ``OPENING`` snapshot.
 The operation is guarded by source/target hashes, is idempotent, and can be
 explicitly reopened before a later month is closed.
 """
@@ -17,9 +17,11 @@ from typing import Any, Callable, Mapping
 from flask import jsonify, request
 
 try:
-    from invoice_valuation import InvoiceValuationError, moving_average_report
+    from invoice_valuation import InvoiceValuationError
+    from invoice_monthly_valuation import monthly_average_report
 except ImportError:  # pragma: no cover - package invocation
-    from .invoice_valuation import InvoiceValuationError, moving_average_report
+    from .invoice_valuation import InvoiceValuationError
+    from .invoice_monthly_valuation import monthly_average_report
 
 
 PERIOD_CLOSE_SCHEMA = """
@@ -148,6 +150,7 @@ def _source_hash(report: Mapping[str, Any]) -> str:
         "closing_qty", "closing_value", "average_unit_cost", "valuation_status",
     )
     return _stable_hash({
+        "valuation_method": report.get("valuation_method", "moving_average"),
         "date_from": report["date_from"],
         "date_to": report["date_to"],
         "opening_period": report.get("opening_period") or "",
@@ -180,7 +183,7 @@ def inventory_period_close_preview(
     safe_period = date_from[:7]
     current_day = today or date.today()
     try:
-        report = moving_average_report(
+        report = monthly_average_report(
             conn,
             date_from=date_from,
             date_to=date_to,
@@ -418,7 +421,7 @@ def close_inventory_period(
     # Existing movements in the next month must still be valid under the new
     # opening snapshot.  Any negative-stock rebuild aborts the whole close.
     try:
-        moving_average_report(
+        monthly_average_report(
             conn,
             date_from=next_period + "-01",
             date_to=_period_bounds(next_period)[1],

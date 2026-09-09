@@ -1060,6 +1060,11 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
             (row["id"],),
         )]
         try:
+            from .invoice_line_tax import annotate_invoice_tax
+        except ImportError:
+            from invoice_line_tax import annotate_invoice_tax
+        annotate_invoice_tax(invoice, row['raw_json'])
+        try:
             from .invoice_product_identity import output_identity_warning
         except ImportError:
             from invoice_product_identity import output_identity_warning

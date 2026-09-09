@@ -138,7 +138,7 @@ def input_invoice_export_data(conn, batch_id: Any) -> dict[str, Any]:
     invoices = [dict(row) for row in conn.execute(
         """SELECT i.id,i.seller_tax_code,i.seller_name,i.invoice_number,i.invoice_series,
                   i.invoice_date,i.subtotal,i.tax_amount,i.total_amount,i.sync_status,
-                  i.receipt_status,i.synced_at
+                  i.receipt_status,i.synced_at,i.raw_json
              FROM invoice_sync_batch_invoices bi
              JOIN msmi_invoices i ON i.id=bi.invoice_id
             WHERE bi.batch_id=?
@@ -178,6 +178,13 @@ def input_invoice_export_data(conn, batch_id: Any) -> dict[str, Any]:
         line["stock_qty"] = _number(line.get("stock_qty"), "Số lượng kho")
         line["stock_unit_price"] = _vnd(line.get("stock_unit_price"), "Đơn giá kho")
 
+    try:
+        from .invoice_line_tax import annotate_invoice_tax
+    except ImportError:
+        from invoice_line_tax import annotate_invoice_tax
+    for invoice in invoices:
+        invoice['items'] = [line for line in lines if line['invoice_id'] == invoice['id']]
+        annotate_invoice_tax(invoice, invoice.pop('raw_json', '{}'))
     return {
         "batch": batch,
         "invoices": invoices,
@@ -310,7 +317,7 @@ def input_invoice_workbook(data: dict[str, Any]) -> Workbook:
         "Dòng", "Mã hàng nguồn", "Tên hàng nguồn", "ĐVT nguồn", "Số lượng",
         "Đơn giá", "Thành tiền", "Thuế suất", "Tính chất", "Có vào kho",
         "Mã TĐP", "Trạng thái ghép mã", "Hệ số quy đổi", "SL kho", "Giá kho",
-        "Ghi chú kiểm tra",
+        "Ghi chú kiểm tra", "Tiền thuế", "Tiền gồm thuế", "Đối chiếu thuế",
     ]
     ws = workbook.create_sheet("Chi tiết hàng hóa")
     ws.append(detail_headers)
@@ -327,13 +334,14 @@ def input_invoice_workbook(data: dict[str, Any]) -> Workbook:
             "Có" if int(line.get("inventory_eligible") or 0) else "Không",
             _excel_text(line.get("product_code")), _status_label(line.get("mapping_status")),
             line.get("conversion_factor"), line["stock_qty"], line["stock_unit_price"],
-            _excel_text(line.get("validation_note")),
+            _excel_text(line.get("validation_note")), line.get('line_tax_amount'), line.get('amount_with_tax'),
+            _excel_text(line.get('tax_note')),
         ])
     _style_table(
         ws, title="CHI TIẾT HÀNG HÓA TRÊN HÓA ĐƠN ĐẦU VÀO", subtitle=period,
         headers=detail_headers,
-        widths=[7, 13, 14, 15, 17, 30, 8, 18, 34, 13, 13, 16, 17, 13, 13, 12, 14, 18, 15, 14, 16, 30],
-        money_columns=(12, 13, 21), quantity_columns=(11, 19, 20), date_columns=(2,),
+        widths=[7, 13, 14, 15, 17, 30, 8, 18, 34, 13, 13, 16, 17, 13, 13, 12, 14, 18, 15, 14, 16, 30, 18, 20, 44],
+        money_columns=(12, 13, 21, 23, 24), quantity_columns=(11, 19, 20), date_columns=(2,),
     )
 
     proof = workbook.create_sheet("Thông tin lần tải")

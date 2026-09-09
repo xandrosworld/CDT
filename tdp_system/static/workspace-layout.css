@@ -58,9 +58,9 @@
   #content .invoice-mapping-compact :is(input,.btn) { height:30px; min-height:30px; }
   #content .invoice-mapping-compact .btn { padding:3px 5px; white-space:nowrap; overflow-wrap:normal; }
   #content .invoice-mapping-code-only { grid-template-columns:minmax(0,1fr) 42px; gap:5px; }
-  #content .invoice-output-table { min-width:1100px; }
-  #content .invoice-output-table tbody td:nth-child(9),
-  #content .invoice-output-table thead th:nth-child(9) { right:0; }
+  #content .invoice-output-table { min-width:1315px; }
+  #content .invoice-output-table tbody td:nth-child(11),
+  #content .invoice-output-table thead th:nth-child(11) { right:0; }
   #content .invoice-output-table td:nth-child(3) { white-space:nowrap; }
   #content .invoice-lines-card .invoice-lines-scroll tfoot td { height:30px; padding:4px 7px; font-size:12px; }
   #content .invoice-lines-card .invoice-total-note { padding:4px 10px; }

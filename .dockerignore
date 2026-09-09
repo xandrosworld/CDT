@@ -20,3 +20,5 @@ tdp_system/qa_*.py
 !tdp_system/templates/simple_payment_request_template.docx
 !demo_tdp/
 !demo_tdp/styles.css
+
+!tdp_system/templates/inventory_nxt_template.xlsx

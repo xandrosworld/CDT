@@ -226,6 +226,13 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
         except ImportError:
             from .invoice_line_groups import grouped_lines
         lines,group_warnings=grouped_lines(conn,tenant,visible_invoices,lines)
+        try:
+            from .invoice_line_tax import grouped_tax
+        except ImportError:
+            from invoice_line_tax import grouped_tax
+        for line in lines:
+            if line.get('group_members'):
+                line.update(grouped_tax(line['group_members']))
         qty_by_unit={}
         for line in lines:
             if line.get('id') is not None:
@@ -259,9 +266,9 @@ def range_workbook(payload):
     title = "HÓA ĐƠN ĐẦU VÀO" if payload["direction"] == "input" else "HÓA ĐƠN ĐẦU RA"
     period = ("CÒN CHƯA NHẬP ĐẾN " if payload['direction'] == 'input' else "CÒN CHƯA XUẤT ĐẾN ") + payload["date_to"] if payload.get("scope") == "pending" else payload["date_from"] + " → " + payload["date_to"]
     ws.append([title + " · " + period])
-    ws.merge_cells("A1:M1")
+    ws.merge_cells("A1:Q1")
     ws.append(["Ngày", "Ký hiệu / Số HĐ", "Đối tác", "Dòng", "Tên hàng", "ĐVT", "Số lượng",
-               "Đơn giá", "Thành tiền dòng (chưa thuế)", "Mã kho", "Lượng kho", "ĐVT kho", "Trạng thái / Cần xử lý"])
+               "Đơn giá", "Thành tiền dòng (chưa thuế)", "Mã kho", "Lượng kho", "ĐVT kho", "Trạng thái / Cần xử lý", "Thuế suất", "Tiền thuế", "Tiền gồm thuế", "Đối chiếu thuế"])
     invoices = {invoice["id"]: invoice for invoice in payload["items"]}
     for line in payload["lines"]:
         invoice = invoices[line["invoice_id"]]
@@ -272,6 +279,7 @@ def range_workbook(payload):
             line.get("unit_price"), line.get("amount"),
             line.get("product_code", ""), line.get("stock_qty"), line.get("product_unit", ""),
             line["issue"] or ('Chi phí · không nhập kho' if line.get('is_expense') else STATUS_LABELS[invoice["workbench_status"]]),
+            line.get("tax_rate"), line.get("line_tax_amount"), line.get("amount_with_tax"), line.get("tax_note"),
         ])
     total_row = ws.max_row + 1
     ws.append(["TỔNG TIỀN CÁC DÒNG ĐANG LỌC", None, None, None, None, None, None, None, payload["totals"]["line_amount"]])
@@ -280,7 +288,7 @@ def range_workbook(payload):
     ws.append(["TỔNG THANH TOÁN CÁC HÓA ĐƠN CÓ DÒNG ĐANG LỌC (mỗi hóa đơn tính một lần)",
                None, None, None, None, None, None, None, payload["totals"]["invoice_amount"]])
     ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=8)
-    widths = [13, 24, 30, 7, 38, 10, 15, 18, 22, 14, 15, 12, 42]
+    widths = [13, 24, 30, 7, 38, 10, 15, 18, 22, 14, 15, 12, 42, 12, 18, 20, 44]
     edge = Side(style="thin", color="B8C2CA")
     border = Border(left=edge, right=edge, top=edge, bottom=edge)
     for cells in ws:
@@ -293,7 +301,7 @@ def range_workbook(payload):
             cell.border = border
             if cell.column in {7, 11}:
                 cell.number_format = "#,##0.######"
-            if cell.column in {8, 9}:
+            if cell.column in {8, 9, 15, 16}:
                 cell.number_format = "#,##0"
         ws.row_dimensions[cells[0].row].height = max(36, 14 * max(
             (len(str(cell.value or "")) // max(1, int(widths[cell.column - 1]) - 3) + 1) for cell in cells
@@ -304,11 +312,11 @@ def range_workbook(payload):
         grouped=[r for r in payload['lines'] if r.get('group_id')]
         if grouped:
             original=wb.create_sheet('Dong goc da gop')
-            original.append(['Nhóm','Hóa đơn','Dòng gốc','Tên nguồn','ĐVT nguồn','Lượng nguồn','Đơn giá nguồn','Tiền chưa thuế','Mã kho','Lượng sau quy đổi','ĐVT kho'])
+            original.append(['Nhóm','Hóa đơn','Dòng gốc','Tên nguồn','ĐVT nguồn','Lượng nguồn','Đơn giá nguồn','Tiền chưa thuế','Mã kho','Lượng sau quy đổi','ĐVT kho','Thuế suất','Tiền thuế','Tiền gồm thuế','Đối chiếu thuế'])
             for group in grouped:
                 invoice=invoices[group['invoice_id']]
                 for member in group['group_members']:
-                    original.append([group['group_id'],invoice['invoice_series']+' / '+invoice['invoice_number'],member['line_index'],member['source_item_name'],member['source_unit'],member['qty'],member['unit_price'],member['amount'],member['product_code'],member['stock_qty'],member['product_unit']])
+                    original.append([group['group_id'],invoice['invoice_series']+' / '+invoice['invoice_number'],member['line_index'],member['source_item_name'],member['source_unit'],member['qty'],member['unit_price'],member['amount'],member['product_code'],member['stock_qty'],member['product_unit'],member.get('tax_rate'),member.get('line_tax_amount'),member.get('amount_with_tax'),member.get('tax_note')])
             for cells in original:
                 for cell in cells:
                     if isinstance(cell.value,str):cell.data_type='s'
@@ -319,15 +327,21 @@ def range_workbook(payload):
         summary = wb.create_sheet("Tong nhap theo ma")
         summary.append(["TỔNG NHẬP THEO MÃ TRONG TỪNG HÓA ĐƠN · Đủ các dòng đã ghép, không phụ thuộc lọc dòng"])
         summary.append(["Ngày", "Hóa đơn", "Mã kho", "Tên hàng", "ĐVT", "Tổng lượng nhập",
-                        "Trong đó lượng 0đ", "Tổng tiền chưa thuế", "Giá nhập bình quân", "Lưu ý"])
+                        "Trong đó lượng 0đ", "Tổng tiền chưa thuế", "Giá nhập bình quân", "Lưu ý", "Thuế suất", "Tiền thuế", "Tiền gồm thuế"])
         for invoice in payload["items"]:
             data = invoice.get("receipt_summary") or input_receipt_summary(invoice)
             note = (f"Còn {data['pending_lines']} dòng chưa đủ mã/quy đổi; tổng chưa đầy đủ. " if data["pending_lines"] else "")
             note += STATUS_LABELS[invoice["workbench_status"]] + "; giá bình quân riêng hóa đơn, chưa gồm tồn cũ."
+            try:
+                from .invoice_line_tax import grouped_tax
+            except ImportError:
+                from invoice_line_tax import grouped_tax
             for row in data["items"] or [{}]:
+                members = [r for r in invoice['items'] if r.get('product_code') == row.get('product_code') and r.get('inventory_eligible') and not r.get('is_expense') and r.get('mapping_status') == 'mapped']
+                tax = grouped_tax(members)
                 summary.append([invoice["invoice_date"], invoice["invoice_series"] + " / " + invoice["invoice_number"],
                                 row.get("product_code"), row.get("product_name"), row.get("unit"), row.get("qty"),
-                                row.get("zero_amount_qty"), row.get("amount"), row.get("average_unit_cost"), note])
+                                row.get("zero_amount_qty"), row.get("amount"), row.get("average_unit_cost"), note, tax["tax_rate"], tax["line_tax_amount"], tax["amount_with_tax"]])
         for cells in summary:
             for cell in cells:
                 if isinstance(cell.value, str):
@@ -339,7 +353,7 @@ def range_workbook(payload):
                     cell.number_format = "#,##0.######"
                 elif cell.column in {8, 9}:
                     cell.number_format = "#,##0"
-        for col, width in zip("ABCDEFGHIJ", (13, 24, 15, 38, 10, 18, 18, 23, 23, 65)):
+        for col, width in zip("ABCDEFGHIJKLM", (13, 24, 15, 38, 10, 18, 18, 23, 23, 65, 15, 18, 20)):
             summary.column_dimensions[col].width = width
         summary.freeze_panes = "F3"
         summary.auto_filter.ref = f"A2:J{summary.max_row}"

@@ -400,7 +400,7 @@ body { min-width: 320px; }
 .inventory-primary-range h3 { margin:0 0 6px; color:#17324d; font-size:23px; }
 .inventory-primary-range p { margin:0; color:#5e7083; }
 .inventory-primary-range label { display:flex; flex-direction:column; gap:6px; color:#455e73; font-size:13px; font-weight:800; }
-.inventory-export-grid { display:grid; grid-template-columns:1.3fr repeat(4,1fr); gap:10px; margin-top:20px; }
+.inventory-export-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:20px; }
 .inventory-export-grid .btn { min-height:48px; justify-content:center; white-space:normal; }
 .inventory-month-close { margin-top:18px; padding:18px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:18px; border:1px solid #b9ddd7; border-radius:15px; background:#f2fbf9; }
 .inventory-month-close-error { border-color:#ecc5c1; background:#fff7f6; }
@@ -711,8 +711,8 @@ body { min-width: 320px; }
 .review-footer { margin:0; padding:12px 20px; border-top:1px solid #d1d8dd; flex:none; }
 
 /* Keep the editor beside compact invoice actions while source columns scroll. */
-.invoice-lines-card .invoice-lines-scroll tbody td:nth-child(9) { position:sticky; right:180px; z-index:2; box-shadow:-1px 0 #b8c2ca; }
-.invoice-lines-card .invoice-lines-scroll thead th:nth-child(9) { right:180px; z-index:5; }
+.invoice-lines-card .invoice-lines-scroll tbody td:nth-child(11) { position:sticky; right:180px; z-index:2; box-shadow:-1px 0 #b8c2ca; }
+.invoice-lines-card .invoice-lines-scroll thead th:nth-child(11) { right:180px; z-index:5; }
 .invoice-lines-card .invoice-row-actions .btn { width:100%; min-height:40px; font-size:14px; }
 .invoice-lines-card .invoice-row-actions .tag { white-space:normal; font-size:13px; }
 .invoice-lines-card .invoice-row-actions .btn { min-height:32px; }
@@ -774,17 +774,17 @@ body { min-width: 320px; }
 .invoice-group-choice:has(input:disabled) { color: #5b6570; cursor: default; }
 
 /* Select source rows first; mapping and conversion are completed in one dialog. */
-.invoice-lines-card .invoice-select-first { min-width:1377px; }
+.invoice-lines-card .invoice-select-first { min-width:1592px; }
 .invoice-lines-card .invoice-select-first .invoice-select-cell { width:52px; min-width:52px; padding:4px; text-align:center; }
 .invoice-select-first .invoice-group-choice { justify-content:center; min-height:44px; }
 .invoice-select-first .invoice-group-select { width:24px; height:24px; flex-shrink:0; }
 .invoice-select-first .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 .invoice-lines-card .invoice-select-first tbody td:nth-child(2) { position:sticky; left:52px; z-index:2; }
 .invoice-lines-card .invoice-select-first thead th:nth-child(2) { left:52px; z-index:5; }
-.invoice-lines-card .invoice-select-first tbody td:nth-child(9) { position:static; box-shadow:none; }
-.invoice-lines-card .invoice-select-first thead th:nth-child(9) { right:auto; }
-.invoice-lines-card .invoice-select-first tbody td:nth-child(10) { position:sticky; right:180px; z-index:2; box-shadow:-1px 0 #b8c2ca; }
-.invoice-lines-card .invoice-select-first thead th:nth-child(10) { right:180px; z-index:5; }
+.invoice-lines-card .invoice-select-first tbody td:nth-child(11) { position:static; box-shadow:none; }
+.invoice-lines-card .invoice-select-first thead th:nth-child(11) { right:auto; }
+.invoice-lines-card .invoice-select-first tbody td:nth-child(12) { position:sticky; right:180px; z-index:2; box-shadow:-1px 0 #b8c2ca; }
+.invoice-lines-card .invoice-select-first thead th:nth-child(12) { right:180px; z-index:5; }
 .invoice-group-dialog { box-sizing:border-box; width:min(960px,96vw); max-height:92vh; overflow:auto; padding:22px; font-size:16px; }
 .invoice-group-dialog #group-product-search { display:block; width:100%; box-sizing:border-box; margin:8px 0; }
 .group-product-results { display:flex; flex-direction:column; gap:5px; max-height:220px; overflow:auto; }

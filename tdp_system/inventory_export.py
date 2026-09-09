@@ -1,9 +1,7 @@
-"""Four official, reconciled TĐK–Nhập–Xuất–NXT workbooks.
+"""Stock valuation helpers and customer reports with source sales and line VAT.
 
-The invoice ledger and :func:`moving_average_report` are the only movement
-source.  The customer's locked TĐK workbook supplies the identity columns and
-visual language; Nhập, Xuất and NXT extend that same structure with static
-values, A4 print settings and one shared reconciliation manifest.
+Customer routes use M-Invoice revenue for Xuất and quantity-based NXT.
+Internal valuation workbooks remain available to the stock reconciliation code.
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from flask import jsonify, request, send_file
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.views import Selection
@@ -164,7 +162,7 @@ def _product_metadata(conn: Any) -> dict[str, dict[str, Any]]:
     return {str(row["code"]): dict(row) for row in rows}
 
 
-def _source_trace(conn: Any, event: Mapping[str, Any]) -> dict[str, Any]:
+def _source_trace(conn: Any, event: Mapping[str, Any], tax_cache=None) -> dict[str, Any]:
     source_id = int(event["source_invoice_id"])
     line_id = int(event["source_line_id"])
     if event["source_invoice_table"] == "msmi_invoices":
@@ -215,7 +213,30 @@ def _source_trace(conn: Any, event: Mapping[str, Any]) -> dict[str, Any]:
             "Sổ kho thiếu dòng hóa đơn nguồn để lập file đối chiếu",
             code="source_trace_missing",
         )
-    return dict(row)
+    trace = dict(row)
+    if event['source_invoice_table'] in {'msmi_invoices', 'outgoing_source_invoices'}:
+        table = event['source_invoice_table']
+        lines_table = 'msmi_invoice_items' if table == 'msmi_invoices' else 'outgoing_source_invoice_items'
+        if tax_cache is None:
+            tax_cache = {}
+        cache_key = (table, source_id)
+        if cache_key not in tax_cache:
+            header = dict(conn.execute(f'SELECT raw_json,tax_amount FROM {table} WHERE id=?', (source_id,)).fetchone())
+            header['items'] = [dict(r) for r in conn.execute(f'SELECT line_index,amount,tax_rate,id FROM {lines_table} WHERE invoice_id=?', (source_id,))]
+            try:
+                from .invoice_line_tax import annotate_invoice_tax
+            except ImportError:
+                from invoice_line_tax import annotate_invoice_tax
+            annotate_invoice_tax(header, header['raw_json'])
+            tax_cache[cache_key] = ({r['id']: r for r in header['items']}, header['detail_tax_difference'])
+        source_lines, difference = tax_cache[cache_key]
+        line = source_lines[line_id]
+        trace.update({key: line[key] for key in ('tax_rate', 'line_tax_amount', 'tax_note')})
+        if difference is not None and abs(difference) > 1:
+            trace['tax_note'] += f"; tổng thuế HĐ trừ chi tiết: {difference:,.0f}"
+    else:
+        trace.update(tax_rate='', line_tax_amount=None, tax_note='BK chưa có tiền thuế nguồn')
+    return trace
 
 
 def _verify_item_balance(item: Mapping[str, Any]) -> None:
@@ -332,8 +353,11 @@ def collect_inventory_export_model(
     input_by_product: dict[str, list[Decimal]] = {}
     output_by_product: dict[str, list[Decimal]] = {}
     event_identity: list[int] = []
+    tax_traces = {}
+    tax_cache = {}
     for event in report["events"]:
-        trace = _source_trace(conn, event)
+        trace = _source_trace(conn, event, tax_cache)
+        tax_traces[int(event["ledger_event_id"])] = trace
         code = str(event["product_code"])
         product = metadata.get(code)
         if not product:
@@ -401,7 +425,25 @@ def collect_inventory_export_model(
         })
         event_identity.append(int(event["ledger_event_id"]))
 
+    for row in input_rows + output_rows:
+        trace = tax_traces[row['ledger_event_id']]
+        row['tax_rate'] = trace.get('tax_rate', '')
+        row['tax_note'] = trace.get('tax_note', 'Chưa có tiền thuế nguồn')
+        tax = trace.get('line_tax_amount')
+        # Source tax belongs to the invoice line, never to its moving-average cost.
+        if row['movement_label'].startswith('Hoàn tác'):
+            tax = None
+            row['tax_note'] = 'Hoàn tác kho; đối chiếu thuế trên hóa đơn nguồn'
+        row['line_tax_amount'] = tax
+        row['amount_with_tax'] = float(_decimal(row['amount'], 'Tiền') + _decimal(tax, 'Thuế')) if tax is not None else None
     input_rows = _group_input_movements(conn, input_rows)
+    try:
+        from .invoice_line_tax import grouped_tax
+    except ImportError:
+        from invoice_line_tax import grouped_tax
+    for row in input_rows:
+        if row.get('group_members'):
+            row.update(grouped_tax(row['group_members']))
 
     item_map = {str(item["product_code"]): item for item in items}
     for code, item in item_map.items():
@@ -462,6 +504,41 @@ def collect_inventory_export_model(
     }
 
 
+def monthly_customer_model(conn, model):
+    """Apply one monthly valuation to NXT and the corresponding opening export."""
+    if model.get('valuation_method') == 'monthly_weighted_average':
+        return model
+    try:
+        from .invoice_monthly_valuation import monthly_average_report
+    except ImportError:
+        from invoice_monthly_valuation import monthly_average_report
+    try:
+        report = monthly_average_report(conn, date_from=model['date_from'], date_to=model['date_to'])
+    except InvoiceValuationError as error:
+        raise InventoryExportError(str(error), code=error.code, status=error.status) from None
+    metadata = _product_metadata(conn)
+    old = {r['product_code']: r for r in model['items']}
+    items = []
+    for row in report['items']:
+        code = row['product_code']
+        item = dict(old.get(code, {}), **row)
+        product = metadata.get(code, {})
+        item.update(product_name=product.get('name', row['product_name']),
+                    invoice_name=product.get('invoice_name', row['product_name']),
+                    warehouse_code=' / '.join(row.get('warehouse_codes') or []) or code,
+                    tax=product.get('tax', ''),
+                    opening_unit_cost=_average(row['opening_value'], row['opening_qty']),
+                    input_unit_cost=_average(row['input_value'], row['input_qty']),
+                    output_unit_cost=row['average_unit_cost'], closing_unit_cost=row['average_unit_cost'])
+        items.append(item)
+    totals = {key: _excel_number(sum((_decimal(r[key], key) for r in items), Decimal(0)),
+                   QTY_SCALE if key.endswith('_qty') else MONEY_SCALE) for key in model['totals']}
+    signature = json.dumps([model['contract_id'], report['valuation_method'], items], ensure_ascii=False, sort_keys=True)
+    return dict(model, items=items, totals=totals, rounding=report['rounding'],
+                valuation_method=report['valuation_method'],
+                contract_id=hashlib.sha256(signature.encode()).hexdigest().upper())
+
+
 def _excel_literal(value: Any) -> Any:
     if isinstance(value, str) and value.startswith("="):
         return "'" + value
@@ -505,7 +582,7 @@ def _add_control_sheet(workbook: Any, model: Mapping[str, Any], kind: str) -> No
         ("SL_TỒN_CUỐI", model["totals"]["closing_qty"]),
         ("GT_TỒN_CUỐI", model["totals"]["closing_value"]),
         ("CÔNG_THỨC", "TĐK + Nhập - Xuất = Tồn cuối"),
-        ("PHƯƠNG_PHÁP_GIÁ", "Bình quân gia quyền di động"),
+        ("PHƯƠNG_PHÁP_GIÁ", "Bình quân gia quyền cả tháng" if model.get("valuation_method") == "monthly_weighted_average" else "Bình quân gia quyền di động"),
         ("NGUỒN_MẪU_TĐK_SHA256", OPENING_TEMPLATE_SHA256),
         ("KIỂU_DỮ_LIỆU", "Giá trị tĩnh; không công thức; không liên kết ngoài"),
         ("ROUNDING", model["rounding"]["method"]),
@@ -654,18 +731,24 @@ def build_movement_workbook(model: Mapping[str, Any], *, direction: str) -> Any:
     if direction not in {"input", "output"}:
         raise InventoryExportError("Chiều file nhập/xuất không hợp lệ", status=400)
     is_input = direction == "input"
-    title = "NHẬP TRONG KỲ" if is_input else "XUẤT TRONG KỲ"
+    title = "NHẬP TRONG KỲ" if is_input else "XUẤT KHO · GIÁ VỐN"
     subtitle = (
         "Gồm hóa đơn đầu vào và BK đã xác nhận; hoàn tác nhập thể hiện âm"
-        if is_input else "Gồm xuất đã post và hoàn tác xuất; số hoàn tác thể hiện âm"
+        if is_input else "Giá vốn hàng xuất; hoàn tác thể hiện âm. Tiền bán xem báo cáo Xuất · giá bán hóa đơn."
     )
+    if not is_input and any(r.get('valuation_status') != 'ok' for r in model['items']):
+        subtitle += ' Giá vốn còn cần đối chiếu.'
     workbook, sheet = _new_document(model, title, subtitle)
     rows = model["input_rows"] if is_input else model["output_rows"]
     headers = (
         "STT", "Ngày HĐ", "Ký hiệu", "Số HĐ", "MST", "Đối tác", "Mã TĐP",
         "Tên TĐP", "Tên trên HĐ", "ĐVT kho", "Số lượng", "Đơn giá vốn",
-        "Thành tiền", "Loại phát sinh",
+        "Thành tiền" if is_input else "Thành tiền giá vốn", "Loại phát sinh",
     )
+    if is_input:
+        headers = (*headers[:11], 'Đơn giá nhập', 'Tiền trước thuế', headers[13], 'Thuế suất', 'Tiền thuế', 'Tiền gồm thuế', 'Đối chiếu thuế')
+        sheet.unmerge_cells('A1:N1'); sheet.unmerge_cells('A2:N2')
+        sheet.merge_cells('A1:R1'); sheet.merge_cells('A2:R2')
     for column, header in enumerate(headers, start=1):
         cell = sheet.cell(4, column, header)
         cell.font = Font(name="Times New Roman", size=10, bold=True, color=WHITE)
@@ -682,6 +765,8 @@ def build_movement_workbook(model: Mapping[str, Any], *, direction: str) -> Any:
             item["invoice_name"], item["unit"], item["quantity"], item["unit_cost"],
             item["amount"], item["movement_label"],
         )
+        if is_input:
+            values += (item.get('tax_rate'), item.get('line_tax_amount'), item.get('amount_with_tax'), item.get('tax_note'))
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row, column)
             _put(sheet, cell.coordinate, value)
@@ -697,7 +782,7 @@ def build_movement_workbook(model: Mapping[str, Any], *, direction: str) -> Any:
                 sheet.cell(row, column).fill = PatternFill("solid", fgColor=PALE_YELLOW)
 
     total_row = 5 + len(rows)
-    _put(sheet, f"A{total_row}", "TỔNG")
+    _put(sheet, f"A{total_row}", "TỔNG" if is_input else "TỔNG GIÁ VỐN HÀNG XUẤT")
     sheet.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=10)
     quantity_field = "input_qty" if is_input else "output_qty"
     value_field = "input_value" if is_input else "output_value"
@@ -712,12 +797,23 @@ def build_movement_workbook(model: Mapping[str, Any], *, direction: str) -> Any:
         cell.border = Border(left=GRID, right=GRID, top=GRID, bottom=GRID)
     sheet[f"K{total_row}"].number_format = "#,##0.######"
     sheet[f"M{total_row}"].number_format = "#,##0"
-    widths = (6, 12, 13, 12, 16, 28, 14, 28, 32, 11, 14, 16, 18, 16)
+    if is_input:
+        try:
+            from .invoice_line_tax import complete_sum
+        except ImportError:
+            from invoice_line_tax import complete_sum
+        for col, field in ((16, 'line_tax_amount'), (17, 'amount_with_tax')):
+            total = complete_sum(rows, field)
+            _put(sheet, f'{chr(64 + col)}{total_row}', total if total is not None else 'Chưa đủ thuế nguồn')
+            for row_cells in sheet.iter_rows(min_row=5, min_col=col, max_col=col, max_row=total_row):
+                row_cells[0].number_format = '#,##0.##'
+    widths = (6, 12, 13, 12, 16, 28, 14, 28, 32, 11, 14, 16, 18, 16) + ((12, 18, 20, 44) if is_input else ())
     for column, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + column)].width = width
     sheet.freeze_panes = "A5"
-    sheet.auto_filter.ref = f"A4:N{max(4, total_row - 1)}"
-    _configure_print(sheet, last_row=total_row, last_column="N", title_rows="$1:$4")
+    last_column = "R" if is_input else "N"
+    sheet.auto_filter.ref = f"A4:{last_column}{max(4, total_row - 1)}"
+    _configure_print(sheet, last_row=total_row, last_column=last_column, title_rows="$1:$4")
     _add_unit_totals(workbook, model)
     _add_control_sheet(workbook, model, direction)
     workbook.active = 0
@@ -856,7 +952,7 @@ def _filenames(model: Mapping[str, Any]) -> dict[str, str]:
     return {
         "opening": f"TDK_{suffix}.xlsx",
         "input": f"Nhap_trong_ky_{suffix}.xlsx",
-        "output": f"Xuat_trong_ky_{suffix}.xlsx",
+        "output": f"Xuat_gia_von_{suffix}.xlsx",
         "nxt": f"NXT_{suffix}.xlsx",
     }
 
@@ -903,13 +999,24 @@ def register_inventory_export_routes(app: Any, ctx: Mapping[str, Any]) -> None:
     template_path = ctx["opening_template_path"]
     expected_sha256 = ctx.get("opening_template_sha256", OPENING_TEMPLATE_SHA256)
 
-    def model() -> dict[str, Any]:
-        with db_factory() as conn:
-            return collect_inventory_export_model(
-                conn,
-                date_from=request.args.get("from"),
-                date_to=request.args.get("to"),
-            )
+    def sales_document(conn):
+        # The sales file must not depend on inventory valuation or posting.
+        try:
+            from .invoice_workbench_listing import invoice_range_payload
+            from .invoice_output_register import output_sales_workbook
+            from .invoice_workbench import InvoiceWorkbenchError
+        except ImportError:
+            from invoice_workbench_listing import invoice_range_payload
+            from invoice_output_register import output_sales_workbook
+            from invoice_workbench import InvoiceWorkbenchError
+        try:
+            tenant = conn.execute("SELECT value FROM settings WHERE key='tenant_code'").fetchone()
+            payload = invoice_range_payload(conn, tenant=str(tenant[0] if tenant else 'TDP').strip() or 'TDP',
+                invoice_type='output', date_from=request.args.get('from'), date_to=request.args.get('to'))
+            name = f"Xuat_gia_ban_M-Invoice_{payload['date_from']}_den_{payload['date_to']}.xlsx"
+            return payload, name, output_sales_workbook(payload).getvalue()
+        except InvoiceWorkbenchError as error:
+            raise InventoryExportError(str(error), code="invalid_period", status=400) from None
 
     def error_response(error: Exception):
         if isinstance(error, (InventoryExportError, TemplateWorkbookError)):
@@ -918,60 +1025,79 @@ def register_inventory_export_routes(app: Any, ctx: Mapping[str, Any]) -> None:
             return jsonify({"ok": False, "error": str(error), "code": code}), status
         raise error
 
+    def customer_document(conn, kind, stock=None, sales=None):
+        if not conn.in_transaction:
+            conn.execute('BEGIN')
+        if kind == 'output_sales':
+            kind = 'output'
+        if kind not in EXPORT_KINDS:
+            raise InventoryExportError("Loại báo cáo không hợp lệ", code="invalid_export_kind", status=404)
+        if kind in {'output', 'nxt'}:
+            sales = sales or sales_document(conn)
+        if kind == 'output':
+            return sales
+        stock = stock or collect_inventory_export_model(conn,
+            date_from=request.args.get('from'), date_to=request.args.get('to'))
+        if kind in {'nxt', 'opening'}:
+            stock = monthly_customer_model(conn, stock)
+        if kind == 'nxt':
+            try:
+                from .inventory_customer_report import customer_nxt_workbook
+            except ImportError:
+                from inventory_customer_report import customer_nxt_workbook
+            book = customer_nxt_workbook(stock, sales[0])
+            try:
+                content = safe_workbook_bytes(book)
+            finally:
+                book.close()
+        else:
+            content = inventory_workbook_bytes(stock, kind, template_path=template_path,
+                                               expected_sha256=expected_sha256)
+        return stock, _filenames(stock)[kind], content
+
     @app.get("/api/invoice-valuation/export")
     def api_inventory_export_archive():
         try:
-            payload = model()
-            stream = io.BytesIO(inventory_archive_bytes(
-                payload,
-                template_path=template_path,
-                expected_sha256=expected_sha256,
-            ))
-            return send_file(
-                stream,
-                as_attachment=True,
-                download_name=f"TDK_NXT_{payload['date_from']}_den_{payload['date_to']}.zip",
-                mimetype="application/zip",
-            )
+            with db_factory() as conn:
+                if not conn.in_transaction:
+                    conn.execute('BEGIN')
+                stock = collect_inventory_export_model(conn,
+                    date_from=request.args.get('from'), date_to=request.args.get('to'))
+                stock = monthly_customer_model(conn, stock)
+                sales = sales_document(conn)
+                documents = [customer_document(conn, kind, stock, sales) for kind in EXPORT_KINDS]
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                for _, name, content in documents:
+                    archive.writestr(name, content)
+            stream.seek(0)
+            return send_file(stream, as_attachment=True,
+                download_name=f"TDK_NXT_{stock['date_from']}_den_{stock['date_to']}.zip", mimetype="application/zip")
         except (InventoryExportError, TemplateWorkbookError) as error:
             return error_response(error)
 
     @app.get("/api/invoice-valuation/export/<kind>")
     def api_inventory_export_one(kind: str):
         try:
-            if kind not in EXPORT_KINDS:
-                raise InventoryExportError(
-                    "Loại file TĐK–NXT không hợp lệ", code="invalid_export_kind", status=404,
-                )
-            payload = model()
-            stream = io.BytesIO(inventory_workbook_bytes(
-                payload,
-                kind,
-                template_path=template_path,
-                expected_sha256=expected_sha256,
-            ))
-            return send_file(
-                stream,
-                as_attachment=True,
-                download_name=_filenames(payload)[kind],
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            with db_factory() as conn:
+                _, filename, content = customer_document(conn, kind)
+            return send_file(io.BytesIO(content), as_attachment=True, download_name=filename,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         except (InventoryExportError, TemplateWorkbookError) as error:
             return error_response(error)
 
     @app.get("/api/invoice-valuation/preview/<kind>")
     def api_inventory_preview(kind: str):
         try:
-            if kind not in EXPORT_KINDS:
-                raise InventoryExportError("Loại báo cáo không hợp lệ", code="invalid_export_kind", status=404)
             try:
                 from inventory_preview import workbook_preview
             except ImportError:
                 from .inventory_preview import workbook_preview
-            payload = model()
-            workbook = build_inventory_workbook(payload, kind, template_path=template_path, expected_sha256=expected_sha256)
+            with db_factory() as conn:
+                payload, filename, content = customer_document(conn, kind)
+            workbook = load_workbook(io.BytesIO(content))
             try:
-                preview = workbook_preview(workbook, _filenames(payload)[kind])
+                preview = workbook_preview(workbook, filename)
             finally:
                 workbook.close()
             return jsonify(ok=True, read_only=True, kind=kind, date_from=payload['date_from'],

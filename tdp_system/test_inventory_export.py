@@ -115,7 +115,7 @@ class InventoryExportTests(unittest.TestCase):
                    invoice_number,invoice_series,invoice_date,subtotal,tax_amount,total_amount,
                    source_status_raw,source_status_class,source_status_field,relation_reference,
                    sync_status,stock_status,raw_json,error_message,synced_at,created_at,updated_at
-               ) VALUES('TDP','msmi','OUT-IDENTITY','REMOTE-OUT','OUT-BUSINESS','0200000002',
+               ) VALUES('TDP','minvoice','OUT-IDENTITY','REMOTE-OUT','OUT-BUSINESS','0200000002',
                         'Khách thử','0002','BB/26E','2026-08-10',900,72,972,'issued','issued',
                         'fixtureStatus','','synced','posted','{}','',?,?,?)""",
             (NOW, NOW, NOW),
@@ -276,7 +276,7 @@ class InventoryExportTests(unittest.TestCase):
         inputs.close()
         outputs = load_workbook(io.BytesIO(payloads["output"]), data_only=True)
         self.assertEqual(("0002", "Khách thử", 3, 133.333333, 400), tuple(
-            outputs["XUẤT TRONG KỲ"][cell].value for cell in ("D5", "F5", "K5", "L5", "M5")
+            outputs["XUẤT KHO · GIÁ VỐN"][cell].value for cell in ("D5", "F5", "K5", "L5", "M5")
         ))
         outputs.close()
         nxt = load_workbook(io.BytesIO(payloads["nxt"]), data_only=True)
@@ -322,7 +322,7 @@ class InventoryExportTests(unittest.TestCase):
                 self.assertEqual(wb.active['I7'].number_format, '#,##0')
             wb.close()
 
-    def test_archive_and_read_only_routes_return_exactly_four_workbooks(self):
+    def test_customer_archive_replaces_cost_file_with_source_sales(self):
         model = self._model()
         archive = inventory_archive_bytes(model, template_path=OPENING_TEMPLATE)
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
@@ -352,6 +352,8 @@ class InventoryExportTests(unittest.TestCase):
         self.assertTrue(response.content_type.startswith("application/zip"))
         with zipfile.ZipFile(io.BytesIO(response.data)) as bundle:
             self.assertEqual(4, len(bundle.namelist()))
+            self.assertFalse(any(name.startswith("Xuat_gia_von_") for name in bundle.namelist()))
+            self.assertTrue(any(name.startswith("Xuat_gia_ban_M-Invoice_") for name in bundle.namelist()))
         one = client.get(
             "/api/invoice-valuation/export/nxt?from=2026-08-01&to=2026-08-31"
         )
@@ -407,7 +409,7 @@ class InventoryExportTests(unittest.TestCase):
         self.assertEqual(13, model["totals"]["closing_qty"])
         self.assertEqual(1733.33, model["totals"]["closing_value"])
 
-    def test_ui_names_tdk_nxt_and_exposes_period_scoped_four_file_download(self):
+    def test_ui_shows_four_customer_reports_without_cost_export(self):
         script = (Path(__file__).resolve().parent / "static" / "app.js").read_text(
             encoding="utf-8"
         )
@@ -419,7 +421,7 @@ class InventoryExportTests(unittest.TestCase):
             "/api/invoice-valuation/export",
             "/api/invoice-valuation/preview/",
             'data-action="preview-inventory-report"',
-            "Tải đủ 4 file ZIP",
+            "Tải 4 báo cáo ZIP",
         ):
             self.assertIn(contract, script)
         renderer = script[script.index('  function renderInventory()'):script.index('  function inventoryDataToolsHtml()')]
