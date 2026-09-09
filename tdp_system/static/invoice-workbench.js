@@ -24,7 +24,7 @@
       if (!reviews.length) return '';
       var labels = {subtotal:'Tiền hàng chưa thuế', tax:'Tiền thuế', total:'Tổng gồm thuế'};
       return '<details class="invoice-amount-reviews"><summary><strong>' + num(reviews.length) + ' hóa đơn cần đối chiếu tổng tiền</strong></summary>' +
-        '<p>Tổng tiền lấy trên hóa đơn M-Invoice; chi tiết được giữ nguyên. Vẫn khớp mã và tải bảng đầu ra được.</p>' +
+        '<p>Tổng tiền lấy trên hóa đơn M-Invoice; chi tiết được giữ nguyên. Vẫn khớp mã, ghi xuất và tải bảng đầu ra được.</p>' +
         '<div class="invoice-amount-review-scroll"><table><thead><tr><th>Hóa đơn</th><th>Khoản tiền</th><th>Cộng từ chi tiết</th><th>Tổng trên hóa đơn</th><th>Chênh lệch<br>(tổng HĐ − chi tiết)</th></tr></thead><tbody>' + reviews.map(function(r) {
           return r.comparisons.map(function(c,i) {
             return '<tr data-amount-review="' + r.invoice_id + '">' + (!i ? '<td rowspan="3"><strong>' + esc(r.invoice_series + ' / ' + r.invoice_number) + '</strong><div>' + dateVN(r.invoice_date) + '</div><small>' + num(r.line_count) + ' dòng chi tiết</small><div><button type="button" class="btn btn-small btn-outline" data-action="review-invoice-amount" data-id="' + r.invoice_id + '">Kiểm tra hóa đơn</button></div></td>' : '') + '<td>' + labels[c.kind] + '</td><td class="num-cell">' + money(c.detail) + '</td><td class="num-cell">' + money(c.header) + '</td><td class="num-cell' + (Math.abs(c.difference) > 1 ? ' invoice-amount-difference' : '') + '">' + money(c.difference) + '</td></tr>';

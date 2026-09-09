@@ -156,6 +156,40 @@ class InventoryPeriodCloseTests(unittest.TestCase):
             "SELECT revision FROM inventory_period_closures WHERE period='2026-08'"
         ).fetchone()[0])
 
+    def test_carry_forward_across_later_month_year_and_leap_february(self):
+        for period, next_period, today in (
+            ('2026-09', '2026-10', date(2026, 10, 2)),
+            ('2026-12', '2027-01', date(2027, 1, 2)),
+            ('2028-02', '2028-03', date(2028, 3, 2)),
+        ):
+            with self.subTest(period=period):
+                self.conn.execute('SAVEPOINT next_period_case')
+                try:
+                    self.conn.execute('DELETE FROM inventory_transactions')
+                    self._opening(period, 'P1', 10, 100)
+                    self._opening(period, 'P2', 0, 0)
+                    self._event('NEXT-IN', 'input', period + '-05', 10, 200)
+                    self._event('NEXT-OUT', 'output', period + '-20', -5)
+                    preview = inventory_period_close_preview(self.conn, period, today=today)
+                    self.assertTrue(preview['can_close'])
+                    for repeat in (False, True):
+                        result = close_inventory_period(
+                            self.conn, period, expected_source_hash=preview['source_hash'],
+                            expected_target_hash=preview['target_hash'], timestamp=NOW, today=today,
+                        )
+                        self.assertEqual(repeat, result['idempotent'])
+                        preview = result['preview']
+                    opening = self.conn.execute(
+                        "SELECT product_code,txn_date,qty_in,qty_out,unit_cost FROM inventory_transactions "
+                        "WHERE source_type='OPENING' AND source_id=? ORDER BY product_code", (next_period,),
+                    ).fetchall()
+                    self.assertEqual(2, len(opening))
+                    self.assertEqual(('P1', next_period+'-01', 15, 0, 150), tuple(opening[0]))
+                    self.assertEqual(('P2', next_period+'-01', 0, 0, 0), tuple(opening[1]))
+                finally:
+                    self.conn.execute('ROLLBACK TO next_period_case')
+                    self.conn.execute('RELEASE next_period_case')
+
     def test_changed_source_requires_a_fresh_preview(self):
         old_preview = inventory_period_close_preview(self.conn, "2026-08", today=TODAY)
         self._event("NEW-IN", "input", "2026-08-22", 1, 100)

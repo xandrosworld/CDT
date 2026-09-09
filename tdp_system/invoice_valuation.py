@@ -70,6 +70,8 @@ def _state(product) -> dict[str, Any]:
         "value": Decimal(0),
         "negative_opening": False,
         "zero_qty_nonzero_value": False,
+        "pending_output_events": set(),
+        "cost_snapshot_review": False,
         "period_input_qty": Decimal(0),
         "period_input_value": Decimal(0),
         "period_gross_output_qty": Decimal(0),
@@ -179,6 +181,15 @@ def moving_average_report(
     ).fetchall()
     original_output_values: dict[str, tuple[Decimal, Decimal]] = {}
     event_payload: list[dict[str, Any]] = []
+    try:
+        from .invoice_output_policy import source_quantity_invoice_ids
+    except ImportError:
+        from invoice_output_policy import source_quantity_invoice_ids
+    quantity_invoice_ids = source_quantity_invoice_ids(conn)
+    def quantity_post(row):
+        return (row['source_invoice_table'] == 'outgoing_source_invoices'
+                and row['source_invoice_id'] in quantity_invoice_ids and row['direction'] == 'output')
+    quantity_codes = {str(r['product_code']) for r in ledger if quantity_post(r)}
 
     def apply(row, in_period: bool) -> None:
         state = states[str(row["product_code"])]
@@ -249,17 +260,22 @@ def moving_average_report(
         elif direction == "output" and event_type == "POST" and delta < 0:
             qty_out = -delta
             if state["qty"] + EPSILON < qty_out or state["qty"] <= EPSILON:
-                raise InvoiceValuationError(
-                    f"Mã {state['product_code']} âm kho khi rebuild tại {row['txn_date']}",
-                    code="negative_stock",
-                )
+                if not quantity_post(row):
+                    raise InvoiceValuationError(
+                        f"Mã {state['product_code']} âm kho khi rebuild tại {row['txn_date']}",
+                        code="negative_stock",
+                    )
+                state['pending_output_events'].add(str(row['event_key']))
             cost = _average(state)
+            if quantity_post(row) and abs(cost - _decimal(row['unit_cost'], 'Giá vốn đã ghi')) > COST_SCALE:
+                state['cost_snapshot_review'] = True
             amount = state["value"] if abs(state["qty"] - qty_out) <= EPSILON else _money(qty_out * cost)
             state["qty"] -= qty_out
             state["value"] -= amount
             if abs(state["qty"]) <= EPSILON:
                 state["qty"] = Decimal(0)
-                state["value"] = Decimal(0)
+                if not state['pending_output_events']:
+                    state["value"] = Decimal(0)
             original_output_values[str(row["event_key"])] = (cost, amount)
             movement = "output"
             if in_period:
@@ -276,6 +292,8 @@ def moving_average_report(
                 ).fetchone()
                 original_qty = _decimal(original_row["qty"], "SL xuất gốc") if original_row else Decimal(0)
                 amount = original_amount if abs(original_qty - delta) <= EPSILON else _money(delta * cost)
+                if abs(original_qty - delta) <= EPSILON:
+                    state['pending_output_events'].discard(reference)
             else:
                 source = conn.execute(
                     "SELECT unit_cost FROM invoice_inventory_ledger WHERE event_key=?",
@@ -300,7 +318,7 @@ def moving_average_report(
                 "Ledger có chiều/loại/số lượng không đúng contract valuation",
                 code="ledger_contract_invalid",
             )
-        if state["qty"] < -EPSILON:
+        if state["qty"] < -EPSILON and state['product_code'] not in quantity_codes:
             raise InvoiceValuationError(
                 f"Mã {state['product_code']} âm kho sau {row['txn_date']}", code="negative_stock"
             )
@@ -347,6 +365,10 @@ def moving_average_report(
         net_output_value = state["period_gross_output_value"] - state["period_reversal_value"]
         if state["negative_opening"]:
             valuation_status = "negative_opening_review"
+        elif state['pending_output_events'] or state['qty'] < -EPSILON:
+            valuation_status = 'pending_source_cost'
+        elif state['cost_snapshot_review']:
+            valuation_status = 'cost_snapshot_review'
         elif state["zero_qty_nonzero_value"]:
             valuation_status = "zero_qty_value_review"
         else:

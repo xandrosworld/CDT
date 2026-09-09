@@ -377,7 +377,14 @@ def post_output_invoice(
             "Đã có bút toán xuất nhưng trạng thái hóa đơn không khớp; cần đối chiếu",
             code="ledger_state_conflict",
         )
-    if (
+    try:
+        from .invoice_output_policy import uses_source_quantity_posting
+        from .invoice_output_editing import output_mapping_allowed
+    except ImportError:
+        from invoice_output_policy import uses_source_quantity_posting
+        from invoice_output_editing import output_mapping_allowed
+    source_quantity_posting = uses_source_quantity_posting(invoice)
+    if not (source_quantity_posting and output_mapping_allowed(invoice)) and (
         invoice["source_status_class"] != "issued"
         or invoice["sync_status"] != "synced"
         or invoice["stock_status"] != "ready"
@@ -419,7 +426,7 @@ def post_output_invoice(
         if not math.isfinite(quantity) or quantity <= 0:
             raise InvoiceInventoryError("Số lượng xuất quy đổi không hợp lệ", code="invalid_quantity")
         available = _minimum_balance_from(conn, product, invoice_date)
-        if available + 1e-9 < quantity:
+        if not source_quantity_posting and available + 1e-9 < quantity:
             raise InvoiceInventoryError(
                 f"Mã {product}: cần {quantity:g}, có thể xuất {max(available, 0):g}, "
                 f"thiếu {quantity - max(available, 0):g}; không đủ tồn tại ngày hóa đơn và các mốc sau đó",
@@ -432,7 +439,12 @@ def post_output_invoice(
             from .invoice_valuation import InvoiceValuationError, moving_average_costs
         valuation_costs = moving_average_costs(conn, invoice_date)
     except InvoiceValuationError as error:
-        raise InvoiceInventoryError(str(error), code=error.code, status=error.status) from None
+        if source_quantity_posting and error.code in {'negative_stock', 'negative_inventory_value'}:
+            # Quantity posting does not certify a cost. Reports mark unresolved
+            # valuation explicitly and monthly close continues to check it.
+            valuation_costs = {}
+        else:
+            raise InvoiceInventoryError(str(error), code=error.code, status=error.status) from None
 
     savepoint = "invoice_output_post_atomic"
     conn.execute(f"SAVEPOINT {savepoint}")
@@ -478,7 +490,9 @@ def post_output_invoice(
             event_type="invoice_output.inventory_post",
             invoice_id=safe_id,
             timestamp=timestamp,
-            metadata={"inventory_lines": len(snapshots), "stock_qty_total": sum(required.values())},
+            metadata={"inventory_lines": len(snapshots), "stock_qty_total": sum(required.values()),
+                      "quantity_policy": "invoice_source" if source_quantity_posting else "available_stock",
+                      "source_amount_warning": invoice['error_message'] if source_quantity_posting else ''},
         )
         conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         return {

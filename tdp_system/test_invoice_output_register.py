@@ -14,7 +14,8 @@ from .test_invoice_input_sync import init_test_database, now_iso
 from .test_minvoice_portal import document
 from .minvoice_portal import normalize_portal_document
 from .invoice_output_sync import upsert_output_invoice
-from .invoice_mapping import save_mapping
+from .invoice_mapping import apply_saved_mappings, save_mapping
+from .invoice_output_mapping import match_output_catalog_codes
 from .invoice_workbench import register_invoice_workbench_routes
 from .invoice_workbench_listing import invoice_range_payload
 from .invoice_output_register import output_sales_workbook
@@ -104,6 +105,73 @@ class OutputRegisterTests(unittest.TestCase):
         self.conn.execute("UPDATE outgoing_source_invoice_items SET source_item_name='=1+1' WHERE invoice_id=?", (self.ids[0],))
         wb = load_workbook(output_sales_workbook(self.payload()))
         self.assertEqual('=1+1', wb.active['E8'].value); self.assertEqual('s', wb.active['E8'].data_type); wb.close()
+
+    def test_month_and_year_changes_keep_full_export_separate_from_old_pending_invoices(self):
+        for index, day in enumerate(('2026-09-01', '2026-09-30', '2026-12-31', '2027-01-01')):
+            raw = document()
+            raw.update(id='next-period-' + day, invoiceDate=day + 'T00:00:00', invoiceNumber=1000 + index)
+            raw['invoiceDetail'][0]['unitCode'] = 'xách'
+            iid = upsert_output_invoice(self.conn, normalize_portal_document(raw), tenant='TDP', now=now_iso(),
+                                        status_map={}, status_fields=(), reference_fields=())[0]
+            apply_saved_mappings(self.conn, 'output', iid)
+            match_output_catalog_codes(self.conn, tenant='TDP', invoice_id=iid, now_iso=now_iso)
+
+        @contextmanager
+        def db(): yield self.conn
+        app = Flask(__name__)
+        register_invoice_workbench_routes(app, {'db':db, 'now_iso':now_iso, 'setting_get':lambda c,k,d:d})
+        client = app.test_client()
+        before = list(self.conn.iterdump())
+        for start, end, days in (
+            ('2026-09-01', '2026-09-30', ['2026-09-01', '2026-09-30']),
+            ('2026-10-01', '2026-10-31', []),
+            ('2026-12-01', '2026-12-31', ['2026-12-31']),
+            ('2027-01-01', '2027-01-31', ['2027-01-01']),
+        ):
+            with self.subTest(start=start):
+                expected_amounts = (100000 * len(days), 8000 * len(days), 108000 * len(days))
+                for filters in ({}, {'line_filter':'needs_attention'}, {'scope':'pending', 'status':'ready'}):
+                    payload = invoice_range_payload(self.conn, tenant='TDP', invoice_type='output',
+                                                    date_from=start, date_to=end, **filters)
+                    summary = payload['output_summary']
+                    self.assertEqual(len(days), summary['invoice_count'])
+                    self.assertEqual(len(days), summary['mapped_line_count'])
+                    self.assertEqual(0, summary['unmapped_line_count'])
+                    self.assertEqual(expected_amounts, tuple(summary[k] for k in ('subtotal', 'tax_amount', 'total_amount')))
+                response = client.get('/api/invoice-workbench/output-register/export'
+                                      f'?from={start}&to={end}&scope=pending&status=ready&line_filter=needs_attention')
+                self.assertEqual(200, response.status_code)
+                wb = load_workbook(BytesIO(response.data)); ws = wb.active
+                self.assertEqual(expected_amounts, tuple(ws[f'I{r}'].value for r in (3, 4, 5)))
+                rows = list(ws.iter_rows(min_row=8, max_row=7+len(days), values_only=True)) if days else []
+                self.assertEqual(days, [r[0] for r in rows])
+                self.assertEqual([('A', 'xách', 2, 50000, 100000)] * len(days),
+                                 [(r[3], r[5], r[6], r[7], r[8]) for r in rows])
+                self.assertEqual('CỘNG TIỀN CÁC DÒNG CHI TIẾT', ws.cell(8+len(days), 1).value)
+                wb.close()
+        self.assertEqual(before, list(self.conn.iterdump()))
+
+    def test_next_month_code_collision_stays_red_without_blocking_source_register(self):
+        raw = document()
+        raw.update(id='september-code-collision', invoiceDate='2026-09-01T00:00:00', invoiceNumber=1001)
+        raw['invoiceDetail'][0].update(productName='Bánh đa đỏ ướt', unitCode='xách')
+        iid = upsert_output_invoice(self.conn, normalize_portal_document(raw), tenant='TDP', now=now_iso(),
+                                    status_map={}, status_fields=(), reference_fields=())[0]
+        apply_saved_mappings(self.conn, 'output', iid)
+        match_output_catalog_codes(self.conn, tenant='TDP', invoice_id=iid, now_iso=now_iso)
+        before = list(self.conn.iterdump())
+        payload = invoice_range_payload(self.conn, tenant='TDP', invoice_type='output',
+                                        date_from='2026-09-01', date_to='2026-09-30')
+        self.assertEqual(1, payload['output_summary']['invoice_count'])
+        self.assertEqual(1, payload['output_summary']['unmapped_line_count'])
+        self.assertEqual(1, payload['totals']['issue_count'])
+        wb = load_workbook(output_sales_workbook(payload)); ws = wb.active
+        self.assertEqual('Bánh đa đỏ ướt', ws['E8'].value)
+        self.assertEqual('Cần khớp mã', ws['J8'].value)
+        self.assertEqual(100000, ws['I3'].value)
+        self.assertEqual(100000, ws['I8'].value)
+        wb.close()
+        self.assertEqual(before, list(self.conn.iterdump()))
 
     def test_renderer_exposes_full_export_and_keeps_stock_actions_available(self):
         payload = self.payload(line_filter='needs_attention')

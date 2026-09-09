@@ -9,7 +9,10 @@ PORTAL_TOTAL_MISMATCH = 'Tổng dòng hàng/thuế trên portal lệch tổng h�
 def output_amount_review(invoice):
     """Explain a monetary hold using source detail and header totals, without changing either."""
     row = dict(invoice)
-    if row.get('error_message') != PORTAL_TOTAL_MISMATCH or not output_mapping_allowed(row):
+    review_source = dict(row)
+    if row.get('stock_status') == 'posted':
+        review_source['stock_status'] = 'blocked'
+    if row.get('error_message') != PORTAL_TOTAL_MISMATCH or not output_mapping_allowed(review_source):
         return None
     raw = json.loads(row['raw_json'])
     line_amount = sum(Decimal(str(line['amountWithoutVAT'])) for line in raw['invoiceDetail'])

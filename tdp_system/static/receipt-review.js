@@ -20,7 +20,7 @@
       const result = await opts.api(endpoint + opts.query);
       if (!dialog.open) return;
       const items = result.items || [];
-      body.innerHTML = '<p>' + (output ? 'Ghi xuất kho trên web theo hóa đơn đã phát hành. Kiểm tra đủ tồn theo ngày cho cả nhóm; hóa đơn chưa đủ điều kiện giữ lại trong Còn chưa xuất. Thao tác này không gửi hoặc phát hành hóa đơn trên M-Invoice.' : 'Nhập một lần các hóa đơn đủ điều kiện đã chọn bên dưới. Hóa đơn còn dòng lỗi được giữ lại cả hóa đơn trong Còn chưa nhập để xử lý tiếp.') + '</p>' +
+      body.innerHTML = '<p>' + (output ? 'Ghi các hóa đơn đã khớp mã, giữ nguyên lượng và đơn vị trên hóa đơn. Cho phép âm tồn; không yêu cầu giá vốn ở bước này. Không phát hành lại hóa đơn.' : 'Nhập một lần các hóa đơn đủ điều kiện đã chọn bên dưới. Hóa đơn còn dòng lỗi được giữ lại cả hóa đơn trong Còn chưa nhập để xử lý tiếp.') + '</p>' +
         '<p class="receipt-selection-total" role="status"></p>' +
         '<details class="receipt-selection-details"' + (items.length === 1 ? ' open' : '') + '><summary>Xem chi tiết / Bỏ chọn hóa đơn</summary>' +
         '<label class="receipt-select-all"><input type="checkbox" checked> Chọn tất cả</label><div class="table-wrap"><table><thead><tr><th>Chọn</th><th>Hóa đơn / Ngày / ' + (output ? 'Khách hàng' : 'NCC') + '</th><th>Dòng ' + verb + '</th><th>Tiền hàng (chưa thuế)</th></tr></thead><tbody>' +

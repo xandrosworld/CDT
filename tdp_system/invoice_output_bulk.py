@@ -21,17 +21,17 @@ def output_review(conn, invoice_id, tenant):
     items = [dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY id', (invoice_id,))]
     products = [dict(r) for r in conn.execute('SELECT code,name,unit FROM products WHERE code IN (SELECT product_code FROM outgoing_source_invoice_items WHERE invoice_id=?) ORDER BY code', (invoice_id,))]
     rules = [dict(r) for r in conn.execute("SELECT * FROM invoice_line_mappings WHERE tenant=? AND source='minvoice' AND partner_key=? ORDER BY id", (tenant, row['buyer_tax_code']))]
-    token = hashlib.sha256(json.dumps([header, items, products, rules], sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
-    units = {p['code']: p['unit'] for p in products}
+    token = hashlib.sha256(json.dumps(['invoice-source-quantity-v1', header, items, products, rules], sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
     quantities, amount = {}, Decimal(0)
     eligible = [r for r in items if r['inventory_eligible']]
     for item in eligible:
-        unit = units.get(item['product_code'], '')
-        quantities[unit] = quantities.get(unit, Decimal(0)) + Decimal(str(item['stock_qty'] or 0))
+        unit = item['source_unit']
+        quantities[unit] = quantities.get(unit, Decimal(0)) + Decimal(str(item['qty'] or 0))
         amount += Decimal(str(item['amount'] or 0))
     return {'id': invoice_id, 'token': token, 'number': row['invoice_series'] + ' / ' + row['invoice_number'],
             'date': row['invoice_date'], 'seller': row['buyer_name'], 'line_count': len(eligible),
-            'amount': float(amount), 'qty_by_unit': {k: float(v) for k, v in quantities.items()}}
+            'amount': float(row['subtotal']), 'detail_amount': float(amount),
+            'qty_by_unit': {k: float(v) for k, v in quantities.items()}}
 
 
 def preview_outputs(conn, ids, tenant, now_iso):

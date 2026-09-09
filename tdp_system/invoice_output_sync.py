@@ -557,7 +557,15 @@ def upsert_output_invoice(
         )]
         changed = _business_signature(dict(existing), stored_items) != _business_signature(data, normalized_items)
         already_reversed = existing["stock_status"] == "reversed"
-        requires_reconcile = already_reversed or changed or data["source_status_class"] != "issued" or bool(data.get("validation_error"))
+        try:
+            from .invoice_output_editing import PORTAL_TOTAL_MISMATCH, output_amount_review
+        except ImportError:
+            from invoice_output_editing import PORTAL_TOTAL_MISMATCH, output_amount_review
+        unchanged_amount_warning = (not changed and existing['stock_status'] == 'posted'
+            and data.get('validation_error') == PORTAL_TOTAL_MISMATCH
+            and output_amount_review(existing) is not None)
+        requires_reconcile = (already_reversed or changed or data["source_status_class"] != "issued"
+                              or bool(data.get("validation_error")) and not unchanged_amount_warning)
         next_stock_status = (
             "reversed" if already_reversed
             else "reversal_required" if requires_reconcile
@@ -571,9 +579,9 @@ def upsert_output_invoice(
             (
                 data["source_status_raw"], data["source_status_class"], data["source_status_field"],
                 data["relation_reference"],
-                "reconcile_required" if requires_reconcile else "synced",
+                "reconcile_required" if requires_reconcile else "review_required" if unchanged_amount_warning else "synced",
                 next_stock_status,
-                "Nguồn thay đổi sau khi đã ghi kho; cần hoàn tác xuất kho và đối chiếu" if requires_reconcile else "",
+                "Nguồn thay đổi sau khi đã ghi kho; cần hoàn tác xuất kho và đối chiếu" if requires_reconcile else PORTAL_TOTAL_MISMATCH if unchanged_amount_warning else "",
                 now, now, existing["id"],
             ),
         )
