@@ -72,27 +72,40 @@ class OutputStockRemapTests(unittest.TestCase):
         data=io.BytesIO(); wb.save(data); wb.close(); return data.getvalue()
 
     def new_file(self, conn, mutate=None):
+        # Compatibility with the A-B layout already downloaded by customers.
+        from .output_stock_remap import NEW_HEADERS,NEW_COLUMN_ORDER,_excel_value
         wb=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
-        ws=wb['Doi ma xuat kho'];ws['A5']='REMAP-B';ws['B5']='Hàng nhận'
+        token=wb['_meta']['B1'].value
+        snapshot=json.loads(conn.execute('SELECT payload FROM output_stock_excel_sessions WHERE token=?',(token,)).fetchone()[0])
+        del wb['Doi ma xuat kho'];ws=wb.create_sheet('Doi ma xuat kho',0)
+        for _ in range(3):ws.append(['Old instructions'])
+        ws.append(NEW_HEADERS)
+        for r in snapshot['rows']:
+            values=[_excel_value(v) for v in r['cells']]+[r['product_code'],r['name']]
+            ws.append([values[i] for i in NEW_COLUMN_ORDER])
+        ws['A5']='REMAP-B';ws['B5']='Hàng nhận'
         if mutate: mutate(ws)
         data=io.BytesIO();wb.save(data);wb.close();return data.getvalue()
 
-    def test_new_layout_puts_editable_identity_first_and_imports_correct_line(self):
+    def test_restored_layout_puts_editable_identity_right_and_imports_correct_line(self):
         with server.db() as conn:
             wb=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
             ws=wb['Doi ma xuat kho']
-            self.assertEqual(('Mã hàng muốn chuyển sang','Tên hàng muốn chuyển sang'),(ws['A4'].value,ws['B4'].value))
-            self.assertIn('CHỈ SỬA 2 CỘT VÀNG',ws['A1'].value)
-            self.assertEqual(('HH-01','Hàng hóa 01','HH-01','Hàng hóa 01',4,'kg',-4),tuple(ws.cell(5,c).value for c in range(1,8)))
-            self.assertEqual(('SOURCE-A','Tên trên hóa đơn',4,20,80,'8',6),tuple(ws[c+'5'].value for c in ('J','K','M','N','O','P','Q')))
-            self.assertIn('có thể trống',ws['J4'].value)
-            self.assertEqual(('E5','A4:R5'),(ws.freeze_panes,ws.auto_filter.ref))
-            self.assertTrue(ws.column_dimensions['R'].hidden)
-            self.assertFalse(ws['A5'].protection.locked)
-            self.assertTrue(ws['J5'].protection.locked)
+            self.assertEqual(('Mã nội bộ mới','Tên nội bộ mới'),(ws['Q4'].value,ws['R4'].value))
+            self.assertIn('1 dòng xuất / 1 mã hàng',ws['L1'].value)
+            self.assertEqual(('HH-01','Hàng hóa 01','kg',4,-4,'HH-01','Hàng hóa 01'),tuple(ws.cell(5,c).value for c in range(12,19)))
+            self.assertEqual(('SOURCE-A','Tên trên hóa đơn',4,20,80,'8',6),tuple(ws[c+'5'].value for c in ('D','E','G','H','I','J','K')))
+            self.assertIn('có thể trống',ws['D4'].comment.text)
+            self.assertEqual(('L5','A4:R5'),(ws.freeze_panes,ws.auto_filter.ref))
+            self.assertIsNone(ws.sheet_view.pane.xSplit)
+            self.assertTrue(ws.column_dimensions['A'].hidden)
+            self.assertFalse(ws['Q5'].protection.locked)
+            self.assertTrue(ws['D5'].protection.locked)
+            ws['Q5']='REMAP-B';ws['R5']='Hàng nhận'
+            data=io.BytesIO();wb.save(data)
             wb.close()
             before=dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone())
-            preview=preview_workbook(conn,self.new_file(conn))
+            preview=preview_workbook(conn,data.getvalue())
             self.assertTrue(preview['can_confirm'],preview)
             self.assertEqual((5,self.line_id), (preview['changes'][0]['excel_row'],preview['changes'][0]['line_id']))
             confirm_preview(conn,preview['token'],'New layout test',server.now_iso())
@@ -121,6 +134,62 @@ class OutputStockRemapTests(unittest.TestCase):
             self.assertEqual(2,book['Doi ma xuat kho'].max_row-4)
             self.assertEqual(before,conn.execute('SELECT tax FROM products WHERE code=?',('HH-01',)).fetchone()[0])
             book.close()
+
+    def test_focused_export_excludes_kkknt_and_positive_stock_and_keeps_other_lines_safe(self):
+        with server.db() as conn:
+            for code in ('REMAP-B','REMAP-C'):
+                invoice=Seed.add_posted_source(conn,source='minvoice',number='SCOPE-'+code,qty=1,product_code=code)
+                conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',
+                    (json.dumps({'_tdp_source_contract':'minvoice_portal_v1','details':[{'taxAmount':0}]}),invoice))
+                line=conn.execute("""INSERT INTO outgoing_source_invoice_items(invoice_id,line_index,source_item_code,
+                    source_item_name,source_unit,qty,unit_price,amount,tax_rate,product_code,mapping_status,stock_qty)
+                    VALUES(?,1,?,'Other source','kg',1,20,20,'0',?,'mapped',1)""",(invoice,code,code)).lastrowid
+                conn.execute('UPDATE invoice_inventory_ledger SET source_line_id=? WHERE source_invoice_id=?',(line,invoice))
+            book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31',scope='blocking')))
+            ws=book['Doi ma xuat kho']
+            self.assertEqual(5,ws.max_row);self.assertEqual('HH-01',ws['L5'].value)
+            self.assertIn('1 dòng cần xử lý / 1 mã hàng',ws['L1'].value)
+            ws['Q5']='REMAP-B';ws['R5']='Hàng nhận'
+            data=io.BytesIO();book.save(data);book.close()
+            preview=preview_workbook(conn,data.getvalue())
+            self.assertTrue(preview['can_confirm'],preview)
+            conn.execute("UPDATE products SET name='Changed outside exported rows' WHERE code='REMAP-C'")
+            with self.assertRaises(RemapError): confirm_preview(conn,preview['token'],'Stale focused test',server.now_iso())
+            conn.execute("UPDATE products SET name='Hoa cúng' WHERE code='REMAP-C'")
+            confirm_preview(conn,preview['token'],'Focused test',server.now_iso())
+            stocks=canonical_available_stock(conn)
+            self.assertEqual((0,5,-4),tuple(stocks[c]['canonical_qty'] for c in ('HH-01','REMAP-B','REMAP-C')))
+            self.assertEqual(1,conn.execute('SELECT COUNT(*) FROM output_stock_remaps').fetchone()[0])
+            # All stock blockers are resolved: no KKKNT rows leak into the next file.
+            empty=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31',scope='blocking')))
+            self.assertEqual(4,empty.active.max_row);self.assertIn('0 dòng cần xử lý',empty.active['L1'].value)
+            empty.close()
+            # Source changes outside the exported subset still invalidate preview.
+            with self.assertRaises(RemapError):preview_workbook(conn,data.getvalue())
+
+    def test_focused_file_rejects_deleted_or_added_rows_and_names_error_product(self):
+        with server.db() as conn:
+            for mutation in ('delete','duplicate','name'):
+                book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31',scope='blocking')))
+                ws=book.active
+                if mutation=='delete':ws.delete_rows(5)
+                elif mutation=='duplicate':ws.append([c.value for c in ws[5]])
+                else:ws['Q5']='REMAP-B';ws['R5']='Wrong name'
+                data=io.BytesIO();book.save(data);book.close()
+                if mutation=='name':
+                    result=preview_workbook(conn,data.getvalue());self.assertFalse(result['can_confirm'])
+                    for expected in ('Hàng số 5','HH-01','Hàng hóa 01','Tên đúng của mã REMAP-B: Hàng nhận'):
+                        self.assertIn(expected,result['errors'][0])
+                else:
+                    with self.assertRaises(RemapError):preview_workbook(conn,data.getvalue())
+
+    def test_api_export_defaults_to_non_kkknt_blockers_with_all_scope_available(self):
+        with server.db() as conn:
+            conn.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
+        for query,expected_rows in (('',4),('&scope=all',5)):
+            response=self.client.get('/api/inventory/output-remap/export?from=2026-08-01&to=2026-08-31'+query)
+            self.assertEqual(200,response.status_code)
+            book=load_workbook(io.BytesIO(response.data));self.assertEqual(expected_rows,book.active.max_row);book.close()
 
     def test_new_layout_rejects_source_identity_edits_and_keeps_missing_source_code_blank(self):
         with server.db() as conn:
@@ -311,7 +380,7 @@ class OutputStockRemapTests(unittest.TestCase):
             self.assertEqual(before_ledger,[dict(r) for r in conn.execute('SELECT * FROM invoice_inventory_ledger ORDER BY id')])
             book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
             sheet=book['Doi ma xuat kho']
-            self.assertEqual((4,'Bịch',6,'kg',4),tuple(sheet[c+'5'].value for c in ('E','F','G','L','M')))
+            self.assertEqual((4,'Bịch',6,'kg',4),tuple(sheet[c+'5'].value for c in ('O','N','P','F','G')))
             book.close()
             report=monthly_average_report(conn,date_from='2026-08-01',date_to='2026-08-31',include_zero=True)
             target=next(r for r in report['items'] if r['product_code']=='REMAP-B')

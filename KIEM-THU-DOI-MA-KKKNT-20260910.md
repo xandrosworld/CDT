@@ -80,3 +80,14 @@ Khách xác nhận giữ nguyên con số lượng chuyển và dùng đơn vị
 - **167/167 ca hồi quy qua**, gồm hai ca mới về khác đơn vị. Kiểm tra cả mẫu Excel cũ/mới, xuất lại đúng đơn vị kho mới, chuyển lần hai, bất biến hóa đơn/ledger gốc, đồng bộ lại hóa đơn giữ mã đã đổi và hoàn tác tháng sau trả đúng mã/đơn vị/giá trị.
 - Trình duyệt trên dữ liệu tạm: xem trước **4 kg → 4 Bịch**, tồn mã nhận **6 Bịch**, xác nhận thành công và chốt tháng với KKKNT còn âm. Không có lỗi JavaScript.
 - Trên bản sao dữ liệu trong RAM: dòng HT00061 xuất 35 Hộp chuyển sang 156HQ002 (đơn vị thực tế trong danh mục là Gói) thành công, giữ lượng 35, tồn mã cũ về 0 và mã nhận còn 365 Gói. Hash hóa đơn, danh mục và ledger gốc không đổi (chỉ mã ghép nội bộ của dòng nguồn được cập nhật). Minh chứng: `cross_unit_copy_result.json`. Không áp dụng phép đổi này lên dữ liệu thật.
+
+## Bố cục và phạm vi khách chốt lúc 11:03–11:05
+
+Khách chọn lại bố cục thông tin hàng cũ bên trái, hai cột vàng mã/tên mới bên phải; chỉ cần các dòng hàng phải xử lý và bỏ qua KKKNT.
+
+- Excel trở về thứ tự cột ban đầu: thông tin hóa đơn A–K, nội bộ hiện tại L–P, hai cột vàng Q–R. Mở tại phần nội bộ, có số dòng và số mã ở đầu bảng, giữ đủ các cột nguồn để đối chiếu.
+- Nút tải mặc định xuất các dòng của mã âm chưa được miễn KKKNT. Các mã KKKNT và mã không âm không xuất hiện ở bảng sửa. Lựa chọn tải toàn bộ vẫn có để tra cứu. Mã âm không có dòng xuất vẫn được thể hiện trong Tổng hợp hàng âm, không tạo dòng xuất giả.
+- File lọc lưu danh sách ID cho phép trên máy chủ, giữ kiểm tra nguồn đầy đủ kể cả ngoài phạm vi xuất. Chỉ nhập đủ các dòng đã xuất trong file đó; chèn/xóa/đổi ID vẫn bị từ chối. File mẫu đầu tiên và mẫu A–B đã gửi khách vẫn nhập được.
+- Lỗi mã/tên ghi **Hàng số N trong Excel**, mã/tên hàng cũ và tên đúng của mã nhận. Giao diện hiển thị danh sách lỗi, giải thích chưa ghi nhận và yêu cầu sửa file đang có rồi tải lên lại.
+- **170/170 ca hồi quy qua**. Trình duyệt kiểm tra file lọc → báo lỗi có tên hàng → sửa cùng file → xác nhận khác đơn vị → chốt tháng với KKKNT âm, không có lỗi JavaScript.
+- Bản sao dữ liệu tháng 8: file lọc có **33 dòng / 14 mã**, toàn bộ tồn âm, không có mã KKKNT. Mã K000067 thuộc KKKNT danh mục được bỏ qua cùng các mã KKKNT khác. Thử đổi dòng 35 Hộp trên file lọc thành công trong RAM, hóa đơn/ledger gốc không đổi. Số dòng là dòng giao dịch để người dùng lựa chọn sửa, không có nghĩa bắt buộc đổi toàn bộ 33 dòng.
