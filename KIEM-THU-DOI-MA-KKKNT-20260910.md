@@ -29,3 +29,19 @@ File không có dòng xuất cho mặt hàng chỉ âm từ đầu kỳ. Với K
 - Bản sao dữ liệu Railway lấy bằng SQLite backup chỉ đọc rồi thử trong RAM: 34 mã âm gồm 20 mã KKKNT và 14 mã còn chặn. Đơn 04/09 còn 3 mã âm chặn, 4 mã KKKNT cảnh báo và 1 dòng thuế chưa hợp lệ. Excel có 1.951 dòng xuất đã ghi kho. Giả lập đổi một dòng thành công; hash toàn bộ dữ liệu hóa đơn gốc và ledger gốc không đổi.
 
 Minh chứng: `tdp_system/exports/output_stock_remap_test/` gồm ảnh thao tác, Excel/ZIP thử nghiệm, `result.json` và `real_snapshot_result.json`. Các phép đổi mã, lập bảng kê và chuyển tồn trong kiểm thử chạy trên dữ liệu tạm/bản sao RAM, không sửa tồn hoặc phát hành hóa đơn của khách.
+
+## Rà soát bổ sung sau triển khai
+
+Phát hiện và sửa thêm ba trường hợp bằng kiểm thử tái hiện:
+
+- Excel lưu số với 15 chữ số có nghĩa: file chỉ sửa hai cột vàng có thể bị báo nhầm sửa cột gốc khi nguồn có số dài hơn. Xuất/đối chiếu theo biểu diễn số của Excel; giá trị nguồn trong cơ sở dữ liệu vẫn giữ nguyên. Sửa thực sự lượng, giá, tiền hoặc các cột gốc vẫn bị từ chối.
+- Mã nhận còn tồn cuối tháng 8 và cuối tháng 9 nhưng thiếu tại một thời điểm đầu tháng 9: khoản nhập về sau không còn che mất thiếu hụt này. Xem trước và xác nhận đều kiểm tra tồn thấp nhất từ cuối kỳ trở đi, trừ cả dự thảo đang giữ. Chỉ kiểm tra một lần cho mỗi mã nhận.
+- Biến thể API M-Invoice dùng `inv_vatAmount`: lấy đúng tiền thuế dòng nguồn, gồm số thập phân/0/số âm của dòng điều chỉnh, thay vì rơi vào phép tính lại và làm tròn thuế suất. Không cập nhật hóa đơn nguồn.
+
+Bổ sung kiểm thử: lưu lại file theo độ chính xác Excel; thiếu tồn giữa các giao dịch tháng sau; giao dịch tháng sau thay đổi sau xem trước; xác nhận đồng thời chỉ ghi một lần; preview khác đã cũ bị từ chối; đổi mã lần hai không trừ hai lần; hai dòng cùng mã chỉ đổi dòng được chọn; đồng bộ lại nguồn giữ nguyên mã nội bộ đã đổi; Excel Xuất giữ nguyên tên, lượng, giá, tiền và thuế của dòng nguồn.
+
+Bộ hồi quy sau sửa: **160/160 ca qua** (145 ca các luồng liên quan và 15 ca đổi mã/KKKNT). Kiểm tra diff không có lỗi khoảng trắng. Chạy đúng một lượt đầy đủ sau thay đổi cuối, không tính các lượt lặp vào số ca.
+
+Trên bản sao dữ liệu thật trong RAM: giả lập 18 dòng đổi mã xử lý được 13/14 mã đang chặn. Mã `N000040` còn thiếu 6,4 lít, phép tìm mã nhận cùng đơn vị và đủ tồn không tìm được ứng viên; chốt tháng tiếp tục bị chặn đúng. Sau khi thêm **một giao dịch nhập giả lập chỉ trong RAM** cho thiếu hụt này, chốt tháng thành công; toàn bộ số lượng và giá trị tồn đầu tháng 9 khớp tồn cuối tháng 8. Hash hóa đơn nguồn và ledger gốc trước/sau đổi mã không đổi. Đây là kiểm thử kỹ thuật, không phải phương án ghép hàng hay chứng từ mua hàng đề xuất cho khách.
+
+Trình duyệt dữ liệu tạm đã kiểm tra cả luồng đổi mã → chốt tháng với KKKNT âm và luồng sửa 7 lỗi tồn → duyệt đơn → lập dự thảo → tải ZIP → tính lại → hủy/tạo lại. Không có lỗi JavaScript. Kết quả chi tiết: `full_recovery_audit.json`, `result.json` trong thư mục minh chứng; kiểm thử tab Bảng kê ở `tdp_system/exports/documents_resolution_test/`.

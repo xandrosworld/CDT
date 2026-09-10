@@ -31,6 +31,14 @@ class LineTaxTests(unittest.TestCase):
             self.assertEqual(100000 + tax, fields['amount_with_tax'])
             self.assertEqual('Thuế theo dòng hóa đơn', fields['tax_note'])
 
+    def test_minvoice_api_line_tax_alias_keeps_exact_zero_decimal_and_signed_tax(self):
+        for tax in (0, 1.6, -1.6):
+            fields = tax_fields(dict(amount=20,tax_rate='8'),{'inv_vatAmount':tax})
+            self.assertEqual(tax,fields['line_tax_amount'])
+            self.assertEqual(20+tax,fields['amount_with_tax'])
+            self.assertEqual('Thuế theo dòng hóa đơn',fields['tax_note'])
+        self.assertIsNone(tax_fields(dict(amount=20,tax_rate='8'),{'inv_vatAmount':'bad'})['line_tax_amount'])
+
     def test_missing_or_invalid_tax_is_not_silently_zero(self):
         for raw in ({}, {'tthue': 'invalid'}, {'tthue': float('nan')}):
             fields = tax_fields(dict(amount=100, tax_rate='KHAC'), raw)

@@ -28,7 +28,7 @@ def tax_fields(line, raw_line=None):
     raw_line = raw_line if isinstance(raw_line, dict) else {}
     rate = tax_rate_label(line.get('tax_rate'))
     tax, note = None, 'Chưa có tiền thuế nguồn'
-    for key in ('vatAmount', 'tthue', 'taxAmount', 'tax_amount'):
+    for key in ('vatAmount', 'inv_vatAmount', 'tthue', 'taxAmount', 'tax_amount'):
         if key in raw_line and raw_line[key] is not None and raw_line[key] != '':
             tax = number(raw_line[key])
             note = 'Thuế theo dòng hóa đơn' if tax is not None else 'Tiền thuế nguồn không hợp lệ'

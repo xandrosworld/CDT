@@ -2,6 +2,8 @@ import io
 import json
 import unittest
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from openpyxl import load_workbook
 
@@ -83,6 +85,126 @@ class OutputStockRemapTests(unittest.TestCase):
             with self.subTest(column=column),server.db() as conn:
                 with self.assertRaises(RemapError): preview_workbook(conn,self.edited(mutate=lambda ws: ws.__setitem__(column+'2','Changed')))
                 self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM output_stock_remaps').fetchone()[0])
+
+    def test_excel_numeric_round_trip_keeps_source_precision(self):
+        with server.db() as conn:
+            price = 20.123456789012345
+            conn.execute('UPDATE outgoing_source_invoice_items SET unit_price=? WHERE id=?', (price,self.line_id))
+            self.file = export_workbook(conn,'2026-08-01','2026-08-31')
+            def excel_save(ws):
+                for row in ws.iter_rows(min_row=2):
+                    for cell in row:
+                        if isinstance(cell.value,(int,float)) and not isinstance(cell.value,bool):
+                            cell.value = float(format(cell.value,'.15g'))
+            preview = preview_workbook(conn,self.edited(mutate=excel_save))
+            self.assertTrue(preview['can_confirm'],preview)
+            confirm_preview(conn,preview['token'],'Excel save test',server.now_iso())
+            self.assertEqual(price,conn.execute('SELECT unit_price FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone()[0])
+            self.file = export_workbook(conn,'2026-08-01','2026-08-31')
+            with self.assertRaises(RemapError):
+                preview_workbook(conn,self.edited(mutate=lambda ws:ws.__setitem__('H2',price+0.000001)))
+
+    def test_future_receipt_cannot_hide_shortage_created_by_remap(self):
+        with server.db() as conn:
+            before = preview_workbook(conn,self.edited())
+            self.assertTrue(before['can_confirm'])
+            Seed.add_posted_source(conn,source='minvoice',number='FUTURE-OUT',
+                invoice_date='2026-09-05',product_code='REMAP-B',qty=8)
+            Seed.add_canonical_event(conn,10,'input','FUTURE-IN','2026-09-20',product_code='REMAP-B')
+            self.file = export_workbook(conn,'2026-08-01','2026-08-31')
+            preview = preview_workbook(conn,self.edited())
+            self.assertFalse(preview['can_confirm'],preview)
+            self.assertIn('REMAP-B',' '.join(preview['errors']))
+            with self.assertRaises(RemapError):
+                confirm_preview(conn,before['token'],'Future changed after preview',server.now_iso())
+            self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM output_stock_remaps').fetchone()[0])
+
+    def test_concurrent_confirm_applies_once_and_rejects_other_stale_preview(self):
+        with server.db() as conn:
+            first = preview_workbook(conn,self.edited())
+            other = preview_workbook(conn,self.edited())
+        barrier = Barrier(2)
+        def confirm():
+            with server.app.test_client() as client:
+                barrier.wait(timeout=10)
+                result = client.post('/api/inventory/output-remap/confirm',json={
+                    'token':first['token'],'actor':'Concurrent test','confirmed':True})
+                return result.status_code,result.get_json()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _:confirm(),range(2)))
+        self.assertEqual([200,200],[r[0] for r in results],results)
+        self.assertEqual([False,True],sorted(r[1]['idempotent'] for r in results))
+        stale = self.client.post('/api/inventory/output-remap/confirm',json={
+            'token':other['token'],'actor':'Stale test','confirmed':True})
+        self.assertEqual(409,stale.status_code,stale.get_json())
+        with server.db() as conn:
+            self.assertEqual(1,conn.execute("SELECT COUNT(*) FROM audit_log WHERE event_type='inventory.output.remap'").fetchone()[0])
+            self.assertEqual(6,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
+
+    def test_second_remap_returns_quantity_without_double_subtraction(self):
+        with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=10 WHERE source_type='OPENING' AND product_code='HH-01'")
+            self.file = export_workbook(conn,'2026-08-01','2026-08-31')
+            first = preview_workbook(conn,self.edited())
+            confirm_preview(conn,first['token'],'First',server.now_iso())
+            self.file = export_workbook(conn,'2026-08-01','2026-08-31')
+            second = preview_workbook(conn,self.edited(code='HH-01',name='Hàng hóa 01'))
+            self.assertTrue(second['can_confirm'],second)
+            confirm_preview(conn,second['token'],'Second',server.now_iso())
+            stock = canonical_available_stock(conn)
+            self.assertEqual((6,10),(stock['HH-01']['canonical_qty'],stock['REMAP-B']['canonical_qty']))
+            self.assertEqual(2,conn.execute('SELECT revision FROM output_stock_remaps').fetchone()[0])
+
+    def test_selected_line_and_resync_preserve_other_line_and_source_report(self):
+        from .invoice_output_sync import upsert_output_invoice
+        from .test_invoice_output_sync import documented_minvoice_invoice
+        remote = documented_minvoice_invoice(20)
+        # Two source lines with the same inventory code: only the selected line
+        # changes. Use the real source normalizer again after the internal edit.
+        detail = remote['details'][0]
+        detail.update(inv_itemCode='HH-01',inv_quantity=1,inv_unitPrice=20,
+                      inv_TotalAmountWithoutVat=20,inv_vatAmount=1.6,inv_TotalAmount=21.6)
+        remote['details'].append({**detail,'stt_rec0':'0002','inv_itemName':'Dòng nguồn thứ hai'})
+        remote.update(tgtcthue=40,tgtthue=3.2,tgtttbso=43.2)
+        options = dict(tenant='default',source='minvoice',now=server.now_iso(),
+                       status_map={},status_fields=(),reference_fields=())
+        with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=10 WHERE source_type='OPENING' AND product_code='HH-01'")
+            options['tenant'] = conn.execute("SELECT value FROM settings WHERE key='tenant_code'").fetchone()[0]
+            invoice_id,_,_,review = upsert_output_invoice(conn,remote,**options)
+            self.assertFalse(review)
+            conn.execute("UPDATE outgoing_source_invoices SET stock_status='posted' WHERE id=?",(invoice_id,))
+            lines = [dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(invoice_id,))]
+            for line in lines:
+                conn.execute("UPDATE outgoing_source_invoice_items SET product_code='HH-01',stock_qty=1,mapping_status='mapped' WHERE id=?",(line['id'],))
+                Seed.add_canonical_event(conn,-1,'output','MULTI-'+str(line['id']),'2026-08-20',
+                    source_table='outgoing_source_invoices',source_id=invoice_id)
+                conn.execute('UPDATE invoice_inventory_ledger SET source_line_id=?,source_line_index=? WHERE event_key=?',
+                    (line['id'],line['line_index'],'MULTI-'+str(line['id'])))
+            original = [dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(invoice_id,))]
+            self.file = export_workbook(conn,'2026-08-01','2026-08-31')
+            def select_line(ws):
+                ws['Q2']='HH-01';ws['R2']='Hàng hóa 01'
+                ws['Q3']='REMAP-B';ws['R3']='Hàng nhận'
+            preview = preview_workbook(conn,self.edited(mutate=select_line))
+            self.assertTrue(preview['can_confirm'],preview)
+            self.assertEqual(1,len(preview['changes']))
+            confirm_preview(conn,preview['token'],'Selected line test',server.now_iso())
+            invoice_id2,created,_,review = upsert_output_invoice(conn,remote,**options)
+            self.assertEqual((invoice_id,False,False),(invoice_id2,created,review))
+            after = [dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(invoice_id,))]
+            self.assertEqual([{**original[0],'product_code':'REMAP-B'},original[1]],after)
+            self.assertEqual(9,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
+        response = self.client.get('/api/invoice-valuation/export/output?from=2026-08-01&to=2026-08-31')
+        self.assertEqual(200,response.status_code,response.get_json(silent=True))
+        wb = load_workbook(io.BytesIO(response.data),data_only=True)
+        rows = list(wb.active.values)
+        changed = next(r for r in rows if len(r)>4 and r[3]=='REMAP-B')
+        unchanged = next(r for r in rows if len(r)>4 and r[4]=='Dòng nguồn thứ hai')
+        self.assertEqual(('Hàng kiểm thử','Kg',1,20,20),changed[4:9])
+        self.assertEqual(('HH-01','Dòng nguồn thứ hai','Kg',1,20,20),unchanged[3:9])
+        self.assertEqual((1.6,21.6),changed[11:13])
+        wb.close()
 
     def test_bad_code_name_unit_formula_and_missing_row(self):
         with server.db() as conn:

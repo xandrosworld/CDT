@@ -18,11 +18,13 @@ try:
     from .stock_tax_policy import kkknt_codes
     from .invoice_line_tax import annotate_invoice_tax
     from .invoice_output_editing import output_amount_review
+    from .invoice_inventory import _minimum_balance_from
 except ImportError:
     from invoice_monthly_valuation import monthly_average_report
     from stock_tax_policy import kkknt_codes
     from invoice_line_tax import annotate_invoice_tax
     from invoice_output_editing import output_amount_review
+    from invoice_inventory import _minimum_balance_from
 
 HEADERS = ['ID dòng kho', 'Ngày', 'Ký hiệu / Số HĐ', 'Mã trên HĐ', 'Tên trên HĐ',
            'ĐVT trên HĐ', 'Số lượng HĐ', 'Đơn giá bán', 'Tiền hàng', 'Thuế suất',
@@ -63,6 +65,15 @@ def _json(value):
 
 def _hash(value):
     return hashlib.sha256(_json(value).encode()).hexdigest()
+
+
+def _excel_value(value):
+    # Excel saves numbers to 15 significant digits. Compare the exported
+    # representation, while retaining the full source precision in the snapshot
+    # and database. This is not a quantity or monetary edit from the workbook.
+    if isinstance(value, float):
+        return float(format(value, '.15g'))
+    return '' if value is None else value
 
 
 def _snapshot(conn, start, end):
@@ -143,7 +154,7 @@ def export_workbook(conn, start, end):
     wb = Workbook(); ws = wb.active; ws.title = 'Doi ma xuat kho'
     ws.append(HEADERS)
     for r in snapshot['rows']:
-        ws.append(r['cells'] + [r['product_code'], r['name']])
+        ws.append([_excel_value(v) for v in r['cells']] + [r['product_code'], r['name']])
     ws.freeze_panes = 'E2'; ws.auto_filter.ref = ws.dimensions
     for row in ws:
         for cell in row:
@@ -197,6 +208,14 @@ def _evaluate(conn, snapshot, changes):
         except ImportError:
             from outgoing_readiness import canonical_available_stock
         available = canonical_available_stock(conn)
+        # A later receipt must not conceal a shortage in an earlier month-after
+        # checkpoint. Check each recipient once, including all active holds.
+        future_available = {}
+        for code in {c['new_code'] for c in changes} - exempt:
+            holds = available.get(code, {})
+            future_available[code] = (_minimum_balance_from(conn, code, snapshot['to'])
+                                      - holds.get('reserved_qty', 0)
+                                      - holds.get('pending_sync_issued_qty', 0))
         errors = []
         for c in changes:
             target = stocks[c['new_code']]
@@ -207,8 +226,8 @@ def _evaluate(conn, snapshot, changes):
                 errors.append(f"Mã nhận {c['new_code']} có giá tồn không hợp lệ; đối chiếu tồn đầu và nhập trước khi chuyển.")
             if c['new_code'] not in exempt and target['closing_qty'] < -1e-9:
                 errors.append(f"Mã nhận {c['new_code']} sẽ âm {target['closing_qty']:g}; chọn mã khác hoặc giảm số dòng chuyển.")
-            elif c['new_code'] not in exempt and available.get(c['new_code'], {}).get('raw_available_qty',0) < -1e-9:
-                errors.append(f"Mã nhận {c['new_code']} không đủ tồn sau khi trừ phần dự thảo đang giữ. Chọn mã khác hoặc kiểm tra dự thảo.")
+            elif c['new_code'] not in exempt and future_available[c['new_code']] < -1e-9:
+                errors.append(f"Mã nhận {c['new_code']} không đủ tồn tại một thời điểm từ cuối kỳ trở đi, đã trừ dự thảo đang giữ. Chọn mã khác hoặc kiểm tra giao dịch tháng sau và dự thảo.")
         return sorted(set(errors))
     finally:
         conn.execute('ROLLBACK TO remap_preview'); conn.execute('RELEASE remap_preview')
@@ -236,7 +255,6 @@ def preview_workbook(conn, data):
         originals = {r['id']: r for r in snapshot['rows']}
         products = {p['code']: p for p in snapshot['catalog']}
         seen = set(); changes = []; errors = []
-        normalize = lambda v: '' if v is None else v
         for excel_row, cells in enumerate(ws.iter_rows(min_row=2), 2):
             values = [c.value for c in cells]
             if all(v is None for v in values): continue
@@ -246,7 +264,7 @@ def preview_workbook(conn, data):
             if key not in originals or key in seen:
                 raise RemapError(f'Dòng {excel_row}: ID không thuộc file hoặc bị lặp.')
             seen.add(key); old = originals[key]
-            if [normalize(v) for v in values[:16]] != [normalize(v) for v in old['cells']]:
+            if [_excel_value(v) for v in values[:16]] != [_excel_value(v) for v in old['cells']]:
                 raise RemapError(f'Dòng {excel_row}: đã sửa cột gốc. Chỉ được đổi mã và tên nội bộ mới.')
             code, name = str(values[16] or '').strip(), str(values[17] or '').strip()
             p = products.get(code)
