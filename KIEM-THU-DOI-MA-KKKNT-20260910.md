@@ -69,3 +69,14 @@ Kiểm thử: **165/165 ca hồi quy qua**. Sau điều chỉnh bảng tổng h�
 Trên bản sao Railway trong RAM: tổng hợp đủ 34 mã âm (20 KKKNT, 14 mã 8%); số tồn từng mã khớp báo cáo Tồn; cả NXT và Tồn chỉ đúng hóa đơn 769 cho K000067. Hash dữ liệu hàng hóa, giao dịch, ledger, đổi mã và hóa đơn trước/sau xuất báo cáo không đổi. Có 15 mã âm khác thuế giữa hai nguồn; không tự sửa phân loại của các mã này.
 
 Minh chứng bổ sung trong `tdp_system/exports/output_stock_remap_test/`: `customer_filtered_comparison.json`, `Doi_chieu_2_file_khach_20260910.xlsx`, `tax_review_copy_result.json`, ba file `*_co_*_kiem_thu.xlsx`. Các bản xuất và kiểm thử không cập nhật tồn hoặc phát hành hóa đơn của khách.
+
+## Đổi nội bộ khác đơn vị — khách xác nhận 10:21 ngày 10/09
+
+Khách xác nhận giữ nguyên con số lượng chuyển và dùng đơn vị trong danh mục của mã nhận: 35 Hộp chuyển sang mã đơn vị Bịch thì trừ 35 Bịch, không quy đổi tỷ lệ. Tên, đơn vị, lượng, tiền, thuế và dữ liệu hóa đơn gốc giữ nguyên. Quy tắc này thay thế giới hạn cùng đơn vị trong các phần kiểm thử trước.
+
+- Bỏ chặn chỉ vì đơn vị mã cũ khác mã mới. File cũ đang được khách sửa vẫn dùng được nếu dữ liệu nguồn chưa thay đổi.
+- Xem trước hiển thị lượng/đơn vị cũ → lượng/đơn vị mới; tồn sau chuyển của mỗi mã hiển thị đơn vị tương ứng. Nhật ký lưu cả hai đơn vị.
+- Tiếp tục kiểm tra mã/tên, thiếu tồn mã nhận, thay đổi danh mục sau xem trước, kỳ đã chốt, cột nguồn, xác nhận lặp và hoàn tác.
+- **167/167 ca hồi quy qua**, gồm hai ca mới về khác đơn vị. Kiểm tra cả mẫu Excel cũ/mới, xuất lại đúng đơn vị kho mới, chuyển lần hai, bất biến hóa đơn/ledger gốc, đồng bộ lại hóa đơn giữ mã đã đổi và hoàn tác tháng sau trả đúng mã/đơn vị/giá trị.
+- Trình duyệt trên dữ liệu tạm: xem trước **4 kg → 4 Bịch**, tồn mã nhận **6 Bịch**, xác nhận thành công và chốt tháng với KKKNT còn âm. Không có lỗi JavaScript.
+- Trên bản sao dữ liệu trong RAM: dòng HT00061 xuất 35 Hộp chuyển sang 156HQ002 (đơn vị thực tế trong danh mục là Gói) thành công, giữ lượng 35, tồn mã cũ về 0 và mã nhận còn 365 Gói. Hash hóa đơn, danh mục và ledger gốc không đổi (chỉ mã ghép nội bộ của dòng nguồn được cập nhật). Minh chứng: `cross_unit_copy_result.json`. Không áp dụng phép đổi này lên dữ liệu thật.

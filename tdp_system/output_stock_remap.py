@@ -238,9 +238,10 @@ def export_workbook(conn, start, end):
                  'Mã trên hóa đơn gốc có thể trống do nguồn M-Invoice không có mã; không có nghĩa là thiếu mã nội bộ.',
                  'File đổi mã giữ từng dòng xuất hóa đơn. Một mã có thể xuất nhiều dòng; không cộng lặp Tồn cuối kỳ.',
                  'Sheet Tổng hợp hàng âm gom mỗi mã một dòng. Lọc Thuế danh mục để so với báo cáo tồn; Thuế HĐ là nguồn riêng, có thể khác danh mục.',
-                 'Một dòng tương ứng toàn bộ lượng trừ kho của một dòng hóa đơn. Không đổi lượng, tiền, thuế hay nội dung hóa đơn.',
+                 'Giữ nguyên số lượng nội bộ, dùng đơn vị của mã mới: ví dụ 35 Hộp chuyển thành 35 Bịch nếu mã mới là Bịch. Không quy đổi tỷ lệ.',
+                 'Không đổi tên, đơn vị, lượng, tiền, thuế hay nội dung hóa đơn gốc.',
                  'Có thể lọc các dòng Tồn cuối kỳ âm; giữ nguyên các dòng không cần đổi. Không xóa dòng hoặc cột.',
-                 'Tải file lên để xem trước. Hệ thống kiểm tra đơn vị, tồn mã nhận, kỳ chốt và dữ liệu đã thay đổi.',
+                 'Tải file lên để xem trước đơn vị cũ → mới. Hệ thống kiểm tra mã/tên, tồn mã nhận, kỳ chốt và dữ liệu đã thay đổi.',
                  'KKKNT được lập bảng kê và chuyển nguyên tồn âm. KCT và 0% không thuộc ngoại lệ này.',
                  'Mã âm từ đầu kỳ không có dòng xuất: đối chiếu tồn đầu; KKKNT có thể lập bảng kê mua vào bổ sung theo nguồn thực tế.']:
         guide.append([line])
@@ -343,11 +344,10 @@ def preview_workbook(conn, data):
             if not p or name != p['name']:
                 errors.append(f'Dòng {excel_row}: mã/tên mới không khớp danh mục. Sao chép cặp mã và tên từ sheet Danh muc ma hang.'); continue
             if code == old['product_code']: continue
-            if str(p['unit'] or '').strip().casefold() != str(old['unit'] or '').strip().casefold():
-                errors.append(f'Dòng {excel_row}: đơn vị mã nhận {p["unit"]} khác đơn vị kho {old["unit"]}.'); continue
             changes.append({'ledger_id': key, 'line_id': old['source_line_id'], 'invoice_id': old['source_invoice_id'],
                             'old_code': old['product_code'], 'old_name': old['name'], 'new_code': code,
-                            'new_name': name, 'qty': -old['qty_delta'], 'unit': old['unit'], 'excel_row': excel_row})
+                            'new_name': name, 'qty': -old['qty_delta'], 'old_unit': old['unit'],
+                            'unit': p['unit'], 'excel_row': excel_row})
         if seen != set(originals): raise RemapError('File bị thiếu dòng. Giữ nguyên các dòng không cần đổi mã.')
         if not changes and not errors: errors.append('Chưa có mã nội bộ nào thay đổi.')
         if changes and not errors: errors.extend(_evaluate(conn, snapshot, changes))

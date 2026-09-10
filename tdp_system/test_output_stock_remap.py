@@ -253,6 +253,7 @@ class OutputStockRemapTests(unittest.TestCase):
         options = dict(tenant='default',source='minvoice',now=server.now_iso(),
                        status_map={},status_fields=(),reference_fields=())
         with server.db() as conn:
+            conn.execute("UPDATE products SET unit='Bịch' WHERE code='REMAP-B'")
             conn.execute("UPDATE inventory_transactions SET qty_in=10 WHERE source_type='OPENING' AND product_code='HH-01'")
             options['tenant'] = conn.execute("SELECT value FROM settings WHERE key='tenant_code'").fetchone()[0]
             invoice_id,_,_,review = upsert_output_invoice(conn,remote,**options)
@@ -290,15 +291,59 @@ class OutputStockRemapTests(unittest.TestCase):
         self.assertEqual((1.6,21.6),changed[11:13])
         wb.close()
 
-    def test_bad_code_name_unit_formula_and_missing_row(self):
+    def test_cross_unit_remap_old_and_new_files_keep_quantity_and_invoice_unchanged(self):
+        with server.db() as conn:
+            conn.execute("UPDATE products SET unit='Bịch' WHERE code='REMAP-B'")
+            before_header=dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(self.source_id,)).fetchone())
+            before_line=dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone())
+            before_ledger=[dict(r) for r in conn.execute('SELECT * FROM invoice_inventory_ledger ORDER BY id')]
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            for data in (self.edited(),self.new_file(conn)):
+                preview=preview_workbook(conn,data)
+                self.assertTrue(preview['can_confirm'],preview)
+                change=preview['changes'][0]
+                self.assertEqual((4,'kg','Bịch',0,6),tuple(change[k] for k in ('qty','old_unit','unit','old_closing_after','new_closing_after')))
+            result=confirm_preview(conn,preview['token'],'Cross unit test',server.now_iso())
+            self.assertEqual(1,result['changed_lines'])
+            self.assertTrue(confirm_preview(conn,preview['token'],'Cross unit test',server.now_iso())['idempotent'])
+            self.assertEqual(before_header,dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(self.source_id,)).fetchone()))
+            self.assertEqual({**before_line,'product_code':'REMAP-B'},dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone()))
+            self.assertEqual(before_ledger,[dict(r) for r in conn.execute('SELECT * FROM invoice_inventory_ledger ORDER BY id')])
+            book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
+            sheet=book['Doi ma xuat kho']
+            self.assertEqual((4,'Bịch',6,'kg',4),tuple(sheet[c+'5'].value for c in ('E','F','G','L','M')))
+            book.close()
+            report=monthly_average_report(conn,date_from='2026-08-01',date_to='2026-08-31',include_zero=True)
+            target=next(r for r in report['items'] if r['product_code']=='REMAP-B')
+            self.assertEqual(('Bịch',6,180),(target['unit'],target['closing_qty'],target['closing_value']))
+            # A second remap uses the current internal unit, never the invoice unit.
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            second=preview_workbook(conn,self.edited(code='REMAP-C',name='Hoa cúng'))
+            self.assertTrue(second['can_confirm'],second)
+            self.assertEqual(('Bịch','kg'),(second['changes'][0]['old_unit'],second['changes'][0]['unit']))
+            confirm_preview(conn,second['token'],'Second cross unit',server.now_iso())
+            stocks=canonical_available_stock(conn)
+            self.assertEqual((0,10,-7),tuple(stocks[c]['canonical_qty'] for c in ('HH-01','REMAP-B','REMAP-C')))
+
+    def test_cross_unit_still_checks_target_stock_and_catalog_changes(self):
+        with server.db() as conn:
+            conn.execute("UPDATE products SET unit='Bịch' WHERE code='REMAP-B'")
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            preview=preview_workbook(conn,self.edited())
+            self.assertTrue(preview['can_confirm'],preview)
+            conn.execute("UPDATE products SET unit='Chai' WHERE code='REMAP-B'")
+            with self.assertRaises(RemapError): confirm_preview(conn,preview['token'],'Test',server.now_iso())
+            conn.execute("UPDATE inventory_transactions SET qty_in=1 WHERE product_code='REMAP-B'")
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            preview=preview_workbook(conn,self.edited())
+            self.assertFalse(preview['can_confirm']);self.assertIn('sẽ âm',preview['errors'][0])
+
+    def test_bad_code_name_formula_and_missing_row(self):
         with server.db() as conn:
             self.assertFalse(preview_workbook(conn,self.edited(code='NO-SUCH-CODE'))['can_confirm'])
             self.assertFalse(preview_workbook(conn,self.edited(name='Tên tự bịa'))['can_confirm'])
             with self.assertRaises(RemapError): preview_workbook(conn,self.edited(code='=1+1'))
             with self.assertRaises(RemapError): preview_workbook(conn,self.edited(mutate=lambda ws:ws.delete_rows(2)))
-            conn.execute("UPDATE products SET unit='chai' WHERE code='REMAP-B'")
-            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
-            p=preview_workbook(conn,self.edited()); self.assertFalse(p['can_confirm']); self.assertIn('đơn vị',p['errors'][0])
 
     def test_target_shortage_stale_file_and_stale_preview_are_rejected(self):
         with server.db() as conn:
@@ -311,6 +356,7 @@ class OutputStockRemapTests(unittest.TestCase):
 
     def test_reversal_returns_stock_to_remapped_product(self):
         with server.db() as conn:
+            conn.execute("UPDATE products SET unit='Bịch' WHERE code='REMAP-B'")
             mapping = conn.execute("""INSERT INTO invoice_line_mappings(tenant,source,invoice_type,scope_key,product_code,mapping_status,conversion_factor,confirmed_at,updated_at)
                 VALUES('test','minvoice','OUTPUT_ELECTRONIC_INVOICE',?,'HH-01','confirmed',1,'test','test')""",(str(self.line_id),)).lastrowid
             revision = conn.execute("""INSERT INTO invoice_mapping_revisions(revision_key,mapping_id,product_code,source_unit,target_unit,conversion_factor,created_at)
@@ -327,7 +373,7 @@ class OutputStockRemapTests(unittest.TestCase):
             self.assertEqual((0,10),tuple(stocks[c]['canonical_qty'] for c in ['HH-01','REMAP-B']))
             report=monthly_average_report(conn,date_from='2026-09-01',date_to='2026-09-30',include_zero=True)
             target=next(r for r in report['items'] if r['product_code']=='REMAP-B')
-            self.assertEqual((10,300),(target['closing_qty'],target['closing_value']))
+            self.assertEqual(('Bịch',10,300),(target['unit'],target['closing_qty'],target['closing_value']))
 
     def test_remapping_does_not_restore_local_issued_hold(self):
         with server.db() as conn:
