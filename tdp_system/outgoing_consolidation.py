@@ -12,6 +12,11 @@ except ImportError:
     from outgoing_readiness import validate_draft_export_stock
 
 SCHEMA = '''
+CREATE TABLE IF NOT EXISTS outgoing_waiting_settlements (
+    order_id INTEGER PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+    external_issued_qty REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS outgoing_consolidated_days (
     draft_id INTEGER NOT NULL REFERENCES outgoing_invoice_drafts(id) ON DELETE CASCADE,
     batch_id INTEGER NOT NULL, PRIMARY KEY(draft_id,batch_id)
@@ -76,13 +81,13 @@ def _groups(rows, floor_kg=True):
     return result
 
 
-def _write_draft(conn,party,rows,days,tax_percent,timestamp,*,floor_kg=True):
+def _write_draft(conn,party,rows,days,tax_percent,timestamp,*,floor_kg=True,kind='consolidated'):
     groups=_groups(rows,floor_kg)
     if not groups:return None
     anchor=max(rows,key=lambda r:(r['work_date'],r['batch_id']))
     round_no=conn.execute('SELECT COALESCE(MAX(round_no),0)+1 FROM outgoing_invoice_drafts WHERE batch_id=? AND contractor=?',(anchor['batch_id'],party)).fetchone()[0]
     did=conn.execute("""INSERT INTO outgoing_invoice_drafts(batch_id,contractor,invoice_date,status,created_at,external_key_uuid,round_no,draft_kind)
-        VALUES(?,?,?,'draft',?,?,?,'consolidated')""",(anchor['batch_id'],party,anchor['work_date'],timestamp,uuid.uuid4().hex.upper(),round_no)).lastrowid
+        VALUES(?,?,?,'draft',?,?,?,?)""",(anchor['batch_id'],party,anchor['work_date'],timestamp,uuid.uuid4().hex.upper(),round_no,kind)).lastrowid
     conn.executemany('INSERT INTO outgoing_consolidated_days(draft_id,batch_id) VALUES(?,?)',[(did,b) for b in sorted(days)])
     subtotal=tax_total=Decimal(0)
     for code,unit,nature,price,qty,items in groups:

@@ -3007,11 +3007,16 @@ def api_approve_batch(batch_id):
             (now_iso(), batch_id),
         )
         post_purchase_list_inventory(conn, batch_id, now_iso)
+        try:
+            from .outgoing_waiting import refresh_after_change
+        except ImportError:
+            from outgoing_waiting import refresh_after_change
+        waiting_result=refresh_after_change(conn,now_iso())
         payable_ledger = sync_payable_ledger(conn, timestamp=now_iso())
         receivable_ledger = sync_receivable_ledger(conn, timestamp=now_iso())
         return jsonify({
             "ok": True, **batch_payload(conn, batch_id),
-            "bk": bk_result,
+            "bk": bk_result,"waiting":waiting_result,
             "payable_ledger": payable_ledger,
             "receivable_ledger": receivable_ledger,
         })
@@ -4261,6 +4266,7 @@ def api_quotes():
 
 @app.get('/api/outgoing-invoices/unissued')
 @app.get('/api/outgoing-invoices/unissued.xlsx')
+@app.post('/api/outgoing-invoices/unissued/refresh')
 def api_outgoing_unissued():
     try:
         from .outgoing_unissued import unissued_payload, unissued_workbook
@@ -4270,9 +4276,22 @@ def api_outgoing_unissued():
         cutoff=valid_iso_date(request.args.get('to') or date.today().isoformat(),'Cộng dồn đến ngày')
         party=clean_text(request.args.get('contractor')).upper()
         with db() as conn:
+            if request.method=='POST':conn.execute('BEGIN IMMEDIATE')
             if party and not conn.execute('SELECT 1 FROM contractors WHERE code=?',(party,)).fetchone():
                 raise ValueError('Không tìm thấy nhà thầu đã chọn')
+            refreshed=None
+            if request.method=='POST':
+                try:
+                    from .outgoing_waiting import refresh_waiting
+                except ImportError:
+                    from outgoing_waiting import refresh_waiting
+                refreshed=refresh_waiting(conn,now_iso())
             payload=unissued_payload(conn,cutoff,party)
+            if refreshed:
+                for warning in refreshed['warnings']:
+                    if (not party or not warning['contractor'] or warning['contractor']==party) and warning not in payload['warnings']:
+                        payload['warnings'].append(warning)
+                payload['reconciliation_complete']=not payload['warnings']
         if request.path.endswith('.xlsx'):
             return send_file(unissued_workbook(payload),as_attachment=True,download_name=f'CHUA_XUAT_HOA_DON_{party or "TAT_CA"}_DEN_{cutoff}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         return jsonify(ok=True,**payload)
@@ -4311,6 +4330,13 @@ def api_export_order_invoices():
             conn.execute('BEGIN IMMEDIATE')
             if contractor and not conn.execute('SELECT 1 FROM contractors WHERE code=?', (contractor,)).fetchone():
                 raise ValueError('Không tìm thấy nhà thầu đã chọn')
+            try:
+                from .outgoing_waiting import refresh_waiting
+            except ImportError:
+                from outgoing_waiting import refresh_waiting
+            refreshed=refresh_waiting(conn,now_iso(),fill=False)
+            if refreshed['warnings']:
+                raise InvoiceTaxExportError(refreshed['warnings'][0]['message'],code='issued_source_unresolved')
             _, source_warnings=issued_allocations(conn)
             source_warnings=[w for w in source_warnings if not contractor or not w['contractor'] or w['contractor']==contractor]
             if source_warnings:
@@ -5064,6 +5090,11 @@ try:
 except ImportError:
     from output_stock_remap import register_routes as register_output_stock_remap_routes
 register_output_stock_remap_routes(app, {'db': db, 'now_iso': now_iso})
+try:
+    from .outgoing_waiting import register_waiting_hooks
+except ImportError:
+    from outgoing_waiting import register_waiting_hooks
+register_waiting_hooks(app,db,now_iso)
 try:
     from .input_discount import register_routes as register_input_discount_routes
 except ImportError:

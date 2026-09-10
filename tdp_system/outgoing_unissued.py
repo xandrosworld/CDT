@@ -12,7 +12,7 @@ def _identity(r,local=False):
             str((r['issued_invoice_date'] or r['invoice_date']) if local else r['invoice_date']).strip())
 
 
-def issued_allocations(conn,asof='9999-12-31'):
+def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
     """Prefer explicit order links; otherwise allocate mapped M-Invoice FIFO once."""
     orders=[dict(r) for r in conn.execute("SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id WHERE b.status='approved' AND o.work_date<=? ORDER BY o.work_date,o.id",(asof,))]
     quantities=defaultdict(float);warnings=[];linked=set()
@@ -69,6 +69,7 @@ def issued_allocations(conn,asof='9999-12-31'):
                 if o['work_date']>s['invoice_date']:continue
                 need=max(o['actual_delivered']-o['customer_return_qty']-quantities[o['id']],0)
                 take=min(need,remaining);quantities[o['id']]+=take;remaining-=take
+                if external_quantities is not None:external_quantities[o['id']]=external_quantities.get(o['id'],0)+take
                 if remaining<=1e-8:break
     return dict(quantities),warnings
 
@@ -78,6 +79,12 @@ def unissued_payload(conn,asof,contractor=''):
     issued,warnings=issued_allocations(conn)
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
         WHERE b.status='approved' AND o.work_date<=? AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(asof,contractor,contractor))]
+    try:
+        from .outgoing_waiting import waiting_readiness
+    except ImportError:
+        from outgoing_waiting import waiting_readiness
+    ready,stock_warnings=waiting_readiness(conn,orders,issued)
+    warnings.extend(stock_warnings)
     drafted={r['order_id']:r['qty'] for r in conn.execute("SELECT l.order_id,SUM(l.qty) qty FROM outgoing_order_allocations l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id WHERE d.status='draft' GROUP BY l.order_id")}
     grouped={};details=[]
     for o in orders:
@@ -85,17 +92,19 @@ def unissued_payload(conn,asof,contractor=''):
         if q<=1e-8:continue
         done=issued.get(o['id'],0);left=max(q-done,0)
         r={'order_id':o['id'],'work_date':o['work_date'],'contractor':o['contractor'],'product_code':o['product_code'],
-           'product_name':o['product_name'],'unit':o['unit'],'approved_qty':q,'issued_qty':done,'drafted_qty':drafted.get(o['id'],0),'unissued_qty':left,'unit_price':o['sell_price']}
+           'product_name':o['product_name'],'unit':o['unit'],'approved_qty':q,'issued_qty':done,'drafted_qty':drafted.get(o['id'],0),'unissued_qty':left,'unit_price':o['sell_price'],
+           'ready_qty':min(ready.get(o['id'],0),left) if not any(not w['contractor'] or w['contractor']==o['contractor'] for w in warnings) else 0}
+        r['waiting_qty']=max(left-r['ready_qty'],0)
         details.append(r)
         key=(o['contractor'],o['product_code'],o['unit'].strip().casefold())
-        g=grouped.setdefault(key,{**r,'approved_qty':0,'issued_qty':0,'drafted_qty':0,'unissued_qty':0,'first_date':o['work_date'],'last_date':o['work_date']})
-        for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty'):g[field]+=r[field]
+        g=grouped.setdefault(key,{**r,'approved_qty':0,'issued_qty':0,'drafted_qty':0,'unissued_qty':0,'ready_qty':0,'waiting_qty':0,'first_date':o['work_date'],'last_date':o['work_date']})
+        for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty'):g[field]+=r[field]
         g['last_date']=o['work_date']
     rows=[r for r in grouped.values() if r['unissued_qty']>1e-8]
     rows.sort(key=lambda r:(r['contractor'],r['product_name'],r['product_code']))
     totals=defaultdict(lambda:defaultdict(float))
     for r in grouped.values():
-        for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty'):totals[r['unit'].strip().casefold()][field]+=r[field]
+        for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty'):totals[r['unit'].strip().casefold()][field]+=r[field]
     warnings=[w for w in warnings if not contractor or not w['contractor'] or w['contractor']==contractor]
     return {'asof':asof,'contractor':contractor,'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
             'totals_by_unit':dict(totals),'source_order_rows':len(details),'unissued_order_rows':sum(r['unissued_qty']>1e-8 for r in details),
@@ -105,11 +114,11 @@ def unissued_payload(conn,asof,contractor=''):
 
 def unissued_workbook(payload):
     w=Workbook();s=w.active;s.title='Chua xuat cong don'
-    headers=['Nhà thầu','Mã hàng','Tên hàng','ĐVT','Ngày đơn đầu','Ngày đơn cuối','Lượng đã duyệt','Đã phát hành','Đang nháp (chưa phát hành)','Chưa xuất hóa đơn']
+    headers=['Nhà thầu','Mã hàng','Tên hàng','ĐVT','Ngày đơn đầu','Ngày đơn cuối','Lượng đã duyệt','Đã phát hành','Tổng lượng đang giữ','Chưa xuất hóa đơn','Đã đủ điều kiện, giữ chờ xuất','Chưa đủ điều kiện / chờ cộng lẻ']
     s.append(headers)
-    for r in payload['rows']:s.append([r[k] for k in ('contractor','product_code','product_name','unit','first_date','last_date','approved_qty','issued_qty','drafted_qty','unissued_qty')])
-    s=w.create_sheet('Chi tiet theo ngay');s.append(['Dòng đơn','Ngày đơn','Nhà thầu','Mã','Tên','ĐVT','Đã duyệt','Đã phát hành','Đang nháp','Chưa xuất','Giá trên đơn'])
-    for r in payload['details']:s.append([r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price')])
+    for r in payload['rows']:s.append([r[k] for k in ('contractor','product_code','product_name','unit','first_date','last_date','approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty')])
+    s=w.create_sheet('Chi tiet theo ngay');s.append(['Dòng đơn','Ngày đơn','Nhà thầu','Mã','Tên','ĐVT','Đã duyệt','Đã phát hành','Tổng lượng đang giữ','Chưa xuất','Giá trên đơn','Đủ điều kiện, giữ chờ xuất','Chưa đủ điều kiện / chờ cộng lẻ'])
+    for r in payload['details']:s.append([r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price','ready_qty','waiting_qty')])
     note=w.create_sheet('Ghi chu');note.append(['Cộng dồn đến ngày',payload['asof']]);note.append(['Cách tính',payload['policy']])
     note.append(['Đối chiếu M-Invoice','Nếu đã ký bên ngoài, đồng bộ hóa đơn hoặc xác nhận đúng số hóa đơn đã phát hành trước khi lập tiếp.'])
     for warning in payload['warnings']:note.append(['Cần đối chiếu',warning['message']])
