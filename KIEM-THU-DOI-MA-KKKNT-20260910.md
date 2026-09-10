@@ -104,3 +104,9 @@ Quy tắc mới thay thế việc chuyển toàn bộ lượng của các dòng 
 - **File khách gửi**, đã sửa duy nhất tên hàng ở R5: trên bản sao dữ liệu mới trong RAM, 15 dòng được dùng để xử lý 14 mã, 19 lựa chọn bỏ qua; kẹo HT00080 chuyển 64, bột tiêu M000048 chuyển 0,3. Không còn lỗi thiếu mã nhận. Xác nhận và chốt tháng 8 thành công; tồn đầu tháng 9 khớp từng mã về lượng/giá trị; 20 mã KKKNT âm được chuyển nguyên. Hash hóa đơn/ledger nguồn/danh mục không đổi, trừ trường ghép mã nội bộ của dòng chuyển toàn bộ. Chưa ghi nhận thay khách trên hệ thống thật.
 
 Minh chứng: `customer_deficit_copy_result.json`, các ảnh kiểm thử trình duyệt trong `tdp_system/exports/output_stock_remap_test/`. Bảng 4 mã thiếu tồn tạo trước đó tính theo toàn bộ lượng, không còn áp dụng cho quy tắc chỉ chuyển phần âm.
+
+## Tên cột theo yêu cầu khách: Lượng cần xử lý luân chuyển
+
+- Cột P của Excel và cột lượng trên bảng xem trước dùng đúng tên **Lượng cần xử lý luân chuyển**. Excel hiển thị phần thiếu bằng số dương (âm 0,3 → cần xử lý 0,3), KKKNT và mã không âm hiển thị 0. Ghi ngay đầu bảng rằng lượng của cả mã chỉ tính một lần, không cộng các dòng lặp.
+- Giữ nguyên snapshot nguồn và nhận cả ba bố cục Excel cũ. File mới kiểm tra lượng hiển thị dựa trên snapshot máy chủ; tự sửa cột P vẫn bị từ chối. Hóa đơn và cách phân bổ phần âm không đổi.
+- 31 ca remap qua (30 ca qua lượt đầu; ca bổ sung sửa dữ liệu dựng thử bị trùng khóa và chạy lại qua). Trình duyệt dữ liệu tạm đã chạy lại thành công tải/sửa/nhập/xác nhận/chuyển tháng với lượng 0,3 và KKKNT âm.

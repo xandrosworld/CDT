@@ -94,7 +94,8 @@ class OutputStockRemapTests(unittest.TestCase):
             ws=wb['Doi ma xuat kho']
             self.assertEqual(('Mã nội bộ mới','Tên nội bộ mới'),(ws['Q4'].value,ws['R4'].value))
             self.assertIn('1 dòng xuất / 1 mã hàng',ws['L1'].value)
-            self.assertEqual(('HH-01','Hàng hóa 01','kg',4,-4,'HH-01','Hàng hóa 01'),tuple(ws.cell(5,c).value for c in range(12,19)))
+            self.assertEqual('Lượng cần xử lý luân chuyển',ws['P4'].value)
+            self.assertEqual(('HH-01','Hàng hóa 01','kg',4,4,'HH-01','Hàng hóa 01'),tuple(ws.cell(5,c).value for c in range(12,19)))
             self.assertEqual(('SOURCE-A','Tên trên hóa đơn',4,20,80,'8',6),tuple(ws[c+'5'].value for c in ('D','E','G','H','I','J','K')))
             self.assertIn('có thể trống',ws['D4'].comment.text)
             self.assertEqual(('L5','A4:R5'),(ws.freeze_panes,ws.auto_filter.ref))
@@ -112,6 +113,30 @@ class OutputStockRemapTests(unittest.TestCase):
             confirm_preview(conn,preview['token'],'New layout test',server.now_iso())
             self.assertEqual({**before,'product_code':'REMAP-B'},dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone()))
             self.assertEqual(6,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
+
+    def test_deficit_column_is_positive_protected_and_old_restored_file_still_imports(self):
+        with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=3.7 WHERE source_type='OPENING' AND product_code='HH-01'")
+            book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
+            ws=book['Doi ma xuat kho']
+            self.assertAlmostEqual(0.3,ws['P5'].value)
+            ws['Q5']='REMAP-B';ws['R5']='Hàng nhận'
+            data=io.BytesIO();book.save(data)
+            preview=preview_workbook(conn,data.getvalue())
+            self.assertTrue(preview['can_confirm'],preview)
+            self.assertAlmostEqual(0.3,preview['changes'][0]['qty'])
+            ws['P5']=4
+            data=io.BytesIO();book.save(data)
+            with self.assertRaisesRegex(RemapError,'đã sửa cột gốc'):
+                preview_workbook(conn,data.getvalue())
+            # The restored Q-R template previously shipped with negative closing stock.
+            from .output_stock_remap import HEADERS,_excel_value
+            snapshot=json.loads(conn.execute('SELECT payload FROM output_stock_excel_sessions WHERE token=?',(book['_meta']['B1'].value,)).fetchone()[0])
+            ws['P4']=HEADERS[15];ws['P5']=_excel_value(snapshot['rows'][0]['cells'][15])
+            data=io.BytesIO();book.save(data);book.close()
+            old_preview=preview_workbook(conn,data.getvalue())
+            self.assertTrue(old_preview['can_confirm'],old_preview)
+            self.assertAlmostEqual(0.3,old_preview['changes'][0]['qty'])
 
     def test_negative_summary_groups_lines_and_exposes_both_taxes_without_double_counting(self):
         with server.db() as conn:
@@ -133,6 +158,7 @@ class OutputStockRemapTests(unittest.TestCase):
             opening_only=next(r for r in rows if r[0]=='REMAP-C')
             self.assertEqual((-3,0),opening_only[5:7]);self.assertIn('Không có dòng xuất',opening_only[8])
             self.assertEqual(2,book['Doi ma xuat kho'].max_row-4)
+            self.assertTrue(all(r[15]==0 for r in book['Doi ma xuat kho'].iter_rows(min_row=5,values_only=True)))
             self.assertEqual(before,conn.execute('SELECT tax FROM products WHERE code=?',('HH-01',)).fetchone()[0])
             book.close()
 
@@ -517,7 +543,7 @@ class OutputStockRemapTests(unittest.TestCase):
             self.assertEqual(before_ledger,[dict(r) for r in conn.execute('SELECT * FROM invoice_inventory_ledger ORDER BY id')])
             book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
             sheet=book['Doi ma xuat kho']
-            self.assertEqual((4,'Bịch',6,'kg',4),tuple(sheet[c+'5'].value for c in ('O','N','P','F','G')))
+            self.assertEqual((4,'Bịch',0,'kg',4),tuple(sheet[c+'5'].value for c in ('O','N','P','F','G')))
             book.close()
             report=monthly_average_report(conn,date_from='2026-08-01',date_to='2026-08-31',include_zero=True)
             target=next(r for r in report['items'] if r['product_code']=='REMAP-B')

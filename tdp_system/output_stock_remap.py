@@ -37,6 +37,13 @@ HEADERS = ['ID dòng kho', 'Ngày', 'Ký hiệu / Số HĐ', 'Mã trên HĐ', 'T
            'ĐVT trên HĐ', 'Số lượng HĐ', 'Đơn giá bán', 'Tiền hàng', 'Thuế suất',
            'Tiền thuế', 'Mã nội bộ hiện tại', 'Tên nội bộ hiện tại', 'ĐVT kho',
            'Lượng trừ kho', 'Tồn cuối kỳ', 'Mã nội bộ mới', 'Tên nội bộ mới']
+DEFICIT_HEADERS = HEADERS[:15] + ['Lượng cần xử lý luân chuyển'] + HEADERS[16:]
+
+
+def _deficit_cells(row, exempt):
+    cells = list(row['cells'])
+    cells[15] = 0 if row['product_code'] in exempt else max(0, -cells[15])
+    return cells
 # Keep the original layout readable for files already being edited by customers.
 NEW_HEADERS = ['Mã hàng muốn chuyển sang', 'Tên hàng muốn chuyển sang',
                'Mã nội bộ đang trừ kho', 'Tên hàng đang trừ kho', 'Lượng chuyển',
@@ -212,7 +219,8 @@ def export_workbook(conn, start, end, scope='all'):
     _editable_period(conn, snapshot['from'])
     if scope not in {'all', 'blocking'}:
         raise RemapError('Phạm vi tải Excel không hợp lệ.')
-    blocked = {r['product_code'] for r in snapshot['stock'] if r['closing_qty'] < -1e-9} - kkknt_codes(conn)
+    exempt = kkknt_codes(conn)
+    blocked = {r['product_code'] for r in snapshot['stock'] if r['closing_qty'] < -1e-9} - exempt
     rows = [r for r in snapshot['rows'] if scope == 'all' or r['product_code'] in blocked]
     if scope == 'blocking':
         snapshot['exported_row_ids'] = [r['id'] for r in rows]
@@ -222,7 +230,7 @@ def export_workbook(conn, start, end, scope='all'):
         ('A1:K1', 'THÔNG TIN HÓA ĐƠN GỐC · GIỮ NGUYÊN'),
         ('L1:R1', f"{len(rows)} dòng {'cần xử lý' if scope == 'blocking' else 'xuất'} / {len({r['product_code'] for r in rows})} mã hàng · Chỉ sửa 2 cột vàng Q–R."),
         ('A2:K2', 'Mã trên HĐ có thể trống. Mã nội bộ đang trừ kho ở cột L. Hóa đơn gốc giữ nguyên.'),
-        ('L2:R2', 'Sao chép cặp mã + tên từ sheet Danh muc ma hang. Sửa Q–R, lưu file rồi tải lên lại. Giữ các dòng không cần đổi.'),
+        ('L2:R2', 'Sửa Q–R theo Danh muc ma hang, lưu rồi tải lên lại. Cột P là lượng cần xử lý của cả mã; chỉ tính một lần, không cộng các dòng cùng mã.'),
         ('A3:K3', 'THÔNG TIN NGUỒN · KHÔNG SỬA'),
         ('L3:P3', 'HÀNG ĐANG TRỪ KHO · ĐỐI CHIẾU'),
         ('Q3:R3', 'HÀNG MUỐN CHUYỂN SANG · SỬA Ở ĐÂY'),
@@ -232,9 +240,9 @@ def export_workbook(conn, start, end, scope='all'):
         cell.alignment = Alignment(wrap_text=True, vertical='center')
         cell.font = Font(bold=cell.row != 2, color='17354A', size=11)
         cell.fill = PatternFill('solid', fgColor='FFF2CC' if cell.column == 1 else 'EDF2F5')
-    ws.append(HEADERS)
+    ws.append(DEFICIT_HEADERS)
     for r in rows:
-        values = [_excel_value(v) for v in r['cells']] + [r['product_code'], r['name']]
+        values = [_excel_value(v) for v in _deficit_cells(r, exempt)] + [r['product_code'], r['name']]
         ws.append(values)
     ws.freeze_panes = 'A5'; ws.auto_filter.ref = f'A4:R{max(ws.max_row,4)}'
     ws.sheet_view.topLeftCell = 'L1'
@@ -253,13 +261,13 @@ def export_workbook(conn, start, end, scope='all'):
                 cell.protection = Protection(locked=False)
             if cell.row > 4 and cell.column in (7,8,9,11,15,16):
                 cell.number_format = '#,##0.######;[Red]-#,##0.######'
-    for index, width in enumerate((14,16,23,22,38,12,14,18,18,14,18,18,42,12,14,16,22,42),1):
+    for index, width in enumerate((14,16,23,22,38,12,14,18,18,14,18,18,42,12,14,24,22,42),1):
         ws.column_dimensions[get_column_letter(index)].width = width
     ws.column_dimensions['A'].hidden = True
     for row, height in ((1,34),(2,34),(3,26),(4,46)): ws.row_dimensions[row].height = height
     ws['D4'].comment = Comment('Mã hóa đơn nguồn có thể trống. Mã nội bộ đang trừ kho ở cột L.', 'TDP')
     ws['Q4'].comment = Comment('Chọn mã + tên mới ở Q–R. Chỉ chuyển đủ phần âm của mỗi mã, theo thứ tự hàng Excel; không chuyển toàn bộ lượng ở O.', 'TDP')
-    ws['P4'].comment = Comment('Tồn lặp ở các dòng xuất cùng mã. Không cộng lặp; xem Tổng hợp hàng âm để đếm theo mã.', 'TDP')
+    ws['P4'].comment = Comment('Lượng cần xử lý của cả mã, hiển thị số dương: tồn âm 0,3 thì cần xử lý 0,3. Số này lặp ở các dòng cùng mã, chỉ tính một lần, không cộng các dòng. KKKNT không cần xử lý.', 'TDP')
     ws['J4'].comment = Comment('Thuế hóa đơn nguồn; có thể khác thuế danh mục trên báo cáo tồn.', 'TDP')
     summary = wb.create_sheet('Tổng hợp hàng âm')
     catalog_by_code = {p['code']:p for p in snapshot['catalog']}
@@ -293,13 +301,13 @@ def export_workbook(conn, start, end, scope='all'):
                  'Chỉ sửa hai cột vàng Q–R: Mã nội bộ mới và Tên nội bộ mới, theo sheet Danh muc ma hang.',
                  'Cột L–P là hàng đang trừ kho và tồn để đối chiếu. Cột A–K là thông tin hóa đơn gốc, không sửa.',
                  'Mã trên hóa đơn gốc có thể trống do nguồn M-Invoice không có mã; không có nghĩa là thiếu mã nội bộ.',
-                 'File đổi mã giữ từng dòng xuất hóa đơn. Một mã có thể xuất nhiều dòng; không cộng lặp Tồn cuối kỳ.',
+                 'Cột P: Lượng cần xử lý luân chuyển của cả mã. Tồn âm 0,3 thì hiển thị 0,3. Lặp ở các dòng cùng mã để đối chiếu, chỉ tính một lần, không cộng các dòng.',
                  'Sheet Tổng hợp hàng âm gom mỗi mã một dòng. Lọc Thuế danh mục để so với báo cáo tồn; Thuế HĐ là nguồn riêng, có thể khác danh mục.',
                  'Chỉ chuyển phần tồn âm của mỗi mã một lần. Xét các dòng đã chọn từ trên xuống; mỗi dòng chuyển tối đa lượng trừ kho của dòng đó và dừng khi đủ phần âm.',
                  'Ví dụ mã âm 64 Gói: dù chọn các dòng 64, 350 và 800, tổng chuyển chỉ 64. Bột tiêu âm 0,3 Kg chỉ chuyển 0,3.',
                  'Phần chuyển dùng đơn vị của mã nhận, không quy đổi tỷ lệ. Phần xuất còn lại vẫn trừ mã cũ. KKKNT được bỏ qua.',
                  'Không đổi tên, đơn vị, lượng, tiền, thuế hay nội dung hóa đơn gốc.',
-                 'Có thể lọc các dòng Tồn cuối kỳ âm; giữ nguyên các dòng không cần đổi. Không xóa dòng hoặc cột.',
+                 'Có thể lọc cột P lớn hơn 0 để xem hàng cần xử lý. KKKNT và hàng không âm hiển thị 0. Giữ nguyên các dòng không cần đổi; không xóa dòng hoặc cột.',
                  'Tải file lên để xem trước đơn vị cũ → mới. Hệ thống kiểm tra mã/tên, tồn mã nhận, kỳ chốt và dữ liệu đã thay đổi.',
                  'KKKNT được lập bảng kê và chuyển nguyên tồn âm. KCT và 0% không thuộc ngoại lệ này.',
                  'Mã âm từ đầu kỳ không có dòng xuất: đối chiếu tồn đầu; KKKNT có thể lập bảng kê mua vào bổ sung theo nguồn thực tế.']:
@@ -410,12 +418,16 @@ def preview_workbook(conn, data):
         ws = wb['Doi ma xuat kho']
         if ws.max_row > 30000 or ws.max_column != len(HEADERS):
             raise RemapError('Bố cục file không hợp lệ.')
+        deficit_layout = False
         if [c.value for c in next(ws.iter_rows())] == HEADERS:
             first_data_row, column_order = 2, tuple(range(len(HEADERS)))
         elif [c.value for c in next(ws.iter_rows(min_row=4,max_row=4))] == NEW_HEADERS:
             first_data_row, column_order = 5, NEW_COLUMN_ORDER
         elif [c.value for c in next(ws.iter_rows(min_row=4,max_row=4))] == HEADERS:
             first_data_row, column_order = 5, tuple(range(len(HEADERS)))
+        elif [c.value for c in next(ws.iter_rows(min_row=4,max_row=4))] == DEFICIT_HEADERS:
+            first_data_row, column_order = 5, tuple(range(len(HEADERS)))
+            deficit_layout = True
         else:
             raise RemapError('Không được đổi tiêu đề hoặc thứ tự cột.')
         allowed_ids = set(snapshot.get('exported_row_ids', [r['id'] for r in snapshot['rows']]))
@@ -436,7 +448,8 @@ def preview_workbook(conn, data):
             if key not in originals or key in seen:
                 raise RemapError(f'Dòng {excel_row}: ID không thuộc file hoặc bị lặp.')
             seen.add(key); old = originals[key]
-            if [_excel_value(v) for v in values[:16]] != [_excel_value(v) for v in old['cells']]:
+            expected_cells = _deficit_cells(old, exempt) if deficit_layout else old['cells']
+            if [_excel_value(v) for v in values[:16]] != [_excel_value(v) for v in expected_cells]:
                 raise RemapError(f'Dòng {excel_row}: đã sửa cột gốc. Chỉ được đổi mã và tên nội bộ mới.')
             code, name = str(values[16] or '').strip(), str(values[17] or '').strip()
             if code == old['product_code'] and name == old['name']: continue
