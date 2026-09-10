@@ -96,8 +96,8 @@ class OrderInvoiceRangeTests(unittest.TestCase):
             b,ids_b=self.add_batch(c,'2026-09-02',[{'qty':1,'sell_price':30}])
         rows=self.excel_rows(self.request())
         self.assertEqual(len(rows),1)
-        self.assertEqual((rows[0][3],rows[0][8]),(3,70))
-        self.assertAlmostEqual(rows[0][4],70/3,places=8)
+        self.assertEqual((rows[0][3],rows[0][8]),(3,69))
+        self.assertEqual(rows[0][4],23)
         with server.db() as c:
             allocated=allocation_by_order(c,[a,b])
             self.assertEqual(allocated[ids_a[0]]['drafted_qty'],2)
@@ -119,6 +119,42 @@ class OrderInvoiceRangeTests(unittest.TestCase):
         with server.db() as c:
             self.assertEqual(allocation_by_order(c,[bid])[ids[0]]['drafted_qty'],.4)
             self.assertAlmostEqual(canonical_available_stock(c)['HH-01']['raw_available_qty'],.6)
+
+    def test_round_average_from_approved_orders_ignores_separate_quote(self):
+        with server.db() as c:
+            self.add_opening(c,300)
+            a,_=self.add_batch(c,'2026-09-01',[{'qty':108.9,'sell_price':2700}])
+            b,_=self.add_batch(c,'2026-09-03',[{'qty':108,'sell_price':2800}])
+            c.execute("UPDATE orders SET unit='Quả'")
+            c.execute("INSERT OR REPLACE INTO product_prices(product_code,price_group,price_text,price_value) VALUES('HH-01','NT-A','X',NULL)")
+            before=[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')]
+        try:
+            rows=self.excel_rows(self.request())
+            self.assertEqual((rows[0][3],rows[0][4],rows[0][8]),(216.9,2750,596475))
+            with server.db() as c:
+                self.assertEqual(before,[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')])
+                self.assertEqual(sum(r['drafted_qty'] for r in allocation_by_order(c,[a,b]).values()),216.9)
+        finally:
+            with server.db() as c:c.execute("DELETE FROM product_prices WHERE product_code='HH-01' AND price_group='NT-A'")
+
+    def test_existing_fractional_draft_refreshes_money_only_and_is_repeatable(self):
+        self.seed()
+        self.assertEqual(self.request().status_code,200)
+        with server.db() as c:
+            line=c.execute("SELECT l.* FROM outgoing_invoice_lines l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id WHERE d.status='draft'").fetchone()
+            c.execute('UPDATE outgoing_invoice_lines SET unit_price=20.5,amount=144 WHERE id=?',(line['id'],))
+            inventory=[tuple(r) for r in c.execute('SELECT * FROM inventory_transactions ORDER BY id')]
+            orders=[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')]
+        rows=self.excel_rows(self.request())
+        self.assertEqual((rows[0][3],rows[0][4],rows[0][8]),(7,21,147))
+        with server.db() as c:
+            self.assertEqual(inventory,[tuple(r) for r in c.execute('SELECT * FROM inventory_transactions ORDER BY id')])
+            self.assertEqual(orders,[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')])
+            self.assertEqual(c.execute('SELECT SUM(amount) FROM outgoing_line_allocations WHERE line_id=?',(line['id'],)).fetchone()[0],147)
+            self.assertEqual(c.execute('SELECT subtotal FROM outgoing_invoice_drafts WHERE id=?',(line['draft_id'],)).fetchone()[0],147)
+            before=c.serialize()
+        self.assertEqual(self.request().status_code,200)
+        with server.db() as c:self.assertEqual(c.serialize(),before)
 
     def test_kg_round_only_after_adding_matching_codes(self):
         with server.db() as c:

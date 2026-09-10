@@ -35,6 +35,39 @@ def decimal(value):
 def money(value):
     return decimal(value).quantize(Decimal('1'),rounding=ROUND_HALF_UP)
 
+def round_existing_prices(conn, draft_id, tax_percent, timestamp):
+    """Refresh editable grouped money without changing reserved quantities."""
+    changes=[]
+    subtotal=tax_total=Decimal(0)
+    for line in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(draft_id,)).fetchall():
+        price=money(line['unit_price'])
+        amount=money(decimal(line['qty'])*price)
+        if decimal(line['unit_price'])!=price or decimal(line['amount'])!=amount:
+            conn.execute('UPDATE outgoing_invoice_lines SET unit_price=?,amount=? WHERE id=?',
+                         (float(price),float(amount),line['id']))
+            allocations=conn.execute('SELECT order_id,qty FROM outgoing_line_allocations WHERE line_id=? ORDER BY order_id',(line['id'],)).fetchall()
+            remaining=amount
+            for index,allocation in enumerate(allocations):
+                value=remaining if index==len(allocations)-1 else min(money(decimal(allocation['qty'])*price),remaining)
+                remaining-=value
+                conn.execute('UPDATE outgoing_line_allocations SET amount=? WHERE line_id=? AND order_id=?',
+                             (float(value),line['id'],allocation['order_id']))
+            changes.append({'product_code':line['product_code'],'old_price':line['unit_price'],
+                            'new_price':float(price),'old_amount':line['amount'],'new_amount':float(amount)})
+        subtotal+=amount
+        vat=tax_percent(line['tax'])
+        tax_total+=money(amount*decimal(vat)/100) if vat>0 else 0
+    if changes:
+        conn.execute('UPDATE outgoing_invoice_drafts SET subtotal=?,tax_amount=?,total_amount=? WHERE id=?',
+                     (float(subtotal),float(tax_total),float(subtotal+tax_total),draft_id))
+        try:
+            from .contract_modules import audit
+        except ImportError:
+            from contract_modules import audit
+        audit(conn,lambda:timestamp,'outgoing.round_prices','ok',entity_type='outgoing_invoice',entity_id=draft_id,
+              metadata={'rounding':'VND_HALF_UP','changes':changes})
+
+
 def consolidate(conn, batch_ids, contractor, tax_percent, timestamp):
     """Replace local editable rounds atomically; grouped lines retain order lineage."""
     scope=set(batch_ids)
@@ -51,7 +84,7 @@ def consolidate(conn, batch_ids, contractor, tax_percent, timestamp):
             LEFT JOIN outgoing_line_allocations a ON a.line_id=l.id AND a.order_id=l.order_id
             WHERE l.draft_id=? ORDER BY o.work_date,l.order_id,l.id''',(draft['id'],))]
         for row in lines:
-            row['_source_price']=decimal(row['source_unit_price']) if row['source_unit_price'] is not None else decimal(row['amount'])/decimal(row['qty'])
+            row['_source_price']=decimal(row['source_unit_price']) if row['source_unit_price'] is not None else decimal(row['unit_price'])
         draft['_days']={r[0] for r in conn.execute('SELECT batch_id FROM outgoing_consolidated_days WHERE draft_id=?',(draft['id'],))} | {r['batch_id'] for r in lines}
         if not draft['_days'].issubset(scope):
             raise InvoiceTaxExportError('Dự thảo đã gộp chứa ngày ngoài khoảng chọn. Chọn đủ các ngày của dự thảo để tải lại.',code='consolidated_scope_incomplete')
@@ -63,6 +96,7 @@ def consolidate(conn, batch_ids, contractor, tax_percent, timestamp):
     result=[]
     for (party,vat),sources in sorted(groups.items()):
         if len(sources)==1 and sources[0][0]['draft_kind']=='consolidated':
+            round_existing_prices(conn,sources[0][0]['id'],tax_percent,timestamp)
             result.append(sources[0][0]['id']);continue
         source_rows=[r for _,rows in sources for r in rows]
         by_product=defaultdict(list)
@@ -88,8 +122,8 @@ def consolidate(conn, batch_ids, contractor, tax_percent, timestamp):
             total_amount=sum((decimal(r['qty'])*r['_source_price'] for r in rows),Decimal(0))
             qty=total_qty.quantize(Decimal('.1'),rounding=ROUND_DOWN) if unit=='kg' else total_qty
             if qty<=0:continue
-            amount=money(total_amount*qty/total_qty)
-            price=(amount/qty).quantize(Decimal('.0000000001'),rounding=ROUND_HALF_UP)
+            price=money(total_amount/total_qty)
+            amount=money(qty*price)
             first=rows[0]
             line_id=conn.execute('''INSERT INTO outgoing_invoice_lines(draft_id,order_id,product_code,product_name,
                 qty,unit,unit_price,tax,invoice_nature,amount) VALUES(?,?,?,?,?,?,?,?,?,?)''',

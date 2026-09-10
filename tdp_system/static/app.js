@@ -2898,7 +2898,7 @@
       }).join('') + '</select></label><label>Từ ngày<input name="from" type="date" required value="'+esc(filters.from)+'"></label>' +
       '<label>Đến ngày<input name="to" type="date" required value="'+esc(filters.to)+'"></label>' +
       '<button type="submit" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
-      '<p>Một ZIP cho tất cả ngày đã chọn. Mỗi nhà thầu một file cho từng nhóm thuế; mã trùng cộng lượng và tính giá bình quân. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
+      '<p>Một ZIP cho tất cả ngày đã chọn. Mỗi nhà thầu một file cho từng nhóm thuế; mã trùng cộng lượng từ đơn đã duyệt. Giá bình quân làm tròn đến đồng; thành tiền tính theo lượng xuất × đơn giá. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
       (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + '</div></section>';
   }
 

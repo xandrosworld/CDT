@@ -4331,7 +4331,7 @@ def api_export_order_invoices():
                     archive.writestr(filename,payload)
                 guide=['FILE TỪ ĐƠN HÀNG ĐỂ NHẬP M-INVOICE',f'Ngày {start} đến {end}. Nhà thầu: {contractor or "Tất cả"}.',
                     f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế, gộp tất cả ngày đã chọn.',
-                    'Mã trùng được cộng lượng và tính giá bình quân theo tổng tiền / tổng lượng. Hàng khuyến mại giữ riêng tính chất.',
+                    'Mã trùng được cộng lượng từ đơn đã duyệt; giá bình quân làm tròn đến đồng, thành tiền tính lại bằng lượng xuất × đơn giá. Hàng khuyến mại giữ riêng tính chất.',
                     'Kg làm tròn xuống theo 0,1 Kg sau khi cộng mã; tính tiền theo lượng xuất, phần lẻ giữ lại.',
                     'Chỉ gồm lượng đã giữ tồn; KKKNT giữ ngoại lệ đã xác nhận. Chưa ký/phát hành hóa đơn.',
                     'Dùng file gộp này thay các file tách ngày chưa phát hành, không nhập thêm cả hai bộ file.',
