@@ -821,6 +821,7 @@
     anchor.click();
     anchor.remove();
     setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
+    return {filename:filename, invoiceFiles:Number(response.headers.get('X-Invoice-Files') || 0), pendingLines:Number(response.headers.get('X-Pending-Order-Lines') || 0)};
   }
 
   function setBusy(value, message) {
@@ -2886,6 +2887,21 @@
     ]);
   }
 
+  function orderInvoiceExportHtml() {
+    var filters = state.orderInvoiceFilters || {from:currentWorkDate().slice(0,7)+'-01',to:currentWorkDate(),contractor:''};
+    var result = state.orderInvoiceExportResult;
+    return '<section class="card"><div class="card-head"><div><h3>Bảng kê từ đơn hàng để đưa lên M-Invoice</h3>' +
+      '<p>Chọn nhà thầu và ngày đơn đã duyệt. Lấy phần đủ tồn để lên hóa đơn; phần thiếu giữ lại. KKKNT giữ ngoại lệ đã xác nhận.</p></div></div>' +
+      '<div class="card-body"><form id="orderInvoiceExportForm" class="document-contractor-form">' +
+      '<label>Nhà thầu<select name="contractor"><option value="">Tất cả nhà thầu</option>' + state.data.master.contractors.map(function(item) {
+        return '<option value="'+esc(item.code)+'"'+(filters.contractor===item.code?' selected':'')+'>'+esc(item.code+' · '+item.name)+'</option>';
+      }).join('') + '</select></label><label>Từ ngày<input name="from" type="date" required value="'+esc(filters.from)+'"></label>' +
+      '<label>Đến ngày<input name="to" type="date" required value="'+esc(filters.to)+'"></label>' +
+      '<button type="submit" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
+      '<p>Giải nén ZIP rồi nhập các file Excel vào M-Invoice để kiểm tra, ký và phát hành. Mỗi file gồm một ngày, nhà thầu và nhóm thuế.</p>' +
+      (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + '</div></section>';
+  }
+
   function paymentRequestFormHtml() {
     var d = state.data;
     if (!state.paymentFilters) {
@@ -3016,14 +3032,15 @@
       '</div>'
     ]) : '';
     content.innerHTML = html([
+      orderInvoiceExportHtml(),
       outgoingReadinessHtml(),
       state.outgoingActionError && state.outgoingActionError.batchId === state.batchId ? '<div class="error-summary" role="alert">' + esc(state.outgoingActionError.message) + '<div class="form-actions"><button class="btn btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button><button class="btn btn-outline" data-view="orders">Mở đơn để kiểm tra</button></div></div>' : '',
       '<div class="document-primary-grid fade-in"><section class="document-primary-card"><div class="document-primary-icon">13</div>',
       '<div><h3>File đưa lên M-Invoice</h3><p>Tải ZIP về máy, giải nén rồi nhập file Excel vào M-Invoice để kiểm tra, ký và phát hành.</p></div><div class="document-primary-action">',
       invoiceFileAction, '</div></section>',
-      '<section class="document-primary-card"><div class="document-primary-icon">KÊ</div><div><h3>Bảng kê từ hóa đơn đỏ</h3>',
+      '<section class="document-primary-card"><div class="document-primary-icon">KÊ</div><div><details><summary>Bảng kê từ hóa đơn đỏ · sau khi phát hành</summary>',
       '<p>Chọn nhà thầu để lấy đúng các hóa đơn Thành Đạt Phát đã phát hành.</p>',
-      paymentRequestFormHtml(), '</div></section></div>',
+      paymentRequestFormHtml(), '</details></div></section></div>',
       outgoingTable, invoicePaymentScopeHtml(),
       '<div id="paymentDocumentPreview"></div>',
       '<div class="card"><div class="card-head"><div><h3>Bảng kê mua hàng và biên nhận</h3><p>Xem đúng hồ sơ người bán; thiếu hoặc trùng CCCD vẫn bị chặn.</p></div><button class="btn btn-outline" data-action="preview-purchase-documents">Xem bảng kê / biên nhận</button></div><div id="purchaseDocumentPreview"></div></div>',
@@ -5907,6 +5924,25 @@
         await fetchOutgoingInvoices();
         showToast('Đã lưu hồ sơ người mua');
       } catch (error) { showToast(error.message, true); }
+    }
+    if (event.target.id === "orderInvoiceExportForm") {
+      event.preventDefault();
+      var selectedOrderScope = Object.fromEntries(new FormData(event.target).entries());
+      state.orderInvoiceFilters = selectedOrderScope;
+      var orderExportButton = event.submitter || event.target.querySelector('button[type=submit]');
+      orderExportButton.disabled = true;
+      orderExportButton.textContent = 'Đang kiểm tra tồn và tạo file…';
+      try {
+        var exported = await downloadFile('/api/export/order-invoices', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
+        state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel để up M-Invoice. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa xuất; xem chi tiết trong file hướng dẫn đi kèm.' : 'Các đơn đã chọn không còn lượng chưa phân bổ.')+' Chưa ký/phát hành hóa đơn.';
+        showToast('Đã tải bảng kê từ đơn hàng để up M-Invoice');
+        state.outgoingInvoices = null; state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
+        await Promise.all([fetchOutgoingInvoices(),fetchOutgoingReadiness()]);
+      } catch(error) {
+        state.orderInvoiceExportResult = error.message;
+        showToast(error.message,true);
+      } finally { renderDocuments(); }
+      return;
     }
     if (event.target.id === "paymentRequestForm") {
       event.preventDefault();

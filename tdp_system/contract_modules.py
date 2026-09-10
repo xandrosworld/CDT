@@ -4513,33 +4513,32 @@ def outgoing_invoice_readiness_payload(conn, batch_id: int) -> dict:
     return batch_readiness_payload(conn, batch_id)
 
 
-def create_partial_outgoing_drafts(conn, batch_id: int, now_iso) -> dict:
+def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_filter: str = "") -> dict:
     """Reserve every quantity currently invoiceable and retain the remainder."""
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
         raise ValueError("Không tìm thấy phiên đơn")
     if batch["status"] != "approved":
         raise ValueError("Phải duyệt phiên đơn trước khi lập hóa đơn đầu ra")
-    issues = invoice_order_issues([dict(r) for r in conn.execute('SELECT * FROM orders WHERE batch_id=?', (batch_id,))])
+    selected_orders = [dict(r) for r in conn.execute(
+        'SELECT * FROM orders WHERE batch_id=? AND (? = \'\' OR contractor=?) ORDER BY contractor,id',
+        (batch_id, contractor_filter, contractor_filter))]
+    issues = invoice_order_issues(selected_orders)
     if issues:
         details = '; '.join(f"Dòng {r['order_id']} · {r['product_code']}: {', '.join(r['messages'])}" for r in issues[:5])
         raise OutgoingReadinessError(f"Còn {len(issues)} dòng đơn cần sửa trước khi tạo file. {details}", code='invalid_invoice_orders')
-    orders = [
-        dict(row) for row in conn.execute(
-            "SELECT * FROM orders WHERE batch_id=? ORDER BY contractor,id", (batch_id,)
-        ) if net_delivered(dict(row)) > 1e-9
-    ]
+    orders = [row for row in selected_orders if net_delivered(row) > 1e-9]
     if not orders:
         raise ValueError("Phiên không còn lượng thực giao dương để lập hóa đơn")
     validate_demand_orders(conn, orders)
 
     replaceable = [dict(row) for row in conn.execute(
         """SELECT * FROM outgoing_invoice_drafts
-           WHERE batch_id=? AND status='draft'
+           WHERE batch_id=? AND status='draft' AND (? = '' OR contractor=?)
              AND COALESCE(draft_kind,'standard')='standard'
              AND COALESCE(minvoice_status,'not_sent') NOT IN ('saved','saving','unknown')
            ORDER BY id""",
-        (batch_id,),
+        (batch_id, contractor_filter, contractor_filter),
     )]
     replaceable_ids = {row["id"] for row in replaceable}
     # Only canonical invoice inventory may unlock an outgoing draft.  Active
