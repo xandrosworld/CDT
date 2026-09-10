@@ -25,10 +25,11 @@ const base='http://127.0.0.1:18802',out=path.join(__dirname,'exports','output_st
   await page.locator('[data-close-remap]').click();
   const download=page.waitForEvent('download');await page.locator('[data-remap-download]').click();
   const file=path.join(out,'Doi_ma.xlsx');await (await download).saveAs(file);
-  cp.execFileSync('python',['-c',"import sys;from openpyxl import load_workbook;p=sys.argv[1];w=load_workbook(p);s=w['Doi ma xuat kho'];s['Q2']='REMAP-B';s['R2']='Hàng nhận';w.save(p)",file]);
+  cp.execFileSync('python',['-c',"import sys;from openpyxl import load_workbook;p=sys.argv[1];w=load_workbook(p);s=w['Doi ma xuat kho'];assert s['A4'].value=='Mã hàng muốn chuyển sang';s['A5']='REMAP-B';s['B5']='Hàng nhận';w.save(p)",file]);
   await page.locator('[data-remap-file]').setInputFiles(file);
   await page.locator('[data-remap-confirm]').waitFor();
   assert((await page.locator('[data-remap-preview]').innerText()).includes('REMAP-B'));
+  assert((await page.locator('[data-remap-preview]').innerText()).includes('→ Sang'));
   await page.screenshot({path:path.join(out,'01_xem_truoc_doi_ma.png'),fullPage:true});
   await page.locator('[data-remap-confirm] input').fill('Kiểm thử');
   await page.locator('[data-remap-confirm] button').click();

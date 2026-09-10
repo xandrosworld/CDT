@@ -5,12 +5,14 @@ Yêu cầu đã chốt: phần Xuất có Excel đổi mã/tên nội bộ, nh�
 ## Cách thao tác
 
 1. Báo cáo vật tư hàng hóa → chọn trọn tháng → **Xuất · Đổi mã nội bộ qua Excel**. Trong cửa sổ chuyển tồn cũng có nút mở chức năng này.
-2. Tải Excel. Sheet `Doi ma xuat kho` chứa các dòng xuất M-Invoice đã ghi kho trong kỳ, mã nội bộ hiện tại và tồn cuối kỳ. Chỉ sửa hai cột vàng `Mã nội bộ mới` và `Tên nội bộ mới`, lấy đúng cặp mã/tên từ sheet danh mục.
-3. Tải file lên. Xem số lượng chuyển, tồn mã cũ và mã mới sau khi đổi. Nhập tên người xác nhận và xác nhận.
+2. Tải Excel. Sheet `Doi ma xuat kho` có hướng dẫn ở đầu bảng. Chỉ sửa hai cột vàng **A–B: Mã hàng muốn chuyển sang / Tên hàng muốn chuyển sang**, lấy đúng cặp mã/tên từ sheet danh mục. Cột C–G là mã/tên đang trừ kho, lượng chuyển, đơn vị và tồn cuối kỳ để đối chiếu. Cột H–Q là hóa đơn gốc; mã nguồn ở J có thể trống, không có nghĩa là thiếu mã nội bộ. ID dòng kho ở R được ẩn để tránh nhầm với mã hàng.
+3. Tải file lên. Xem diễn giải **Từ mã/tên hàng cũ → Sang mã/tên hàng nhận**, lượng chuyển và tồn hai hàng sau khi đổi. Nhập tên người xác nhận và xác nhận. Mẫu cũ đã tải trước lần đổi bố cục này vẫn được nhận với hai cột vàng Q–R; vẫn kiểm tra thời hạn và dữ liệu có thay đổi như trước.
 4. Tồn và báo cáo được tính theo mã nội bộ mới. Mỗi dòng chuyển toàn bộ lượng trừ kho của một dòng hóa đơn; không đổi số lượng, đơn vị, giá bán, tiền hàng, thuế hay tên/mã nguồn trên hóa đơn.
 5. Với hàng KKKNT, có thể mở **Bảng kê mua vào bổ sung** từ cửa sổ chuyển tồn; tải mẫu trắng, điền phát sinh mua thực tế và nhập lại. Không phải bù hết âm mới được lập bảng kê hoặc chuyển tháng.
 
 File không có dòng xuất cho mặt hàng chỉ âm từ đầu kỳ. Với KKKNT, số âm được chuyển nguyên; với hàng khác cần đối chiếu nguồn tồn đầu, không tự tạo dòng xuất để đổi mã.
+
+Kiểm thử đổi bố cục: 17 ca remap/KKKNT qua, gồm 15 ca chạy với bố cục cũ để giữ tương thích và 2 ca mới kiểm tra vị trí cột, mã hóa đơn nguồn trống, nhập/xác nhận đúng dòng, chặn sửa 16 cột gốc/công thức/xóa dòng. Trình duyệt tải mẫu mới, sửa A–B, nhập lại, xác nhận và chuyển tháng thành công.
 
 ## Kiểm soát dữ liệu
 

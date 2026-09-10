@@ -4,8 +4,10 @@ window.TdpOutputStockRemap = function (options) {
   const dialog = document.createElement('dialog');
   dialog.className = 'inventory-totals-dialog output-remap-dialog';
   let preview = null, busy = false;
+  const quantity = value => value == null ? '—' : Number(value).toLocaleString('vi-VN', {maximumFractionDigits:6});
   dialog.innerHTML = '<div class="inventory-totals-heading"><h3>Xuất · Đổi mã hàng nội bộ qua Excel</h3><button class="icon-button" data-remap-close aria-label="Đóng">×</button></div>' +
-    '<p>Kỳ ' + esc(from) + ' → ' + esc(to) + '. File gồm các dòng xuất đã ghi kho trong kỳ. Tải Excel, sửa hai cột màu vàng theo danh mục rồi tải lên để xem trước.</p>' +
+    '<p>Kỳ ' + esc(from) + ' → ' + esc(to) + '. Tải Excel, sửa <strong>hai cột vàng A–B ở đầu bảng: Mã hàng muốn chuyển sang và Tên hàng muốn chuyển sang</strong>, rồi tải lên để xem trước. Sao chép đúng cặp mã + tên từ sheet Danh muc ma hang.</p>' +
+    '<p>Cột C–G là hàng đang trừ kho và tồn để đối chiếu. Thông tin hóa đơn gốc nằm bên phải; mã nguồn có thể trống, còn mã nội bộ đang trừ kho nằm ở cột C. <strong>File mẫu cũ vẫn tải lên được</strong> bằng hai cột vàng Mã nội bộ mới và Tên nội bộ mới.</p>' +
     '<p>Tên hàng, lượng, tiền và thuế trên hóa đơn đã xuất được giữ nguyên. Mỗi dòng chuyển toàn bộ lượng trừ kho sang mã mới cùng đơn vị.</p>' +
     '<div class="form-actions"><button class="btn btn-primary" data-remap-download>1. Tải Excel đổi mã nội bộ</button>' +
     '<label class="btn btn-outline">2. Chọn Excel đã sửa<input data-remap-file type="file" accept=".xlsx" style="display:block"></label></div>' +
@@ -25,7 +27,7 @@ window.TdpOutputStockRemap = function (options) {
     setBusy(true); message.textContent = 'Đang tạo Excel…';
     try {
       await downloadFile('/api/inventory/output-remap/export?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to));
-      message.textContent = 'Đã tải Excel. Sửa mã và tên ở hai cột vàng, giữ nguyên các cột khác.';
+      message.textContent = 'Đã tải Excel. Chỉ sửa hai cột vàng A–B ở đầu bảng, lấy cặp mã + tên từ sheet Danh muc ma hang.';
     } catch (error) { message.textContent = error.message; }
     finally { setBusy(false); }
   };
@@ -36,8 +38,8 @@ window.TdpOutputStockRemap = function (options) {
     try {
       preview = await api('/api/inventory/output-remap/preview', {method:'POST', body:data});
       message.textContent = preview.errors.length ? preview.errors.join('\n') : 'File hợp lệ. Kiểm tra các dòng đổi mã trước khi xác nhận.';
-      panel.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Dòng Excel</th><th>Mã cũ</th><th>Mã mới</th><th>Tên nội bộ mới</th><th>Lượng chuyển</th><th>Tồn mã cũ sau</th><th>Tồn mã mới sau</th></tr></thead><tbody>' +
-        preview.changes.map(c => '<tr><td>' + c.excel_row + '</td><td>' + esc(c.old_code) + '</td><td>' + esc(c.new_code) + '</td><td>' + esc(c.new_name) + '</td><td>' + c.qty + ' ' + esc(c.unit) + '</td><td>' + (c.old_closing_after ?? '—') + '</td><td>' + (c.new_closing_after ?? '—') + '</td></tr>').join('') + '</tbody></table></div>' +
+      panel.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Dòng Excel</th><th>Chuyển trừ kho</th><th>Lượng chuyển</th><th>Tồn hàng cũ sau chuyển</th><th>Tồn hàng nhận sau chuyển</th></tr></thead><tbody>' +
+        preview.changes.map(c => '<tr><td>' + c.excel_row + '</td><td>Từ <strong>' + esc(c.old_code) + ' · ' + esc(c.old_name) + '</strong><br>→ Sang <strong>' + esc(c.new_code) + ' · ' + esc(c.new_name) + '</strong></td><td>' + quantity(c.qty) + ' ' + esc(c.unit) + '</td><td>' + quantity(c.old_closing_after) + ' ' + esc(c.unit) + '</td><td>' + quantity(c.new_closing_after) + ' ' + esc(c.unit) + '</td></tr>').join('') + '</tbody></table></div>' +
         (preview.can_confirm ? '<form data-remap-confirm><label>Người xác nhận <input name="actor" maxlength="100" required></label><button class="btn btn-primary" type="submit">3. Xác nhận đổi mã nội bộ</button></form>' : '');
       const form = panel.querySelector('form');
       if (form) form.onsubmit = async event => {

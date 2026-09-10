@@ -9,7 +9,9 @@ import zipfile
 
 from flask import jsonify, request, send_file
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill, Protection
+from openpyxl.styles import Alignment, Font, PatternFill, Protection
+from openpyxl.comments import Comment
+from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 from xml.etree.ElementTree import ParseError
 
@@ -30,6 +32,14 @@ HEADERS = ['ID dòng kho', 'Ngày', 'Ký hiệu / Số HĐ', 'Mã trên HĐ', 'T
            'ĐVT trên HĐ', 'Số lượng HĐ', 'Đơn giá bán', 'Tiền hàng', 'Thuế suất',
            'Tiền thuế', 'Mã nội bộ hiện tại', 'Tên nội bộ hiện tại', 'ĐVT kho',
            'Lượng trừ kho', 'Tồn cuối kỳ', 'Mã nội bộ mới', 'Tên nội bộ mới']
+# Keep the original layout readable for files already being edited by customers.
+NEW_HEADERS = ['Mã hàng muốn chuyển sang', 'Tên hàng muốn chuyển sang',
+               'Mã nội bộ đang trừ kho', 'Tên hàng đang trừ kho', 'Lượng chuyển',
+               'ĐVT kho', 'Tồn cuối kỳ', 'Ngày hóa đơn', 'Ký hiệu / Số HĐ',
+               'Mã trên hóa đơn gốc (có thể trống)', 'Tên trên hóa đơn gốc',
+               'ĐVT trên HĐ', 'Số lượng HĐ', 'Đơn giá bán', 'Tiền hàng',
+               'Thuế suất', 'Tiền thuế', 'ID dòng kho']
+NEW_COLUMN_ORDER = (16, 17, 11, 12, 14, 13, 15, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0)
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS output_stock_remaps (
     ledger_id INTEGER PRIMARY KEY REFERENCES invoice_inventory_ledger(id),
@@ -152,26 +162,51 @@ def export_workbook(conn, start, end):
     _editable_period(conn, snapshot['from'])
     token = _store(conn, 'export', snapshot)
     wb = Workbook(); ws = wb.active; ws.title = 'Doi ma xuat kho'
-    ws.append(HEADERS)
+    for area, text in [
+        ('A1:G1', 'CHỈ SỬA 2 CỘT VÀNG A–B: Mã hàng muốn chuyển sang và Tên hàng muốn chuyển sang.'),
+        ('H1:Q1', 'THÔNG TIN HÓA ĐƠN GỐC · GIỮ NGUYÊN'),
+        ('A2:G2', 'Sao chép cặp mã + tên từ sheet Danh muc ma hang, rồi tải file lên hệ thống. Giữ nguyên dòng không cần đổi.'),
+        ('H2:Q2', 'Mã trên hóa đơn gốc có thể trống do dữ liệu M-Invoice không có mã. Mã nội bộ đang trừ kho nằm ở cột C.'),
+        ('A3:B3', '1. SỬA HÀNG MUỐN CHUYỂN SANG'),
+        ('C3:G3', '2. ĐỐI CHIẾU HÀNG ĐANG TRỪ KHO'),
+        ('H3:Q3', '3. THÔNG TIN NGUỒN · KHÔNG SỬA'),
+    ]:
+        ws.merge_cells(area)
+        cell = ws[area.split(':')[0]]; cell.value = text
+        cell.alignment = Alignment(wrap_text=True, vertical='center')
+        cell.font = Font(bold=cell.row != 2, color='17354A', size=11)
+        cell.fill = PatternFill('solid', fgColor='FFF2CC' if cell.column == 1 else 'EDF2F5')
+    ws.append(NEW_HEADERS)
     for r in snapshot['rows']:
-        ws.append([_excel_value(v) for v in r['cells']] + [r['product_code'], r['name']])
-    ws.freeze_panes = 'E2'; ws.auto_filter.ref = ws.dimensions
-    for row in ws:
+        values = [_excel_value(v) for v in r['cells']] + [r['product_code'], r['name']]
+        ws.append([values[i] for i in NEW_COLUMN_ORDER])
+    ws.freeze_panes = 'E5'; ws.auto_filter.ref = f'A4:R{max(ws.max_row,4)}'
+    ws.sheet_view.showGridLines = False
+    for row in ws.iter_rows(min_row=4):
         for cell in row:
             if isinstance(cell.value, str): cell.data_type = 's'
-            if cell.row == 1:
-                cell.font = Font(bold=True, color='FFFFFF')
-                cell.fill = PatternFill('solid', fgColor='17354A')
-            elif cell.column >= 17:
-                cell.fill = PatternFill('solid', fgColor='FFF2CC')
+            editable = cell.column <= 2
+            source = cell.column >= 8
+            cell.alignment = Alignment(wrap_text=True, vertical='center')
+            cell.fill = PatternFill('solid', fgColor='FFF2CC' if editable else 'F2F4F6' if source else 'EFF7FB')
+            cell.font = Font(bold=cell.row == 4, color='17354A' if not source else '4B5563', size=11)
+            if editable and cell.row > 4:
                 cell.protection = Protection(locked=False)
-    for col in ('E','M','R'): ws.column_dimensions[col].width = 38
-    for col in ('C','L','Q'): ws.column_dimensions[col].width = 23
+            if cell.row > 4 and cell.column in (5,7,13,14,15,17):
+                cell.number_format = '#,##0.######;[Red]-#,##0.######'
+    for index, width in enumerate((25,38,23,38,14,12,16,16,23,29,38,14,16,20,20,14,20,14),1):
+        ws.column_dimensions[get_column_letter(index)].width = width
+    ws.column_dimensions['R'].hidden = True
+    for row, height in ((1,34),(2,34),(3,26),(4,46)): ws.row_dimensions[row].height = height
+    ws['J4'].comment = Comment('Đây là mã từ hóa đơn nguồn, có thể trống. Mã nội bộ dùng trừ kho nằm ở cột C. Không điền mã nội bộ vào cột này.', 'TDP')
+    ws['A4'].comment = Comment('Sao chép mã và tên cùng một hàng trong sheet Danh muc ma hang vào hai cột A–B. Mỗi dòng chuyển toàn bộ lượng ở cột E.', 'TDP')
     catalog = wb.create_sheet('Danh muc ma hang'); catalog.append(['Mã nội bộ', 'Tên nội bộ', 'ĐVT', 'Thuế'])
     for p in snapshot['catalog']: catalog.append([p[k] for k in ('code','name','unit','tax')])
     catalog.auto_filter.ref = catalog.dimensions; catalog.freeze_panes = 'A2'; catalog.column_dimensions['B'].width = 48
     guide = wb.create_sheet('Huong dan')
-    for line in ['Chỉ sửa hai cột vàng Mã nội bộ mới và Tên nội bộ mới, theo sheet Danh muc ma hang.',
+    for line in ['Chỉ sửa hai cột vàng A–B: Mã hàng muốn chuyển sang và Tên hàng muốn chuyển sang, theo sheet Danh muc ma hang.',
+                 'Cột C–G là hàng đang trừ kho và tồn để đối chiếu. Cột H–Q là thông tin hóa đơn gốc, không sửa.',
+                 'Mã trên hóa đơn gốc có thể trống do nguồn M-Invoice không có mã; không có nghĩa là thiếu mã nội bộ.',
                  'Một dòng tương ứng toàn bộ lượng trừ kho của một dòng hóa đơn. Không đổi lượng, tiền, thuế hay nội dung hóa đơn.',
                  'Có thể lọc các dòng Tồn cuối kỳ âm; giữ nguyên các dòng không cần đổi. Không xóa dòng hoặc cột.',
                  'Tải file lên để xem trước. Hệ thống kiểm tra đơn vị, tồn mã nhận, kỳ chốt và dữ liệu đã thay đổi.',
@@ -250,13 +285,19 @@ def preview_workbook(conn, data):
         ws = wb['Doi ma xuat kho']
         if ws.max_row > 30000 or ws.max_column != len(HEADERS):
             raise RemapError('Bố cục file không hợp lệ.')
-        if [c.value for c in next(ws.iter_rows())] != HEADERS:
+        if [c.value for c in next(ws.iter_rows())] == HEADERS:
+            first_data_row, column_order = 2, tuple(range(len(HEADERS)))
+        elif [c.value for c in next(ws.iter_rows(min_row=4,max_row=4))] == NEW_HEADERS:
+            first_data_row, column_order = 5, NEW_COLUMN_ORDER
+        else:
             raise RemapError('Không được đổi tiêu đề hoặc thứ tự cột.')
         originals = {r['id']: r for r in snapshot['rows']}
         products = {p['code']: p for p in snapshot['catalog']}
         seen = set(); changes = []; errors = []
-        for excel_row, cells in enumerate(ws.iter_rows(min_row=2), 2):
-            values = [c.value for c in cells]
+        for excel_row, cells in enumerate(ws.iter_rows(min_row=first_data_row), first_data_row):
+            values = [None] * len(HEADERS)
+            for cell, original_column in zip(cells,column_order):
+                values[original_column] = cell.value
             if all(v is None for v in values): continue
             if any(c.data_type == 'f' for c in cells):
                 raise RemapError(f'Dòng {excel_row}: không nhận công thức; dán giá trị vào hai cột vàng.')

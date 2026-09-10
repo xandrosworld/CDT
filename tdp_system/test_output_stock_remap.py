@@ -5,15 +5,32 @@ from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 from . import server
 from .test_outgoing_readiness import OutgoingReadinessTests as Seed
-from .output_stock_remap import export_workbook, preview_workbook, confirm_preview, RemapError
+from .output_stock_remap import export_workbook as export_new_workbook, preview_workbook, confirm_preview, RemapError
 from .invoice_monthly_valuation import monthly_average_report
 from .invoice_inventory import reverse_output_invoice
 from .inventory_period_close import inventory_period_close_preview, close_inventory_period
 from .outgoing_readiness import canonical_available_stock
+
+
+def export_workbook(conn, start, end):
+    """Build the previously shipped file from its unchanged saved snapshot.
+
+    The original regression cases intentionally keep testing old customer files,
+    including their metadata without any layout/version marker.
+    """
+    from .output_stock_remap import HEADERS, _excel_value
+    downloaded = load_workbook(io.BytesIO(export_new_workbook(conn,start,end)))
+    token = downloaded['_meta']['B1'].value; downloaded.close()
+    snapshot = json.loads(conn.execute('SELECT payload FROM output_stock_excel_sessions WHERE token=?',(token,)).fetchone()[0])
+    wb = Workbook(); ws=wb.active; ws.title='Doi ma xuat kho'; ws.append(HEADERS)
+    for r in snapshot['rows']:
+        ws.append([_excel_value(v) for v in r['cells']] + [r['product_code'],r['name']])
+    meta=wb.create_sheet('_meta');meta.append(['token',token]);meta.sheet_state='veryHidden'
+    data=io.BytesIO();wb.save(data);wb.close();return data.getvalue()
 
 
 class OutputStockRemapTests(unittest.TestCase):
@@ -53,6 +70,50 @@ class OutputStockRemapTests(unittest.TestCase):
         ws['Q2']=code; ws['R2']=name
         if mutate: mutate(ws)
         data=io.BytesIO(); wb.save(data); wb.close(); return data.getvalue()
+
+    def new_file(self, conn, mutate=None):
+        wb=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
+        ws=wb['Doi ma xuat kho'];ws['A5']='REMAP-B';ws['B5']='Hàng nhận'
+        if mutate: mutate(ws)
+        data=io.BytesIO();wb.save(data);wb.close();return data.getvalue()
+
+    def test_new_layout_puts_editable_identity_first_and_imports_correct_line(self):
+        with server.db() as conn:
+            wb=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
+            ws=wb['Doi ma xuat kho']
+            self.assertEqual(('Mã hàng muốn chuyển sang','Tên hàng muốn chuyển sang'),(ws['A4'].value,ws['B4'].value))
+            self.assertIn('CHỈ SỬA 2 CỘT VÀNG',ws['A1'].value)
+            self.assertEqual(('HH-01','Hàng hóa 01','HH-01','Hàng hóa 01',4,'kg',-4),tuple(ws.cell(5,c).value for c in range(1,8)))
+            self.assertEqual(('SOURCE-A','Tên trên hóa đơn',4,20,80,'8',6),tuple(ws[c+'5'].value for c in ('J','K','M','N','O','P','Q')))
+            self.assertIn('có thể trống',ws['J4'].value)
+            self.assertEqual(('E5','A4:R5'),(ws.freeze_panes,ws.auto_filter.ref))
+            self.assertTrue(ws.column_dimensions['R'].hidden)
+            self.assertFalse(ws['A5'].protection.locked)
+            self.assertTrue(ws['J5'].protection.locked)
+            wb.close()
+            before=dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone())
+            preview=preview_workbook(conn,self.new_file(conn))
+            self.assertTrue(preview['can_confirm'],preview)
+            self.assertEqual((5,self.line_id), (preview['changes'][0]['excel_row'],preview['changes'][0]['line_id']))
+            confirm_preview(conn,preview['token'],'New layout test',server.now_iso())
+            self.assertEqual({**before,'product_code':'REMAP-B'},dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone()))
+            self.assertEqual(6,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
+
+    def test_new_layout_rejects_source_identity_edits_and_keeps_missing_source_code_blank(self):
+        with server.db() as conn:
+            conn.execute("UPDATE outgoing_source_invoice_items SET source_item_code='' WHERE id=?",(self.line_id,))
+            data=self.new_file(conn)
+            wb=load_workbook(io.BytesIO(data));ws=wb['Doi ma xuat kho']
+            self.assertIsNone(ws['J5'].value);self.assertEqual('HH-01',ws['C5'].value);wb.close()
+            self.assertTrue(preview_workbook(conn,data)['can_confirm'])
+            for column in 'CDEFGHIJKLMNOPQR':
+                with self.subTest(column=column),self.assertRaises(RemapError):
+                    preview_workbook(conn,self.new_file(conn,lambda ws:ws.__setitem__(column+'5','Changed')))
+            with self.assertRaises(RemapError):
+                preview_workbook(conn,self.new_file(conn,lambda ws:ws.__setitem__('A5','=1+1')))
+            with self.assertRaises(RemapError):
+                preview_workbook(conn,self.new_file(conn,lambda ws:ws.delete_rows(5)))
+            self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM output_stock_remaps').fetchone()[0])
 
     def test_round_trip_preserves_source_and_ledger_and_closes_with_negative_kkknt(self):
         with server.db() as conn:

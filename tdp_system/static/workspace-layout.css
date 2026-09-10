@@ -120,3 +120,17 @@
 .inventory-close-dialog .inventory-close-action { display:flex; flex-wrap:wrap; gap:8px; align-items:end; }
 .inventory-close-dialog .inventory-close-action label { display:grid; gap:4px; }
 .inventory-close-dialog .inventory-close-history { margin-bottom:12px; }
+
+.output-remap-dialog { width:min(1100px,96vw); max-width:96vw; overflow:auto; }
+.output-remap-dialog > p,
+.output-remap-dialog > .form-actions,
+.output-remap-dialog > .warning-summary,
+.output-remap-dialog > [data-remap-message],
+.output-remap-dialog > [data-remap-preview] { margin:14px 20px; }
+.output-remap-dialog [data-remap-message] { white-space:pre-line; }
+.output-remap-dialog .table-wrap table { width:100%; min-width:700px; }
+.output-remap-dialog th { white-space:normal; }
+.output-remap-dialog td { vertical-align:top; }
+.output-remap-dialog [data-remap-confirm] { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin-top:16px; }
+.output-remap-dialog [data-remap-confirm] label { display:grid; gap:6px; }
+.output-remap-dialog [data-remap-confirm] input { padding:9px; border:1px solid #b8c8ce; border-radius:6px; }
