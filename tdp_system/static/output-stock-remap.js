@@ -43,10 +43,10 @@ window.TdpOutputStockRemap = function (options) {
         message.innerHTML += '<div class="warning-summary"><strong>' + (preview.catalog_names_applied ? 'Đã lấy tên theo mã trong danh mục để xem trước:' : 'Có thể sửa tên ngay tại đây, giữ nguyên mã chị đã chọn:') + '</strong><ul>' +
           preview.name_corrections.map(c => '<li>Hàng số ' + c.excel_row + ' · ' + esc(c.code) + ': ' + esc(c.entered_name || '(trống)') + ' → <strong>' + esc(c.catalog_name) + '</strong></li>').join('') + '</ul>' +
           (preview.catalog_names_applied ? 'Chưa ghi kho. Kiểm tra bảng rồi bấm xác nhận.' : '<button type="button" class="btn btn-primary" data-remap-fix-names>Lấy tên theo mã đã chọn và kiểm tra lại</button><p>Không cần sửa hoặc tải lại Excel. Hóa đơn gốc giữ nguyên.</p>') + '</div>';
-        const fixNames = message.querySelector('[data-remap-fix-names]');
-        if (fixNames) fixNames.onclick = () => { if (!busy) checkFile(file, true); };
       }
       if (preview.skipped?.length) message.innerHTML += '<p>Bỏ qua ' + preview.skipped.length + ' dòng đã chọn vì thuộc KKKNT, không âm hoặc đã đủ lượng xử lý âm.</p>';
+      const fixNames = message.querySelector('[data-remap-fix-names]');
+      if (fixNames) fixNames.onclick = () => { if (!busy) checkFile(file, true); };
       panel.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Hàng số trong Excel</th><th>Chuyển trừ kho</th><th>Lượng cần xử lý luân chuyển</th><th>Tồn hàng cũ sau chuyển</th><th>Tồn hàng nhận sau chuyển</th></tr></thead><tbody>' +
         preview.changes.map(c => '<tr><td>' + c.excel_row + '</td><td>Từ <strong>' + esc(c.old_code) + ' · ' + esc(c.old_name) + '</strong><br>→ Sang <strong>' + esc(c.new_code) + ' · ' + esc(c.new_name) + '</strong></td><td>' + quantity(c.qty) + ' ' + esc(c.old_unit ?? c.unit) + ' → ' + quantity(c.qty) + ' ' + esc(c.unit) + '</td><td>' + (c.old_closing_after == null ? 'Chưa tính: file còn lỗi' : quantity(c.old_closing_after) + ' ' + esc(c.old_unit ?? c.unit)) + '</td><td>' + (c.new_closing_after == null ? 'Chưa tính: file còn lỗi' : quantity(c.new_closing_after) + ' ' + esc(c.unit)) + '</td></tr>').join('') + '</tbody></table></div>' +
         (preview.can_confirm ? '<form data-remap-confirm><label>Người xác nhận <input name="actor" maxlength="100" required></label><button class="btn btn-primary" type="submit">3. Xác nhận đổi mã nội bộ</button></form>' : '');
