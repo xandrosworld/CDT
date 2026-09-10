@@ -770,7 +770,7 @@
 
   function friendlyErrorMessage(message, status) {
     var text = String(message || "").trim();
-    if (status === 404 || /requested URL was not found/i.test(text)) {
+    if ((status === 404 && !text) || /requested URL was not found/i.test(text)) {
       return "Không tìm thấy chức năng này. Hãy tải lại trang; nếu vẫn còn lỗi, liên hệ người hỗ trợ.";
     }
     if (/failed to fetch|networkerror|network request failed/i.test(text)) {
