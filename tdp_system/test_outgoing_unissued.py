@@ -67,7 +67,7 @@ class UnissuedTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/outgoing-invoices/unissued?to=bad').status_code,400)
 
     def test_unmapped_issued_invoice_is_flagged_and_blocks_duplicate_export(self):
-        self.seed(stock=20)
+        a,b=self.seed(stock=20)
         with server.db() as c:
             Fixture.add_posted_source(c,source='minvoice',qty=3,invoice_date='2026-09-03',number='103')
             before=c.serialize()
@@ -76,7 +76,13 @@ class UnissuedTests(unittest.TestCase):
         response=self.request()
         self.assertEqual(response.status_code,409)
         self.assertEqual(response.get_json()['code'],'issued_source_unresolved')
-        with server.db() as c:self.assertEqual(c.serialize(),before)
+        from .contract_modules import create_partial_outgoing_drafts
+        from .outgoing_readiness import OutgoingReadinessError
+        with server.db() as c:
+            self.assertEqual(c.serialize(),before)
+            with self.assertRaises(OutgoingReadinessError):
+                create_partial_outgoing_drafts(c,a,server.now_iso,contractor_filter='NT-A')
+            self.assertEqual(c.serialize(),before)
 
     def test_conflicting_confirmed_quantity_is_visible_and_not_counted_twice(self):
         a,b=self.seed(stock=20)

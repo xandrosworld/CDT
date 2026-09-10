@@ -4605,7 +4605,14 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
         from .outgoing_unissued import issued_allocations
     except ImportError:
         from outgoing_unissued import issued_allocations
-    issued, _ = issued_allocations(conn)
+    issued, source_warnings = issued_allocations(conn)
+    selected_parties={item['contractor'] for item in orders}
+    source_warnings=[w for w in source_warnings if not w['contractor'] or w['contractor'] in selected_parties]
+    if source_warnings:
+        raise OutgoingReadinessError(
+            'Cần đối chiếu hóa đơn đã phát hành trước khi lập tiếp để tránh xuất trùng. '+source_warnings[0]['message'],
+            code='issued_source_unresolved',
+        )
     for item in orders:
         allocated_locked[item['id']] = allocated_locked.get(item['id'], 0) + issued.get(item['id'], 0)
     allocations = defaultdict(list)
