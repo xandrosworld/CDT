@@ -2898,7 +2898,7 @@
       }).join('') + '</select></label><label>Từ ngày<input name="from" type="date" required value="'+esc(filters.from)+'"></label>' +
       '<label>Đến ngày<input name="to" type="date" required value="'+esc(filters.to)+'"></label>' +
       '<button type="submit" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
-      '<p>Giải nén ZIP rồi nhập các file Excel vào M-Invoice để kiểm tra, ký và phát hành. Mỗi file gồm một ngày, nhà thầu và nhóm thuế.</p>' +
+      '<p>Một ZIP cho tất cả ngày đã chọn. Mỗi nhà thầu một file cho từng nhóm thuế; mã trùng cộng lượng và tính giá bình quân. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
       (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + '</div></section>';
   }
 
@@ -2950,7 +2950,7 @@
       return (item.contractor || "").trim();
     }).filter(Boolean))).sort();
     var currentInvoices = (state.outgoingInvoices || []).filter(function (item) {
-      return item.batch_id === state.batchId;
+      return item.batch_id === state.batchId || (item.source_batch_ids || []).includes(state.batchId);
     });
     var outgoingRows = currentInvoices.map(function (item) {
       var statusText = item.status === "issued" ? "Đã phát hành" : item.status === "cancelled" ? "Đã hủy" : "Dự thảo";
@@ -2977,7 +2977,7 @@
         '</td><td>' + actions + '</td></tr>';
     }).join("");
     var minvoiceForms = ((state.data && state.data.minvoice_draft_available === false) ? [] : (state.outgoingInvoices || [])).filter(function (item) {
-      return item.batch_id === state.batchId && item.status === "draft";
+      return (item.batch_id === state.batchId || (item.source_batch_ids || []).includes(state.batchId)) && item.status === "draft";
     }).map(function (item) {
       var buyer = item.buyer || {};
       return '<form class="minvoiceDraftForm card-body" data-id="' + item.id + '" data-contractor="' +

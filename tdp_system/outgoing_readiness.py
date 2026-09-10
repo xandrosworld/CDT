@@ -469,9 +469,10 @@ def allocation_by_order(conn, batch_ids: list[int]) -> dict[int, dict[str, float
         f"""SELECT l.order_id,
                     SUM(CASE WHEN d.status='draft' THEN l.qty ELSE 0 END) drafted_qty,
                     SUM(CASE WHEN d.status='issued' THEN l.qty ELSE 0 END) issued_qty
-               FROM outgoing_invoice_lines l
+               FROM outgoing_order_allocations l
                JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
-              WHERE d.status!='cancelled' AND d.batch_id IN ({placeholders})
+               JOIN orders o ON o.id=l.order_id
+              WHERE d.status!='cancelled' AND o.batch_id IN ({placeholders})
               GROUP BY l.order_id""",
         tuple(batch_ids),
     )

@@ -232,7 +232,7 @@ def build_invoice_workbook(
                 total = amount + tax_amount
                 values = [
                     _literal(code), _literal(name), _literal(unit), qty,
-                    None if nature == "2" else _vnd(unit_price),
+                    None if nature == "2" else unit_price,
                     None if nature == "2" else amount,
                     None, None,
                     None if nature == "2" else amount,
@@ -250,6 +250,7 @@ def build_invoice_workbook(
                 sheet.cell(output_row, 4).number_format = "#,##0.######"
                 for column in (5, 6, 8, 9, 11, 12):
                     sheet.cell(output_row, column).number_format = "#,##0"
+                sheet.cell(output_row, 5).number_format = "#,##0.##########"
             sheet.auto_filter.ref = f"A1:M{sheet.max_row}"
             sheet.freeze_panes = None
             return safe_workbook_bytes(workbook), template_kind

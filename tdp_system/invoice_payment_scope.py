@@ -255,7 +255,7 @@ def _local_issued_payment_scope(
         f"""SELECT l.*,d.issued_invoice_number,d.issued_invoice_series,d.issued_invoice_date,
                     d.subtotal invoice_subtotal,d.tax_amount invoice_tax_amount,
                     d.total_amount invoice_total,b.work_date,o.kitchen
-               FROM outgoing_invoice_lines l
+               FROM outgoing_order_allocations l
                JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
                JOIN orders o ON o.id=l.order_id
                JOIN batches b ON b.id=o.batch_id
@@ -268,7 +268,9 @@ def _local_issued_payment_scope(
             "Hóa đơn đã phát hành không còn dòng giao hàng để đối chiếu",
             code="issued_invoice_lines_missing",
         )
-    _verify_lines(drafts, lines)
+    invoice_lines = [dict(r) for r in conn.execute(
+        f'SELECT * FROM outgoing_invoice_lines WHERE draft_id IN ({placeholders})',tuple(draft_ids))]
+    _verify_lines(drafts, invoice_lines)
 
     invoices = []
     for draft in drafts:

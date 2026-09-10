@@ -3522,9 +3522,9 @@ def batch_mutation_blocker(conn, batch_id: int) -> str:
         return bk_blocked
     draft = conn.execute(
         """SELECT status,minvoice_status FROM outgoing_invoice_drafts
-           WHERE batch_id=? AND status!='cancelled'
+           WHERE (batch_id=? OR id IN (SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id=?)) AND status!='cancelled'
            ORDER BY CASE status WHEN 'issued' THEN 0 ELSE 1 END,id LIMIT 1""",
-        (batch_id,),
+        (batch_id,batch_id),
     ).fetchone()
     if draft:
         if draft["status"] == "issued":
@@ -4261,13 +4261,17 @@ def api_quotes():
 
 @app.post("/api/export/order-invoices")
 def api_export_order_invoices():
-    """Build upload files from approved orders, reserving only available stock."""
+    """One ZIP; one consolidated invoice per contractor/tax across selected days."""
     try:
-        from .contract_modules import create_partial_outgoing_drafts, net_delivered
+        from .contract_modules import create_partial_outgoing_drafts, net_delivered, invoice_tax_percent
         from .outgoing_readiness import OutgoingReadinessError
+        from .outgoing_consolidation import consolidate
+        from .invoice_tax_export import build_invoice_workbook, _safe_name
     except ImportError:
-        from contract_modules import create_partial_outgoing_drafts, net_delivered
+        from contract_modules import create_partial_outgoing_drafts, net_delivered, invoice_tax_percent
         from outgoing_readiness import OutgoingReadinessError
+        from outgoing_consolidation import consolidate
+        from invoice_tax_export import build_invoice_workbook, _safe_name
     try:
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
@@ -4278,66 +4282,65 @@ def api_export_order_invoices():
         if start > end:
             raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày')
         output = io.BytesIO()
-        files, pending = 0, []
+        pending, selected_orders = [], []
         with db() as conn:
             conn.execute('BEGIN IMMEDIATE')
             if contractor and not conn.execute('SELECT 1 FROM contractors WHERE code=?', (contractor,)).fetchone():
                 raise ValueError('Không tìm thấy nhà thầu đã chọn')
-            batches = conn.execute('''SELECT b.* FROM batches b WHERE b.work_date BETWEEN ? AND ?
+            batches = conn.execute("""SELECT b.* FROM batches b WHERE b.work_date BETWEEN ? AND ?
                 AND EXISTS(SELECT 1 FROM orders o WHERE o.batch_id=b.id AND (?='' OR o.contractor=?))
-                ORDER BY b.work_date,b.id''', (start,end,contractor,contractor)).fetchall()
+                ORDER BY b.work_date,b.id""", (start,end,contractor,contractor)).fetchall()
             if not batches or len(batches)>100:
                 raise ValueError('Chọn khoảng ngày có từ 1 đến 100 phiên đơn cần xuất')
             for batch in batches:
                 if batch['status'] != 'approved':
                     raise ValueError(f"Đơn ngày {batch['work_date']} chưa duyệt. Chị duyệt đơn trước khi lấy file.")
+            for batch in batches:
+                orders = [dict(r) for r in conn.execute(
+                    "SELECT * FROM orders WHERE batch_id=? AND (?='' OR contractor=?) ORDER BY id",
+                    (batch['id'],contractor,contractor))]
+                selected_orders.extend(orders)
+                for party in sorted({r['contractor'] for r in orders if net_delivered(r)>1e-9}):
+                    editable = conn.execute("""SELECT 1 FROM outgoing_invoice_drafts d
+                        JOIN outgoing_order_allocations l ON l.draft_id=d.id JOIN orders o ON o.id=l.order_id
+                        WHERE (o.batch_id=? OR d.id IN (SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id=?)) AND d.contractor=? AND d.status='draft'
+                        AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') LIMIT 1""",
+                        (batch['id'],batch['id'],party)).fetchone()
+                    if not editable:
+                        create_partial_outgoing_drafts(conn,batch['id'],now_iso,contractor_filter=party)
+            draft_ids = consolidate(conn,[b['id'] for b in batches],contractor,invoice_tax_percent,now_iso())
+            if not draft_ids:
+                raise InvoiceTaxExportError('Chưa có lượng đủ điều kiện để tạo file mới. Kiểm tra tồn và các dự thảo đã lưu/đã phát hành.',code='no_invoiceable_orders')
+            for order in selected_orders:
+                allocated = conn.execute("""SELECT COALESCE(SUM(l.qty),0) FROM outgoing_order_allocations l
+                    JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
+                    WHERE l.order_id=? AND d.status!='cancelled' """,(order['id'],)).fetchone()[0]
+                remaining = max(net_delivered(order)-allocated,0)
+                if remaining>1e-8:
+                    pending.append(f"{order['work_date']} · {order['contractor']} · {order['product_code']} · {order['product_name']}: còn {remaining:g} {order['unit']}")
             with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
-                for batch in batches:
-                    orders = [dict(r) for r in conn.execute(
-                        "SELECT * FROM orders WHERE batch_id=? AND (?='' OR contractor=?) ORDER BY id",
-                        (batch['id'],contractor,contractor))]
-                    # Keep existing upload drafts stable; downloading again must not
-                    # silently change a file the customer may already have uploaded.
-                    parties = sorted({r['contractor'] for r in orders if net_delivered(r)>1e-9})
-                    for party in parties:
-                        editable = conn.execute('''SELECT 1 FROM outgoing_invoice_drafts WHERE batch_id=?
-                            AND contractor=? AND status='draft' AND COALESCE(minvoice_status,'not_sent')
-                            NOT IN ('saved','saving','unknown') LIMIT 1''', (batch['id'],party)).fetchone()
-                        if not editable:
-                            create_partial_outgoing_drafts(conn,batch['id'],now_iso,contractor_filter=party)
-                    editable = conn.execute('''SELECT 1 FROM outgoing_invoice_drafts WHERE batch_id=?
-                        AND (?='' OR contractor=?) AND status='draft'
-                        AND COALESCE(minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') LIMIT 1''',
-                        (batch['id'],contractor,contractor)).fetchone()
-                    if editable:
-                        payload = export_invoices_zip(conn,batch,orders,contractor_filter=contractor)
-                        try:
-                            with zipfile.ZipFile(payload) as source:
-                                for name in source.namelist():
-                                    if name.endswith('.xlsx'):
-                                        archive.writestr(f"Ngay_{batch['work_date']}_don_{batch['id']}/{name}",source.read(name))
-                                        files += 1
-                        finally:
-                            payload.close()
-                    for order in orders:
-                        allocated = conn.execute('''SELECT COALESCE(SUM(l.qty),0) FROM outgoing_invoice_lines l
-                            JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
-                            WHERE l.order_id=? AND d.status!='cancelled' ''',(order['id'],)).fetchone()[0]
-                        remaining = max(net_delivered(order)-allocated,0)
-                        if remaining>1e-9:
-                            pending.append(f"{batch['work_date']} · {order['contractor']} · {order['product_code']} · {order['product_name']}: còn {remaining:g} {order['unit']}")
-                if not files:
-                    raise InvoiceTaxExportError('Chưa có lượng đủ điều kiện để tạo file mới. Kiểm tra tồn và các dự thảo đã lưu/đã phát hành.',code='no_invoiceable_orders')
-                guide = ['FILE TỪ ĐƠN HÀNG ĐỂ NHẬP M-INVOICE',f'Ngày {start} đến {end}. Nhà thầu: {contractor or "Tất cả"}.',
-                    f'{files} file Excel theo ngày, nhà thầu và nhóm thuế. Giải nén rồi nhập các file Excel vào M-Invoice.',
-                    'File này dùng trước khi ký/phát hành hóa đơn. Chỉ gồm lượng đã giữ tồn; KKKNT giữ ngoại lệ đã xác nhận.',
-                    'Tải lại lấy dự thảo hiện có, không cộng thêm lượng giữ kho. Không nhập lặp file đã đưa lên M-Invoice.',
-                    f'PHẦN CHƯA XUẤT: {len(pending)} dòng (không nằm trong file Excel):',*pending]
+                for draft_id in draft_ids:
+                    draft=conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?',(draft_id,)).fetchone()
+                    lines=[{**dict(r),'contractor':draft['contractor']} for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(draft_id,))]
+                    vat=invoice_tax_percent(lines[0]['tax'])
+                    payload,_=build_invoice_workbook(lines,vat_percent=vat,template_dir=TAX_TEMPLATE_DIR)
+                    label='KKKNT' if vat==-2 else 'KCT' if vat==-1 else f'VAT{vat:g}'
+                    filename=f"Bang_ke_{_safe_name(draft['contractor'])}_{label}_{start}_{end}.xlsx"
+                    if filename in archive.namelist():
+                        raise InvoiceTaxExportError('Tên file nhà thầu bị trùng; cần kiểm tra mã nhà thầu.')
+                    archive.writestr(filename,payload)
+                guide=['FILE TỪ ĐƠN HÀNG ĐỂ NHẬP M-INVOICE',f'Ngày {start} đến {end}. Nhà thầu: {contractor or "Tất cả"}.',
+                    f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế, gộp tất cả ngày đã chọn.',
+                    'Mã trùng được cộng lượng và tính giá bình quân theo tổng tiền / tổng lượng. Hàng khuyến mại giữ riêng tính chất.',
+                    'Kg làm tròn xuống theo 0,1 Kg sau khi cộng mã; tính tiền theo lượng xuất, phần lẻ giữ lại.',
+                    'Chỉ gồm lượng đã giữ tồn; KKKNT giữ ngoại lệ đã xác nhận. Chưa ký/phát hành hóa đơn.',
+                    'Dùng file gộp này thay các file tách ngày chưa phát hành, không nhập thêm cả hai bộ file.',
+                    f'PHẦN CHƯA XUẤT: {len(pending)} dòng (thiếu tồn hoặc phần lẻ Kg):',*pending]
                 archive.writestr('HUONG_DAN_VA_PHAN_CHUA_XUAT.txt','\n'.join(guide).encode('utf-8-sig'))
         output.seek(0)
-        response = send_file(output,as_attachment=True,download_name=f'BANG_KE_UP_M_INVOICE_{start}_{end}.zip',mimetype='application/zip')
-        response.headers['X-Invoice-Files'] = str(files)
-        response.headers['X-Pending-Order-Lines'] = str(len(pending))
+        response=send_file(output,as_attachment=True,download_name=f'BANG_KE_UP_M_INVOICE_{start}_{end}.zip',mimetype='application/zip')
+        response.headers['X-Invoice-Files']=str(len(draft_ids))
+        response.headers['X-Pending-Order-Lines']=str(len(pending))
         return response
     except (ValueError,InvoiceTaxExportError,OutgoingReadinessError) as exc:
         return jsonify({'ok':False,'error':str(exc),'code':getattr(exc,'code','invalid_order_invoice_export')}),getattr(exc,'status',409)

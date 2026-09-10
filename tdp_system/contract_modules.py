@@ -757,6 +757,10 @@ def migrate_outgoing_invoice_rounds(conn):
 def init_contract_schema(conn, opening_template_path=None):
     conn.executescript(ADVANCED_SCHEMA)
     try:
+        from .outgoing_consolidation import SCHEMA as CONSOLIDATION_SCHEMA
+    except ImportError:
+        from outgoing_consolidation import SCHEMA as CONSOLIDATION_SCHEMA
+    try:
         from .catalog_products import SCHEMA as CATALOG_SCHEMA
     except ImportError:
         from catalog_products import SCHEMA as CATALOG_SCHEMA
@@ -923,6 +927,7 @@ def init_contract_schema(conn, opening_template_path=None):
                ON outgoing_invoice_drafts(issued_invoice_series COLLATE NOCASE,issued_invoice_number)
                WHERE issued_invoice_number IS NOT NULL AND issued_invoice_number!=''"""
         )
+    conn.executescript(CONSOLIDATION_SCHEMA)
     defaults = {
         "tenant_code": "TDP",
         "printer_name": "",
@@ -4585,10 +4590,11 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
         row["order_id"]: as_number(row["qty"])
         for row in conn.execute(
             """SELECT l.order_id,SUM(l.qty) qty
-               FROM outgoing_invoice_lines l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
-               WHERE d.batch_id=? AND d.status!='cancelled'
+               FROM outgoing_order_allocations l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
+               JOIN orders o ON o.id=l.order_id
+               WHERE o.batch_id=? AND d.status!='cancelled'
                  AND (
-                     COALESCE(d.draft_kind,'standard')='substitution'
+                     COALESCE(d.draft_kind,'standard')!='standard'
                      OR d.status='issued'
                      OR COALESCE(d.minvoice_status,'not_sent') IN ('saved','saving','unknown')
                  )
@@ -8320,8 +8326,8 @@ def register_contract_routes(app, ctx):
         with db_factory() as conn:
             rows = [dict(row) for row in conn.execute(
                 'SELECT * FROM outgoing_invoice_drafts ' +
-                ('WHERE batch_id=? ORDER BY invoice_date DESC,id DESC' if batch_id else
-                 'ORDER BY invoice_date DESC,id DESC LIMIT 200'), (batch_id,) if batch_id else ()
+                ('WHERE id IN (SELECT l.draft_id FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id WHERE o.batch_id=? UNION SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id=?) ORDER BY invoice_date DESC,id DESC' if batch_id else
+                 'ORDER BY invoice_date DESC,id DESC LIMIT 200'), (batch_id,batch_id) if batch_id else ()
             )]
             taxes = defaultdict(set)
             for line in conn.execute('SELECT draft_id,tax FROM outgoing_invoice_lines WHERE draft_id IN '
@@ -8332,6 +8338,7 @@ def register_contract_routes(app, ctx):
                 for row in conn.execute("SELECT * FROM outgoing_buyer_profiles")
             }
             for row in rows:
+                row['source_batch_ids'] = [r[0] for r in conn.execute('SELECT DISTINCT o.batch_id FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id WHERE l.draft_id=? UNION SELECT batch_id FROM outgoing_consolidated_days WHERE draft_id=?',(row['id'],row['id']))]
                 row["buyer"] = profiles.get(row["contractor"])
                 row['tax_label'] = ', '.join('KKKNT' if tax == -2 else 'KCT' if tax == -1 else f'{tax:g}%'
                                             for tax in sorted(taxes[row['id']]))
