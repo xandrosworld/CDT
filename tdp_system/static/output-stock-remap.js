@@ -32,18 +32,27 @@ window.TdpOutputStockRemap = function (options) {
     } catch (error) { message.textContent = error.message; }
     finally { setBusy(false); }
   };
-  dialog.querySelector('[data-remap-file]').onchange = async e => {
-    const file = e.target.files[0]; if (!file) return;
+  async function checkFile(file, useCatalogNames = false) {
     preview = null; panel.innerHTML = ''; setBusy(true); message.textContent = 'Đang kiểm tra file và tính lại tồn…';
     const data = new FormData(); data.append('file', file);
+    if (useCatalogNames) data.append('use_catalog_names', 'true');
     try {
       preview = await api('/api/inventory/output-remap/preview', {method:'POST', body:data});
       message.innerHTML = preview.errors.length ? '<strong>Chưa ghi nhận: còn ' + preview.errors.length + ' vấn đề cần sửa.</strong><ul>' + preview.errors.map(error => '<li>' + esc(error) + '</li>').join('') + '</ul><p>Sửa trên file vừa tải lên, lưu rồi chọn lại file ở bước 2. Không cần tải file mới.</p>' : 'Chưa ghi nhận. File hợp lệ; kiểm tra lượng xử lý âm bên dưới rồi bấm xác nhận.';
+      if (preview.name_corrections?.length) {
+        message.innerHTML += '<div class="warning-summary"><strong>' + (preview.catalog_names_applied ? 'Đã lấy tên theo mã trong danh mục để xem trước:' : 'Có thể sửa tên ngay tại đây, giữ nguyên mã chị đã chọn:') + '</strong><ul>' +
+          preview.name_corrections.map(c => '<li>Hàng số ' + c.excel_row + ' · ' + esc(c.code) + ': ' + esc(c.entered_name || '(trống)') + ' → <strong>' + esc(c.catalog_name) + '</strong></li>').join('') + '</ul>' +
+          (preview.catalog_names_applied ? 'Chưa ghi kho. Kiểm tra bảng rồi bấm xác nhận.' : '<button type="button" class="btn btn-primary" data-remap-fix-names>Lấy tên theo mã đã chọn và kiểm tra lại</button><p>Không cần sửa hoặc tải lại Excel. Hóa đơn gốc giữ nguyên.</p>') + '</div>';
+        const fixNames = message.querySelector('[data-remap-fix-names]');
+        if (fixNames) fixNames.onclick = () => { if (!busy) checkFile(file, true); };
+      }
       if (preview.skipped?.length) message.innerHTML += '<p>Bỏ qua ' + preview.skipped.length + ' dòng đã chọn vì thuộc KKKNT, không âm hoặc đã đủ lượng xử lý âm.</p>';
       panel.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Hàng số trong Excel</th><th>Chuyển trừ kho</th><th>Lượng cần xử lý luân chuyển</th><th>Tồn hàng cũ sau chuyển</th><th>Tồn hàng nhận sau chuyển</th></tr></thead><tbody>' +
-        preview.changes.map(c => '<tr><td>' + c.excel_row + '</td><td>Từ <strong>' + esc(c.old_code) + ' · ' + esc(c.old_name) + '</strong><br>→ Sang <strong>' + esc(c.new_code) + ' · ' + esc(c.new_name) + '</strong></td><td>' + quantity(c.qty) + ' ' + esc(c.old_unit ?? c.unit) + ' → ' + quantity(c.qty) + ' ' + esc(c.unit) + '</td><td>' + quantity(c.old_closing_after) + ' ' + esc(c.old_unit ?? c.unit) + '</td><td>' + quantity(c.new_closing_after) + ' ' + esc(c.unit) + '</td></tr>').join('') + '</tbody></table></div>' +
+        preview.changes.map(c => '<tr><td>' + c.excel_row + '</td><td>Từ <strong>' + esc(c.old_code) + ' · ' + esc(c.old_name) + '</strong><br>→ Sang <strong>' + esc(c.new_code) + ' · ' + esc(c.new_name) + '</strong></td><td>' + quantity(c.qty) + ' ' + esc(c.old_unit ?? c.unit) + ' → ' + quantity(c.qty) + ' ' + esc(c.unit) + '</td><td>' + (c.old_closing_after == null ? 'Chưa tính: file còn lỗi' : quantity(c.old_closing_after) + ' ' + esc(c.old_unit ?? c.unit)) + '</td><td>' + (c.new_closing_after == null ? 'Chưa tính: file còn lỗi' : quantity(c.new_closing_after) + ' ' + esc(c.unit)) + '</td></tr>').join('') + '</tbody></table></div>' +
         (preview.can_confirm ? '<form data-remap-confirm><label>Người xác nhận <input name="actor" maxlength="100" required></label><button class="btn btn-primary" type="submit">3. Xác nhận đổi mã nội bộ</button></form>' : '');
       const form = panel.querySelector('form');
+      if (form) panel.prepend(form);
+      message.scrollIntoView({block:'start'});
       if (form) form.onsubmit = async event => {
         event.preventDefault(); if (busy) return;
         const actor = form.elements.actor.value.trim(); if (!actor) return;
@@ -57,6 +66,11 @@ window.TdpOutputStockRemap = function (options) {
         finally { setBusy(false); }
       };
     } catch (error) { message.textContent = error.message; }
-    finally { setBusy(false); e.target.value = ''; }
+    finally { setBusy(false); }
+  }
+  dialog.querySelector('[data-remap-file]').onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    await checkFile(file);
+    e.target.value = '';
   };
 };

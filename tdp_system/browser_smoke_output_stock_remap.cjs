@@ -33,7 +33,7 @@ const base='http://127.0.0.1:18802',out=path.join(__dirname,'exports','output_st
   assert.equal(await page.locator('[data-remap-confirm]').count(),0);
   assert((await page.locator('[data-remap-message]').innerText()).includes('Hàng số 5 trong Excel · HH-01 · Hàng hóa 01'));
   await page.screenshot({path:path.join(out,'00_loi_co_ten_hang.png'),fullPage:true});
-  await page.locator('[data-remap-file]').setInputFiles(file);
+  await page.locator('[data-remap-fix-names]').click();
   await page.locator('[data-remap-confirm]').waitFor();
   assert((await page.locator('[data-remap-preview]').innerText()).includes('REMAP-B'));
   assert((await page.locator('[data-remap-preview]').innerText()).includes('→ Sang'));

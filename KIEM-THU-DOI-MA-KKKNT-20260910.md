@@ -110,3 +110,11 @@ Minh chứng: `customer_deficit_copy_result.json`, các ảnh kiểm thử trìn
 - Cột P của Excel và cột lượng trên bảng xem trước dùng đúng tên **Lượng cần xử lý luân chuyển**. Excel hiển thị phần thiếu bằng số dương (âm 0,3 → cần xử lý 0,3), KKKNT và mã không âm hiển thị 0. Ghi ngay đầu bảng rằng lượng của cả mã chỉ tính một lần, không cộng các dòng lặp.
 - Giữ nguyên snapshot nguồn và nhận cả ba bố cục Excel cũ. File mới kiểm tra lượng hiển thị dựa trên snapshot máy chủ; tự sửa cột P vẫn bị từ chối. Hóa đơn và cách phân bổ phần âm không đổi.
 - 31 ca remap qua (30 ca qua lượt đầu; ca bổ sung sửa dữ liệu dựng thử bị trùng khóa và chạy lại qua). Trình duyệt dữ liệu tạm đã chạy lại thành công tải/sửa/nhập/xác nhận/chuyển tháng với lượng 0,3 và KKKNT âm.
+
+## File khách gửi lúc 13:19: sửa tên ngay trên màn hình
+
+- Đọc đúng `Doi_ma_noi_bo_xuat_kho  (2).xlsx` và snapshot mới của hệ thống. File vẫn có tên viết tắt ở R5 cho mã HT00072, khác tên danh mục. Đây là lỗi duy nhất làm `can_confirm=false`; 14 dòng còn lại chưa được tính tồn do file còn lỗi. Các lượt xem trước gần nhất trên hệ thống cũng ghi lỗi này. Kết quả hợp lệ trước đó là bản đã sửa R5, không phải file này.
+- Thêm nút **Lấy tên theo mã đã chọn và kiểm tra lại**. Hiển thị rõ tên trước/sau, chỉ dùng mã đã có trong danh mục; người dùng bấm nút rồi xem lại trước khi xác nhận ghi kho. Mã không tồn tại, thiếu tồn, file nguồn thay đổi và sửa cột gốc vẫn bị chặn. Ghi lựa chọn sửa tên vào audit khi xác nhận.
+- Nút xác nhận được đưa lên đầu bảng kết quả. Nếu file còn lỗi, cột tồn ghi **Chưa tính: file còn lỗi** thay dấu gạch; màn hình tự cuộn đến thông báo và nút xử lý.
+- Bản Excel sửa hộ chỉ thay R5, không đổi mã hoặc các lựa chọn khác. Trên snapshot hiện tại, bản sửa và thao tác lấy tên trong ứng dụng đều cho cùng 15 dòng thực chuyển, không lỗi; 19 lựa chọn còn lại được bỏ qua theo quy tắc phần âm.
+- **32 ca remap qua**. Trình duyệt đã thử file sai tên → bấm sửa ngay → xem trước phần âm 0,3 → xác nhận → chốt tháng với KKKNT âm, không lỗi JavaScript.

@@ -401,7 +401,7 @@ def _evaluate(conn, snapshot, changes):
         conn.execute('ROLLBACK TO remap_preview'); conn.execute('RELEASE remap_preview')
 
 
-def preview_workbook(conn, data):
+def preview_workbook(conn, data, *, use_catalog_names=False):
     if not conn.in_transaction:
         conn.execute('BEGIN')
     if len(data) > 10 * 1024 * 1024:
@@ -436,7 +436,7 @@ def preview_workbook(conn, data):
         stocks = {r['product_code']:r for r in snapshot['stock']}
         exempt = kkknt_codes(conn)
         deficits = {code:max(Decimal(0),-Decimal(str(r['closing_qty']))) for code,r in stocks.items() if code not in exempt}
-        seen = set(); changes = []; errors = []; skipped = []
+        seen = set(); changes = []; errors = []; skipped = []; name_corrections = []
         for excel_row, cells in enumerate(ws.iter_rows(min_row=first_data_row), first_data_row):
             values = [None] * len(HEADERS)
             for cell, original_column in zip(cells,column_order):
@@ -459,6 +459,11 @@ def preview_workbook(conn, data):
                                 'reason':'KKKNT: bỏ qua' if old['product_code'] in exempt else 'Đã đủ lượng xử lý âm hoặc mã không âm'})
                 continue
             p = products.get(code)
+            if p and name != p['name']:
+                name_corrections.append({'excel_row':excel_row, 'code':code, 'entered_name':name,
+                                         'catalog_name':p['name']})
+                if use_catalog_names:
+                    name = p['name']
             if not p or name != p['name']:
                 expected = f'Tên đúng của mã {code}: {p["name"]}.' if p else f'Mã mới {code or "(trống)"} không có trong danh mục.'
                 errors.append(f'Hàng số {excel_row} trong Excel · {old["product_code"]} · {old["name"]}: mã/tên mới không khớp danh mục. {expected} Sao chép đúng cặp mã + tên từ Danh muc ma hang.'); continue
@@ -473,10 +478,12 @@ def preview_workbook(conn, data):
         if seen != set(originals): raise RemapError('File bị thiếu dòng. Giữ nguyên các dòng không cần đổi mã.')
         if not changes and not errors: errors.append('Không có lượng tồn âm cần chuyển trong các dòng đã chọn. KKKNT được bỏ qua.')
         if changes and not errors: errors.extend(_evaluate(conn, snapshot, changes))
-        preview = {'snapshot': snapshot, 'changes': changes, 'errors': errors, 'mode':'deficit_only_v1'}
+        preview = {'snapshot': snapshot, 'changes': changes, 'errors': errors, 'mode':'deficit_only_v1',
+                   'name_corrections':name_corrections, 'catalog_names_applied':use_catalog_names}
         preview_token = _store(conn, 'preview', preview)
         return {'token': preview_token, 'changes': changes, 'errors': errors, 'can_confirm': bool(changes) and not errors,
-                'from': snapshot['from'], 'to': snapshot['to'], 'skipped':skipped, 'mode':'deficit_only_v1'}
+                'from': snapshot['from'], 'to': snapshot['to'], 'skipped':skipped, 'mode':'deficit_only_v1',
+                'name_corrections':name_corrections, 'catalog_names_applied':use_catalog_names}
     except (KeyError, zipfile.BadZipFile, InvalidFileException, ParseError, ValueError, TypeError) as exc:
         if isinstance(exc, RemapError): raise
         raise RemapError('File không phải mẫu đổi mã đã tải từ hệ thống hoặc chứa dữ liệu không hợp lệ.') from exc
@@ -508,7 +515,8 @@ def confirm_preview(conn, token, actor, timestamp):
                 conn.execute('UPDATE outgoing_source_invoice_items SET product_code=? WHERE id=? AND invoice_id=?',
                              (c['new_code'], c['line_id'], c['invoice_id']))
         conn.execute("INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at) VALUES('inventory.output.remap','excel',?,'ok',?,?,?)",
-                     (token, 'Đổi mã nội bộ theo Excel', _json({'actor': actor, 'from': snapshot['from'], 'to': snapshot['to'], 'changes': changes}), timestamp))
+                     (token, 'Đổi mã nội bộ theo Excel', _json({'actor': actor, 'from': snapshot['from'], 'to': snapshot['to'], 'changes': changes,
+                         'name_corrections':preview.get('name_corrections',[]), 'catalog_names_applied':preview.get('catalog_names_applied',False)}), timestamp))
         result = {'changed_lines': len(changes), 'idempotent': False}
         conn.execute('UPDATE output_stock_excel_sessions SET result=? WHERE token=?', (_json(result), token))
         conn.execute('RELEASE apply_stock_remap')
@@ -534,7 +542,8 @@ def register_routes(app, ctx):
             file = request.files.get('file')
             if not file: raise RemapError('Chọn file Excel đã sửa.')
             with ctx['db']() as conn:
-                result = preview_workbook(conn, file.read(10 * 1024 * 1024 + 1))
+                result = preview_workbook(conn, file.read(10 * 1024 * 1024 + 1),
+                                          use_catalog_names=request.form.get('use_catalog_names') == 'true')
             return jsonify(ok=True, **result)
         except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
         except sqlite3.Error: return jsonify(ok=False, error='Dữ liệu đang được cập nhật. Chọn lại file để kiểm tra.'), 409

@@ -576,6 +576,27 @@ class OutputStockRemapTests(unittest.TestCase):
             with self.assertRaises(RemapError): preview_workbook(conn,self.edited(code='=1+1'))
             with self.assertRaises(RemapError): preview_workbook(conn,self.edited(mutate=lambda ws:ws.delete_rows(2)))
 
+    def test_catalog_name_repair_requires_explicit_choice_and_keeps_stock_checks(self):
+        with server.db() as conn:
+            original=dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone())
+            data=self.edited(name='Tên khách viết ngắn')
+            blocked=preview_workbook(conn,data)
+            self.assertFalse(blocked['can_confirm'])
+            self.assertEqual('Hàng nhận',blocked['name_corrections'][0]['catalog_name'])
+            fixed=preview_workbook(conn,data,use_catalog_names=True)
+            self.assertTrue(fixed['can_confirm'],fixed)
+            self.assertEqual('REMAP-B',fixed['changes'][0]['new_code'])
+            self.assertEqual('Hàng nhận',fixed['changes'][0]['new_name'])
+            self.assertEqual(original,dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone()))
+            unknown=preview_workbook(conn,self.edited(code='NO-SUCH-CODE'),use_catalog_names=True)
+            self.assertFalse(unknown['can_confirm'])
+            self.assertEqual([],unknown['name_corrections'])
+            conn.execute("UPDATE inventory_transactions SET qty_in=1 WHERE product_code='REMAP-B'")
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            shortage=preview_workbook(conn,self.edited(name='Tên viết tắt'),use_catalog_names=True)
+            self.assertFalse(shortage['can_confirm'])
+            self.assertIn('Còn thiếu 3',shortage['errors'][0])
+
     def test_target_shortage_stale_file_and_stale_preview_are_rejected(self):
         with server.db() as conn:
             p=preview_workbook(conn,self.edited()); self.assertTrue(p['can_confirm'])
