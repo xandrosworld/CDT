@@ -39,6 +39,7 @@ class OutputStockRemapTests(unittest.TestCase):
 
     def setUp(self):
         with server.db() as conn:
+            conn.execute('DELETE FROM output_stock_remap_parts')
             conn.execute('DELETE FROM output_stock_remaps')
             conn.execute('DELETE FROM output_stock_excel_sessions')
             conn.execute('DELETE FROM inventory_period_closures')
@@ -274,6 +275,8 @@ class OutputStockRemapTests(unittest.TestCase):
 
     def test_concurrent_confirm_applies_once_and_rejects_other_stale_preview(self):
         with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=3.7 WHERE source_type='OPENING' AND product_code='HH-01'")
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
             first = preview_workbook(conn,self.edited())
             other = preview_workbook(conn,self.edited())
         barrier = Barrier(2)
@@ -292,20 +295,151 @@ class OutputStockRemapTests(unittest.TestCase):
         self.assertEqual(409,stale.status_code,stale.get_json())
         with server.db() as conn:
             self.assertEqual(1,conn.execute("SELECT COUNT(*) FROM audit_log WHERE event_type='inventory.output.remap'").fetchone()[0])
-            self.assertEqual(6,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
+            self.assertEqual(9.7,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
+
+    def test_fractional_deficit_split_preserves_invoice_and_reverses_after_month_close(self):
+        with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=3.7,unit_cost=20 WHERE source_type='OPENING' AND product_code='HH-01'")
+            conn.execute("UPDATE products SET unit='Chai' WHERE code='REMAP-B'")
+            mapping=conn.execute("""INSERT INTO invoice_line_mappings(tenant,source,invoice_type,scope_key,product_code,mapping_status,conversion_factor,confirmed_at,updated_at)
+                VALUES('test','minvoice','OUTPUT_ELECTRONIC_INVOICE',?,'HH-01','confirmed',1,'test','test')""",(str(self.line_id),)).lastrowid
+            revision=conn.execute("""INSERT INTO invoice_mapping_revisions(revision_key,mapping_id,product_code,source_unit,target_unit,conversion_factor,created_at)
+                VALUES(?,?,'HH-01','kg','kg',1,'test')""",(str(self.line_id),mapping)).lastrowid
+            conn.execute('UPDATE invoice_inventory_ledger SET mapping_revision_id=? WHERE source_line_id=?',(revision,self.line_id))
+            before={table:[dict(r) for r in conn.execute('SELECT * FROM '+table+' ORDER BY id')] for table in
+                    ('invoice_inventory_ledger','outgoing_source_invoices','outgoing_source_invoice_items')}
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            preview=preview_workbook(conn,self.edited())
+            self.assertTrue(preview['can_confirm'],preview)
+            change=preview['changes'][0]
+            self.assertEqual((0.3,4,0,9.7),tuple(change[k] for k in ('qty','source_stock_qty','old_closing_after','new_closing_after')))
+            confirm_preview(conn,preview['token'],'Partial test',server.now_iso())
+            for table,values in before.items():self.assertEqual(values,[dict(r) for r in conn.execute('SELECT * FROM '+table+' ORDER BY id')])
+            parts=[dict(r) for r in conn.execute("SELECT * FROM invoice_inventory_effective_ledger WHERE source_line_id=? AND event_type='POST'",(self.line_id,))]
+            self.assertEqual({'HH-01':-3.7,'REMAP-B':-0.3},{r['product_code']:r['qty_delta'] for r in parts})
+            self.assertEqual(2,len({r['event_key'] for r in parts}))
+            book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
+            exported=list(book.active.iter_rows(min_row=5,values_only=True));book.close()
+            self.assertEqual(2,len(exported));self.assertTrue(all(r[6]==4 and r[8]==80 for r in exported))
+            self.assertAlmostEqual(4,sum(r[14] for r in exported))
+            close=inventory_period_close_preview(conn,'2026-08',today=date(2026,9,10))
+            self.assertTrue(close['can_close'],close)
+            close_inventory_period(conn,'2026-08',expected_source_hash=close['source_hash'],expected_target_hash=close['target_hash'],timestamp=server.now_iso(),today=date(2026,9,10))
+            conn.execute("UPDATE outgoing_source_invoices SET stock_status='reversal_required',source_status_class='cancelled' WHERE id=?",(self.source_id,))
+            reverse_output_invoice(conn,self.source_id,confirmed=True,note='partial reversal',now_iso=lambda:'2026-09-25T12:00:00')
+            self.assertTrue(reverse_output_invoice(conn,self.source_id,confirmed=True,note='partial reversal',now_iso=lambda:'2026-09-25T12:00:00')['idempotent'])
+            stock=canonical_available_stock(conn)
+            self.assertEqual((3.7,10),(stock['HH-01']['canonical_qty'],stock['REMAP-B']['canonical_qty']))
+            report=monthly_average_report(conn,date_from='2026-09-01',date_to='2026-09-30',include_zero=True)
+            values={r['product_code']:r['closing_value'] for r in report['items']}
+            self.assertEqual((74,300),(values['HH-01'],values['REMAP-B']))
+
+    def _three_selected_rows(self, conn, deficit=64, target_stock=1110):
+        conn.execute("UPDATE inventory_transactions SET qty_in=? WHERE source_type='OPENING' AND product_code='HH-01'",(1214-deficit,))
+        conn.execute("UPDATE inventory_transactions SET qty_in=? WHERE source_type='OPENING' AND product_code='REMAP-B'",(target_stock,))
+        conn.execute('UPDATE invoice_inventory_ledger SET qty_delta=-64 WHERE source_line_id=?',(self.line_id,))
+        conn.execute('UPDATE outgoing_source_invoice_items SET qty=64,stock_qty=64 WHERE id=?',(self.line_id,))
+        for index,qty in enumerate((350,800),2):
+            invoice=Seed.add_posted_source(conn,source='minvoice',number='DEFICIT-'+str(index),qty=qty)
+            conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',
+                         (json.dumps({'_tdp_source_contract':'minvoice_portal_v1','details':[{'taxAmount':0}]}),invoice))
+            line=conn.execute("""INSERT INTO outgoing_source_invoice_items(invoice_id,line_index,source_item_code,
+                source_item_name,source_unit,qty,unit_price,amount,tax_rate,product_code,mapping_status,stock_qty)
+                VALUES(?,1,'SRC','Original invoice','kg',?,20,?,'8','HH-01','mapped',?)""",(invoice,qty,qty*20,qty)).lastrowid
+            conn.execute('UPDATE invoice_inventory_ledger SET source_line_id=? WHERE source_invoice_id=?',(line,invoice))
+        self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+        def select(ws):
+            for row in range(2,5):ws[f'Q{row}']='REMAP-B';ws[f'R{row}']='Hàng nhận'
+        return self.edited(mutate=select)
+
+    def test_repeated_rows_transfer_only_64_not_1214(self):
+        with server.db() as conn:
+            preview=preview_workbook(conn,self._three_selected_rows(conn))
+            self.assertTrue(preview['can_confirm'],preview)
+            self.assertEqual([64],[r['qty'] for r in preview['changes']])
+            self.assertEqual(2,len(preview['skipped']))
+            self.assertEqual(1046,preview['changes'][0]['new_closing_after'])
+            confirm_preview(conn,preview['token'],'Only deficit',server.now_iso())
+            self.assertEqual(0,canonical_available_stock(conn)['HH-01']['canonical_qty'])
+
+    def test_deficit_spans_rows_once_and_partially_uses_last_required_row(self):
+        with server.db() as conn:
+            preview=preview_workbook(conn,self._three_selected_rows(conn,deficit=80))
+            self.assertTrue(preview['can_confirm'],preview)
+            self.assertEqual([64,16],[r['qty'] for r in preview['changes']])
+            self.assertEqual(1,len(preview['skipped']))
+            confirm_preview(conn,preview['token'],'Split deficit',server.now_iso())
+            self.assertEqual(1030,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
+            self.assertEqual(0,canonical_available_stock(conn)['HH-01']['canonical_qty'])
+
+    def test_shortage_message_uses_deficit_quantity_and_identifies_selected_rows(self):
+        with server.db() as conn:
+            preview=preview_workbook(conn,self._three_selected_rows(conn,target_stock=50))
+            self.assertFalse(preview['can_confirm'])
+            error=preview['errors'][0]
+            for expected in ('Hàng nhận','trước chuyển 50 kg','chuyển sang 64 kg','hàng Excel 2: 64','Còn thiếu 14 kg'):
+                self.assertIn(expected,error)
+            self.assertNotIn('1.214',error)
+
+    def test_kkknt_changes_are_skipped_and_legacy_full_quantity_previews_rejected(self):
+        with server.db() as conn:
+            preview=preview_workbook(conn,self.edited())
+            row=conn.execute('SELECT payload FROM output_stock_excel_sessions WHERE token=?',(preview['token'],)).fetchone()
+            payload=json.loads(row[0]);payload.pop('mode')
+            conn.execute('UPDATE output_stock_excel_sessions SET payload=? WHERE token=?',(json.dumps(payload),preview['token']))
+            with self.assertRaisesRegex(RemapError,'Chọn lại file'):confirm_preview(conn,preview['token'],'Legacy preview',server.now_iso())
+            conn.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            preview=preview_workbook(conn,self.edited(name='Ignored choice'))
+            self.assertEqual([],preview['changes']);self.assertIn('KKKNT',preview['skipped'][0]['reason'])
+
+    def test_partial_write_failure_rolls_back_and_can_be_retried(self):
+        with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=3.7 WHERE source_type='OPENING' AND product_code='HH-01'")
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            preview=preview_workbook(conn,self.edited())
+            conn.execute("CREATE TEMP TRIGGER fail_partial BEFORE INSERT ON output_stock_remap_parts WHEN NEW.product_code='REMAP-B' BEGIN SELECT RAISE(ABORT,'fixture'); END")
+            with self.assertRaises(Exception):confirm_preview(conn,preview['token'],'Partial rollback',server.now_iso())
+            self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM output_stock_remap_parts').fetchone()[0])
+            self.assertEqual('HH-01',conn.execute('SELECT product_code FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone()[0])
+            conn.execute('DROP TRIGGER fail_partial')
+            self.assertEqual(1,confirm_preview(conn,preview['token'],'Partial retry',server.now_iso())['changed_lines'])
+
+    def test_partial_component_can_be_reallocated_without_losing_remaining_quantity(self):
+        from .output_stock_remap import init_schema,_snapshot,_source_hash
+        with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=3.7 WHERE source_type='OPENING' AND product_code='HH-01'")
+            self.file=export_workbook(conn,'2026-08-01','2026-08-31')
+            preview=preview_workbook(conn,self.edited());confirm_preview(conn,preview['token'],'First partial',server.now_iso())
+            conn.execute("UPDATE inventory_transactions SET qty_in=3.9 WHERE source_type='OPENING' AND product_code='HH-01'")
+            conn.execute("UPDATE inventory_transactions SET qty_in=0.2 WHERE source_type='OPENING' AND product_code='REMAP-B'")
+            book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31',scope='blocking')))
+            ws=book.active;self.assertEqual(5,ws.max_row);self.assertLess(ws['A5'].value,0)
+            ws['Q5']='HH-01';ws['R5']='Hàng hóa 01'
+            data=io.BytesIO();book.save(data);book.close()
+            preview=preview_workbook(conn,data.getvalue());self.assertTrue(preview['can_confirm'],preview)
+            self.assertEqual(0.1,preview['changes'][0]['qty'])
+            confirm_preview(conn,preview['token'],'Second partial',server.now_iso())
+            pieces={r['product_code']:r['qty_delta'] for r in conn.execute('SELECT * FROM invoice_inventory_effective_ledger WHERE source_line_id=?',(self.line_id,))}
+            self.assertEqual({'HH-01':-3.8,'REMAP-B':-0.2},pieces)
+            stock=canonical_available_stock(conn);self.assertAlmostEqual(0.1,stock['HH-01']['canonical_qty']);self.assertEqual(0,stock['REMAP-B']['canonical_qty'])
+            before=_source_hash(_snapshot(conn,'2026-08-01','2026-08-31'))
+            init_schema(conn)
+            self.assertEqual(before,_source_hash(_snapshot(conn,'2026-08-01','2026-08-31')))
 
     def test_second_remap_returns_quantity_without_double_subtraction(self):
         with server.db() as conn:
-            conn.execute("UPDATE inventory_transactions SET qty_in=10 WHERE source_type='OPENING' AND product_code='HH-01'")
             self.file = export_workbook(conn,'2026-08-01','2026-08-31')
             first = preview_workbook(conn,self.edited())
             confirm_preview(conn,first['token'],'First',server.now_iso())
+            conn.execute("UPDATE inventory_transactions SET qty_in=0 WHERE source_type='OPENING' AND product_code='REMAP-B'")
+            conn.execute("UPDATE inventory_transactions SET qty_in=10 WHERE source_type='OPENING' AND product_code='HH-01'")
             self.file = export_workbook(conn,'2026-08-01','2026-08-31')
             second = preview_workbook(conn,self.edited(code='HH-01',name='Hàng hóa 01'))
             self.assertTrue(second['can_confirm'],second)
             confirm_preview(conn,second['token'],'Second',server.now_iso())
             stock = canonical_available_stock(conn)
-            self.assertEqual((6,10),(stock['HH-01']['canonical_qty'],stock['REMAP-B']['canonical_qty']))
+            self.assertEqual((6,0),(stock['HH-01']['canonical_qty'],stock['REMAP-B']['canonical_qty']))
             self.assertEqual(2,conn.execute('SELECT revision FROM output_stock_remaps').fetchone()[0])
 
     def test_selected_line_and_resync_preserve_other_line_and_source_report(self):
@@ -323,11 +457,14 @@ class OutputStockRemapTests(unittest.TestCase):
                        status_map={},status_fields=(),reference_fields=())
         with server.db() as conn:
             conn.execute("UPDATE products SET unit='Bịch' WHERE code='REMAP-B'")
-            conn.execute("UPDATE inventory_transactions SET qty_in=10 WHERE source_type='OPENING' AND product_code='HH-01'")
+            conn.execute("UPDATE inventory_transactions SET qty_in=5.5 WHERE source_type='OPENING' AND product_code='HH-01'")
             options['tenant'] = conn.execute("SELECT value FROM settings WHERE key='tenant_code'").fetchone()[0]
             invoice_id,_,_,review = upsert_output_invoice(conn,remote,**options)
             self.assertFalse(review)
             conn.execute("UPDATE outgoing_source_invoices SET stock_status='posted' WHERE id=?",(invoice_id,))
+            raw=json.loads(conn.execute('SELECT raw_json FROM outgoing_source_invoices WHERE id=?',(invoice_id,)).fetchone()[0])
+            raw['_tdp_source_contract']='minvoice_portal_v1'
+            conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',(json.dumps(raw),invoice_id))
             lines = [dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(invoice_id,))]
             for line in lines:
                 conn.execute("UPDATE outgoing_source_invoice_items SET product_code='HH-01',stock_qty=1,mapping_status='mapped' WHERE id=?",(line['id'],))
@@ -347,13 +484,13 @@ class OutputStockRemapTests(unittest.TestCase):
             invoice_id2,created,_,review = upsert_output_invoice(conn,remote,**options)
             self.assertEqual((invoice_id,False,False),(invoice_id2,created,review))
             after = [dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(invoice_id,))]
-            self.assertEqual([{**original[0],'product_code':'REMAP-B'},original[1]],after)
-            self.assertEqual(9,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
+            self.assertEqual(original,after)
+            self.assertEqual(9.5,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
         response = self.client.get('/api/invoice-valuation/export/output?from=2026-08-01&to=2026-08-31')
         self.assertEqual(200,response.status_code,response.get_json(silent=True))
         wb = load_workbook(io.BytesIO(response.data),data_only=True)
         rows = list(wb.active.values)
-        changed = next(r for r in rows if len(r)>4 and r[3]=='REMAP-B')
+        changed = next(r for r in rows if len(r)>4 and r[4]=='Hàng kiểm thử')
         unchanged = next(r for r in rows if len(r)>4 and r[4]=='Dòng nguồn thứ hai')
         self.assertEqual(('Hàng kiểm thử','Kg',1,20,20),changed[4:9])
         self.assertEqual(('HH-01','Dòng nguồn thứ hai','Kg',1,20,20),unchanged[3:9])
@@ -388,11 +525,10 @@ class OutputStockRemapTests(unittest.TestCase):
             # A second remap uses the current internal unit, never the invoice unit.
             self.file=export_workbook(conn,'2026-08-01','2026-08-31')
             second=preview_workbook(conn,self.edited(code='REMAP-C',name='Hoa cúng'))
-            self.assertTrue(second['can_confirm'],second)
-            self.assertEqual(('Bịch','kg'),(second['changes'][0]['old_unit'],second['changes'][0]['unit']))
-            confirm_preview(conn,second['token'],'Second cross unit',server.now_iso())
+            self.assertFalse(second['can_confirm'],second)
+            self.assertEqual([],second['changes'])
             stocks=canonical_available_stock(conn)
-            self.assertEqual((0,10,-7),tuple(stocks[c]['canonical_qty'] for c in ('HH-01','REMAP-B','REMAP-C')))
+            self.assertEqual((0,6,-3),tuple(stocks[c]['canonical_qty'] for c in ('HH-01','REMAP-B','REMAP-C')))
 
     def test_cross_unit_still_checks_target_stock_and_catalog_changes(self):
         with server.db() as conn:
@@ -405,7 +541,7 @@ class OutputStockRemapTests(unittest.TestCase):
             conn.execute("UPDATE inventory_transactions SET qty_in=1 WHERE product_code='REMAP-B'")
             self.file=export_workbook(conn,'2026-08-01','2026-08-31')
             preview=preview_workbook(conn,self.edited())
-            self.assertFalse(preview['can_confirm']);self.assertIn('sẽ âm',preview['errors'][0])
+            self.assertFalse(preview['can_confirm']);self.assertIn('Còn thiếu 3',preview['errors'][0])
 
     def test_bad_code_name_formula_and_missing_row(self):
         with server.db() as conn:
@@ -421,7 +557,7 @@ class OutputStockRemapTests(unittest.TestCase):
             with self.assertRaises(RemapError): confirm_preview(conn,p['token'],'Test',server.now_iso())
             with self.assertRaises(RemapError): preview_workbook(conn,self.edited())
             self.file=export_workbook(conn,'2026-08-01','2026-08-31')
-            p=preview_workbook(conn,self.edited()); self.assertFalse(p['can_confirm']); self.assertIn('sẽ âm',p['errors'][0])
+            p=preview_workbook(conn,self.edited()); self.assertFalse(p['can_confirm']); self.assertIn('Còn thiếu 3',p['errors'][0])
 
     def test_reversal_returns_stock_to_remapped_product(self):
         with server.db() as conn:

@@ -17,6 +17,7 @@ def main():
         fixture=OutputStockRemapTests(); fixture.setUp()
         with server.db() as conn:
             conn.execute("UPDATE products SET unit='Bịch' WHERE code='REMAP-B'")
+            conn.execute("UPDATE inventory_transactions SET qty_in=3.7 WHERE source_type='OPENING' AND product_code='HH-01'")
             batch,_=Seed.add_batch(conn,'2026-08-20',[{'product_code':'REMAP-C','qty':100}])
             conn.execute("UPDATE orders SET tax='KKKNT' WHERE batch_id=?",(batch,))
         print('SYNTHETIC_REMAP_READY',flush=True)

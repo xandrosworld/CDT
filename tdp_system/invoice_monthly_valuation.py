@@ -35,8 +35,14 @@ def monthly_average_report(conn, *, date_from, date_to, include_zero=False, incl
             item['opening_value'] = previous[item['product_code']]['closing_value']
         available_qty = number(item['opening_qty']) + number(item['input_qty'])
         available_value = number(item['opening_value']) + number(item['input_value'])
-        average = available_value / available_qty if available_qty != 0 else Decimal(0)
-        closing = money(number(item['closing_qty']) * average) if available_qty != 0 else available_value
+        # A return after month close can restore an item whose opening balance
+        # is zero. Its saved reversal cost is the only valuation basis then.
+        basis_qty, basis_value = available_qty, available_value
+        if basis_qty == 0 and number(item['reversal_qty']) > 0:
+            basis_qty = number(item['reversal_qty'])
+            basis_value += number(item['reversal_value'])
+        average = basis_value / basis_qty if basis_qty != 0 else Decimal(0)
+        closing = money(number(item['closing_qty']) * average) if basis_qty != 0 else available_value
         item.update(average_unit_cost=float(average.quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP)),
                     closing_value=float(closing), output_value=float(available_value - closing))
         # Chronological shortages and old moving-cost snapshots do not determine

@@ -37,8 +37,8 @@ const base='http://127.0.0.1:18802',out=path.join(__dirname,'exports','output_st
   await page.locator('[data-remap-confirm]').waitFor();
   assert((await page.locator('[data-remap-preview]').innerText()).includes('REMAP-B'));
   assert((await page.locator('[data-remap-preview]').innerText()).includes('→ Sang'));
-  assert((await page.locator('[data-remap-preview]').innerText()).includes('4 kg → 4 Bịch'));
-  assert((await page.locator('[data-remap-preview]').innerText()).includes('6 Bịch'));
+  assert((await page.locator('[data-remap-preview]').innerText()).includes('0,3 kg → 0,3 Bịch'));
+  assert((await page.locator('[data-remap-preview]').innerText()).includes('9,7 Bịch'));
   await page.screenshot({path:path.join(out,'01_xem_truoc_doi_ma.png'),fullPage:true});
   await page.locator('[data-remap-confirm] input').fill('Kiểm thử');
   await page.locator('[data-remap-confirm] button').click();

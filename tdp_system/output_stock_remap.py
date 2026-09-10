@@ -7,6 +7,7 @@ import time
 import uuid
 import zipfile
 from collections import defaultdict
+from decimal import Decimal
 
 from flask import jsonify, request, send_file
 from openpyxl import Workbook, load_workbook
@@ -54,6 +55,14 @@ CREATE TABLE IF NOT EXISTS output_stock_excel_sessions (
     token TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
     created REAL NOT NULL, result TEXT
 );
+CREATE TABLE IF NOT EXISTS output_stock_remap_parts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ledger_id INTEGER NOT NULL REFERENCES invoice_inventory_ledger(id),
+    product_code TEXT NOT NULL REFERENCES products(code),
+    qty REAL NOT NULL CHECK(qty >= 0), unit_cost REAL NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(ledger_id, product_code)
+);
 '''
 
 
@@ -65,8 +74,31 @@ def init_schema(conn):
     select = ','.join(f'COALESCE(m.{col},l.{col}) AS {col}'
                       if col in {'product_code','unit_cost'} else 'l.' + col for col in columns)
     conn.execute('DROP VIEW IF EXISTS invoice_inventory_effective_ledger')
-    conn.execute('CREATE VIEW IF NOT EXISTS invoice_inventory_effective_ledger AS SELECT ' + select +
+    conn.execute('DROP VIEW IF EXISTS invoice_inventory_remap_base_ledger')
+    conn.execute('CREATE VIEW invoice_inventory_remap_base_ledger AS SELECT ' + select +
                  ' FROM invoice_inventory_ledger l LEFT JOIN output_stock_remaps m ON m.ledger_id=l.id')
+    # A partial transfer partitions the original stock event without changing
+    # the invoice or append-only ledger. A later full reversal uses the same
+    # partition, with distinct event keys so valuation restores each component.
+    expressions = {
+        'id': '-2*p.id-CASE WHEN l.event_type=\'REVERSAL\' THEN 1 ELSE 0 END',
+        'product_code': 'p.product_code',
+        'qty_delta': "CASE WHEN l.event_type='POST' THEN -p.qty ELSE p.qty END",
+        'unit_cost': 'p.unit_cost',
+        'event_key': "l.event_key || ':stock:' || p.id",
+        'reverses_event_key': "CASE WHEN l.event_type='REVERSAL' THEN l.reverses_event_key || ':stock:' || p.id ELSE l.reverses_event_key END",
+    }
+    parts_select = ','.join(expressions.get(col,'l.'+col)+' AS '+col for col in columns)
+    conn.execute('''CREATE VIEW invoice_inventory_effective_ledger AS
+        SELECT l.* FROM invoice_inventory_remap_base_ledger l
+        WHERE NOT EXISTS (
+            SELECT 1 FROM output_stock_remap_parts p JOIN invoice_inventory_ledger original ON original.id=p.ledger_id
+            WHERE l.id=original.id OR (l.event_type='REVERSAL' AND l.reverses_event_key=original.event_key))
+        UNION ALL SELECT '''+parts_select+''' FROM output_stock_remap_parts p
+        JOIN invoice_inventory_ledger original ON original.id=p.ledger_id
+        JOIN invoice_inventory_remap_base_ledger l ON l.id=original.id
+          OR (l.event_type='REVERSAL' AND l.reverses_event_key=original.event_key)
+        WHERE p.qty>0''')
 
 
 class RemapError(ValueError):
@@ -101,12 +133,13 @@ def _snapshot(conn, start, end):
             i.subtotal,i.total_amount,i.tax_amount header_tax,i.buyer_name,i.buyer_tax_code,
             li.source_item_code,li.source_item_name,
             li.source_unit,li.qty,li.unit_price,li.amount,li.tax_rate,i.raw_json,
-            p.name,p.unit,COALESCE(m.revision,0) remap_revision
+            p.name,p.unit,COALESCE(part.revision,m.revision,0) remap_revision
           FROM invoice_inventory_effective_ledger l
           JOIN outgoing_source_invoices i ON i.id=l.source_invoice_id
           JOIN outgoing_source_invoice_items li ON li.id=l.source_line_id AND li.invoice_id=i.id
           JOIN products p ON p.code=l.product_code
           LEFT JOIN output_stock_remaps m ON m.ledger_id=l.id
+          LEFT JOIN output_stock_remap_parts part ON l.id=-2*part.id
           WHERE l.source_invoice_table='outgoing_source_invoices' AND l.direction='output'
             AND l.event_type='POST' AND i.source='minvoice' AND i.stock_status='posted'
             AND i.source_status_class='issued'
@@ -129,12 +162,15 @@ def _snapshot(conn, start, end):
                          r['qty'], r['unit_price'], r['amount'], tax_line['tax_rate'], tax_line['line_tax_amount'],
                          r['product_code'], r['name'], r['unit'], -r['qty_delta'], item['closing_qty']]
         rows.append(item)
-    return {'from': start, 'to': end, 'rows': rows, 'stock': report['items'],
+    snapshot = {'from': start, 'to': end, 'rows': rows, 'stock': report['items'],
             'catalog': [dict(r) for r in conn.execute('SELECT code,name,unit,tax FROM products ORDER BY code')],
             'closures': [dict(r) for r in conn.execute('SELECT period,status,revision FROM inventory_period_closures ORDER BY period')],
             'holds': [dict(r) for r in conn.execute("SELECT id,product_code,qty_out,status FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' ORDER BY id")],
             'local_invoices': [dict(r) for r in conn.execute("SELECT id,status,issued_invoice_number,issued_invoice_series,issued_invoice_date FROM outgoing_invoice_drafts WHERE status!='cancelled' ORDER BY id")],
             'openings': [dict(r) for r in conn.execute("SELECT id,txn_date,product_code,qty_in,qty_out,unit_cost FROM inventory_transactions WHERE source_type='OPENING' AND status='posted' ORDER BY id")]}
+    parts = [dict(r) for r in conn.execute('SELECT * FROM output_stock_remap_parts ORDER BY id')]
+    if parts: snapshot['parts'] = parts
+    return snapshot
 
 
 def _editable_period(conn, start):
@@ -163,6 +199,10 @@ def _source_hash(snapshot):
     # Export scope is saved server-side; the source hash still covers ALL stock
     # and source lines, including lines not included in a focused workbook.
     return _hash({k:v for k,v in snapshot.items() if k != 'exported_row_ids'})
+
+
+def _quantity_text(value):
+    return format(float(value), ',.6f').rstrip('0').rstrip('.').replace(',', '_').replace('.', ',').replace('_', '.')
 
 
 def export_workbook(conn, start, end, scope='all'):
@@ -218,7 +258,7 @@ def export_workbook(conn, start, end, scope='all'):
     ws.column_dimensions['A'].hidden = True
     for row, height in ((1,34),(2,34),(3,26),(4,46)): ws.row_dimensions[row].height = height
     ws['D4'].comment = Comment('Mã hóa đơn nguồn có thể trống. Mã nội bộ đang trừ kho ở cột L.', 'TDP')
-    ws['Q4'].comment = Comment('Sao chép đúng cặp mã + tên từ Danh muc ma hang vào Q–R. Mỗi dòng chuyển toàn bộ lượng ở O.', 'TDP')
+    ws['Q4'].comment = Comment('Chọn mã + tên mới ở Q–R. Chỉ chuyển đủ phần âm của mỗi mã, theo thứ tự hàng Excel; không chuyển toàn bộ lượng ở O.', 'TDP')
     ws['P4'].comment = Comment('Tồn lặp ở các dòng xuất cùng mã. Không cộng lặp; xem Tổng hợp hàng âm để đếm theo mã.', 'TDP')
     ws['J4'].comment = Comment('Thuế hóa đơn nguồn; có thể khác thuế danh mục trên báo cáo tồn.', 'TDP')
     summary = wb.create_sheet('Tổng hợp hàng âm')
@@ -255,7 +295,9 @@ def export_workbook(conn, start, end, scope='all'):
                  'Mã trên hóa đơn gốc có thể trống do nguồn M-Invoice không có mã; không có nghĩa là thiếu mã nội bộ.',
                  'File đổi mã giữ từng dòng xuất hóa đơn. Một mã có thể xuất nhiều dòng; không cộng lặp Tồn cuối kỳ.',
                  'Sheet Tổng hợp hàng âm gom mỗi mã một dòng. Lọc Thuế danh mục để so với báo cáo tồn; Thuế HĐ là nguồn riêng, có thể khác danh mục.',
-                 'Giữ nguyên số lượng nội bộ, dùng đơn vị của mã mới: ví dụ 35 Hộp chuyển thành 35 Bịch nếu mã mới là Bịch. Không quy đổi tỷ lệ.',
+                 'Chỉ chuyển phần tồn âm của mỗi mã một lần. Xét các dòng đã chọn từ trên xuống; mỗi dòng chuyển tối đa lượng trừ kho của dòng đó và dừng khi đủ phần âm.',
+                 'Ví dụ mã âm 64 Gói: dù chọn các dòng 64, 350 và 800, tổng chuyển chỉ 64. Bột tiêu âm 0,3 Kg chỉ chuyển 0,3.',
+                 'Phần chuyển dùng đơn vị của mã nhận, không quy đổi tỷ lệ. Phần xuất còn lại vẫn trừ mã cũ. KKKNT được bỏ qua.',
                  'Không đổi tên, đơn vị, lượng, tiền, thuế hay nội dung hóa đơn gốc.',
                  'Có thể lọc các dòng Tồn cuối kỳ âm; giữ nguyên các dòng không cần đổi. Không xóa dòng hoặc cột.',
                  'Tải file lên để xem trước đơn vị cũ → mới. Hệ thống kiểm tra mã/tên, tồn mã nhận, kỳ chốt và dữ liệu đã thay đổi.',
@@ -273,10 +315,32 @@ def export_workbook(conn, start, end, scope='all'):
 
 def _set_overrides(conn, changes, timestamp):
     for c in changes:
-        conn.execute('''INSERT INTO output_stock_remaps(ledger_id,product_code,revision,updated_at,unit_cost) VALUES(?,?,1,?,?)
-                       ON CONFLICT(ledger_id) DO UPDATE SET product_code=excluded.product_code,
-                       revision=output_stock_remaps.revision+1,updated_at=excluded.updated_at,unit_cost=excluded.unit_cost''',
-                     (c['ledger_id'], c['new_code'], timestamp, c.get('new_unit_cost')))
+        if c['ledger_id'] < 0:
+            part = conn.execute('SELECT * FROM output_stock_remap_parts WHERE id=?',(-c['ledger_id']//2,)).fetchone()
+            base_id = part['ledger_id']
+        else:
+            base_id = c['ledger_id']
+            part = None
+        base = conn.execute('SELECT * FROM invoice_inventory_remap_base_ledger WHERE id=?',(base_id,)).fetchone()
+        if not part and abs(c['qty'] + base['qty_delta']) < 1e-9:
+            conn.execute('''INSERT INTO output_stock_remaps(ledger_id,product_code,revision,updated_at,unit_cost) VALUES(?,?,1,?,?)
+                           ON CONFLICT(ledger_id) DO UPDATE SET product_code=excluded.product_code,
+                           revision=output_stock_remaps.revision+1,updated_at=excluded.updated_at,unit_cost=excluded.unit_cost''',
+                         (base_id, c['new_code'], timestamp, c.get('new_unit_cost')))
+            continue
+        if not part:
+            conn.execute('INSERT INTO output_stock_remap_parts(ledger_id,product_code,qty,unit_cost) VALUES(?,?,?,?)',
+                         (base_id,c['old_code'],-base['qty_delta'],c['old_unit_cost']))
+            part = conn.execute('SELECT * FROM output_stock_remap_parts WHERE ledger_id=? AND product_code=?',(base_id,c['old_code'])).fetchone()
+        remaining = Decimal(str(part['qty'])) - Decimal(str(c['qty']))
+        if remaining < 0:
+            raise RemapError('Lượng chuyển vượt phần xuất nội bộ còn lại; tải lại file để đối chiếu.')
+        conn.execute('UPDATE output_stock_remap_parts SET qty=?,revision=revision+1 WHERE id=?',(float(remaining),part['id']))
+        existing = conn.execute('SELECT * FROM output_stock_remap_parts WHERE ledger_id=? AND product_code=?',(base_id,c['new_code'])).fetchone()
+        new_qty = Decimal(str(c['qty'])) + (Decimal(str(existing['qty'])) if existing else 0)
+        conn.execute('''INSERT INTO output_stock_remap_parts(ledger_id,product_code,qty,unit_cost) VALUES(?,?,?,?)
+            ON CONFLICT(ledger_id,product_code) DO UPDATE SET qty=excluded.qty,unit_cost=excluded.unit_cost,revision=revision+1''',
+                     (base_id,c['new_code'],float(new_qty),c.get('new_unit_cost') or 0))
 
 
 def _evaluate(conn, snapshot, changes):
@@ -301,6 +365,12 @@ def _evaluate(conn, snapshot, changes):
                                       - holds.get('reserved_qty', 0)
                                       - holds.get('pending_sync_issued_qty', 0))
         errors = []
+        before = {r['product_code']:r for r in snapshot['stock']}
+        grouped = defaultdict(list)
+        returned = defaultdict(float)
+        for change in changes:
+            grouped[change['new_code']].append(change)
+            returned[change['old_code']] += change['qty']
         for c in changes:
             target = stocks[c['new_code']]
             c['old_closing_after'] = stocks[c['old_code']]['closing_qty']
@@ -309,7 +379,13 @@ def _evaluate(conn, snapshot, changes):
             if c['new_unit_cost'] < 0:
                 errors.append(f"Mã nhận {c['new_code']} có giá tồn không hợp lệ; đối chiếu tồn đầu và nhập trước khi chuyển.")
             if c['new_code'] not in exempt and target['closing_qty'] < -1e-9:
-                errors.append(f"Mã nhận {c['new_code']} sẽ âm {target['closing_qty']:g}; chọn mã khác hoặc giảm số dòng chuyển.")
+                code = c['new_code']; unit = c['unit']; selections = grouped[code]
+                total = sum(Decimal(str(r['qty'])) for r in selections)
+                positions = ', '.join(f"{r['excel_row']}: {_quantity_text(r['qty'])}" for r in selections)
+                credit = f"; đồng thời hoàn về {_quantity_text(returned[code])} {unit}" if returned[code] else ''
+                errors.append(f"{code} · {c['new_name']}: tồn cuối kỳ trước chuyển {_quantity_text(before[code]['closing_qty'])} {unit}{credit}. "
+                              f"Tổng lượng xử lý âm chuyển sang {_quantity_text(total)} {unit} (hàng Excel {positions}). "
+                              f"Còn thiếu {_quantity_text(-target['closing_qty'])} {unit}. Chọn mã nhận khác cho một số hàng Excel trên.")
             elif c['new_code'] not in exempt and future_available[c['new_code']] < -1e-9:
                 errors.append(f"Mã nhận {c['new_code']} không đủ tồn tại một thời điểm từ cuối kỳ trở đi, đã trừ dự thảo đang giữ. Chọn mã khác hoặc kiểm tra giao dịch tháng sau và dự thảo.")
         return sorted(set(errors))
@@ -345,7 +421,10 @@ def preview_workbook(conn, data):
         allowed_ids = set(snapshot.get('exported_row_ids', [r['id'] for r in snapshot['rows']]))
         originals = {r['id']: r for r in snapshot['rows'] if r['id'] in allowed_ids}
         products = {p['code']: p for p in snapshot['catalog']}
-        seen = set(); changes = []; errors = []
+        stocks = {r['product_code']:r for r in snapshot['stock']}
+        exempt = kkknt_codes(conn)
+        deficits = {code:max(Decimal(0),-Decimal(str(r['closing_qty']))) for code,r in stocks.items() if code not in exempt}
+        seen = set(); changes = []; errors = []; skipped = []
         for excel_row, cells in enumerate(ws.iter_rows(min_row=first_data_row), first_data_row):
             values = [None] * len(HEADERS)
             for cell, original_column in zip(cells,column_order):
@@ -360,22 +439,31 @@ def preview_workbook(conn, data):
             if [_excel_value(v) for v in values[:16]] != [_excel_value(v) for v in old['cells']]:
                 raise RemapError(f'Dòng {excel_row}: đã sửa cột gốc. Chỉ được đổi mã và tên nội bộ mới.')
             code, name = str(values[16] or '').strip(), str(values[17] or '').strip()
+            if code == old['product_code'] and name == old['name']: continue
+            remaining = deficits.get(old['product_code'],Decimal(0))
+            if remaining <= 0:
+                skipped.append({'excel_row':excel_row,'old_code':old['product_code'],'old_name':old['name'],
+                                'reason':'KKKNT: bỏ qua' if old['product_code'] in exempt else 'Đã đủ lượng xử lý âm hoặc mã không âm'})
+                continue
             p = products.get(code)
             if not p or name != p['name']:
                 expected = f'Tên đúng của mã {code}: {p["name"]}.' if p else f'Mã mới {code or "(trống)"} không có trong danh mục.'
                 errors.append(f'Hàng số {excel_row} trong Excel · {old["product_code"]} · {old["name"]}: mã/tên mới không khớp danh mục. {expected} Sao chép đúng cặp mã + tên từ Danh muc ma hang.'); continue
             if code == old['product_code']: continue
+            qty = min(remaining,Decimal(str(-old['qty_delta'])))
+            deficits[old['product_code']] -= qty
             changes.append({'ledger_id': key, 'line_id': old['source_line_id'], 'invoice_id': old['source_invoice_id'],
                             'old_code': old['product_code'], 'old_name': old['name'], 'new_code': code,
-                            'new_name': name, 'qty': -old['qty_delta'], 'old_unit': old['unit'],
+                            'new_name': name, 'qty': float(qty), 'old_unit': old['unit'],
+                            'source_stock_qty':-old['qty_delta'], 'old_unit_cost':stocks[old['product_code']]['average_unit_cost'],
                             'unit': p['unit'], 'excel_row': excel_row})
         if seen != set(originals): raise RemapError('File bị thiếu dòng. Giữ nguyên các dòng không cần đổi mã.')
-        if not changes and not errors: errors.append('Chưa có mã nội bộ nào thay đổi.')
+        if not changes and not errors: errors.append('Không có lượng tồn âm cần chuyển trong các dòng đã chọn. KKKNT được bỏ qua.')
         if changes and not errors: errors.extend(_evaluate(conn, snapshot, changes))
-        preview = {'snapshot': snapshot, 'changes': changes, 'errors': errors}
+        preview = {'snapshot': snapshot, 'changes': changes, 'errors': errors, 'mode':'deficit_only_v1'}
         preview_token = _store(conn, 'preview', preview)
         return {'token': preview_token, 'changes': changes, 'errors': errors, 'can_confirm': bool(changes) and not errors,
-                'from': snapshot['from'], 'to': snapshot['to']}
+                'from': snapshot['from'], 'to': snapshot['to'], 'skipped':skipped, 'mode':'deficit_only_v1'}
     except (KeyError, zipfile.BadZipFile, InvalidFileException, ParseError, ValueError, TypeError) as exc:
         if isinstance(exc, RemapError): raise
         raise RemapError('File không phải mẫu đổi mã đã tải từ hệ thống hoặc chứa dữ liệu không hợp lệ.') from exc
@@ -386,6 +474,8 @@ def preview_workbook(conn, data):
 def confirm_preview(conn, token, actor, timestamp):
     row, preview = _load(conn, token, 'preview', 900)
     if row['result']: return {**json.loads(row['result']), 'idempotent': True}
+    if preview.get('mode') != 'deficit_only_v1':
+        raise RemapError('Cách tính đã đổi sang chỉ xử lý tồn âm. Chọn lại file đã sửa ở bước 2 để xem đúng lượng trước khi xác nhận.')
     if not actor or len(actor) > 100: raise RemapError('Cần tên người xác nhận, tối đa 100 ký tự.')
     if preview['errors'] or not preview['changes']: raise RemapError('File còn lỗi hoặc chưa có thay đổi.')
     snapshot, changes = preview['snapshot'], preview['changes']
@@ -399,8 +489,11 @@ def confirm_preview(conn, token, actor, timestamp):
         for c in changes:
             # These are local mapping fields only. Source names, codes, amounts,
             # quantities, tax, raw source JSON and issued invoice headers stay intact.
-            conn.execute('UPDATE outgoing_source_invoice_items SET product_code=? WHERE id=? AND invoice_id=?',
-                         (c['new_code'], c['line_id'], c['invoice_id']))
+            # Split lines have several stock identities. Keep the source line's
+            # existing mapping instead of relabelling the whole issued line.
+            if c['ledger_id'] > 0 and not conn.execute('SELECT 1 FROM output_stock_remap_parts WHERE ledger_id=?',(c['ledger_id'],)).fetchone():
+                conn.execute('UPDATE outgoing_source_invoice_items SET product_code=? WHERE id=? AND invoice_id=?',
+                             (c['new_code'], c['line_id'], c['invoice_id']))
         conn.execute("INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at) VALUES('inventory.output.remap','excel',?,'ok',?,?,?)",
                      (token, 'Đổi mã nội bộ theo Excel', _json({'actor': actor, 'from': snapshot['from'], 'to': snapshot['to'], 'changes': changes}), timestamp))
         result = {'changed_lines': len(changes), 'idempotent': False}

@@ -531,13 +531,13 @@ def reverse_output_invoice(
     if not invoice:
         raise InvoiceInventoryError("Không tìm thấy hóa đơn đầu ra", code="not_found", status=404)
     original = conn.execute(
-        """SELECT * FROM invoice_inventory_effective_ledger
+        """SELECT * FROM invoice_inventory_remap_base_ledger
            WHERE direction='output' AND event_type='POST'
              AND source_invoice_table=? AND source_invoice_id=? ORDER BY source_line_index""",
         (OUTPUT_TABLE, safe_id),
     ).fetchall()
     reversed_count = int(conn.execute(
-        """SELECT COUNT(*) n FROM invoice_inventory_effective_ledger
+        """SELECT COUNT(*) n FROM invoice_inventory_remap_base_ledger
            WHERE direction='output' AND event_type='REVERSAL'
              AND source_invoice_table=? AND source_invoice_id=?""",
         (OUTPUT_TABLE, safe_id),
@@ -651,7 +651,7 @@ def invoice_inventory_trace(conn, direction: Any, invoice_id: int) -> dict[str, 
                   l.source_line_id,l.source_line_index,l.product_code,l.txn_date,l.qty_delta,
                   l.unit_cost,l.mapping_revision_id,l.confirmation_id,l.reverses_event_key,
                   l.status,l.created_at,c.action,c.note confirmation_note,c.created_at confirmed_at,
-                  p.name product_name,COALESCE(NULLIF(r.target_unit,''),p.unit) product_unit
+                  p.name product_name,COALESCE(NULLIF(p.unit,''),r.target_unit) product_unit
            FROM invoice_inventory_effective_ledger l
            JOIN invoice_inventory_confirmations c ON c.id=l.confirmation_id
            LEFT JOIN products p ON p.code=l.product_code
