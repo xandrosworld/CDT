@@ -200,7 +200,7 @@ def record_input_invoice_events(
 
 def _posted_input_trace_count(conn, invoice_id: int) -> int:
     return int(conn.execute(
-        """SELECT COUNT(*) n FROM invoice_inventory_ledger
+        """SELECT COUNT(*) n FROM invoice_inventory_effective_ledger
            WHERE direction='input' AND event_type='POST'
              AND source_invoice_table=? AND source_invoice_id=?""",
         (INPUT_TABLE, int(invoice_id)),
@@ -258,7 +258,7 @@ def invoice_stock_rows(conn, as_of: Any = "", *, include_zero: bool = False) -> 
                        SUM(CASE WHEN l.event_type='REVERSAL' THEN l.qty_delta ELSE 0 END)
                            reversal_qty,
                        SUM(l.qty_delta) net_qty
-                FROM invoice_inventory_ledger l
+                FROM invoice_inventory_effective_ledger l
                 WHERE l.status='posted' AND l.txn_date>=? AND l.txn_date<=?
                 GROUP BY l.product_code
             )
@@ -291,7 +291,7 @@ def _minimum_balance_from(conn, product_code: str, txn_date: str) -> float:
         (opening_source, product_code),
     ).fetchone()["qty"])
     rows = conn.execute(
-        """SELECT txn_date,SUM(qty_delta) delta FROM invoice_inventory_ledger
+        """SELECT txn_date,SUM(qty_delta) delta FROM invoice_inventory_effective_ledger
            WHERE status='posted' AND product_code=? AND txn_date>=?
            GROUP BY txn_date ORDER BY txn_date""",
         (product_code, opening_start),
@@ -355,7 +355,7 @@ def post_output_invoice(
             code="invalid_output_source",
         )
     existing = conn.execute(
-        """SELECT COUNT(*) n FROM invoice_inventory_ledger
+        """SELECT COUNT(*) n FROM invoice_inventory_effective_ledger
            WHERE direction='output' AND event_type='POST'
              AND source_invoice_table=? AND source_invoice_id=?""",
         (OUTPUT_TABLE, safe_id),
@@ -531,13 +531,13 @@ def reverse_output_invoice(
     if not invoice:
         raise InvoiceInventoryError("Không tìm thấy hóa đơn đầu ra", code="not_found", status=404)
     original = conn.execute(
-        """SELECT * FROM invoice_inventory_ledger
+        """SELECT * FROM invoice_inventory_effective_ledger
            WHERE direction='output' AND event_type='POST'
              AND source_invoice_table=? AND source_invoice_id=? ORDER BY source_line_index""",
         (OUTPUT_TABLE, safe_id),
     ).fetchall()
     reversed_count = int(conn.execute(
-        """SELECT COUNT(*) n FROM invoice_inventory_ledger
+        """SELECT COUNT(*) n FROM invoice_inventory_effective_ledger
            WHERE direction='output' AND event_type='REVERSAL'
              AND source_invoice_table=? AND source_invoice_id=?""",
         (OUTPUT_TABLE, safe_id),
@@ -652,7 +652,7 @@ def invoice_inventory_trace(conn, direction: Any, invoice_id: int) -> dict[str, 
                   l.unit_cost,l.mapping_revision_id,l.confirmation_id,l.reverses_event_key,
                   l.status,l.created_at,c.action,c.note confirmation_note,c.created_at confirmed_at,
                   p.name product_name,COALESCE(NULLIF(r.target_unit,''),p.unit) product_unit
-           FROM invoice_inventory_ledger l
+           FROM invoice_inventory_effective_ledger l
            JOIN invoice_inventory_confirmations c ON c.id=l.confirmation_id
            LEFT JOIN products p ON p.code=l.product_code
            LEFT JOIN invoice_mapping_revisions r ON r.id=l.mapping_revision_id

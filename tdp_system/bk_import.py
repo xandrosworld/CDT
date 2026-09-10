@@ -730,7 +730,7 @@ def _verify_posted_document(conn, document) -> int:
         (int(document["id"]),),
     ).fetchall()
     events = conn.execute(
-        """SELECT * FROM invoice_inventory_ledger
+        """SELECT * FROM invoice_inventory_effective_ledger
             WHERE direction='input' AND event_type='POST'
               AND source_invoice_table=? AND source_invoice_id=? ORDER BY source_line_index,id""",
         (BK_LEDGER_SOURCE_TABLE, int(document["id"])),
@@ -915,7 +915,7 @@ def _assert_no_negative_stock_after_reversal(
         events = conn.execute(
             f"""SELECT txn_date,direction,event_type,qty_delta,source_invoice_table,
                        source_invoice_id,source_line_index,id
-                  FROM invoice_inventory_ledger
+                  FROM invoice_inventory_effective_ledger
                  WHERE status='posted' AND product_code=? AND txn_date>=?{end_clause}
                  ORDER BY txn_date,
                    CASE
@@ -950,7 +950,7 @@ def _assert_reversal_valuation_safe(conn, reversal_date: str) -> None:
         end_clause = " AND txn_date<?"
         params.append(next_opening)
     row = conn.execute(
-        f"""SELECT MAX(txn_date) value FROM invoice_inventory_ledger
+        f"""SELECT MAX(txn_date) value FROM invoice_inventory_effective_ledger
              WHERE status='posted' AND txn_date>=?{end_clause}""",
         params,
     ).fetchone()
@@ -981,7 +981,7 @@ def _reverse_document(
         raise BKImportError("Không tìm thấy bộ BK", code="bk_document_not_found", status=404)
     original_count = _verify_posted_document(conn, document)
     existing_reversals = int(conn.execute(
-        """SELECT COUNT(*) n FROM invoice_inventory_ledger
+        """SELECT COUNT(*) n FROM invoice_inventory_effective_ledger
             WHERE direction='input' AND event_type='REVERSAL'
               AND source_invoice_table=? AND source_invoice_id=?""",
         (BK_LEDGER_SOURCE_TABLE, document_id),
@@ -1030,7 +1030,7 @@ def _reverse_document(
         conn, document_id=document_id, action="reversal", note=reason, timestamp=timestamp,
     )
     originals = conn.execute(
-        """SELECT * FROM invoice_inventory_ledger
+        """SELECT * FROM invoice_inventory_effective_ledger
             WHERE direction='input' AND event_type='POST'
               AND source_invoice_table=? AND source_invoice_id=? ORDER BY source_line_index,id""",
         (BK_LEDGER_SOURCE_TABLE, document_id),
@@ -1079,10 +1079,10 @@ def _reverse_document(
 def _document_payloads(conn, limit: int = 50) -> list[dict[str, Any]]:
     rows = conn.execute(
         """SELECT d.*,
-                  (SELECT COUNT(*) FROM invoice_inventory_ledger l
+                  (SELECT COUNT(*) FROM invoice_inventory_effective_ledger l
                     WHERE l.source_invoice_table=? AND l.source_invoice_id=d.id
                       AND l.event_type='POST') posted_lines,
-                  (SELECT COUNT(*) FROM invoice_inventory_ledger l
+                  (SELECT COUNT(*) FROM invoice_inventory_effective_ledger l
                     WHERE l.source_invoice_table=? AND l.source_invoice_id=d.id
                       AND l.event_type='REVERSAL') reversal_lines
              FROM bk_import_documents d ORDER BY d.id DESC LIMIT ?""",

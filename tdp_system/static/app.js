@@ -2640,7 +2640,7 @@
       var status = n(item.pending_qty) > 0
         ? '<span class="tag tag-warn">Còn chờ</span>'
         : n(item.invoiceable_qty) > 0
-          ? '<span class="tag tag-ok">Đủ lượng</span>'
+          ? '<span class="tag tag-ok">' + (item.negative_stock_allowed ? 'KKKNT · được phép âm' : 'Đủ lượng') + '</span>'
           : n(item.drafted_qty) > 0
             ? '<span class="tag">Đang giữ trong dự thảo</span>'
             : '<span class="tag tag-ok">Đã phát hành</span>';
@@ -2672,6 +2672,7 @@
       '<button class="btn btn-small btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button></div>',
       '<div class="card-body">',
       !approved ? '<div class="warning-summary">Đơn chưa duyệt. <button class="btn btn-outline" data-view="orders">Mở đơn để sửa / duyệt</button></div>' : '',
+      (readiness.negative_stock_warnings || []).length ? '<div class="warning-summary">KKKNT vẫn được lập bảng kê dù tồn âm: ' + readiness.negative_stock_warnings.map(function(r) { return esc(r.product_code) + ' (' + stockQty(r.qty) + ' ' + esc(r.unit) + ')'; }).join(' · ') + '. Số âm vẫn được theo dõi và chuyển sang tháng sau.</div>' : '',
       orderIssues.length ? '<div class="error-summary" id="invoice-order-issues"><strong>Còn ' + orderIssues.length + ' dòng đơn cần sửa trước khi lập hóa đơn.</strong>' + orderIssues.map(function(item) {
         return '<div class="stock-block-row"><span><strong>' + esc(item.product_name || item.product_code) + '</strong> · ' + esc(item.product_code) + ' · Bếp ' + esc(item.kitchen) + (item.source_row ? ' · Dòng Excel ' + esc(item.source_row) : '') + '<br>' + (item.messages || []).map(esc).join('<br>') + '</span><button class="btn btn-outline" data-action="resolve-invoice-order" data-id="' + item.order_id + '">Sửa dòng này</button></div>';
       }).join('') + '</div>' : '',
@@ -2684,7 +2685,7 @@
       stockBlocks.length
         ? '<div class="error-summary" id="outgoing-stock-blocks" style="margin-top:14px"><strong>Chưa tạo được file: ' + stockBlocks.length + ' mã tồn âm.</strong><p>Mở từng mã, đối chiếu tồn đầu và nhập/xuất, sửa đúng nguồn rồi bấm Kiểm tra lại.</p>' + stockBlocks.map(function(r) { return '<div class="stock-block-row"><span>' + esc(r.product_name || r.product_code) + ' (' + esc(r.product_code) + ') đang âm <strong>' + stockQty(-r.qty) + ' ' + esc(r.unit || '') + '</strong>. Cần kiểm tra trước khi tạo file.</span><button class="btn btn-outline" data-action="show-stock-cause" data-code="' + esc(r.product_code) + '">Xử lý ' + esc(r.product_code) + '</button></div>'; }).join('') + '</div>'
         : allReady
-        ? '<div class="ok-summary" style="margin-top:14px">Đã đủ đầu vào cho toàn bộ phần còn lại.</div>'
+        ? '<div class="ok-summary" style="margin-top:14px">Toàn bộ phần còn lại đủ điều kiện về tồn; hàng KKKNT được phép âm.</div>'
         : '<div class="warning-summary" style="margin-top:14px">' + (approved ? 'Có thể tạo dự thảo cho phần đủ lượng.' : 'Duyệt đơn trước khi tạo dự thảo cho phần đủ lượng.') + ' Phần còn thiếu giữ lại để lập tiếp.</div>',
       '</div><div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Tổng cần</th><th>Đã dự thảo</th><th>Đã phát hành</th><th>Có thể lập</th><th>Còn thiếu</th></tr></thead><tbody>',
       contractorRows || '<tr><td colspan="6"><div class="empty">Không có nhà thầu cần lập hóa đơn trong đơn hàng này.</div></td></tr>',
@@ -3050,10 +3051,14 @@
       (close && !close.error && (close.unposted_input_count || close.unposted_output_count) ? '<div class="compact-controls">' +
         (close.unposted_input_count ? '<button class="btn btn-primary" data-bulk-direction="input">Ghi kho đầu vào hàng loạt</button><button class="btn btn-outline" data-pending-direction="input">Xem đầu vào còn chờ</button>' : '') +
         (close.unposted_output_count ? '<button class="btn btn-primary" data-bulk-direction="output">Ghi kho đầu ra hàng loạt</button><button class="btn btn-outline" data-pending-direction="output">Xem đầu ra còn chờ</button>' : '') + '</div>' : '') +
-      (close && close.problem_items && close.problem_items.length ? '<div class="table-wrap"><table><thead><tr><th>Mã cần kiểm tra</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th></tr></thead><tbody>' + close.problem_items.map(function(item) {
-        return '<tr class="invoice-row-issue"><td>' + esc(item.product_code) + '</td><td>' + esc(item.product_name) + '</td><td>' + esc(item.unit) + '</td><td>' + stockQty(item.closing_qty) + '</td><td>' + stockMoney(item.closing_value) + '</td></tr>';
+      (close && close.problem_items && close.problem_items.length ? '<div class="form-actions"><button class="btn btn-primary" data-close-remap>Xuất · Sửa mã nội bộ bằng Excel</button><button class="btn btn-outline" data-close-bk>Bảng kê mua vào bổ sung</button></div><div class="table-wrap"><table><thead><tr><th>Mã cần kiểm tra</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th><th>Xử lý</th></tr></thead><tbody>' + close.problem_items.map(function(item) {
+        return '<tr class="invoice-row-issue"><td>' + esc(item.product_code) + '</td><td>' + esc(item.product_name) + '</td><td>' + esc(item.unit) + '</td><td>' + stockQty(item.closing_qty) + '</td><td>' + stockMoney(item.closing_value) + '</td><td>' + (item.negative_stock_allowed ? 'KKKNT · được chuyển tồn âm' : 'Đối chiếu tồn đầu hoặc sửa mã xuất') + '</td></tr>';
       }).join('') + '</tbody></table></div>' : '');
     dialog.querySelector('.close-period-dialog').onclick = function() { if (!state.inventoryCloseBusy) dialog.close(); };
+    var remapButton = dialog.querySelector('[data-close-remap]');
+    if (remapButton) remapButton.onclick = function() { dialog.close(); openOutputStockRemap(close.date_from, close.date_to); };
+    var bkButton = dialog.querySelector('[data-close-bk]');
+    if (bkButton) bkButton.onclick = function() { dialog.close(); state.inventoryDataToolsOpen = true; navigate('inventory'); document.getElementById('inventoryDataTools')?.scrollIntoView(); };
     dialog.querySelector('#inventoryClosePeriod').onchange = async function(event) {
       if (state.inventoryCloseBusy || !/^\d{4}-\d{2}$/.test(event.target.value)) return;
       state.inventoryClosePeriod = event.target.value; state.inventoryMonthClose = null;
@@ -3135,7 +3140,7 @@
       esc(statusLabel) + '</span></div><div class="inventory-close-totals"><span><small>Số mặt hàng</small><strong>' +
       stockQty(close.nonzero_item_count) + '</strong></span><span><small>Tổng lượng tồn cuối</small><strong>' +
       esc(Object.keys(close.qty_by_unit || {}).map(function (unit) { return stockQty(close.qty_by_unit[unit]) + " " + unit; }).join(" · ") || stockQty(close.total_qty)) + '</strong></span><span><small>Tổng giá trị tồn cuối</small><strong>' +
-      stockMoney(close.total_value) + '</strong></span></div>' + replacementWarning + movementWarning + unpostedWarning + issueHtml +
+      stockMoney(close.total_value) + '</strong></span></div>' + (close.kkknt_negative_count ? '<p class="warning-summary">Có ' + close.kkknt_negative_count + ' mã KKKNT âm: được chuyển nguyên số âm sang tháng sau; có thể lập bảng kê mua vào bổ sung.</p>' : '') + replacementWarning + movementWarning + unpostedWarning + issueHtml +
       '</div><div class="inventory-close-action">' + (action ? '<label>Người xác nhận<input id="inventoryCloseActor" class="input-date" type="text" maxlength="100" placeholder="Nhập họ tên" value="' + esc(state.inventoryCloseActor) + '"></label>' : '') + action + '</div></div>' +
       '<details class="inventory-close-history"><summary>Lịch sử chốt / mở tháng (50 lần gần nhất)</summary><div class="table-wrap"><table><thead><tr><th>Thời gian</th><th>Thao tác</th><th>Người xác nhận</th></tr></thead><tbody>' + (history || '<tr><td colspan="3">Chưa có lịch sử chốt tháng này.</td></tr>') + '</tbody></table></div><small>Tên do người thao tác nhập khi xác nhận; không phải tài khoản đăng nhập riêng.</small></details>';
   }
@@ -3189,6 +3194,7 @@
         return '<button class="btn ' + (item[0] === 'output' ? 'btn-primary' : 'btn-outline') + '" data-action="preview-inventory-report" data-kind="' + item[0] + '"' + (valid ? '' : ' disabled') + '>' + item[1] + '</button>';
       }).join(''),
       '<button class="btn btn-outline" data-action="download-document" data-url="/api/invoice-valuation/export/closing', exportQuery, '"', valid ? '' : ' disabled', '>Tải Excel tồn trong kỳ</button>',
+      '<button class="btn btn-primary" data-action="open-output-stock-remap"', valid ? '' : ' disabled', '>Xuất · Đổi mã nội bộ qua Excel</button>',
       '</div>', valid ? '' : '<p class="error-summary">Chọn đủ ngày; Từ ngày không được lớn hơn Đến ngày.</p>', '</div>',
       inventoryDataToolsHtml()
     ]);
@@ -3227,6 +3233,14 @@
   }
 
   var inventoryPreviewSerial = 0;
+  function openOutputStockRemap(from, to) {
+    window.TdpOutputStockRemap({api:api, downloadFile:downloadFile, esc:esc, from:from, to:to, onApplied:async function() {
+      state.inventoryValuation = null; state.inventoryMonthClose = null;
+      state.invoiceWorkbench = null; state.invoiceListing = null;
+      await loadData();
+    }});
+  }
+
   async function previewInventoryReport(button) {
     var serial = ++inventoryPreviewSerial, from = state.inventoryFrom, to = state.inventoryTo;
     if (!from || !to || from > to) { showToast('Khoảng ngày chưa hợp lệ.', true); return; }
@@ -6375,6 +6389,7 @@
       return;
     }
     if (action === 'preview-inventory-report') { await previewInventoryReport(button); return; }
+    if (action === 'open-output-stock-remap') { openOutputStockRemap(state.inventoryFrom, state.inventoryTo); return; }
     if (action === 'show-all-output-invoices') {
       state.invoiceDirection = 'output'; state.invoiceStatus = 'all';
       state.invoiceLineFilter = 'all'; state.invoicePending = false;

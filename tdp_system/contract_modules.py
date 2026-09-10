@@ -4561,7 +4561,12 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso) -> dict:
         code: max(raw_available.get(code, 0) + released.get(code, 0), 0)
         for code in set(raw_available) | set(released)
     }
-    demand_codes = {item["product_code"] for item in orders}
+    try:
+        from .stock_tax_policy import exempt_order_codes
+    except ImportError:
+        from stock_tax_policy import exempt_order_codes
+    exempt = exempt_order_codes(conn, orders)
+    demand_codes = {item["product_code"] for item in orders} - exempt
     unresolved_holds = {
         code: -(raw_available.get(code, 0) + released.get(code, 0))
         for code in demand_codes
@@ -4604,7 +4609,7 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso) -> dict:
             )
         remaining = max(demand - locked, 0)
         have = available.get(item["product_code"], 0)
-        qty = min(remaining, have)
+        qty = remaining if item['product_code'] in exempt else min(remaining, have)
         available[item["product_code"]] = max(have - qty, 0)
         if qty > 1e-9:
             # Each tax workbook is imported and issued separately. Keep its

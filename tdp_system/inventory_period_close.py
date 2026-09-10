@@ -195,7 +195,14 @@ def inventory_period_close_preview(
             str(error), code=error.code, status=error.status,
         ) from None
 
-    source_hash = _source_hash(report)
+    try:
+        from .stock_tax_policy import kkknt_codes
+    except ImportError:
+        from stock_tax_policy import kkknt_codes
+    exempt = kkknt_codes(conn)
+    for item in report['items']:
+        item['negative_stock_allowed'] = item['product_code'] in exempt
+    source_hash = _stable_hash({'report': _source_hash(report), 'kkknt_codes': sorted(exempt)})
     target_rows = _opening_rows(conn, next_period)
     target_hash = _stable_hash(target_rows)
     closure_row = conn.execute(
@@ -207,7 +214,7 @@ def inventory_period_close_preview(
     ).fetchone()
     next_date_to = _period_bounds(next_period)[1]
     next_movement_count = int(conn.execute(
-        """SELECT COUNT(*) n FROM invoice_inventory_ledger
+        """SELECT COUNT(*) n FROM invoice_inventory_effective_ledger
              WHERE status='posted' AND txn_date>=? AND txn_date<=?""",
         (next_period + "-01", next_date_to),
     ).fetchone()["n"])
@@ -217,6 +224,10 @@ def inventory_period_close_preview(
         issues.append(f"Chỉ chốt sau khi tháng {_period_label(safe_period)} đã kết thúc")
     invalid_items = [
         item for item in report["items"] if item.get("valuation_status") != "ok"
+        and not (item['product_code'] in exempt
+                 and item.get('valuation_status') in {'negative_opening_review', 'pending_source_cost'}
+                 and item.get('average_unit_cost', 0) >= 0
+                 and (item['closing_qty'] != 0 or abs(item['closing_value']) <= float(MONEY_EPSILON)))
     ]
     if invalid_items:
         issues.append(
@@ -227,8 +238,9 @@ def inventory_period_close_preview(
         if _decimal(item.get("closing_qty"), "Tồn cuối") < -QTY_EPSILON
         or _decimal(item.get("closing_value"), "Giá trị tồn cuối") < -MONEY_EPSILON
     ]
-    if negative_items:
-        issues.append(f"Có {len(negative_items)} mã hàng bị âm tồn cuối")
+    blocked_negative_items = [item for item in negative_items if item['product_code'] not in exempt]
+    if blocked_negative_items:
+        issues.append(f"Có {len(blocked_negative_items)} mã hàng có thuế hoặc chưa xác định thuế bị âm tồn cuối")
     if downstream:
         issues.append(
             f"Tháng {_period_label(next_period)} đã chốt tiếp; phải mở tháng sau trước"
@@ -311,7 +323,8 @@ def inventory_period_close_preview(
         "unposted_input_count": unposted_input_count,
         "unposted_output_count": unposted_output_count,
         "issues": issues,
-        "problem_items": [{key: item.get(key) for key in ('product_code', 'product_name', 'unit', 'closing_qty', 'closing_value', 'valuation_status')}
+        "kkknt_negative_count": sum(item['product_code'] in exempt for item in negative_items),
+        "problem_items": [{key: item.get(key) for key in ('product_code', 'product_name', 'unit', 'closing_qty', 'closing_value', 'valuation_status', 'negative_stock_allowed')}
                           for item in report['items'] if item in invalid_items or item in negative_items],
         "can_close": not issues and not already_current,
         "can_reopen": bool(closure_row and closure_row["status"] == "closed" and not downstream),
@@ -372,7 +385,7 @@ def close_inventory_period(
         incoming_codes.add(code)
         qty = _decimal(item["closing_qty"], "Tồn cuối")
         value = _decimal(item["closing_value"], "Giá trị tồn cuối")
-        if qty < -QTY_EPSILON or value < -MONEY_EPSILON:
+        if (qty < -QTY_EPSILON or value < -MONEY_EPSILON) and not item.get('negative_stock_allowed'):
             raise InventoryPeriodCloseError(
                 f"Mã {code} bị âm tồn cuối; chưa chuyển sang tháng sau",
                 code="negative_closing",

@@ -248,6 +248,11 @@ class InvoiceWorkbenchError(ValueError):
 def init_invoice_workbench_schema(conn) -> None:
     conn.executescript(INVOICE_WORKBENCH_SCHEMA)
     try:
+        from .output_stock_remap import init_schema as init_remap_schema
+    except ImportError:
+        from output_stock_remap import init_schema as init_remap_schema
+    init_remap_schema(conn)
+    try:
         from invoice_line_groups import SCHEMA
     except ImportError:
         from .invoice_line_groups import SCHEMA

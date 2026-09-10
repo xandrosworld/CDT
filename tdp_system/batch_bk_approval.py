@@ -135,11 +135,11 @@ def prepare(conn, batch_id):
             'unit_cost': float(cost), 'amount': float((qty*cost).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)),
             'source_party': line.get('supplier') or seller,
             'note': f'Duyệt đơn và bảng kê; dòng nguồn {row_ref}; giá BK {rate * 100}% giá bán.'})
-        matches = conn.execute("""SELECT DISTINCT i.invoice_series,i.invoice_number FROM invoice_inventory_ledger l
+        matches = conn.execute("""SELECT DISTINCT i.invoice_series,i.invoice_number FROM invoice_inventory_effective_ledger l
             JOIN msmi_invoices i ON i.id=l.source_invoice_id
             WHERE l.source_invoice_table='msmi_invoices' AND l.direction='input' AND l.status='posted'
               AND l.event_type='POST' AND l.product_code=? AND l.txn_date=?
-              AND NOT EXISTS (SELECT 1 FROM invoice_inventory_ledger r
+              AND NOT EXISTS (SELECT 1 FROM invoice_inventory_effective_ledger r
                   WHERE r.reverses_event_key=l.event_key AND r.status='posted')""",
             (product['code'], line['work_date'])).fetchall()
         if matches:

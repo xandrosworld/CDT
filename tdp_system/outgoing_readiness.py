@@ -22,6 +22,11 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.page import PageMargins
 
 try:
+    from .stock_tax_policy import exempt_order_codes
+except ImportError:
+    from stock_tax_policy import exempt_order_codes
+
+try:
     from invoice_inventory import invoice_stock_rows, _minimum_balance_from, selected_opening_snapshot
     from template_workbook import safe_workbook_bytes
 except ImportError:  # pragma: no cover - package invocation
@@ -354,7 +359,9 @@ def invoice_order_issues(orders):
 def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     """Read-only recheck before handing off a file or saving a remote draft."""
     required = defaultdict(float)
-    for line in conn.execute("SELECT product_code,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)):
+    lines = conn.execute("SELECT product_code,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    exempt = exempt_order_codes(conn, lines)
+    for line in lines:
         tax_error = invoice_tax_error(line['tax'])
         if tax_error:
             raise OutgoingReadinessError(f"Mã {line['product_code']}: {tax_error}", code='invalid_invoice_tax')
@@ -371,6 +378,8 @@ def validate_draft_export_stock(conn, draft_id, invoice_date=""):
         raise OutgoingReadinessError("Phần giữ tồn không khớp dự thảo; cần tính lại trước khi tải/gửi hóa đơn", code="draft_reservation_mismatch")
     stock = canonical_available_stock(conn, invoice_date)
     for code, qty in required.items():
+        if code in exempt:
+            continue
         available = max(stock.get(code, {}).get("raw_available_qty", 0) + held[code], 0)
         if qty > available + EPSILON:
             raise OutgoingReadinessError(
@@ -385,7 +394,8 @@ def validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, in
     Matching an already posted M-Invoice must release only this draft's hold,
     not deduct the same physical invoice twice. Other drafts keep their holds.
     """
-    lines = conn.execute("SELECT product_code,qty FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    lines = conn.execute("SELECT product_code,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    exempt = exempt_order_codes(conn, lines)
     if not lines or any(not math.isfinite(float(r["qty"])) or float(r["qty"]) <= 0 for r in lines):
         raise OutgoingReadinessError("Dự thảo thiếu dòng hàng hoặc có số lượng không hợp lệ", code="invalid_draft_quantity")
     conn.execute("SAVEPOINT validate_issued_stock")
@@ -405,6 +415,8 @@ def validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, in
             required[line["product_code"]] += float(line["qty"])
         shortages = []
         for code, quantity in required.items():
+            if code in exempt:
+                continue
             remaining = stock.get(code, {}).get("raw_available_qty", -quantity)
             if remaining < -EPSILON:
                 available = max(quantity + remaining, 0)
@@ -481,6 +493,7 @@ def _project_rows(
     stock = canonical_available_stock(conn)
     available = {code: item["available_qty"] for code, item in stock.items()}
     allocated = allocation_by_order(conn, batch_ids)
+    exempt = exempt_order_codes(conn, orders)
     rows: list[dict[str, Any]] = []
     for item in orders:
         demand = _net_delivered(item)
@@ -497,7 +510,7 @@ def _project_rows(
         remaining = max(demand - drafted - issued, 0)
         code = str(item["product_code"]).strip()
         have = max(available.get(code, 0), 0)
-        invoiceable = min(remaining, have)
+        invoiceable = remaining if code in exempt else min(remaining, have)
         pending = max(remaining - invoiceable, 0)
         available[code] = max(have - invoiceable, 0)
         unit_price = _vnd(item.get("sell_price"))
@@ -523,6 +536,7 @@ def _project_rows(
                 if pending > EPSILON else ""
             ),
             "available_before": have,
+            "negative_stock_allowed": code in exempt,
             "demand_value": _vnd(demand, unit_price),
             "drafted_value": _vnd(drafted, unit_price),
             "issued_value": _vnd(issued, unit_price),
@@ -602,7 +616,7 @@ def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[st
                   COALESCE(i.invoice_date,o.invoice_date,l.txn_date) invoice_date,
                   COALESCE(i.id,o.id) linked_invoice_id,
                   COALESCE(c.note,'') note
-           FROM invoice_inventory_ledger l
+           FROM invoice_inventory_effective_ledger l
            LEFT JOIN msmi_invoices i ON l.source_invoice_table='msmi_invoices' AND i.id=l.source_invoice_id
            LEFT JOIN outgoing_source_invoices o ON l.source_invoice_table='outgoing_source_invoices' AND o.id=l.source_invoice_id
            LEFT JOIN invoice_inventory_confirmations c ON c.id=l.confirmation_id
@@ -652,10 +666,12 @@ def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:
     stock = canonical_available_stock(conn)
     released = _replaceable_batch_holds(conn, batch_id)
     blocking_issues = []
+    exempt = exempt_order_codes(conn, orders)
+    negative_warnings = []
     for code in sorted({o['product_code'] for o in orders}):
         remaining = stock.get(code,{}).get('raw_available_qty',0) + released.get(code,0)
         if remaining < -EPSILON:
-            blocking_issues.append({'product_code':code,'qty':remaining,
+            (negative_warnings if code in exempt else blocking_issues).append({'product_code':code,'qty':remaining,
                                     'product_name': stock.get(code, {}).get('product_name', ''),
                                     'unit': stock.get(code, {}).get('unit', ''),
                                     'message':f'Tồn {code} đang âm {abs(remaining):g}. Cần đối chiếu kho trước khi tạo file.'})
@@ -666,6 +682,7 @@ def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:
         "contractors": _contractor_summaries(rows),
         "rows": rows,
         "blocking_issues": blocking_issues,
+        "negative_stock_warnings": negative_warnings,
         "order_issues": invoice_order_issues(all_orders),
         "stock_basis": "OPENING + invoice_inventory_ledger − active local holds",
     }

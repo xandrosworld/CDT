@@ -167,7 +167,7 @@ def moving_average_report(
             state["negative_opening"] = state["qty"] < -EPSILON
 
     ledger = conn.execute(
-        """SELECT l.* FROM invoice_inventory_ledger l
+        """SELECT l.* FROM invoice_inventory_effective_ledger l
            WHERE l.status='posted' AND l.txn_date>=? AND l.txn_date<=?
            ORDER BY l.txn_date,
                     CASE
@@ -186,10 +186,16 @@ def moving_average_report(
     except ImportError:
         from invoice_output_policy import source_quantity_invoice_ids
     quantity_invoice_ids = source_quantity_invoice_ids(conn)
+    try:
+        from .stock_tax_policy import kkknt_codes
+    except ImportError:
+        from stock_tax_policy import kkknt_codes
+    exempt = kkknt_codes(conn)
     def quantity_post(row):
-        return (row['source_invoice_table'] == 'outgoing_source_invoices'
-                and row['source_invoice_id'] in quantity_invoice_ids and row['direction'] == 'output')
-    quantity_codes = {str(r['product_code']) for r in ledger if quantity_post(r)}
+        return row['direction'] == 'output' and (row['product_code'] in exempt or
+                (row['source_invoice_table'] == 'outgoing_source_invoices'
+                 and row['source_invoice_id'] in quantity_invoice_ids))
+    quantity_codes = {str(r['product_code']) for r in ledger if quantity_post(r)} | exempt
 
     def apply(row, in_period: bool) -> None:
         state = states[str(row["product_code"])]
@@ -215,7 +221,7 @@ def moving_average_report(
             source = conn.execute(
                 """SELECT direction,event_type,source_invoice_table,source_invoice_id,
                           source_line_id,product_code,qty_delta,unit_cost
-                     FROM invoice_inventory_ledger WHERE event_key=?""",
+                     FROM invoice_inventory_effective_ledger WHERE event_key=?""",
                 (reference,),
             ).fetchone()
             if (
@@ -232,7 +238,7 @@ def moving_average_report(
                     code="input_reversal_source_invalid",
                 )
             qty_out = -delta
-            if state["qty"] + EPSILON < qty_out or state["qty"] <= EPSILON:
+            if (state["qty"] + EPSILON < qty_out or state["qty"] <= EPSILON) and state['product_code'] not in exempt:
                 raise InvoiceValuationError(
                     f"Mã {state['product_code']} âm kho khi hoàn tác nhập tại {row['txn_date']}",
                     code="negative_stock",
@@ -245,7 +251,7 @@ def moving_average_report(
             amount = _money(delta * cost)
             state["qty"] += delta
             state["value"] += amount
-            if state["value"] < -MONEY_SCALE:
+            if state["value"] < -MONEY_SCALE and state['product_code'] not in exempt:
                 raise InvoiceValuationError(
                     f"Mã {state['product_code']} âm giá trị kho khi hoàn tác nhập tại {row['txn_date']}",
                     code="negative_inventory_value",
@@ -287,7 +293,7 @@ def moving_average_report(
             if original:
                 cost, original_amount = original
                 original_row = conn.execute(
-                    "SELECT ABS(qty_delta) qty FROM invoice_inventory_ledger WHERE event_key=?",
+                    "SELECT ABS(qty_delta) qty FROM invoice_inventory_effective_ledger WHERE event_key=?",
                     (reference,),
                 ).fetchone()
                 original_qty = _decimal(original_row["qty"], "SL xuất gốc") if original_row else Decimal(0)
@@ -296,7 +302,7 @@ def moving_average_report(
                     state['pending_output_events'].discard(reference)
             else:
                 source = conn.execute(
-                    "SELECT unit_cost FROM invoice_inventory_ledger WHERE event_key=?",
+                    "SELECT unit_cost FROM invoice_inventory_effective_ledger WHERE event_key=?",
                     (reference,),
                 ).fetchone()
                 stored_cost = _decimal(source["unit_cost"], "Giá vốn xuất gốc") if source else Decimal(0)

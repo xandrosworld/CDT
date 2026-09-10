@@ -19,7 +19,7 @@ def monthly_average_report(conn, *, date_from, date_to, include_zero=False, incl
     report = moving_average_report(conn, date_from=start, date_to=end, include_zero=True, include_events=False)
     opening_date = report['opening_date']
     if not opening_date:
-        earliest = conn.execute("SELECT MIN(txn_date) FROM invoice_inventory_ledger WHERE status='posted'").fetchone()[0]
+        earliest = conn.execute("SELECT MIN(txn_date) FROM invoice_inventory_effective_ledger WHERE status='posted'").fetchone()[0]
         opening_date = earliest or start
     previous = {}
     if opening_date[:7] < start[:7]:

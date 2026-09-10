@@ -4934,6 +4934,12 @@ register_inventory_period_close_routes(app, {
     "now_iso": now_iso,
 })
 
+try:
+    from .output_stock_remap import register_routes as register_output_stock_remap_routes
+except ImportError:
+    from output_stock_remap import register_routes as register_output_stock_remap_routes
+register_output_stock_remap_routes(app, {'db': db, 'now_iso': now_iso})
+
 register_bk_import_routes(app, {
     "db": db,
     "now_iso": now_iso,
