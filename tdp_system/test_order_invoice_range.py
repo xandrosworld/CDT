@@ -41,6 +41,31 @@ class OrderInvoiceRangeTests(unittest.TestCase):
         again=self.request();self.assertEqual(again.status_code,200)
         with server.db() as c:self.assertEqual(c.serialize(),before)
 
+    def test_new_stock_fills_remainder_and_repeat_keeps_same_holds(self):
+        self.seed();self.assertEqual(self.request().status_code,200)
+        with server.db() as c:
+            c.execute("UPDATE inventory_transactions SET qty_in=10 WHERE source_type='OPENING'")
+        rows=self.excel_rows(self.request())
+        self.assertEqual(rows[0][3],10)
+        with server.db() as c:
+            self.assertEqual(c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],10)
+            before=c.serialize()
+        self.assertEqual(self.request().status_code,200)
+        with server.db() as c:self.assertEqual(c.serialize(),before)
+
+    def test_fractional_remainder_combines_with_later_day_at_same_sale_price(self):
+        with server.db() as c:
+            self.add_opening(c,3)
+            self.add_batch(c,'2026-09-01',[{'qty':.46,'sell_price':20000}])
+        self.assertEqual(self.excel_rows(self.request())[0][3],.4)
+        with server.db() as c:before=c.serialize()
+        self.assertEqual(self.request().status_code,200)
+        with server.db() as c:
+            self.assertEqual(c.serialize(),before)
+            self.add_batch(c,'2026-09-02',[{'qty':.46,'sell_price':20000}])
+        rows=self.excel_rows(self.request())
+        self.assertEqual((rows[0][3],rows[0][4]),(.9,20000))
+
     def test_contractor_filter_does_not_touch_other_drafts(self):
         with server.db() as c:
             self.add_opening(c,20)
@@ -89,15 +114,14 @@ class OrderInvoiceRangeTests(unittest.TestCase):
                     result.extend(list(wb.active.values)[1:]);wb.close()
         return result
 
-    def test_weighted_price_and_single_product_across_days(self):
+    def test_distinct_sale_prices_are_preserved_across_days(self):
         with server.db() as c:
             self.add_opening(c,10)
             a,ids_a=self.add_batch(c,'2026-09-01',[{'qty':2,'sell_price':20}])
             b,ids_b=self.add_batch(c,'2026-09-02',[{'qty':1,'sell_price':30}])
         rows=self.excel_rows(self.request())
-        self.assertEqual(len(rows),1)
-        self.assertEqual((rows[0][3],rows[0][8]),(3,69))
-        self.assertEqual(rows[0][4],23)
+        self.assertEqual(len(rows),2)
+        self.assertEqual([(r[3],r[4],r[8]) for r in rows],[(2,20,40),(1,30,30)])
         with server.db() as c:
             allocated=allocation_by_order(c,[a,b])
             self.assertEqual(allocated[ids_a[0]]['drafted_qty'],2)
@@ -107,7 +131,8 @@ class OrderInvoiceRangeTests(unittest.TestCase):
         for bid in (a,b):
             draft=next(r for r in self.client.get('/api/outgoing-invoices?batch_id='+str(bid)).get_json()['items'] if r['id']==did)
             self.assertEqual(set(draft['source_batch_ids']),{a,b})
-        self.assertEqual(self.request(start='2026-09-02').status_code,409)
+        selected=self.excel_rows(self.request(start='2026-09-02'))
+        self.assertEqual([(r[3],r[4]) for r in selected],[(1,30)])
 
     def test_kg_floor_releases_fraction_and_recalculates_money(self):
         with server.db() as c:
@@ -120,7 +145,7 @@ class OrderInvoiceRangeTests(unittest.TestCase):
             self.assertEqual(allocation_by_order(c,[bid])[ids[0]]['drafted_qty'],.4)
             self.assertAlmostEqual(canonical_available_stock(c)['HH-01']['raw_available_qty'],.6)
 
-    def test_round_average_from_approved_orders_ignores_separate_quote(self):
+    def test_approved_order_prices_ignore_separate_quote_and_do_not_average(self):
         with server.db() as c:
             self.add_opening(c,300)
             a,_=self.add_batch(c,'2026-09-01',[{'qty':108.9,'sell_price':2700}])
@@ -130,31 +155,54 @@ class OrderInvoiceRangeTests(unittest.TestCase):
             before=[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')]
         try:
             rows=self.excel_rows(self.request())
-            self.assertEqual((rows[0][3],rows[0][4],rows[0][8]),(216.9,2750,596475))
+            self.assertEqual([(r[3],r[4],r[8]) for r in rows],[(108.9,2700,294030),(108,2800,302400)])
             with server.db() as c:
                 self.assertEqual(before,[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')])
                 self.assertEqual(sum(r['drafted_qty'] for r in allocation_by_order(c,[a,b]).values()),216.9)
         finally:
             with server.db() as c:c.execute("DELETE FROM product_prices WHERE product_code='HH-01' AND price_group='NT-A'")
 
-    def test_existing_fractional_draft_refreshes_money_only_and_is_repeatable(self):
+    def test_existing_averaged_draft_restores_source_price_and_is_repeatable(self):
         self.seed()
         self.assertEqual(self.request().status_code,200)
         with server.db() as c:
             line=c.execute("SELECT l.* FROM outgoing_invoice_lines l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id WHERE d.status='draft'").fetchone()
             c.execute('UPDATE outgoing_invoice_lines SET unit_price=20.5,amount=144 WHERE id=?',(line['id'],))
-            inventory=[tuple(r) for r in c.execute('SELECT * FROM inventory_transactions ORDER BY id')]
+            reserved=c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE status='reserved'").fetchone()[0]
             orders=[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')]
         rows=self.excel_rows(self.request())
-        self.assertEqual((rows[0][3],rows[0][4],rows[0][8]),(7,21,147))
+        self.assertEqual((rows[0][3],rows[0][4],rows[0][8]),(7,20,140))
         with server.db() as c:
-            self.assertEqual(inventory,[tuple(r) for r in c.execute('SELECT * FROM inventory_transactions ORDER BY id')])
+            self.assertEqual(reserved,c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE status='reserved'").fetchone()[0])
             self.assertEqual(orders,[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')])
-            self.assertEqual(c.execute('SELECT SUM(amount) FROM outgoing_line_allocations WHERE line_id=?',(line['id'],)).fetchone()[0],147)
-            self.assertEqual(c.execute('SELECT subtotal FROM outgoing_invoice_drafts WHERE id=?',(line['draft_id'],)).fetchone()[0],147)
+            self.assertEqual(c.execute("SELECT subtotal FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0],140)
             before=c.serialize()
         self.assertEqual(self.request().status_code,200)
         with server.db() as c:self.assertEqual(c.serialize(),before)
+
+    def test_select_one_day_after_range_preserves_other_days_and_rolls_back_failure(self):
+        a,b=self.seed()
+        self.assertEqual(self.request().status_code,200)
+        with server.db() as c:before=c.serialize()
+        with patch('tdp_system.invoice_tax_export.build_invoice_workbook',side_effect=server.InvoiceTaxExportError('bad template')):
+            self.assertEqual(self.request(start='2026-09-02',end='2026-09-02').status_code,409)
+        with server.db() as c:self.assertEqual(c.serialize(),before)
+        rows=self.excel_rows(self.request(start='2026-09-02',end='2026-09-02'))
+        self.assertEqual(rows[0][3],2)
+        with server.db() as c:
+            allocation=allocation_by_order(c,[a,b])
+            self.assertEqual(sum(r['drafted_qty'] for r in allocation.values()),7)
+            self.assertEqual(canonical_available_stock(c)['HH-01']['raw_available_qty'],0)
+            before=c.serialize()
+        self.assertEqual(self.request(start='2026-09-02',end='2026-09-02').status_code,200)
+        with server.db() as c:self.assertEqual(c.serialize(),before)
+
+    def test_ten_rows_same_sale_price_keep_one_price(self):
+        with server.db() as c:
+            self.add_opening(c,30)
+            self.add_batch(c,'2026-09-01',[{'qty':1,'sell_price':20000} for _ in range(10)])
+        rows=self.excel_rows(self.request())
+        self.assertEqual([(r[3],r[4],r[8]) for r in rows],[(10,20000,200000)])
 
     def test_kg_round_only_after_adding_matching_codes(self):
         with server.db() as c:

@@ -476,13 +476,23 @@ def allocation_by_order(conn, batch_ids: list[int]) -> dict[int, dict[str, float
               GROUP BY l.order_id""",
         tuple(batch_ids),
     )
-    return {
+    result = {
         int(row["order_id"]): {
             "drafted_qty": max(_number(row["drafted_qty"]), 0),
             "issued_qty": max(_number(row["issued_qty"]), 0),
         }
         for row in rows
     }
+    try:
+        from .outgoing_unissued import issued_allocations
+    except ImportError:
+        from outgoing_unissued import issued_allocations
+    issued, _ = issued_allocations(conn)
+    selected = {r['id'] for r in conn.execute(f'SELECT id FROM orders WHERE batch_id IN ({placeholders})',tuple(batch_ids))}
+    for oid in selected:
+        if oid in issued or oid in result:
+            result.setdefault(oid, {'drafted_qty': 0.0, 'issued_qty': 0.0})['issued_qty'] = issued.get(oid, 0.0)
+    return result
 
 
 def _project_rows(

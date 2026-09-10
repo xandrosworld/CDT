@@ -4259,18 +4259,41 @@ def api_quotes():
         return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
 
 
+@app.get('/api/outgoing-invoices/unissued')
+@app.get('/api/outgoing-invoices/unissued.xlsx')
+def api_outgoing_unissued():
+    try:
+        from .outgoing_unissued import unissued_payload, unissued_workbook
+    except ImportError:
+        from outgoing_unissued import unissued_payload, unissued_workbook
+    try:
+        cutoff=valid_iso_date(request.args.get('to') or date.today().isoformat(),'Cộng dồn đến ngày')
+        party=clean_text(request.args.get('contractor')).upper()
+        with db() as conn:
+            if party and not conn.execute('SELECT 1 FROM contractors WHERE code=?',(party,)).fetchone():
+                raise ValueError('Không tìm thấy nhà thầu đã chọn')
+            payload=unissued_payload(conn,cutoff,party)
+        if request.path.endswith('.xlsx'):
+            return send_file(unissued_workbook(payload),as_attachment=True,download_name=f'CHUA_XUAT_HOA_DON_{party or "TAT_CA"}_DEN_{cutoff}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        return jsonify(ok=True,**payload)
+    except ValueError as exc:
+        return jsonify(ok=False,error=str(exc)),400
+
+
 @app.post("/api/export/order-invoices")
 def api_export_order_invoices():
     """One ZIP; one consolidated invoice per contractor/tax across selected days."""
     try:
         from .contract_modules import create_partial_outgoing_drafts, net_delivered, invoice_tax_percent
-        from .outgoing_readiness import OutgoingReadinessError
-        from .outgoing_consolidation import consolidate
+        from .outgoing_readiness import OutgoingReadinessError, allocation_by_order
+        from .outgoing_consolidation import consolidate, replenishable_scopes
+        from .outgoing_unissued import issued_allocations
         from .invoice_tax_export import build_invoice_workbook, _safe_name
     except ImportError:
         from contract_modules import create_partial_outgoing_drafts, net_delivered, invoice_tax_percent
-        from outgoing_readiness import OutgoingReadinessError
-        from outgoing_consolidation import consolidate
+        from outgoing_readiness import OutgoingReadinessError, allocation_by_order
+        from outgoing_consolidation import consolidate, replenishable_scopes
+        from outgoing_unissued import issued_allocations
         from invoice_tax_export import build_invoice_workbook, _safe_name
     try:
         body = request.get_json(silent=True) or {}
@@ -4279,6 +4302,7 @@ def api_export_order_invoices():
         start = valid_iso_date(body.get('from'), 'Từ ngày')
         end = valid_iso_date(body.get('to'), 'Đến ngày')
         contractor = clean_text(body.get('contractor')).upper()
+        if contractor=='*':contractor=''
         if start > end:
             raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày')
         output = io.BytesIO()
@@ -4287,6 +4311,10 @@ def api_export_order_invoices():
             conn.execute('BEGIN IMMEDIATE')
             if contractor and not conn.execute('SELECT 1 FROM contractors WHERE code=?', (contractor,)).fetchone():
                 raise ValueError('Không tìm thấy nhà thầu đã chọn')
+            _, source_warnings=issued_allocations(conn)
+            source_warnings=[w for w in source_warnings if not contractor or not w['contractor'] or w['contractor']==contractor]
+            if source_warnings:
+                raise InvoiceTaxExportError('Cần đối chiếu hóa đơn đã phát hành trước khi lập tiếp để tránh xuất trùng. '+source_warnings[0]['message'],code='issued_source_unresolved')
             batches = conn.execute("""SELECT b.* FROM batches b WHERE b.work_date BETWEEN ? AND ?
                 AND EXISTS(SELECT 1 FROM orders o WHERE o.batch_id=b.id AND (?='' OR o.contractor=?))
                 ORDER BY b.work_date,b.id""", (start,end,contractor,contractor)).fetchall()
@@ -4296,25 +4324,27 @@ def api_export_order_invoices():
                 if batch['status'] != 'approved':
                     raise ValueError(f"Đơn ngày {batch['work_date']} chưa duyệt. Chị duyệt đơn trước khi lấy file.")
             for batch in batches:
-                orders = [dict(r) for r in conn.execute(
+                selected_orders.extend(dict(r) for r in conn.execute(
                     "SELECT * FROM orders WHERE batch_id=? AND (?='' OR contractor=?) ORDER BY id",
-                    (batch['id'],contractor,contractor))]
-                selected_orders.extend(orders)
+                    (batch['id'],contractor,contractor)))
+            replenish=replenishable_scopes(conn,selected_orders,[b['id'] for b in batches])
+            for batch in batches:
+                orders = [r for r in selected_orders if r['batch_id']==batch['id']]
                 for party in sorted({r['contractor'] for r in orders if net_delivered(r)>1e-9}):
                     editable = conn.execute("""SELECT 1 FROM outgoing_invoice_drafts d
                         JOIN outgoing_order_allocations l ON l.draft_id=d.id JOIN orders o ON o.id=l.order_id
                         WHERE (o.batch_id=? OR d.id IN (SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id=?)) AND d.contractor=? AND d.status='draft'
                         AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') LIMIT 1""",
                         (batch['id'],batch['id'],party)).fetchone()
-                    if not editable:
+                    if not editable or (batch['id'],party) in replenish:
                         create_partial_outgoing_drafts(conn,batch['id'],now_iso,contractor_filter=party)
             draft_ids = consolidate(conn,[b['id'] for b in batches],contractor,invoice_tax_percent,now_iso())
             if not draft_ids:
                 raise InvoiceTaxExportError('Chưa có lượng đủ điều kiện để tạo file mới. Kiểm tra tồn và các dự thảo đã lưu/đã phát hành.',code='no_invoiceable_orders')
+            all_allocated=allocation_by_order(conn,[b['id'] for b in batches])
             for order in selected_orders:
-                allocated = conn.execute("""SELECT COALESCE(SUM(l.qty),0) FROM outgoing_order_allocations l
-                    JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
-                    WHERE l.order_id=? AND d.status!='cancelled' """,(order['id'],)).fetchone()[0]
+                from_alloc = all_allocated.get(order['id'],{})
+                allocated=from_alloc.get('drafted_qty',0)+from_alloc.get('issued_qty',0)
                 remaining = max(net_delivered(order)-allocated,0)
                 if remaining>1e-8:
                     pending.append(f"{order['work_date']} · {order['contractor']} · {order['product_code']} · {order['product_name']}: còn {remaining:g} {order['unit']}")
@@ -4331,11 +4361,12 @@ def api_export_order_invoices():
                     archive.writestr(filename,payload)
                 guide=['FILE TỪ ĐƠN HÀNG ĐỂ NHẬP M-INVOICE',f'Ngày {start} đến {end}. Nhà thầu: {contractor or "Tất cả"}.',
                     f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế, gộp tất cả ngày đã chọn.',
-                    'Mã trùng được cộng lượng từ đơn đã duyệt; giá bình quân làm tròn đến đồng, thành tiền tính lại bằng lượng xuất × đơn giá. Hàng khuyến mại giữ riêng tính chất.',
+                    'Cùng mã và cùng giá bán trên đơn đã duyệt được cộng lượng. Khác giá bán giữ dòng riêng để đối chiếu, không tự tạo giá bình quân mới. Hàng khuyến mại giữ riêng tính chất.',
                     'Kg làm tròn xuống theo 0,1 Kg sau khi cộng mã; tính tiền theo lượng xuất, phần lẻ giữ lại.',
                     'Chỉ gồm lượng đã giữ tồn; KKKNT giữ ngoại lệ đã xác nhận. Chưa ký/phát hành hóa đơn.',
                     'Dùng file gộp này thay các file tách ngày chưa phát hành, không nhập thêm cả hai bộ file.',
-                    f'PHẦN CHƯA XUẤT: {len(pending)} dòng (thiếu tồn hoặc phần lẻ Kg):',*pending]
+                    'Tải file hoặc tạo nháp chưa tính là đã xuất hóa đơn. Bảng chưa xuất cộng dồn lấy lượng đã duyệt trừ lượng đã phát hành được đồng bộ/xác nhận.',
+                    f'PHẦN CHƯA PHÂN BỔ VÀO FILE NÀY: {len(pending)} dòng (thiếu tồn hoặc phần lẻ Kg; không phải toàn bộ hàng chưa xuất hóa đơn):',*pending]
                 archive.writestr('HUONG_DAN_VA_PHAN_CHUA_XUAT.txt','\n'.join(guide).encode('utf-8-sig'))
         output.seek(0)
         response=send_file(output,as_attachment=True,download_name=f'BANG_KE_UP_M_INVOICE_{start}_{end}.zip',mimetype='application/zip')

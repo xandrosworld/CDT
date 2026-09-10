@@ -4592,16 +4592,22 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
             """SELECT l.order_id,SUM(l.qty) qty
                FROM outgoing_order_allocations l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
                JOIN orders o ON o.id=l.order_id
-               WHERE o.batch_id=? AND d.status!='cancelled'
+               WHERE o.batch_id=? AND d.status='draft'
                  AND (
                      COALESCE(d.draft_kind,'standard')!='standard'
-                     OR d.status='issued'
                      OR COALESCE(d.minvoice_status,'not_sent') IN ('saved','saving','unknown')
                  )
                GROUP BY l.order_id""",
             (batch_id,),
         )
     }
+    try:
+        from .outgoing_unissued import issued_allocations
+    except ImportError:
+        from outgoing_unissued import issued_allocations
+    issued, _ = issued_allocations(conn)
+    for item in orders:
+        allocated_locked[item['id']] = allocated_locked.get(item['id'], 0) + issued.get(item['id'], 0)
     allocations = defaultdict(list)
     pending_qty = 0.0
     for item in orders:

@@ -35,41 +35,78 @@ def decimal(value):
 def money(value):
     return decimal(value).quantize(Decimal('1'),rounding=ROUND_HALF_UP)
 
-def round_existing_prices(conn, draft_id, tax_percent, timestamp):
-    """Refresh editable grouped money without changing reserved quantities."""
-    changes=[]
+def replenishable_scopes(conn, orders, batch_ids):
+    """Add newly available stock only when it increases an exported quantity."""
+    try:
+        from .outgoing_readiness import _project_rows
+    except ImportError:
+        from outgoing_readiness import _project_rows
+    source={r['id']:r for r in orders}
+    groups=defaultdict(list)
+    for r in _project_rows(conn,orders,batch_ids):
+        o=source[r['order_id']]
+        groups[(r['contractor'],r['product_code'],r['unit'].strip().casefold(),o['tax'],o.get('invoice_nature') or '1',r['unit_price'])].append(r)
+    result=set()
+    for key,rows in groups.items():
+        held=sum((decimal(r['drafted_qty']) for r in rows),Decimal(0))
+        extra=sum((decimal(r['invoiceable_qty']) for r in rows),Decimal(0))
+        if key[2]=='kg':
+            increased=(held+extra).quantize(Decimal('.1'),rounding=ROUND_DOWN)>held.quantize(Decimal('.1'),rounding=ROUND_DOWN)
+        else:
+            increased=extra>Decimal('0.00000001')
+        if increased:
+            result.update((r['batch_id'],r['contractor']) for r in rows if r['invoiceable_qty']>1e-8)
+    return result
+
+
+def _groups(rows, floor_kg=True):
+    grouped=defaultdict(list)
+    for row in rows:
+        key=(row['product_code'],row['unit'].strip().casefold(),row['invoice_nature'],row['_source_price'])
+        grouped[key].append(row)
+    result=[]
+    units=defaultdict(set)
+    for (code,unit,nature,price),items in sorted(grouped.items()):
+        units[code].add(unit)
+        qty=sum((decimal(r['qty']) for r in items),Decimal(0))
+        if floor_kg and unit=='kg':qty=qty.quantize(Decimal('.1'),rounding=ROUND_DOWN)
+        if qty>0:result.append((code,unit,nature,price,qty,items))
+    if any(len(v)>1 for v in units.values()):
+        raise InvoiceTaxExportError('Cùng mã có nhiều đơn vị tính. Kiểm tra quy đổi trước khi dồn mã.')
+    return result
+
+
+def _write_draft(conn,party,rows,days,tax_percent,timestamp,*,floor_kg=True):
+    groups=_groups(rows,floor_kg)
+    if not groups:return None
+    anchor=max(rows,key=lambda r:(r['work_date'],r['batch_id']))
+    round_no=conn.execute('SELECT COALESCE(MAX(round_no),0)+1 FROM outgoing_invoice_drafts WHERE batch_id=? AND contractor=?',(anchor['batch_id'],party)).fetchone()[0]
+    did=conn.execute("""INSERT INTO outgoing_invoice_drafts(batch_id,contractor,invoice_date,status,created_at,external_key_uuid,round_no,draft_kind)
+        VALUES(?,?,?,'draft',?,?,?,'consolidated')""",(anchor['batch_id'],party,anchor['work_date'],timestamp,uuid.uuid4().hex.upper(),round_no)).lastrowid
+    conn.executemany('INSERT INTO outgoing_consolidated_days(draft_id,batch_id) VALUES(?,?)',[(did,b) for b in sorted(days)])
     subtotal=tax_total=Decimal(0)
-    for line in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(draft_id,)).fetchall():
-        price=money(line['unit_price'])
-        amount=money(decimal(line['qty'])*price)
-        if decimal(line['unit_price'])!=price or decimal(line['amount'])!=amount:
-            conn.execute('UPDATE outgoing_invoice_lines SET unit_price=?,amount=? WHERE id=?',
-                         (float(price),float(amount),line['id']))
-            allocations=conn.execute('SELECT order_id,qty FROM outgoing_line_allocations WHERE line_id=? ORDER BY order_id',(line['id'],)).fetchall()
-            remaining=amount
-            for index,allocation in enumerate(allocations):
-                value=remaining if index==len(allocations)-1 else min(money(decimal(allocation['qty'])*price),remaining)
-                remaining-=value
-                conn.execute('UPDATE outgoing_line_allocations SET amount=? WHERE line_id=? AND order_id=?',
-                             (float(value),line['id'],allocation['order_id']))
-            changes.append({'product_code':line['product_code'],'old_price':line['unit_price'],
-                            'new_price':float(price),'old_amount':line['amount'],'new_amount':float(amount)})
-        subtotal+=amount
-        vat=tax_percent(line['tax'])
-        tax_total+=money(amount*decimal(vat)/100) if vat>0 else 0
-    if changes:
-        conn.execute('UPDATE outgoing_invoice_drafts SET subtotal=?,tax_amount=?,total_amount=? WHERE id=?',
-                     (float(subtotal),float(tax_total),float(subtotal+tax_total),draft_id))
-        try:
-            from .contract_modules import audit
-        except ImportError:
-            from contract_modules import audit
-        audit(conn,lambda:timestamp,'outgoing.round_prices','ok',entity_type='outgoing_invoice',entity_id=draft_id,
-              metadata={'rounding':'VND_HALF_UP','changes':changes})
+    for code,unit,nature,price,qty,items in groups:
+        first=items[0];amount=money(qty*price)
+        lid=conn.execute('''INSERT INTO outgoing_invoice_lines(draft_id,order_id,product_code,product_name,qty,unit,unit_price,tax,invoice_nature,amount)
+            VALUES(?,?,?,?,?,?,?,?,?,?)''',(did,first['order_id'],code,first['product_name'],float(qty),first['unit'],float(price),first['tax'],nature,float(amount))).lastrowid
+        remaining=qty;allocations=defaultdict(lambda:Decimal(0));cost=Decimal(0)
+        for row in items:
+            part=min(decimal(row['qty']),remaining)
+            if part<=0:break
+            allocations[row['order_id']]+=part;cost+=part*decimal(row['buy_price'] or 0);remaining-=part
+        amount_left=amount
+        for index,(oid,part) in enumerate(allocations.items()):
+            value=amount_left if index==len(allocations)-1 else min(money(part*price),amount_left);amount_left-=value
+            conn.execute('INSERT INTO outgoing_line_allocations(line_id,order_id,qty,amount,source_unit_price) VALUES(?,?,?,?,?)',(lid,oid,float(part),float(value),float(price)))
+        conn.execute("""INSERT INTO inventory_transactions(txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,kitchen,status,note,created_at,updated_at)
+            VALUES(?,?,0,?,?,'OUTGOING_DRAFT',?,?,'','reserved','Chọn phạm vi đơn chưa phát hành',?,?)""",(anchor['work_date'],code,float(qty),float(cost/qty),str(did),str(lid),timestamp,timestamp))
+        vat=tax_percent(first['tax']);subtotal+=amount;tax_total+=money(amount*decimal(vat)/100) if vat>0 else 0
+    conn.execute('UPDATE outgoing_invoice_drafts SET subtotal=?,tax_amount=?,total_amount=? WHERE id=?',(float(subtotal),float(tax_total),float(subtotal+tax_total),did))
+    return did
 
 
-def consolidate(conn, batch_ids, contractor, tax_percent, timestamp):
-    """Replace local editable rounds atomically; grouped lines retain order lineage."""
+def consolidate(conn,batch_ids,contractor,tax_percent,timestamp):
+    """Select editable quantities by day; preserve sale prices and other days' holds."""
     scope=set(batch_ids)
     drafts=[dict(r) for r in conn.execute('''SELECT DISTINCT d.* FROM outgoing_invoice_drafts d
         JOIN outgoing_order_allocations l ON l.draft_id=d.id JOIN orders o ON o.id=l.order_id
@@ -77,91 +114,47 @@ def consolidate(conn, batch_ids, contractor, tax_percent, timestamp):
         AND (?='' OR d.contractor=?) AND (o.batch_id IN (SELECT value FROM json_each(?))
         OR d.id IN (SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id IN (SELECT value FROM json_each(?))))
         ORDER BY d.invoice_date,d.id''',(contractor,contractor,json.dumps(batch_ids),json.dumps(batch_ids)))]
-    groups=defaultdict(list)
-    for draft in drafts:
-        lines=[dict(r) for r in conn.execute('''SELECT l.*,o.batch_id,o.work_date,o.buy_price,a.source_unit_price
+    grouped=defaultdict(list)
+    for d in drafts:
+        rows=[dict(r) for r in conn.execute('''SELECT l.*,o.batch_id,o.work_date,o.buy_price,a.source_unit_price
             FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id
             LEFT JOIN outgoing_line_allocations a ON a.line_id=l.id AND a.order_id=l.order_id
-            WHERE l.draft_id=? ORDER BY o.work_date,l.order_id,l.id''',(draft['id'],))]
-        for row in lines:
-            row['_source_price']=decimal(row['source_unit_price']) if row['source_unit_price'] is not None else decimal(row['unit_price'])
-        draft['_days']={r[0] for r in conn.execute('SELECT batch_id FROM outgoing_consolidated_days WHERE draft_id=?',(draft['id'],))} | {r['batch_id'] for r in lines}
-        if not draft['_days'].issubset(scope):
-            raise InvoiceTaxExportError('Dự thảo đã gộp chứa ngày ngoài khoảng chọn. Chọn đủ các ngày của dự thảo để tải lại.',code='consolidated_scope_incomplete')
-        taxes={tax_percent(r['tax']) for r in lines}
-        if len(taxes)!=1:
-            raise InvoiceTaxExportError('Dự thảo còn lẫn thuế. Cần tính lại trước khi gộp file.')
-        validate_draft_export_stock(conn,draft['id'])
-        groups[(draft['contractor'],next(iter(taxes)))].append((draft,lines))
-    result=[]
-    for (party,vat),sources in sorted(groups.items()):
-        if len(sources)==1 and sources[0][0]['draft_kind']=='consolidated':
-            round_existing_prices(conn,sources[0][0]['id'],tax_percent,timestamp)
-            result.append(sources[0][0]['id']);continue
-        source_rows=[r for _,rows in sources for r in rows]
-        by_product=defaultdict(list)
-        for row in source_rows:
-            by_product[(row['product_code'],row['unit'].strip().casefold(),row['invoice_nature'])].append(row)
-        # A code cannot be silently combined across incompatible stock units.
-        units=defaultdict(set)
-        for code,unit,nature in by_product:units[code].add(unit)
-        if any(len(v)>1 for v in units.values()):
-            raise InvoiceTaxExportError('Cùng mã có nhiều đơn vị tính. Kiểm tra quy đổi trước khi dồn mã.')
-        anchor=max(source_rows,key=lambda r:(r['work_date'],r['batch_id']))
-        round_no=conn.execute('SELECT COALESCE(MAX(round_no),0)+1 FROM outgoing_invoice_drafts WHERE batch_id=? AND contractor=?',
-                             (anchor['batch_id'],party)).fetchone()[0]
-        draft_id=conn.execute('''INSERT INTO outgoing_invoice_drafts(batch_id,contractor,invoice_date,status,
-            created_at,external_key_uuid,round_no,draft_kind) VALUES(?,?,?,'draft',?,?,?,'consolidated')''',
-            (anchor['batch_id'],party,anchor['work_date'],timestamp,uuid.uuid4().hex.upper(),round_no)).lastrowid
-        conn.executemany('INSERT INTO outgoing_consolidated_days(draft_id,batch_id) VALUES(?,?)',
-                         [(draft_id,bid) for bid in sorted(set().union(*(d['_days'] for d,_ in sources)))])
-        subtotal=tax_total=Decimal(0)
-        kept=0
-        for (code,unit,nature),rows in sorted(by_product.items()):
-            total_qty=sum((decimal(r['qty']) for r in rows),Decimal(0))
-            total_amount=sum((decimal(r['qty'])*r['_source_price'] for r in rows),Decimal(0))
-            qty=total_qty.quantize(Decimal('.1'),rounding=ROUND_DOWN) if unit=='kg' else total_qty
-            if qty<=0:continue
-            price=money(total_amount/total_qty)
-            amount=money(qty*price)
-            first=rows[0]
-            line_id=conn.execute('''INSERT INTO outgoing_invoice_lines(draft_id,order_id,product_code,product_name,
-                qty,unit,unit_price,tax,invoice_nature,amount) VALUES(?,?,?,?,?,?,?,?,?,?)''',
-                (draft_id,first['order_id'],code,first['product_name'],float(qty),first['unit'],float(price),first['tax'],nature,float(amount))).lastrowid
-            remaining=qty
-            allocations=defaultdict(lambda:Decimal(0))
-            source_values=defaultdict(lambda:Decimal(0))
-            cost=Decimal(0)
-            for row in rows:
-                part=min(decimal(row['qty']),remaining)
-                if part<=0:break
-                allocations[row['order_id']]+=part;source_values[row['order_id']]+=part*row['_source_price']
-                cost+=part*decimal(row['buy_price'] or 0);remaining-=part
-            amount_left=amount
-            for index,(order_id,part) in enumerate(allocations.items()):
-                value=amount_left if index==len(allocations)-1 else min(money(amount*part/qty),amount_left)
-                amount_left-=value
-                conn.execute('INSERT INTO outgoing_line_allocations(line_id,order_id,qty,amount,source_unit_price) VALUES(?,?,?,?,?)',
-                             (line_id,order_id,float(part),float(value),float(source_values[order_id]/part)))
-            conn.execute('''INSERT INTO inventory_transactions(txn_date,product_code,qty_in,qty_out,unit_cost,
-                source_type,source_id,source_line,kitchen,status,note,created_at,updated_at)
-                VALUES(?,?,0,?,?,'OUTGOING_DRAFT',?,?,'','reserved','Gộp mã và thuế từ các ngày đơn',?,?)''',
-                (anchor['work_date'],code,float(qty),float(cost/qty),str(draft_id),str(line_id),timestamp,timestamp))
-            subtotal+=amount;tax_total+=money(amount*decimal(vat)/100) if vat>0 else 0;kept+=1
-        for old,_ in sources:
-            conn.execute("UPDATE outgoing_invoice_drafts SET status='cancelled' WHERE id=?",(old['id'],))
-            conn.execute("UPDATE inventory_transactions SET status='cancelled',updated_at=? WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",(timestamp,str(old['id'])))
-        if not kept:
-            conn.execute('DELETE FROM outgoing_invoice_drafts WHERE id=?',(draft_id,));continue
-        conn.execute('UPDATE outgoing_invoice_drafts SET subtotal=?,tax_amount=?,total_amount=? WHERE id=?',
-                     (float(subtotal),float(tax_total),float(subtotal+tax_total),draft_id))
-        validate_draft_export_stock(conn,draft_id)
-        try:
-            from .contract_modules import audit
-        except ImportError:
-            from contract_modules import audit
-        audit(conn,lambda:timestamp,'outgoing.consolidate','ok',entity_type='outgoing_invoice',entity_id=draft_id,
-              metadata={'source_draft_ids':[d['id'] for d,_ in sources],'batch_ids':batch_ids,'kg_precision':1,
-                        'kg_rounding':'down','subtotal':float(subtotal),'lines':kept})
-        result.append(draft_id)
+            WHERE l.draft_id=? ORDER BY o.work_date,l.order_id,l.id''',(d['id'],))]
+        for r in rows:r['_source_price']=decimal(r['source_unit_price'] if r['source_unit_price'] is not None else r['unit_price'])
+        taxes={tax_percent(r['tax']) for r in rows}
+        if len(taxes)!=1:raise InvoiceTaxExportError('Dự thảo còn lẫn thuế. Cần tính lại trước khi gộp file.')
+        validate_draft_export_stock(conn,d['id'])
+        d['_days']={r[0] for r in conn.execute('SELECT batch_id FROM outgoing_consolidated_days WHERE draft_id=?',(d['id'],))}|{r['batch_id'] for r in rows}
+        grouped[(d['contractor'],next(iter(taxes)))].append((d,rows))
+    result=[];created=[];old_ids=[]
+    for (party,vat),sources in sorted(grouped.items()):
+        selected=[r for _,rows in sources for r in rows if r['batch_id'] in scope]
+        if len(sources)==1 and sources[0][0]['_days'].issubset(scope):
+            old=sources[0][0]
+            expected=sorted((code,unit,nature,price,qty) for code,unit,nature,price,qty,_ in _groups(selected))
+            actual=sorted((r['product_code'],r['unit'].strip().casefold(),r['invoice_nature'],decimal(r['unit_price']),decimal(r['qty'])) for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=?',(old['id'],)))
+            if old['draft_kind']=='consolidated' and expected==actual:
+                result.append(old['id']);continue
+        # Keep all unselected allocations in separate daily drafts, including fractional Kg.
+        outside=defaultdict(list)
+        for old,rows in sources:
+            old_ids.append(old['id'])
+            for r in rows:
+                if r['batch_id'] not in scope:outside[r['batch_id']].append(r)
+        for bid,rows in outside.items():
+            did=_write_draft(conn,party,rows,{bid},tax_percent,timestamp,floor_kg=False)
+            if did:created.append(did)
+        if selected:
+            days=set().union(*(d['_days'] for d,_ in sources))&scope
+            did=_write_draft(conn,party,selected,days,tax_percent,timestamp)
+            if did:created.append(did);result.append(did)
+    for did in old_ids:
+        conn.execute("UPDATE outgoing_invoice_drafts SET status='cancelled' WHERE id=?",(did,))
+        conn.execute("UPDATE inventory_transactions SET status='cancelled',updated_at=? WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",(timestamp,str(did)))
+    for did in created:validate_draft_export_stock(conn,did)
+    if old_ids:
+        try:from .contract_modules import audit
+        except ImportError:from contract_modules import audit
+        audit(conn,lambda:timestamp,'outgoing.select_scope','ok',entity_type='outgoing_invoice',
+              metadata={'source_draft_ids':old_ids,'created_draft_ids':created,'export_draft_ids':result,'batch_ids':batch_ids,'sale_prices_preserved':True})
     return result

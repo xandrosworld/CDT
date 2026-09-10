@@ -2668,8 +2668,8 @@
     var orderIssues = readiness.order_issues || [];
     var approved = state.data?.batch?.status === 'approved';
     return html([
-      '<div class="card fade-in invoice-readiness"><div class="card-head"><div><h3>Được xuất và chưa được xuất theo nhà thầu</h3>',
-      '<p>Xem số tổng trước; chỉ mở chi tiết mặt hàng khi cần kiểm tra.</p></div>',
+      '<div class="card fade-in invoice-readiness"><div class="card-head"><div><h3>Lượng có thể lập thêm theo tồn kho</h3>',
+      '<p>Phần đủ tồn và phần còn thiếu đầu vào. Tổng hàng chưa phát hành xem tại bảng cộng dồn phía trên.</p></div>',
       '<button class="btn btn-small btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button></div>',
       '<div class="card-body">',
       !approved ? '<div class="warning-summary">Đơn chưa duyệt. <button class="btn btn-outline" data-view="orders">Mở đơn để sửa / duyệt</button></div>' : '',
@@ -2888,18 +2888,30 @@
   }
 
   function orderInvoiceExportHtml() {
-    var filters = state.orderInvoiceFilters || {from:currentWorkDate().slice(0,7)+'-01',to:currentWorkDate(),contractor:''};
+    var filters = state.orderInvoiceFilters || {from:currentWorkDate(),to:currentWorkDate(),contractor:''};
     var result = state.orderInvoiceExportResult;
     return '<section class="card"><div class="card-head"><div><h3>Bảng kê từ đơn hàng để đưa lên M-Invoice</h3>' +
       '<p>Chọn nhà thầu và ngày đơn đã duyệt. Lấy phần đủ tồn để lên hóa đơn; phần thiếu giữ lại. KKKNT giữ ngoại lệ đã xác nhận.</p></div></div>' +
       '<div class="card-body"><form id="orderInvoiceExportForm" class="document-contractor-form">' +
-      '<label>Nhà thầu<select name="contractor"><option value="">Tất cả nhà thầu</option>' + state.data.master.contractors.map(function(item) {
+      '<label>Nhà thầu<select name="contractor" required><option value="">Chọn nhà thầu cần xuất</option><option value="*"'+(filters.contractor==='*'?' selected':'')+'>Tất cả nhà thầu</option>' + state.data.master.contractors.map(function(item) {
         return '<option value="'+esc(item.code)+'"'+(filters.contractor===item.code?' selected':'')+'>'+esc(item.code+' · '+item.name)+'</option>';
       }).join('') + '</select></label><label>Từ ngày<input name="from" type="date" required value="'+esc(filters.from)+'"></label>' +
       '<label>Đến ngày<input name="to" type="date" required value="'+esc(filters.to)+'"></label>' +
       '<button type="submit" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
-      '<p>Một ZIP cho tất cả ngày đã chọn. Mỗi nhà thầu một file cho từng nhóm thuế; mã trùng cộng lượng từ đơn đã duyệt. Giá bình quân làm tròn đến đồng; thành tiền tính theo lượng xuất × đơn giá. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
+      '<p>Xuất theo ngày: chọn cùng ngày bắt đầu và kết thúc. Xuất theo tháng: chọn khoảng ngày trong tháng. Chỉ lấy nhà thầu và ngày chị chọn; tải file chưa tính là đã phát hành.</p>' +
+      '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng để đối chiếu. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
       (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + '</div></section>';
+  }
+
+  function unissuedHtml() {
+    var f=state.unissuedFilters || {to:currentWorkDate(),contractor:''}, d=state.unissued;
+    var rows=d && d.rows || [];
+    return '<section class="card"><div class="card-head"><div><h3>Hàng chưa xuất hóa đơn · cộng dồn</h3><p>Đơn đã duyệt − lượng đã phát hành. Tải bảng kê và tạo nháp không làm giảm số chưa xuất.</p></div></div><div class="card-body">'+
+      '<form id="unissuedForm" class="document-contractor-form"><label>Nhà thầu<select name="contractor"><option value="">Tất cả nhà thầu</option>'+state.data.master.contractors.map(function(r){return '<option value="'+esc(r.code)+'"'+(f.contractor===r.code?' selected':'')+'>'+esc(r.code)+'</option>';}).join('')+'</select></label>'+
+      '<label>Cộng dồn đến ngày<input type="date" name="to" required value="'+esc(f.to)+'"></label><button class="btn btn-outline" type="submit" value="view">Xem / cập nhật</button><button class="btn btn-primary" type="submit" value="excel">Tải bảng chưa xuất</button></form>'+
+      (d ? '<p class="code-note" role="status">Đến '+esc(dateVN(d.asof))+' · '+rows.length+' mã còn chưa xuất · '+d.unissued_order_rows+' dòng đơn nguồn. Phần đã nháp vẫn nằm trong số chưa xuất.</p>'+ (d.warnings||[]).map(function(w){return '<div class="warning-summary">'+esc(w.message)+'</div>';}).join('') : '<p>Chọn ngày để xem số chưa xuất cộng dồn từ các đơn đã duyệt.</p>')+
+      (state.unissuedError?'<div class="error-summary">'+esc(state.unissuedError)+'</div>':'')+'</div>'+
+      (d?'<div class="table-wrap" style="max-height:380px;overflow:auto"><table><thead><tr><th>Nhà thầu</th><th>Mã / Tên hàng</th><th>ĐVT</th><th>Đã duyệt</th><th>Đã phát hành</th><th>Đang nháp</th><th>Chưa xuất</th></tr></thead><tbody>'+rows.map(function(r){return '<tr><td>'+esc(r.contractor)+'</td><td>'+esc(r.product_code)+' · '+esc(r.product_name)+'</td><td>'+esc(r.unit)+'</td><td>'+stockQty(r.approved_qty)+'</td><td>'+stockQty(r.issued_qty)+'</td><td>'+stockQty(r.drafted_qty)+'</td><td><strong>'+stockQty(r.unissued_qty)+'</strong></td></tr>';}).join('')+'</tbody></table></div>':'')+'</section>';
   }
 
   function paymentRequestFormHtml() {
@@ -3033,6 +3045,7 @@
     ]) : '';
     content.innerHTML = html([
       orderInvoiceExportHtml(),
+      unissuedHtml(),
       outgoingReadinessHtml(),
       state.outgoingActionError && state.outgoingActionError.batchId === state.batchId ? '<div class="error-summary" role="alert">' + esc(state.outgoingActionError.message) + '<div class="form-actions"><button class="btn btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button><button class="btn btn-outline" data-view="orders">Mở đơn để kiểm tra</button></div></div>' : '',
       '<div class="document-primary-grid fade-in"><section class="document-primary-card"><div class="document-primary-icon">13</div>',
@@ -5934,15 +5947,29 @@
       orderExportButton.textContent = 'Đang kiểm tra tồn và tạo file…';
       try {
         var exported = await downloadFile('/api/export/order-invoices', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
-        state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel để up M-Invoice. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa xuất; xem chi tiết trong file hướng dẫn đi kèm.' : 'Các đơn đã chọn không còn lượng chưa phân bổ.')+' Chưa ký/phát hành hóa đơn.';
+        state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel để up M-Invoice. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa phân bổ vào file này.' : 'Đã phân bổ lượng được chọn vào file.')+' Tải file chưa tính là đã xuất; xem bảng chưa xuất cộng dồn bên dưới.';
         showToast('Đã tải bảng kê từ đơn hàng để up M-Invoice');
         state.outgoingInvoices = null; state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
         await Promise.all([fetchOutgoingInvoices(),fetchOutgoingReadiness()]);
+        if(state.unissued && state.unissuedFilters) {
+          state.unissued=await api('/api/outgoing-invoices/unissued?'+new URLSearchParams(state.unissuedFilters).toString());
+        }
       } catch(error) {
         state.orderInvoiceExportResult = error.message;
         showToast(error.message,true);
       } finally { renderDocuments(); }
       return;
+    }
+    if (event.target.id === 'unissuedForm') {
+      event.preventDefault();
+      var f=Object.fromEntries(new FormData(event.target).entries());state.unissuedFilters=f;
+      var params='?to='+encodeURIComponent(f.to)+'&contractor='+encodeURIComponent(f.contractor);
+      try {
+        state.unissuedError='';
+        state.unissued=await api('/api/outgoing-invoices/unissued'+params);
+        if(event.submitter && event.submitter.value==='excel') await downloadFile('/api/outgoing-invoices/unissued.xlsx'+params);
+      } catch(error) {state.unissuedError=error.message;showToast(error.message,true);}
+      renderDocuments();return;
     }
     if (event.target.id === "paymentRequestForm") {
       event.preventDefault();
@@ -5995,6 +6022,8 @@
   });
 
   content.addEventListener("input", function (event) {
+    if (event.target.form && event.target.form.id === 'orderInvoiceExportForm') state.orderInvoiceFilters=Object.fromEntries(new FormData(event.target.form).entries());
+    if (event.target.form && event.target.form.id === 'unissuedForm') state.unissuedFilters=Object.fromEntries(new FormData(event.target.form).entries());
     if (event.target.matches('.unit-conversion-input, .invoice-draft-factor')) {
       var editingCell = event.target.closest('.invoice-mapping-cell');
       if (!editingCell.mappingExpected) editingCell.mappingExpected = invoiceMappingExpected(event.target.dataset.id);
@@ -6058,6 +6087,8 @@
   });
 
   content.addEventListener("change", function (event) {
+    if (event.target.form && event.target.form.id === 'orderInvoiceExportForm') state.orderInvoiceFilters=Object.fromEntries(new FormData(event.target.form).entries());
+    if (event.target.form && event.target.form.id === 'unissuedForm') state.unissuedFilters=Object.fromEntries(new FormData(event.target.form).entries());
     if (event.target.matches('.invoice-group-select')) {
       var checked = invoiceCheckedRows();
       if (checked.some(function(e) { return e.dataset.invoiceId !== event.target.dataset.invoiceId; })) {
