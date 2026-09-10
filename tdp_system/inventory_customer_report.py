@@ -7,10 +7,12 @@ from openpyxl.worksheet.views import Selection
 
 try:
     from .invoice_line_tax import tax_rate_label
+    from .inventory_tax_review import add_tax_review
     from .inventory_report_company import write_company_header
     from .template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 except ImportError:
     from invoice_line_tax import tax_rate_label
+    from inventory_tax_review import add_tax_review
     from inventory_report_company import write_company_header
     from template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 
@@ -152,5 +154,10 @@ def customer_nxt_workbook(model, sales):
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     wb.properties.title = f'NXT {month}/{year}'
     wb.properties.description = 'Mẫu khách cung cấp; bình quân cả tháng; tiền Xuất theo M-Invoice.'
+    differences = add_tax_review(wb, ws, list(items.values()), outgoing, 10, sales['items'])
+    ws['A7'] = ws['A7'].value + ' T/Suất: ưu tiên danh mục.'
+    if differences:
+        ws['A7'] = ws['A7'].value + f' Có {differences} mã khác thuế HĐ; xem sheet Đối chiếu thuế.'
+        ws.row_dimensions[7].height = 48
     assert_workbook_safe(wb)
     return wb

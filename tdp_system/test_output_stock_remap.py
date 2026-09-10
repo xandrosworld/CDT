@@ -99,6 +99,29 @@ class OutputStockRemapTests(unittest.TestCase):
             self.assertEqual({**before,'product_code':'REMAP-B'},dict(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone()))
             self.assertEqual(6,canonical_available_stock(conn)['REMAP-B']['canonical_qty'])
 
+    def test_negative_summary_groups_lines_and_exposes_both_taxes_without_double_counting(self):
+        with server.db() as conn:
+            second=Seed.add_posted_source(conn,source='minvoice',number='SUMMARY-2',qty=2)
+            conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',
+                         (json.dumps({'_tdp_source_contract':'minvoice_portal_v1','details':[{'vatAmount':3.2}]}),second))
+            line=conn.execute("""INSERT INTO outgoing_source_invoice_items(invoice_id,line_index,source_item_code,
+                source_item_name,source_unit,qty,unit_price,amount,tax_rate,product_code,mapping_status,stock_qty)
+                VALUES(?,1,'SOURCE-A','Tên trên hóa đơn','kg',2,20,40,'8','HH-01','mapped',2)""",(second,)).lastrowid
+            conn.execute('UPDATE invoice_inventory_ledger SET source_line_id=? WHERE source_invoice_id=?',(line,second))
+            conn.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
+            before=conn.execute('SELECT tax FROM products WHERE code=?',('HH-01',)).fetchone()[0]
+            book=load_workbook(io.BytesIO(export_new_workbook(conn,'2026-08-01','2026-08-31')))
+            summary=book['Tổng hợp hàng âm'];rows=list(summary.iter_rows(min_row=3,values_only=True))
+            match=[r for r in rows if r[0]=='HH-01']
+            self.assertEqual(1,len(match));self.assertEqual(('KKKNT','8%'),match[0][2:4])
+            self.assertEqual((-6,2),match[0][5:7])
+            self.assertIn('khác thuế HĐ',match[0][7])
+            opening_only=next(r for r in rows if r[0]=='REMAP-C')
+            self.assertEqual((-3,0),opening_only[5:7]);self.assertIn('Không có dòng xuất',opening_only[8])
+            self.assertEqual(2,book['Doi ma xuat kho'].max_row-4)
+            self.assertEqual(before,conn.execute('SELECT tax FROM products WHERE code=?',('HH-01',)).fetchone()[0])
+            book.close()
+
     def test_new_layout_rejects_source_identity_edits_and_keeps_missing_source_code_blank(self):
         with server.db() as conn:
             conn.execute("UPDATE outgoing_source_invoice_items SET source_item_code='' WHERE id=?",(self.line_id,))

@@ -47,3 +47,25 @@ Bộ hồi quy sau sửa: **160/160 ca qua** (145 ca các luồng liên quan và
 Trên bản sao dữ liệu thật trong RAM: giả lập 18 dòng đổi mã xử lý được 13/14 mã đang chặn. Mã `N000040` còn thiếu 6,4 lít, phép tìm mã nhận cùng đơn vị và đủ tồn không tìm được ứng viên; chốt tháng tiếp tục bị chặn đúng. Sau khi thêm **một giao dịch nhập giả lập chỉ trong RAM** cho thiếu hụt này, chốt tháng thành công; toàn bộ số lượng và giá trị tồn đầu tháng 9 khớp tồn cuối tháng 8. Hash hóa đơn nguồn và ledger gốc trước/sau đổi mã không đổi. Đây là kiểm thử kỹ thuật, không phải phương án ghép hàng hay chứng từ mua hàng đề xuất cho khách.
 
 Trình duyệt dữ liệu tạm đã kiểm tra cả luồng đổi mã → chốt tháng với KKKNT âm và luồng sửa 7 lỗi tồn → duyệt đơn → lập dự thảo → tải ZIP → tính lại → hủy/tạo lại. Không có lỗi JavaScript. Kết quả chi tiết: `full_recovery_audit.json`, `result.json` trong thư mục minh chứng; kiểm thử tab Bảng kê ở `tdp_system/exports/documents_resolution_test/`.
+
+## Đối chiếu hai file khách gửi sáng 10/09
+
+Đọc trực tiếp `Doi_ma_noi_bo_xuat_kho (1).xlsx` và `tồn tháng 8.xlsx`, giữ nguyên file và bộ lọc đã lưu:
+
+- File tồn có **14 dòng hiện / 14 mã** với bộ lọc 8% và tồn âm; con số 24 trong tin nhắn không khớp file nhận được.
+- File đổi mã có **34 dòng hiện / 15 mã**. Một mã lặp ở nhiều dòng hóa đơn (H000001 có 6 dòng); số tồn cuối lặp lại không được cộng dồn.
+- Số tồn của cả 14 mã chung khớp nhau. Mã riêng K000067 có tồn −2,75 kg; danh mục KKKNT, hóa đơn 1C26TYY/769 có thuế nguồn 8%, tiền thuế 31.200 đồng. Nguồn M-Invoice gốc cũng ghi 8%; không phải lỗi đọc mã −2.
+- Trên bản sao mới: trong các dòng gắn mã danh mục KKKNT, nguồn có 364 dòng KKKNT, 1.218 dòng 0% và 4 dòng 8%. Đây là đối chiếu khác biệt hai nguồn, không kết luận phân loại thuế nào cần sửa.
+
+Thay đổi phần mềm:
+
+- Hai cột sửa mã/tên ở A–B; mã nguồn hóa đơn được ghi rõ có thể trống, không trộn với mã nội bộ.
+- File đổi mã thêm sheet **Tổng hợp hàng âm**, mỗi mã một dòng, đủ cả mã âm đầu kỳ không có dòng xuất. Có số dòng xuất, liên kết đến dòng xuất và hai nguồn thuế riêng. Lọc **Thuế danh mục** để đối chiếu với báo cáo tồn khi danh mục đã có thuế.
+- NXT và Tồn thêm sheet **Đối chiếu thuế** khi danh mục khác thuế đầu ra; chỉ rõ các số hóa đơn liên quan. Giữ bố cục và số liệu sheet chính, không tự đổi danh mục, hóa đơn hay chính sách KKKNT.
+- File Excel cũ vẫn nhập được; snapshot và kiểm tra nội dung hóa đơn giữ nguyên.
+
+Kiểm thử: **165/165 ca hồi quy qua**. Sau điều chỉnh bảng tổng hợp lấy đúng thuế đã hiển thị trên dòng Excel, ca tổng hợp liên quan chạy lại qua. Trình duyệt trên dữ liệu tạm kiểm tra tải Excel mới → sửa A–B → nhập → xem trước → xác nhận → chốt tháng còn KKKNT âm, đồng thời tải ZIP bảng kê KKKNT thành công.
+
+Trên bản sao Railway trong RAM: tổng hợp đủ 34 mã âm (20 KKKNT, 14 mã 8%); số tồn từng mã khớp báo cáo Tồn; cả NXT và Tồn chỉ đúng hóa đơn 769 cho K000067. Hash dữ liệu hàng hóa, giao dịch, ledger, đổi mã và hóa đơn trước/sau xuất báo cáo không đổi. Có 15 mã âm khác thuế giữa hai nguồn; không tự sửa phân loại của các mã này.
+
+Minh chứng bổ sung trong `tdp_system/exports/output_stock_remap_test/`: `customer_filtered_comparison.json`, `Doi_chieu_2_file_khach_20260910.xlsx`, `tax_review_copy_result.json`, ba file `*_co_*_kiem_thu.xlsx`. Các bản xuất và kiểm thử không cập nhật tồn hoặc phát hành hóa đơn của khách.

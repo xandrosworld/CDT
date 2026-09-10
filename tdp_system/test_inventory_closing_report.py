@@ -10,9 +10,38 @@ from .inventory_customer_report import tax_value
 from .inventory_closing_report import customer_closing_workbook, TEMPLATE_PATH
 from .invoice_workbench_listing import invoice_range_payload
 from .inventory_report_company import DEFAULT_COMPANY
+from .inventory_tax_review import compare_tax, display_tax
 
 
 class ClosingReportTests(unittest.TestCase):
+    def test_tax_representations_are_compared_without_false_conflicts(self):
+        for source in ('8', '8%', '0.08', 0.08):
+            self.assertFalse(compare_tax({'tax':'0.08'},[{'tax_rate':source}])['differs'])
+        for value in ('KKKNT', -2, '-2.0'):
+            self.assertEqual('KKKNT',display_tax(value))
+            self.assertFalse(compare_tax({'tax':'KKKNT'},[{'tax_rate':value}])['differs'])
+        self.assertTrue(compare_tax({'tax':'KKKNT'},[{'tax_rate':'8'}])['differs'])
+        self.assertFalse(compare_tax({'tax':''},[{'tax_rate':'8'}])['differs'])
+
+    def test_catalog_invoice_mismatch_is_explained_without_changing_tax_or_stock(self):
+        item=self.model['items'][0];item['tax']='KKKNT'
+        code=item['product_code']
+        for line in self.sales['lines']:
+            if line.get('product_code')==code:line['tax_rate']='8'
+        before_model=copy.deepcopy(self.model);before_sales=copy.deepcopy(self.sales)
+        for builder,first in ((customer_closing_workbook,7),(customer_nxt_workbook,10)):
+            book=builder(self.model,self.sales)
+            try:
+                sheet=book['Đối chiếu thuế']
+                row=next(r for r in sheet.iter_rows(min_row=3,values_only=True) if r[0]==code)
+                self.assertEqual(('KKKNT','8%'),row[2:4])
+                self.assertIn(str(self.sales['items'][0]['invoice_number']),row[6])
+                self.assertEqual('KKKNT',book.active.cell(first,5).value)
+                self.assertIn('8%',book.active.cell(first,5).comment.text)
+                self.assertIn('Đối chiếu thuế',book.active.cell(6 if first==7 else 7,1).value)
+            finally:book.close()
+        self.assertEqual(before_model,self.model);self.assertEqual(before_sales,self.sales)
+
     def test_stock_tax_category_codes_are_not_rendered_as_negative_percentages(self):
         self.assertEqual('KKKNT', tax_value({'tax': -2}, []))
         self.assertEqual('KCT', tax_value({'tax': '-1'}, []))

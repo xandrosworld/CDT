@@ -6,6 +6,7 @@ import sqlite3
 import time
 import uuid
 import zipfile
+from collections import defaultdict
 
 from flask import jsonify, request, send_file
 from openpyxl import Workbook, load_workbook
@@ -21,12 +22,14 @@ try:
     from .invoice_line_tax import annotate_invoice_tax
     from .invoice_output_editing import output_amount_review
     from .invoice_inventory import _minimum_balance_from
+    from .inventory_tax_review import compare_tax, display_tax, format_review_sheet
 except ImportError:
     from invoice_monthly_valuation import monthly_average_report
     from stock_tax_policy import kkknt_codes
     from invoice_line_tax import annotate_invoice_tax
     from invoice_output_editing import output_amount_review
     from invoice_inventory import _minimum_balance_from
+    from inventory_tax_review import compare_tax, display_tax, format_review_sheet
 
 HEADERS = ['ID dòng kho', 'Ngày', 'Ký hiệu / Số HĐ', 'Mã trên HĐ', 'Tên trên HĐ',
            'ĐVT trên HĐ', 'Số lượng HĐ', 'Đơn giá bán', 'Tiền hàng', 'Thuế suất',
@@ -164,9 +167,9 @@ def export_workbook(conn, start, end):
     wb = Workbook(); ws = wb.active; ws.title = 'Doi ma xuat kho'
     for area, text in [
         ('A1:G1', 'CHỈ SỬA 2 CỘT VÀNG A–B: Mã hàng muốn chuyển sang và Tên hàng muốn chuyển sang.'),
-        ('H1:Q1', 'THÔNG TIN HÓA ĐƠN GỐC · GIỮ NGUYÊN'),
+        ('H1:Q1', f"{len(snapshot['rows'])} dòng xuất / {len({r['product_code'] for r in snapshot['rows']})} mã hàng. Một mã có thể lặp nhiều dòng; không cộng lặp cột Tồn cuối kỳ."),
         ('A2:G2', 'Sao chép cặp mã + tên từ sheet Danh muc ma hang, rồi tải file lên hệ thống. Giữ nguyên dòng không cần đổi.'),
-        ('H2:Q2', 'Mã trên hóa đơn gốc có thể trống do dữ liệu M-Invoice không có mã. Mã nội bộ đang trừ kho nằm ở cột C.'),
+        ('H2:Q2', 'Để đối chiếu với báo cáo tồn, mở sheet Tổng hợp hàng âm: mỗi mã một dòng, lọc Thuế danh mục. Thuế trên HĐ có thể khác danh mục.'),
         ('A3:B3', '1. SỬA HÀNG MUỐN CHUYỂN SANG'),
         ('C3:G3', '2. ĐỐI CHIẾU HÀNG ĐANG TRỪ KHO'),
         ('H3:Q3', '3. THÔNG TIN NGUỒN · KHÔNG SỬA'),
@@ -200,13 +203,41 @@ def export_workbook(conn, start, end):
     for row, height in ((1,34),(2,34),(3,26),(4,46)): ws.row_dimensions[row].height = height
     ws['J4'].comment = Comment('Đây là mã từ hóa đơn nguồn, có thể trống. Mã nội bộ dùng trừ kho nằm ở cột C. Không điền mã nội bộ vào cột này.', 'TDP')
     ws['A4'].comment = Comment('Sao chép mã và tên cùng một hàng trong sheet Danh muc ma hang vào hai cột A–B. Mỗi dòng chuyển toàn bộ lượng ở cột E.', 'TDP')
+    ws['G4'].comment = Comment('Số tồn của mã ở cột C, lặp lại ở các dòng xuất cùng mã. Không cộng cột này; xem sheet Tổng hợp hàng âm để đếm theo mã.', 'TDP')
+    ws['P4'].comment = Comment('Thuế từ dòng hóa đơn gốc. Báo cáo tồn ưu tiên thuế danh mục; xem cả hai nguồn ở sheet Tổng hợp hàng âm.', 'TDP')
+    summary = wb.create_sheet('Tổng hợp hàng âm')
+    catalog_by_code = {p['code']:p for p in snapshot['catalog']}
+    by_code = defaultdict(list)
+    first_rows = {}
+    for index, row in enumerate(snapshot['rows'], 5):
+        by_code[row['product_code']].append(row)
+        first_rows.setdefault(row['product_code'], index)
+    negatives = [r for r in snapshot['stock'] if r['closing_qty'] < -1e-9]
+    summary.append([f'{len(negatives)} mã tồn âm · Mỗi mã chỉ một dòng. Lọc cột Thuế danh mục để so với báo cáo tồn.'])
+    summary.merge_cells('A1:I1')
+    summary.append(['Mã nội bộ','Tên hàng','Thuế danh mục (như báo cáo tồn)','Thuế HĐ trong file đổi mã',
+                    'ĐVT','Tồn cuối kỳ (mỗi mã một lần)','Số dòng xuất có thể đổi','Đối chiếu thuế','Mở dòng xuất'])
+    for item in negatives:
+        code = item['product_code']; lines = by_code[code]
+        review = compare_tax(catalog_by_code[code], [{'tax_rate':r['cells'][9]} for r in lines])
+        summary.append([code, catalog_by_code[code]['name'], review['catalog'], review['source'], item['unit'],
+                        item['closing_qty'], len(lines), review['note'],
+                        'Đến dòng xuất đầu tiên; có thể lọc mã ở cột C' if lines else 'Không có dòng xuất trong file đổi mã'])
+        if lines:
+            summary.cell(summary.max_row,9).hyperlink = f"#'Doi ma xuat kho'!A{first_rows[code]}"
+        if review['differs']:
+            for cell in summary[summary.max_row]: cell.fill = PatternFill('solid',fgColor='FFF2CC')
+        summary.cell(summary.max_row,6).number_format = '#,##0.######;[Red]-#,##0.######'
+    format_review_sheet(summary, 2, (18,40,26,26,12,25,20,62,48))
     catalog = wb.create_sheet('Danh muc ma hang'); catalog.append(['Mã nội bộ', 'Tên nội bộ', 'ĐVT', 'Thuế'])
-    for p in snapshot['catalog']: catalog.append([p[k] for k in ('code','name','unit','tax')])
+    for p in snapshot['catalog']: catalog.append([p[k] for k in ('code','name','unit')] + [display_tax(p['tax'])])
     catalog.auto_filter.ref = catalog.dimensions; catalog.freeze_panes = 'A2'; catalog.column_dimensions['B'].width = 48
     guide = wb.create_sheet('Huong dan')
     for line in ['Chỉ sửa hai cột vàng A–B: Mã hàng muốn chuyển sang và Tên hàng muốn chuyển sang, theo sheet Danh muc ma hang.',
                  'Cột C–G là hàng đang trừ kho và tồn để đối chiếu. Cột H–Q là thông tin hóa đơn gốc, không sửa.',
                  'Mã trên hóa đơn gốc có thể trống do nguồn M-Invoice không có mã; không có nghĩa là thiếu mã nội bộ.',
+                 'File đổi mã giữ từng dòng xuất hóa đơn. Một mã có thể xuất nhiều dòng; không cộng lặp Tồn cuối kỳ.',
+                 'Sheet Tổng hợp hàng âm gom mỗi mã một dòng. Lọc Thuế danh mục để so với báo cáo tồn; Thuế HĐ là nguồn riêng, có thể khác danh mục.',
                  'Một dòng tương ứng toàn bộ lượng trừ kho của một dòng hóa đơn. Không đổi lượng, tiền, thuế hay nội dung hóa đơn.',
                  'Có thể lọc các dòng Tồn cuối kỳ âm; giữ nguyên các dòng không cần đổi. Không xóa dòng hoặc cột.',
                  'Tải file lên để xem trước. Hệ thống kiểm tra đơn vị, tồn mã nhận, kỳ chốt và dữ liệu đã thay đổi.',

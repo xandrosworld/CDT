@@ -9,10 +9,12 @@ from openpyxl.worksheet.views import Selection
 try:
     from .inventory_report_company import write_company_header
     from .inventory_customer_report import literal, number, tax_value
+    from .inventory_tax_review import add_tax_review
     from .template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 except ImportError:
     from inventory_report_company import write_company_header
     from inventory_customer_report import literal, number, tax_value
+    from inventory_tax_review import add_tax_review
     from template_workbook import clone_template_workbook, copy_row_layout, assert_workbook_safe
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / 'templates' / 'inventory_closing_template.xlsx'
@@ -108,5 +110,10 @@ def customer_closing_workbook(model, sales):
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     wb.properties.title = f'Tồn trong kỳ {month}/{year}'
     wb.properties.description = 'Tồn cuối kỳ và đơn giá bình quân tháng lấy cùng dữ liệu báo cáo NXT.'
+    differences = add_tax_review(wb, ws, model['items'], outgoing, 7, sales['items'])
+    ws['A6'] = ws['A6'].value + ' · T/Suất: ưu tiên danh mục.'
+    if differences:
+        ws['A6'] = ws['A6'].value + f' Có {differences} mã khác thuế HĐ; xem sheet Đối chiếu thuế.'
+        ws.row_dimensions[6].height = 44
     assert_workbook_safe(wb)
     return wb
