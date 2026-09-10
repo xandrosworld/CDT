@@ -3601,7 +3601,10 @@
       '<button class="btn btn-outline" data-action="clear-print-batches">Bỏ chọn tất cả</button>',
       '<button class="btn btn-outline" data-action="preview-selected-documents" ', selectedCount ? '' : 'disabled', '>Xem phần đã chọn</button>',
       '<button class="btn btn-primary" data-action="print-selected-documents" ', selectedCount ? '' : 'disabled', '>In phần đã chọn</button>',
-      '<button class="btn btn-outline" data-action="download-selected-documents" ', selectedCount ? '' : 'disabled', '>Tải file đã chọn</button></div>',
+      '<button class="btn btn-outline" data-action="download-selected-documents" ', selectedCount ? '' : 'disabled', '>Tải file đã chọn</button>',
+      state.printingDocument === "purchases" ? '<button class="btn btn-primary" data-action="download-approved-input-bk" ' + (selectedCount ? '' : 'disabled') + '>Tải bảng kê đầu vào</button>' : '',
+      '</div>',
+      state.printingDocument === "purchases" ? '<p class="muted">Tải bảng kê đầu vào: gộp các ngày đã chọn vào một file Excel, theo lượng và giá đã ghi nhập kho khi duyệt đơn.</p>' : '',
       state.printingDocument === 'deliveries' ? '<label class="print-customer-filter">Khách hàng / bếp <select id="printingCustomer"><option value="">Tất cả bếp</option>' + state.data.master.kitchens.map(function(k) { return '<option value="' + esc(k.code) + '" ' + (state.printingCustomer === k.code ? 'selected' : '') + '>' + esc(k.name || k.code) + '</option>'; }).join('') + '</select></label>' : '', '</div>',
       '<div class="table-wrap print-batch-table"><table><thead><tr><th>Chọn</th><th>',
       state.printingDocument === "deliveries" ? 'Bếp / ngày giao' : 'Ngày / file đơn',
@@ -6508,7 +6511,8 @@
       await window.TDPDocuments.open({kind:"purchases", selections:[{batch_id:state.batchId}]}, "purchaseDocumentPreview");
       return;
     }
-    if (action === "download-selected-documents") {
+    if (action === "download-selected-documents" || action === "download-approved-input-bk") {
+      var inputBKDownload = action === "download-approved-input-bk";
       var selectedPrintRows = printingSelectionRows().filter(function (item) {
         return Boolean(state.printingSelected[item.key]);
       });
@@ -6523,7 +6527,7 @@
       try {
         button.disabled = true;
         button.textContent = "Đang tạo file…";
-        await downloadFile("/api/export/selected-documents", {
+        await downloadFile(inputBKDownload ? "/api/bk-import/export-approved" : "/api/export/selected-documents", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -6534,7 +6538,7 @@
             }) : []
           })
         });
-        showToast("Đã tải giấy tờ đã chọn · mở file Excel rồi bấm Ctrl+P để in");
+        showToast(inputBKDownload ? "Đã tải bảng kê đầu vào của các ngày đã chọn. Hàng đã ghi kho, không cần nhập lại." : "Đã tải giấy tờ đã chọn · mở file Excel rồi bấm Ctrl+P để in");
       } catch (error) {
         showToast(error.message, true);
       } finally {

@@ -1,4 +1,6 @@
 import unittest
+import io
+from openpyxl import load_workbook
 from . import server, batch_bk_approval as approval
 from .test_bk_import import BKImportTests, NOW
 from .purchase_summary_export import collect_purchase_summary_rows
@@ -130,6 +132,63 @@ class BatchBKApprovalTests(unittest.TestCase):
         with server.db() as conn:
             p=approval.bk.parse_bk_preview(conn,payload)
             self.assertTrue(p['canConfirm']);self.assertTrue(p['alreadyPosted'])
+
+    def test_selected_input_export_uses_posted_cost_without_writing_stock(self):
+        self.assertEqual(self.post().status_code, 200)
+        with server.db() as conn:
+            before = conn.serialize()
+            conn.execute("UPDATE settings SET value='0.8' WHERE key='purchase_rate'")
+        with server.db() as conn:
+            before = conn.serialize()
+        for _ in range(2):
+            response = self.client.post('/api/bk-import/export-approved', json={'batch_ids':[self.batch, self.batch]})
+            self.assertEqual(response.status_code, 200, response.get_json(silent=True))
+            wb = load_workbook(io.BytesIO(response.data), data_only=True)
+            try:
+                self.assertEqual(wb.active['A1'].value, 'BẢNG KÊ ĐẦU VÀO ĐÃ GHI NHẬP KHO')
+                self.assertEqual(wb.active.max_row, 4)
+                self.assertEqual([wb.active.cell(4,c).value for c in (8,9,10)], [2,190,380])
+            finally:
+                wb.close()
+        with server.db() as conn:
+            self.assertEqual(before, conn.serialize(), 'Download must not write stock or business data')
+
+    def test_selected_input_export_blocks_unapproved_or_unposted(self):
+        response = self.client.post('/api/bk-import/export-approved', json={'batch_ids':[self.batch]})
+        self.assertEqual(response.status_code, 409)
+        with server.db() as conn:
+            conn.execute("UPDATE batches SET status='approved' WHERE id=?", (self.batch,))
+        response = self.client.post('/api/bk-import/export-approved', json={'batch_ids':[self.batch]})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()['code'], 'bk_not_posted')
+
+    def test_selected_input_export_multiple_days_in_one_file(self):
+        self.assertEqual(self.post().status_code, 200)
+        first = self.batch
+        with server.db() as conn:
+            self.batch = conn.execute("INSERT INTO batches(work_date,source_name,status,created_at) VALUES('2026-09-02','second.xlsx','draft',?)", (NOW,)).lastrowid
+            second_order = self.add_line(conn, qty=3)
+            conn.execute("UPDATE orders SET work_date='2026-09-02' WHERE id=?", (second_order,))
+        self.assertEqual(self.post().status_code, 200)
+        response = self.client.post('/api/bk-import/export-approved', json={'batch_ids':[first, self.batch]})
+        self.assertEqual(response.status_code, 200, response.get_json(silent=True))
+        wb = load_workbook(io.BytesIO(response.data), data_only=True)
+        try:
+            self.assertEqual(wb.active.max_row, 5)
+            self.assertEqual([wb.active.cell(r, 1).value.day for r in (4,5)], [2,3])
+            self.assertEqual(sum(wb.active.cell(r, 10).value for r in (4,5)), 950)
+        finally:
+            wb.close()
+
+    def test_selected_input_export_validates_selection(self):
+        for ids in ([], [True], [1.5], ['1'], [-1], list(range(1,102))):
+            self.assertEqual(self.client.post('/api/bk-import/export-approved', json={'batch_ids':ids}).status_code, 400)
+        with server.db() as conn:
+            conn.execute('UPDATE orders SET purchase_list=0 WHERE id=?', (self.order,))
+        self.assertEqual(self.post().status_code, 200)
+        response = self.client.post('/api/bk-import/export-approved', json={'batch_ids':[self.batch]})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()['code'], 'no_posted_bk')
 
     def test_reversal_reopens_batch_and_reapproval_posts_only_corrected_quantity(self):
         posted=self.post().get_json()['bk']

@@ -321,7 +321,7 @@ def _template_rows_for_batch(conn, batch_id: int) -> list[dict[str, Any]]:
     return result
 
 
-def build_bk_import_template(rows: Iterable[Mapping[str, Any]] = ()) -> bytes:
+def build_bk_import_template(rows: Iterable[Mapping[str, Any]] = (), *, posted: bool = False) -> bytes:
     """Return the official formula-free BK input template, optionally prefilled."""
     workbook = Workbook()
     sheet = workbook.active
@@ -375,6 +375,14 @@ def build_bk_import_template(rows: Iterable[Mapping[str, Any]] = ()) -> bytes:
     sheet.print_options.horizontalCentered = True
     workbook.properties.title = "Mẫu nhập BK hàng mua vào không có hóa đơn"
     workbook.properties.subject = "Nguồn Excel BK độc lập; preview và xác nhận trước khi ghi kho"
+    if posted:
+        sheet.cell(1, 1).value = "BẢNG KÊ ĐẦU VÀO ĐÃ GHI NHẬP KHO"
+        sheet.cell(2, 1).value = (
+            "Gồm các ngày đã chọn và đã duyệt. Số lượng, đơn giá và thành tiền lấy theo bảng kê đã ghi kho. "
+            "Không cần nhập lại file này; tải file không làm tăng tồn kho."
+        )
+        workbook.properties.title = "Bảng kê đầu vào đã ghi nhập kho"
+        workbook.properties.subject = "Đối chiếu bảng kê đầu vào của các ngày đã duyệt"
     try:
         return safe_workbook_bytes(workbook)
     finally:
@@ -1105,6 +1113,50 @@ def register_bk_import_routes(app, ctx) -> None:
 
     def error_response(exc: BKImportError):
         return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
+
+    @app.post("/api/bk-import/export-approved")
+    def api_bk_export_approved():
+        try:
+            from . import batch_bk_approval as approval
+        except ImportError:
+            import batch_bk_approval as approval
+        try:
+            body = request.get_json(silent=True)
+            ids = body.get("batch_ids") if isinstance(body, dict) else None
+            if (not isinstance(ids, list) or not 1 <= len(ids) <= 100
+                    or any(type(value) is not int or value <= 0 for value in ids)):
+                raise BKImportError("Hãy chọn từ 1 đến 100 ngày cần tải bảng kê.", code="invalid_batch_ids")
+            rows, dates = [], []
+            with db_factory() as conn:
+                conn.execute("BEGIN")
+                batches = []
+                for batch_id in sorted(set(ids)):
+                    batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
+                    if not batch:
+                        raise BKImportError("Không tìm thấy ngày đơn đã chọn.", status=404)
+                    if batch["status"] != "approved":
+                        raise BKImportError(f"Ngày {batch['work_date']} chưa duyệt. Chị duyệt đơn rồi tải bảng kê.", status=409)
+                    batches.append(batch)
+                for batch in sorted(batches, key=lambda item: (item["work_date"], item["id"])):
+                    preview = approval.prepare(conn, batch["id"])
+                    if not preview["alreadyPosted"]:
+                        if preview["rows"] or preview["issues"]:
+                            raise BKImportError(
+                                f"Ngày {batch['work_date']} chưa ghi nhập kho bảng kê. Cần kiểm tra và duyệt bảng kê trước khi tải.",
+                                code="bk_not_posted", status=409,
+                            )
+                        continue
+                    rows.extend(_template_rows_for_batch(conn, batch["id"]))
+                    dates.append(batch["work_date"])
+            if not rows:
+                raise BKImportError("Các ngày đã chọn không có bảng kê đầu vào đã ghi kho.", code="no_posted_bk", status=409)
+            return send_file(
+                io.BytesIO(build_bk_import_template(rows, posted=True)), as_attachment=True,
+                download_name=f"BANG_KE_DAU_VAO_{min(dates)}_{max(dates)}.xlsx",
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except BKImportError as exc:
+            return error_response(exc)
 
     @app.get("/api/bk-import/template")
     def api_bk_import_template():
