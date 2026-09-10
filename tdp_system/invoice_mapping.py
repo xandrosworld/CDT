@@ -347,6 +347,10 @@ def apply_saved_mappings(conn, direction: str, invoice_id: int, *, only_unmapped
         if only_unmapped and (row['product_code'] or row['mapping_status'] != 'unmapped'):
             continue
         if safe_direction == 'input':
+            from tdp_system.input_conversion_repair import apply_preference
+            if apply_preference(conn,row['id']):
+                applied += 1
+                continue
             try:
                 from invoice_line_groups import restore_group_choice
             except ImportError:

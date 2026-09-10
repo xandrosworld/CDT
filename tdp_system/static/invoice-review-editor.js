@@ -52,6 +52,7 @@
       ++revision;
       const allowed = editable(), summary = invoice.receipt_summary || {items:[],pending_lines:0};
       find('.review-content').innerHTML = (!allowed ? '<p class="warning-summary">' + esc(invoice.error_message || 'Hóa đơn đã ghi kho hoặc nguồn cần kiểm tra. Chỉ xem các dòng và tổng đã lưu.') + '</p>' : '') +
+        (invoice.receipt_status==='posted' && invoice.sync_status==='synced' ? '<p><button class="btn btn-primary review-repair-conversion">Sửa quy đổi đã nhập kho</button></p>' : '') +
         warnings.map(g=>'<p class="warning-summary">' + esc(g.message) + (allowed ? ' <button type="button" class="btn btn-small btn-outline review-split" data-group="' + g.id + '">Bỏ nhóm cũ</button>' : '') + '</p>').join('') +
         '<p class="review-caption">Đủ ' + lines.length + ' dòng gốc · ' + (invoice.discount_available ? 'Tổng chưa thuế sau chiết khấu trên hóa đơn: <strong>' + money(invoice.discount_net_total == null ? invoice.subtotal : invoice.discount_net_total) + '</strong>' : 'Tổng tiền dòng chưa thuế: <strong>' + money(lines.reduce((sum,r)=>sum+Number(r.amount || 0),0)) + '</strong>') + '</p>' +
         (invoice.discount_allocated ? '<p class="review-caption">Đã phân bổ chiết khấu <strong>' + money(invoice.discount_amount) + '</strong> vào giá nhập. Bảng dòng gốc giữ nguyên; bảng tổng nhập bên dưới dùng giá sau chiết khấu.</p>' : '') +
@@ -160,6 +161,9 @@
     dialog.addEventListener('click',async e=>{
       const button=e.target.closest('button');
       if(!button || busy)return;
+      if(button.matches('.review-repair-conversion')){
+        close();await window.TdpInputConversionRepair({invoice,api,esc,onSaved:changed});return;
+      }
       const row=button.closest('[data-review-line]'),line=row && lineFor(row.dataset.reviewLine);
       if(button.matches('.review-reset')){drafts.delete(line.id);render();rowFor(line.id).querySelector('.review-code').focus();return;}
       if(!button.matches('.review-save,.review-group,.review-split'))return;

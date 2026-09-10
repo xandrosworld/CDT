@@ -894,6 +894,8 @@ def init_database(*, sync_master=True):
         except ImportError:
             from input_discount import init_schema as init_discount_schema
         init_discount_schema(conn)
+        from tdp_system.input_conversion_repair import init_schema as init_conversion_repair_schema
+        init_conversion_repair_schema(conn)
         try:
             from .invoice_output_code_only import repair_output_code_only
         except ImportError:
@@ -4949,6 +4951,8 @@ try:
 except ImportError:
     from input_discount import register_routes as register_input_discount_routes
 register_input_discount_routes(app, {'db': db, 'now_iso': now_iso, 'setting_get': setting_get})
+from tdp_system.input_conversion_repair import register_routes as register_conversion_repair_routes
+register_conversion_repair_routes(app, {'db': db, 'now_iso': now_iso, 'setting_get': setting_get})
 
 register_bk_import_routes(app, {
     "db": db,

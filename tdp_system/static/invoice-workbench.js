@@ -79,6 +79,7 @@
       var result = input && ['ready','needs_mapping'].includes(invoice.workbench_status) ? '' : '<span class="tag">' + esc(statusLabels[invoice.workbench_status] || 'Cần kiểm tra') + '</span>';
       if (input) result += button('view-invoice-receipt-summary', invoice.id, 'Kiểm tra');
       if (input && invoice.discount_available) result += button('allocate-input-discount',invoice.id,invoice.discount_allocated ? 'Xem / sửa chiết khấu' : 'Phân bổ chiết khấu','btn-primary');
+      if (input && invoice.receipt_status === 'posted' && invoice.sync_status === 'synced') result += button('repair-input-conversion',invoice.id,'Sửa quy đổi đã nhập kho');
       if (!input) result += '<small>' + esc({issued:'Đã phát hành hợp lệ',draft:'Nháp/chờ ký',unknown:'Chưa rõ trạng thái',cancelled:'Đã hủy · cần đối chiếu',replaced:'Đã thay thế · cần đối chiếu',adjusted:'Điều chỉnh · cần đối chiếu'}[invoice.source_status_class] || 'Chưa rõ trạng thái') + '</small>';
       if (!input && invoice.workbench_status === 'ready') result += button('post-invoice-output', invoice.id, 'Xác nhận xuất cả hóa đơn', 'btn-primary');
       if (invoice.stock_status === 'reversal_required') result += button('reverse-invoice-output', invoice.id, 'Xác nhận hoàn tác xuất kho', 'btn-danger');

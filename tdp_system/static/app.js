@@ -7025,6 +7025,14 @@
         return;
       }
     }
+    if (action === 'repair-input-conversion') {
+      var repairInvoice = (state.invoiceListing.items || []).find(r => String(r.id) === String(button.dataset.id));
+      if (repairInvoice) await window.TdpInputConversionRepair({invoice:repairInvoice,api:api,esc:esc,onSaved:async function(){
+        state.inventoryValuation=null;state.inventoryMonthClose=null;state.outgoingReadiness=null;
+        state.outgoingPeriodShortages=null;await loadInvoiceWorkbench(true);render();
+      }});
+      return;
+    }
     if (action === 'allocate-input-discount') {
       if (invoicePendingEdit()) { showToast('Lưu mã/quy đổi đang sửa trước khi phân bổ chiết khấu.',true); return; }
       await window.TdpInputDiscount({id:Number(button.dataset.id),api:api,esc:esc,onSaved:async function(){ await loadInvoiceWorkbench(true); render(); }});
