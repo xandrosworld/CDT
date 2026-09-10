@@ -94,7 +94,7 @@ def input_receipt_summary(invoice):
             continue
         try:
             qty = Decimal(str(item.get("stock_qty")))
-            amount = Decimal(str(item.get("amount")))
+            amount = Decimal(str(item.get("stock_amount",item.get("amount"))))
             valid = qty.is_finite() and amount.is_finite() and qty > 0 and amount >= 0
         except (InvalidOperation, TypeError, ValueError):
             valid = False

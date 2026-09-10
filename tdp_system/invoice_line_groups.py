@@ -277,7 +277,8 @@ def grouped_lines(conn, tenant, invoices, lines):
             merged={**first,'group_id':g['id'],'group_members':members,'line_index':' + '.join(map(str,indices)),
                     'source_item_code':'','source_item_name':first['product_name'],'source_unit':first['product_unit'],
                     'qty':float(qty),'stock_qty':float(qty),'amount':float(amount),'unit_price':float(amount/qty),
-                    'stock_unit_price':float(amount/qty),'conversion_factor':1}
+                    'stock_unit_price':float(amount/qty),'conversion_factor':1,
+                    'stock_amount':sum(r.get('stock_amount',r['amount']) for r in members)}
             result=[merged if n==min(positions) else r for n,r in enumerate(result) if n==min(positions) or n not in positions]
     return result,warnings
 

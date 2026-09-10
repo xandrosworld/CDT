@@ -53,7 +53,8 @@
       const allowed = editable(), summary = invoice.receipt_summary || {items:[],pending_lines:0};
       find('.review-content').innerHTML = (!allowed ? '<p class="warning-summary">' + esc(invoice.error_message || 'Hóa đơn đã ghi kho hoặc nguồn cần kiểm tra. Chỉ xem các dòng và tổng đã lưu.') + '</p>' : '') +
         warnings.map(g=>'<p class="warning-summary">' + esc(g.message) + (allowed ? ' <button type="button" class="btn btn-small btn-outline review-split" data-group="' + g.id + '">Bỏ nhóm cũ</button>' : '') + '</p>').join('') +
-        '<p class="review-caption">Đủ ' + lines.length + ' dòng gốc · Tổng tiền dòng chưa thuế: <strong>' + money(lines.reduce((sum,r)=>sum+Number(r.amount || 0),0)) + '</strong></p>' +
+        '<p class="review-caption">Đủ ' + lines.length + ' dòng gốc · ' + (invoice.discount_available ? 'Tổng chưa thuế sau chiết khấu trên hóa đơn: <strong>' + money(invoice.discount_net_total == null ? invoice.subtotal : invoice.discount_net_total) + '</strong>' : 'Tổng tiền dòng chưa thuế: <strong>' + money(lines.reduce((sum,r)=>sum+Number(r.amount || 0),0)) + '</strong>') + '</p>' +
+        (invoice.discount_allocated ? '<p class="review-caption">Đã phân bổ chiết khấu <strong>' + money(invoice.discount_amount) + '</strong> vào giá nhập. Bảng dòng gốc giữ nguyên; bảng tổng nhập bên dưới dùng giá sau chiết khấu.</p>' : '') +
         '<div class="review-lines-scroll"><table class="review-lines"><thead><tr><th>Chọn</th><th>Dòng / Tên hàng</th><th>Lượng nguồn</th><th>Đơn giá</th><th>Tiền chưa thuế</th><th>Mã hàng / Quy đổi</th></tr></thead><tbody>' + lines.map(line => {
           const group = groups.get(line.id), canEdit = allowed && line.inventory_eligible && !line.is_expense && !group;
           const issue = line.issue || '';

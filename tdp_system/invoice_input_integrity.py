@@ -24,6 +24,16 @@ def receipt_cost_warning(conn, invoice_id, items=None):
     header = conn.execute('SELECT raw_json,receipt_status FROM msmi_invoices WHERE id=?', (invoice_id,)).fetchone()
     if not header or header['receipt_status'] == 'posted':
         return ''
+    try:
+        from .input_discount import _saved, state, DiscountError
+    except ImportError:
+        from input_discount import _saved, state, DiscountError
+    if _saved(conn,invoice_id):
+        try:
+            allocation=state(conn,invoice_id)
+            if allocation['valid']: return ''
+        except DiscountError: pass
+        return 'Phân bổ chiết khấu đã cũ. Mở Phân bổ chiết khấu để kiểm tra và xác nhận lại.'
     rows = items if items is not None else [dict(r) for r in conn.execute(
         'SELECT * FROM msmi_invoice_items WHERE invoice_id=?', (invoice_id,))]
     if not any(r['inventory_eligible'] for r in rows):

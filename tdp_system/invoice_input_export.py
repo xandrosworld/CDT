@@ -185,6 +185,17 @@ def input_invoice_export_data(conn, batch_id: Any) -> dict[str, Any]:
     for invoice in invoices:
         invoice['items'] = [line for line in lines if line['invoice_id'] == invoice['id']]
         annotate_invoice_tax(invoice, invoice.pop('raw_json', '{}'))
+        try:
+            from .input_discount import annotate, DiscountError
+        except ImportError:
+            from input_discount import annotate, DiscountError
+        try:
+            annotate(conn,invoice)
+        except DiscountError:
+            pass
+        for line in invoice['items']:
+            if 'stock_amount' in line and line['stock_qty'] > 0:
+                line['stock_unit_price'] = _vnd(line['stock_amount'] / line['stock_qty'], 'Đơn giá kho sau chiết khấu')
     return {
         "batch": batch,
         "invoices": invoices,

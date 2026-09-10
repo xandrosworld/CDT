@@ -890,6 +890,11 @@ def init_database(*, sync_master=True):
             from invoice_input_integrity import repair_missing_unit_price_goods
         repair_missing_unit_price_goods(conn, timestamp=now_iso())
         try:
+            from .input_discount import init_schema as init_discount_schema
+        except ImportError:
+            from input_discount import init_schema as init_discount_schema
+        init_discount_schema(conn)
+        try:
             from .invoice_output_code_only import repair_output_code_only
         except ImportError:
             from invoice_output_code_only import repair_output_code_only
@@ -4939,6 +4944,11 @@ try:
 except ImportError:
     from output_stock_remap import register_routes as register_output_stock_remap_routes
 register_output_stock_remap_routes(app, {'db': db, 'now_iso': now_iso})
+try:
+    from .input_discount import register_routes as register_input_discount_routes
+except ImportError:
+    from input_discount import register_routes as register_input_discount_routes
+register_input_discount_routes(app, {'db': db, 'now_iso': now_iso, 'setting_get': setting_get})
 
 register_bk_import_routes(app, {
     "db": db,

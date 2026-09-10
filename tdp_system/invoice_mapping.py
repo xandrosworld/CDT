@@ -456,14 +456,22 @@ def validated_input_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
     ).fetchone()
     if not revision:
         raise InvoiceMappingError("Mapping thiếu revision audit", code="mapping_revision_missing")
+    try:
+        from .input_discount import allocated_amount, DiscountError
+    except ImportError:
+        from input_discount import allocated_amount, DiscountError
+    try:
+        stock_amount=allocated_amount(conn,context['invoice_id'],int(item_id),context['amount'])
+    except DiscountError as exc:
+        raise InvoiceMappingError(str(exc),code='input_cost_review_required') from None
     return {
         "item_id": int(item_id),
         "line_index": int(context["line_index"]),
         "product_code": mapping["product_code"],
         "conversion_factor": factor,
         "stock_qty": expected_qty,
-        "stock_unit_price": expected_price,
-        "amount": float(context["amount"] or 0),
+        "stock_unit_price": stock_amount / expected_qty,
+        "amount": stock_amount,
         "mapping_id": int(mapping["id"]),
         "mapping_revision_id": int(revision["id"]),
     }

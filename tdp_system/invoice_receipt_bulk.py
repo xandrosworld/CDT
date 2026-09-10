@@ -21,7 +21,19 @@ def receipt_review(conn, invoice_id, tenant):
     products = [dict(r) for r in conn.execute('SELECT code,name,unit FROM products WHERE code IN (SELECT product_code FROM msmi_invoice_items WHERE invoice_id=?) ORDER BY code', (invoice_id,))]
     # Rules and units must still be those the user reviewed, including dated rules.
     rules = [dict(r) for r in conn.execute("SELECT * FROM invoice_line_mappings WHERE tenant=? AND source='msmi' AND partner_key=? ORDER BY id", (tenant, invoice['seller_tax_code']))]
-    token = hashlib.sha256(json.dumps([header, items, products, rules], sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+    try:
+        from .input_discount import _saved, state, DiscountError
+    except ImportError:
+        from input_discount import _saved, state, DiscountError
+    allocation=_saved(conn,invoice_id);discounts={}
+    if allocation:
+        try:
+            s=state(conn,invoice_id)
+            if s['valid']: discounts=s['values']
+        except DiscountError: pass
+    source=[header, items, products, rules]
+    if allocation: source.append(allocation)
+    token = hashlib.sha256(json.dumps(source, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
     units = {p['code']: p['unit'] for p in products}
     quantities = {}
     eligible = [r for r in items if r['inventory_eligible']]
@@ -29,7 +41,7 @@ def receipt_review(conn, invoice_id, tenant):
     for item in eligible:
         unit = units.get(item['product_code'], '')
         quantities[unit] = quantities.get(unit, Decimal(0)) + Decimal(str(item['stock_qty'] or 0))
-        amount += Decimal(str(item['amount'] or 0))
+        amount += Decimal(str(item['amount'] or 0))-discounts.get(item['id'],Decimal(0))
     return {'id': invoice_id, 'token': token, 'number': invoice['invoice_series'] + ' / ' + invoice['invoice_number'],
             'date': invoice['invoice_date'], 'seller': invoice['seller_name'], 'line_count': len(eligible),
             'amount': float(amount), 'qty_by_unit': {k: float(v) for k,v in quantities.items()}}

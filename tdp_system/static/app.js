@@ -7025,6 +7025,11 @@
         return;
       }
     }
+    if (action === 'allocate-input-discount') {
+      if (invoicePendingEdit()) { showToast('Lưu mã/quy đổi đang sửa trước khi phân bổ chiết khấu.',true); return; }
+      await window.TdpInputDiscount({id:Number(button.dataset.id),api:api,esc:esc,onSaved:async function(){ await loadInvoiceWorkbench(true); render(); }});
+      return;
+    }
     if (['invoice-expense-all','invoice-expense-undo','invoice-expense-line','invoice-expense-line-undo'].includes(action)) {
       if (invoicePendingEdit()) {
         showToast('Hãy Lưu hoặc nhấn Esc để bỏ sửa mã trước khi phân loại.',true); return;

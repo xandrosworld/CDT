@@ -112,6 +112,12 @@ def input_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=None
         except ImportError:
             from invoice_input_integrity import receipt_cost_warning
         invoice['cost_warning'] = receipt_cost_warning(conn, invoice['id'], invoice['items'])
+        try:
+            from .input_discount import annotate, DiscountError
+        except ImportError:
+            from input_discount import annotate, DiscountError
+        try: annotate(conn,invoice)
+        except DiscountError: invoice['discount_available']=bool(invoice['cost_warning'])
     return {
         "batch_id": safe_batch_id,
         "invoice_type": INPUT_INVOICE,

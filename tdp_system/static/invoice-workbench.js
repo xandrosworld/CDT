@@ -49,7 +49,7 @@
         return '<div class="invoice-adjustment-review"><strong>Cặp hóa đơn điều chỉnh cần đối chiếu</strong><small>Lượng tăng/giảm bù nhau. Kiểm tra phần thuế và xác nhận có giao/nhận thêm hàng hay không.</small>' + button('review-output-adjustment',invoice.id,'Đối chiếu điều chỉnh') + '</div>';
       }
       if (item.is_expense) return '<span class="invoice-expense-label">Chi phí · không nhập kho</span>';
-      if (item.group_id) return '<strong>' + esc(item.product_code) + '</strong><div>Đã gộp ' + item.group_members.length + ' dòng</div><div>' + num(item.stock_qty) + ' ' + esc(item.product_unit) + '</div><small>Giá vốn sau gộp: ' + money(item.stock_unit_price) + '</small><details><summary>Xem dòng gốc</summary>' + item.group_members.map(function(r) { return '<div>Dòng ' + r.line_index + ': ' + esc(r.source_item_name) + ' · ' + num(r.qty) + ' ' + esc(r.source_unit) + ' · ' + money(r.amount) + '</div>'; }).join('') + '</details>' + button('split-invoice-group', item.group_id, 'Tách lại');
+      if (item.group_id) return '<strong>' + esc(item.product_code) + '</strong><div>Đã gộp ' + item.group_members.length + ' dòng</div><div>' + num(item.stock_qty) + ' ' + esc(item.product_unit) + '</div><small>Giá vốn sau gộp: ' + money(item.stock_amount != null && item.stock_qty > 0 ? item.stock_amount / item.stock_qty : item.stock_unit_price) + '</small><details><summary>Xem dòng gốc</summary>' + item.group_members.map(function(r) { return '<div>Dòng ' + r.line_index + ': ' + esc(r.source_item_name) + ' · ' + num(r.qty) + ' ' + esc(r.source_unit) + ' · ' + money(r.amount) + '</div>'; }).join('') + '</details>' + button('split-invoice-group', item.group_id, 'Tách lại');
 
       var editableReview = !input && invoice.can_edit_mapping === true && invoice.sync_status !== 'synced';
       if (!input && !editableReview && (invoice.sync_status !== 'synced' || invoice.stock_status === 'blocked')) {
@@ -78,6 +78,7 @@
     function actions(invoice) {
       var result = input && ['ready','needs_mapping'].includes(invoice.workbench_status) ? '' : '<span class="tag">' + esc(statusLabels[invoice.workbench_status] || 'Cần kiểm tra') + '</span>';
       if (input) result += button('view-invoice-receipt-summary', invoice.id, 'Kiểm tra');
+      if (input && invoice.discount_available) result += button('allocate-input-discount',invoice.id,invoice.discount_allocated ? 'Xem / sửa chiết khấu' : 'Phân bổ chiết khấu','btn-primary');
       if (!input) result += '<small>' + esc({issued:'Đã phát hành hợp lệ',draft:'Nháp/chờ ký',unknown:'Chưa rõ trạng thái',cancelled:'Đã hủy · cần đối chiếu',replaced:'Đã thay thế · cần đối chiếu',adjusted:'Điều chỉnh · cần đối chiếu'}[invoice.source_status_class] || 'Chưa rõ trạng thái') + '</small>';
       if (!input && invoice.workbench_status === 'ready') result += button('post-invoice-output', invoice.id, 'Xác nhận xuất cả hóa đơn', 'btn-primary');
       if (invoice.stock_status === 'reversal_required') result += button('reverse-invoice-output', invoice.id, 'Xác nhận hoàn tác xuất kho', 'btn-danger');
