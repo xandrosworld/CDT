@@ -105,6 +105,38 @@ class SourceScopeTests(unittest.TestCase):
         self.assertIn('OTHER',str(report['warnings']))
         self.assertEqual(self.request().status_code,409)
 
+    def test_known_other_contractor_conflict_does_not_block_selected_export(self):
+        self.seed(stock=30)
+        with server.db() as c:
+            self.add_batch(c,'2026-09-02',[{'qty':4,'contractor':'NT-B'}])
+            c.execute("INSERT OR REPLACE INTO products(code,name,unit) VALUES('OTHER','Mã khác','kg')")
+        sid=self.source(code='OTHER');self.assign(sid,party='NT-B')
+        self.assertEqual(self.request(contractor='NT-B').status_code,409)
+        all_response=self.request(contractor='')
+        self.assertEqual(all_response.status_code,200,all_response.get_json(silent=True))
+        self.assertEqual(all_response.headers['X-Blocked-Contractors'],'1')
+        response=self.request(contractor='NT-A')
+        self.assertEqual(response.status_code,200,response.get_json(silent=True))
+        self.assertEqual(response.headers['X-Invoice-Files'],'1')
+        with server.db() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM outgoing_invoice_drafts WHERE contractor='NT-B'").fetchone()[0],0)
+
+    def test_unknown_buyer_still_requires_reconciliation_for_selected_export(self):
+        self.seed(stock=30);self.source()
+        self.assertEqual(self.request(contractor='NT-A').status_code,409)
+
+    def test_verified_buyer_profile_resolves_future_invoices(self):
+        self.seed(stock=30);sid=self.source()
+        self.assertEqual(self.request().status_code,409)
+        with server.db() as c:
+            c.execute("UPDATE outgoing_source_invoices SET buyer_tax_code='0200168673' WHERE id=?",(sid,))
+            tax=c.execute('SELECT buyer_tax_code FROM outgoing_source_invoices WHERE id=?',(sid,)).fetchone()[0]
+            c.execute("INSERT INTO outgoing_buyer_profiles(contractor,legal_name,tax_code,address,updated_at) VALUES('NT-A','Khách hàng',?,'Test',?)",(tax,server.now_iso()))
+        self.assertEqual(self.report()['rows'][0]['unissued_qty'],7)
+        self.assertEqual(self.request().status_code,200)
+        self.assertEqual(self.request().status_code,200)
+        self.assertEqual(self.report()['rows'][0]['unissued_qty'],7)
+
     def test_effective_stock_identity_is_used_after_a_reviewed_remap(self):
         self.seed(stock=20)
         with server.db() as c:c.execute("INSERT OR REPLACE INTO products(code,name,unit) VALUES('OTHER','Mã khác','kg')")

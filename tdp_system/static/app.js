@@ -821,7 +821,7 @@
     anchor.click();
     anchor.remove();
     setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
-    return {filename:filename, invoiceFiles:Number(response.headers.get('X-Invoice-Files') || 0), pendingLines:Number(response.headers.get('X-Pending-Order-Lines') || 0)};
+    return {filename:filename, invoiceFiles:Number(response.headers.get('X-Invoice-Files') || 0), pendingLines:Number(response.headers.get('X-Pending-Order-Lines') || 0), blockedContractors:Number(response.headers.get('X-Blocked-Contractors') || 0)};
   }
 
   function setBusy(value, message) {
@@ -2898,7 +2898,7 @@
       }).join('') + '</select></label><input type="hidden" name="scope" value="unissued">' +
       '<button type="submit" value="sync" class="btn btn-outline">Cập nhật hóa đơn đã ký</button>' +
       '<button type="submit" value="export" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
-      '<p>Trước mỗi lần tải bảng kê, hệ thống cập nhật hóa đơn đã ký từ M-Invoice để trừ phần đã xuất. Nếu còn hóa đơn chưa khớp nhà thầu hoặc mã hàng, cần đối chiếu trước khi tải tiếp.</p>' +
+      '<p>Trước mỗi lần tải bảng kê, hệ thống cập nhật hóa đơn đã ký từ M-Invoice để trừ phần đã xuất. Khi chọn tất cả, nhà thầu đủ điều kiện vẫn tải được; nhà thầu cần sửa được ghi rõ trong file hướng dẫn kèm ZIP. Hóa đơn chưa xác định được nhà thầu cần đối chiếu trước để tránh xuất trùng.</p>' +
       '<p>Hàng thông thường chỉ lấy lượng đủ tồn, không âm kho; phần thiếu giữ lại. KKKNT giữ ngoại lệ đã thống nhất.</p>' +
       '<p><strong>Tự cộng dồn toàn bộ phần đủ điều kiện chưa xuất từ trước đến hôm nay.</strong> Không cần chọn ngày. Chị quyết định xuất phần nào, lúc nào; phần còn lại giữ chờ và cộng với đơn mới đã duyệt. Tải file chưa tính là đã phát hành.</p>' +
       '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng để đối chiếu. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
@@ -5997,6 +5997,7 @@
         }
         var exported = await downloadFile('/api/export/order-invoices', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
         state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel để up M-Invoice. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa phân bổ vào file này.' : 'Đã phân bổ lượng được chọn vào file.')+' Tải file chưa tính là đã xuất; xem bảng chưa xuất cộng dồn bên dưới.';
+        if(exported.blockedContractors) state.orderInvoiceExportResult+=' Có '+exported.blockedContractors+' nhà thầu chưa tạo file do cần sửa. Xem tên nhà thầu và lý do trong HUONG_DAN_VA_PHAN_CHUA_XUAT.txt kèm ZIP.';
         showToast('Đã tải bảng kê từ đơn hàng để up M-Invoice');
         state.outgoingInvoices = null; state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
         await Promise.all([fetchOutgoingInvoices(),fetchOutgoingReadiness()]);

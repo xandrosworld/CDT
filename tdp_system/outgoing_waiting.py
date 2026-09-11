@@ -14,7 +14,7 @@ except ImportError:
     from stock_tax_policy import exempt_order_codes
 
 
-def refresh_waiting(conn, timestamp, *, fill=True):
+def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
     """Caller owns the transaction. Downloads/refreshes never mark invoices issued."""
     try:
         from .contract_modules import invoice_tax_percent, audit
@@ -22,17 +22,23 @@ def refresh_waiting(conn, timestamp, *, fill=True):
         from contract_modules import invoice_tax_percent, audit
     external={}
     issued,warnings=issued_allocations(conn,external_quantities=external)
+    warnings=[w for w in warnings if not contractor or not w['contractor'] or w['contractor']==contractor]
     if warnings:
         return {'created':[], 'replaced':[], 'warnings':warnings}
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
-        WHERE b.status='approved' ORDER BY o.work_date,o.id""")]
+        WHERE b.status='approved' AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(contractor,contractor))]
     need={r['id']:max(decimal(r['actual_delivered'])-decimal(r['customer_return_qty'])-decimal(issued.get(r['id'],0)),Decimal(0)) for r in orders}
     settled={r['order_id']:r['external_issued_qty'] for r in conn.execute('SELECT * FROM outgoing_waiting_settlements')}
+    if contractor:
+        order_ids={r['id'] for r in orders}
+        external={oid:q for oid,q in external.items() if oid in order_ids}
+        settled={oid:q for oid,q in settled.items() if oid in order_ids}
     consume={oid:max(decimal(q)-decimal(settled.get(oid,0)),Decimal(0)) for oid,q in external.items()}
     old=[];replacement=[];created=[]
     # Remote saved drafts cannot be rewritten. Allocate their holds first.
     drafts=[dict(r) for r in conn.execute("""SELECT * FROM outgoing_invoice_drafts WHERE status='draft'
-        ORDER BY CASE WHEN minvoice_status IN ('saved','saving','unknown') THEN 0 ELSE 1 END,id""")]
+        AND (?='' OR contractor=?)
+        ORDER BY CASE WHEN minvoice_status IN ('saved','saving','unknown') THEN 0 ELSE 1 END,id""",(contractor,contractor))]
     for d in drafts:
         rows=[dict(r) for r in conn.execute("""SELECT l.*,o.batch_id,o.work_date,o.buy_price,a.source_unit_price
             FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id
@@ -54,7 +60,7 @@ def refresh_waiting(conn, timestamp, *, fill=True):
             continue
         old.append(d['id'])
         if kept:replacement.append((d['contractor'],kept))
-    # Ambiguous remote drafts leave the complete waiting pool unchanged.
+    # Ambiguous remote drafts leave the selected contractors' waiting pool unchanged.
     if warnings:return {'created':[], 'replaced':[], 'warnings':warnings}
     for oid in settled.keys()|external.keys():
         qty=external.get(oid,0)

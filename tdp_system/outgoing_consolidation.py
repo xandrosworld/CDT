@@ -76,8 +76,9 @@ def _groups(rows, floor_kg=True):
         qty=sum((decimal(r['qty']) for r in items),Decimal(0))
         if floor_kg and unit=='kg':qty=qty.quantize(Decimal('.1'),rounding=ROUND_DOWN)
         if qty>0:result.append((code,unit,nature,price,qty,items))
-    if any(len(v)>1 for v in units.values()):
-        raise InvoiceTaxExportError('Cùng mã có nhiều đơn vị tính. Kiểm tra quy đổi trước khi dồn mã.')
+    conflicts=[code+' ('+', '.join(sorted(values))+')' for code,values in units.items() if len(values)>1]
+    if conflicts:
+        raise InvoiceTaxExportError('Cùng mã có nhiều đơn vị tính: '+ '; '.join(conflicts)+'. Kiểm tra quy đổi trước khi dồn mã.')
     return result
 
 

@@ -4411,7 +4411,7 @@ def api_export_order_invoices():
             except (ValueError,MinvoiceError) as exc:
                 raise InvoiceTaxExportError('Chưa cập nhật đủ hóa đơn đã ký từ M-Invoice; chưa tạo file để tránh xuất trùng. '+str(exc),code='issued_sync_required') from exc
         output = io.BytesIO()
-        pending, selected_orders = [], []
+        pending, selected_orders, blocked = [], [], []
         with db() as conn:
             conn.execute('BEGIN IMMEDIATE')
             if contractor and not conn.execute('SELECT 1 FROM contractors WHERE code=?', (contractor,)).fetchone():
@@ -4420,13 +4420,6 @@ def api_export_order_invoices():
                 from .outgoing_waiting import refresh_waiting
             except ImportError:
                 from outgoing_waiting import refresh_waiting
-            refreshed=refresh_waiting(conn,now_iso(),fill=False)
-            if refreshed['warnings']:
-                raise InvoiceTaxExportError(refreshed['warnings'][0]['message'],code='issued_source_unresolved')
-            _, source_warnings=issued_allocations(conn)
-            source_warnings=[w for w in source_warnings if not contractor or not w['contractor'] or w['contractor']==contractor]
-            if source_warnings:
-                raise InvoiceTaxExportError('Cần đối chiếu hóa đơn đã phát hành trước khi lập tiếp để tránh xuất trùng. '+source_warnings[0]['message'],code='issued_source_unresolved')
             batches = conn.execute("""SELECT b.* FROM batches b WHERE b.work_date BETWEEN ? AND ?
                 AND (?=0 OR b.status='approved')
                 AND EXISTS(SELECT 1 FROM orders o WHERE o.batch_id=b.id AND (?='' OR o.contractor=?))
@@ -4442,19 +4435,39 @@ def api_export_order_invoices():
                 selected_orders.extend(dict(r) for r in conn.execute(
                     "SELECT * FROM orders WHERE batch_id=? AND (?='' OR contractor=?) ORDER BY id",
                     (batch['id'],contractor,contractor)))
-            replenish=replenishable_scopes(conn,selected_orders,[b['id'] for b in batches])
-            for batch in batches:
-                orders = [r for r in selected_orders if r['batch_id']==batch['id']]
-                for party in sorted({r['contractor'] for r in orders if net_delivered(r)>1e-9}):
-                    editable = conn.execute("""SELECT 1 FROM outgoing_invoice_drafts d
-                        JOIN outgoing_order_allocations l ON l.draft_id=d.id JOIN orders o ON o.id=l.order_id
-                        WHERE (o.batch_id=? OR d.id IN (SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id=?)) AND d.contractor=? AND d.status='draft'
-                        AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') LIMIT 1""",
-                        (batch['id'],batch['id'],party)).fetchone()
-                    if not editable or (batch['id'],party) in replenish:
-                        create_partial_outgoing_drafts(conn,batch['id'],now_iso,contractor_filter=party)
-            draft_ids = consolidate(conn,[b['id'] for b in batches],contractor,invoice_tax_percent,now_iso())
+            draft_ids=[]
+            for party in sorted({r['contractor'] for r in selected_orders if net_delivered(r)>1e-9}):
+                conn.execute('SAVEPOINT export_contractor')
+                try:
+                    refreshed=refresh_waiting(conn,now_iso(),fill=False,contractor=party)
+                    if refreshed['warnings']:
+                        raise InvoiceTaxExportError(refreshed['warnings'][0]['message'],code='issued_source_unresolved')
+                    party_orders=[r for r in selected_orders if r['contractor']==party]
+                    replenish=replenishable_scopes(conn,party_orders,[b['id'] for b in batches])
+                    for batch in batches:
+                        if not any(r['batch_id']==batch['id'] for r in party_orders):continue
+                        editable = conn.execute("""SELECT 1 FROM outgoing_invoice_drafts d
+                            JOIN outgoing_order_allocations l ON l.draft_id=d.id JOIN orders o ON o.id=l.order_id
+                            WHERE (o.batch_id=? OR d.id IN (SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id=?)) AND d.contractor=? AND d.status='draft'
+                            AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') LIMIT 1""",
+                            (batch['id'],batch['id'],party)).fetchone()
+                        if not editable or (batch['id'],party) in replenish:
+                            create_partial_outgoing_drafts(conn,batch['id'],now_iso,contractor_filter=party)
+                    party_drafts=consolidate(conn,[b['id'] for b in batches],party,invoice_tax_percent,now_iso())
+                    # Validate the actual workbook before committing this contractor's holds.
+                    for did in party_drafts:
+                        lines=[{**dict(r),'contractor':party} for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(did,))]
+                        build_invoice_workbook(lines,vat_percent=invoice_tax_percent(lines[0]['tax']),template_dir=TAX_TEMPLATE_DIR)
+                    draft_ids.extend(party_drafts)
+                except (ValueError,InvoiceTaxExportError,OutgoingReadinessError) as exc:
+                    conn.execute('ROLLBACK TO export_contractor')
+                    if contractor:raise
+                    blocked.append({'contractor':party,'message':str(exc),'code':getattr(exc,'code','invalid_order_invoice_export')})
+                finally:
+                    conn.execute('RELEASE export_contractor')
             if not draft_ids:
+                if blocked:
+                    raise InvoiceTaxExportError('; '.join(w['contractor']+': '+w['message'] for w in blocked),code=blocked[0]['code'])
                 raise InvoiceTaxExportError('Chưa có lượng đủ điều kiện để tạo file mới. Kiểm tra tồn và các dự thảo đã lưu/đã phát hành.',code='no_invoiceable_orders')
             all_allocated=allocation_by_order(conn,[b['id'] for b in batches])
             for order in selected_orders:
@@ -4481,12 +4494,15 @@ def api_export_order_invoices():
                     'Chỉ gồm lượng đã giữ tồn; KKKNT giữ ngoại lệ đã xác nhận. Chưa ký/phát hành hóa đơn.',
                     'Dùng file gộp này thay các file tách ngày chưa phát hành, không nhập thêm cả hai bộ file.',
                     'Tải file hoặc tạo nháp chưa tính là đã xuất hóa đơn. Bảng chưa xuất cộng dồn lấy lượng đã duyệt trừ lượng đã phát hành được đồng bộ/xác nhận.',
-                    f'PHẦN CHƯA PHÂN BỔ VÀO FILE NÀY: {len(pending)} dòng (thiếu tồn hoặc phần lẻ Kg; không phải toàn bộ hàng chưa xuất hóa đơn):',*pending]
+                    f'NHÀ THẦU CHƯA TẠO FILE: {len(blocked)}. Các nhà thầu này giữ nguyên phần chờ, cần sửa trước khi tải riêng:',
+                    *[w['contractor']+': '+w['message'] for w in blocked],
+                    f'PHẦN CHƯA PHÂN BỔ VÀO FILE NÀY: {len(pending)} dòng (thiếu tồn, phần lẻ Kg hoặc nhà thầu cần sửa; không phải toàn bộ hàng chưa xuất hóa đơn):',*pending]
                 archive.writestr('HUONG_DAN_VA_PHAN_CHUA_XUAT.txt','\n'.join(guide).encode('utf-8-sig'))
         output.seek(0)
         response=send_file(output,as_attachment=True,download_name=f'BANG_KE_UP_M_INVOICE_{start}_{end}.zip',mimetype='application/zip')
         response.headers['X-Invoice-Files']=str(len(draft_ids))
         response.headers['X-Pending-Order-Lines']=str(len(pending))
+        response.headers['X-Blocked-Contractors']=str(len(blocked))
         response.headers['X-Order-Scope']='unissued' if cumulative else 'range'
         return response
     except (ValueError,InvoiceTaxExportError,OutgoingReadinessError) as exc:

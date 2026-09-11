@@ -25,6 +25,30 @@ class OrderInvoiceRangeTests(unittest.TestCase):
             b,_=self.add_batch(c,'2026-09-02',[{'qty':5}])
         return a,b
 
+    def test_all_exports_valid_party_and_reports_unit_conflict_without_changing_its_holds(self):
+        self.seed(stock=100)
+        with server.db() as c:
+            self.add_batch(c,'2026-09-01',[{'qty':5,'contractor':'NT-B'}])
+            bid,_=self.add_batch(c,'2026-09-02',[{'qty':4,'contractor':'NT-B'}])
+            c.execute("UPDATE orders SET unit='gói' WHERE batch_id=?",(bid,))
+        # Preexisting daily drafts must survive a failed consolidation unchanged.
+        self.assertEqual(self.request('NT-B',start='2026-09-01',end='2026-09-01').status_code,200)
+        self.assertEqual(self.request('NT-B',start='2026-09-02',end='2026-09-02').status_code,200)
+        def held(c):
+            return [tuple(r) for r in c.execute("SELECT t.* FROM inventory_transactions t JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id WHERE t.source_type='OUTGOING_DRAFT' AND d.contractor='NT-B' ORDER BY t.id")]
+        with server.db() as c:before=held(c)
+        for _ in range(2):
+            result=self.request(contractor='')
+            self.assertEqual(result.status_code,200,result.get_json(silent=True))
+            self.assertEqual(result.headers['X-Blocked-Contractors'],'1')
+            with zipfile.ZipFile(io.BytesIO(result.data)) as archive:
+                excel=[n for n in archive.namelist() if n.endswith('.xlsx')]
+                self.assertEqual(len(excel),1);self.assertIn('NT-A',excel[0])
+                guide=archive.read('HUONG_DAN_VA_PHAN_CHUA_XUAT.txt').decode('utf-8-sig')
+                self.assertIn('NT-B',guide);self.assertIn('HH-01 (gói, kg)',guide)
+            with server.db() as c:self.assertEqual(held(c),before)
+        self.assertEqual(self.request('NT-B').status_code,409)
+
     def test_two_days_cap_stock_and_repeat_does_not_change_reservations(self):
         self.seed()
         r=self.request();self.assertEqual(r.status_code,200,r.get_json(silent=True))
