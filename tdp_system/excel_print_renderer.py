@@ -29,7 +29,7 @@ from reportlab.lib.pagesizes import A4, A5
 
 EXCEL_PAPER_SIZES = {"A4": 9, "A5": 11}
 PDF_PAPER_SIZES = {"A4": A4, "A5": A5}
-FORMAT_VERSION = "tdp-excel-artwork-pdf-v3"
+FORMAT_VERSION = "tdp-excel-artwork-pdf-v4"
 
 
 class ExcelPrintError(RuntimeError):
@@ -300,6 +300,7 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
 
     writer = PdfWriter()
     layout, blank_pages = [], []
+    binding_landscape = None
     def blank_back():
         previous = writer.pages[-1]
         writer.add_blank_page(width=float(previous.mediabox.width), height=float(previous.mediabox.height))
@@ -316,6 +317,8 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
             for page in reader.pages:
                 source_width = float(page.mediabox.width)
                 source_height = float(page.mediabox.height)
+                if not receipt and binding_landscape is None:
+                    binding_landscape = source_width > source_height
                 base_width, base_height = PDF_PAPER_SIZES[paper]
                 if source_width > source_height:
                     target_width, target_height = base_height, base_width
@@ -333,8 +336,11 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
                            'end_page':len(writer.pages), 'receipt':receipt})
             if duplex and receipt:
                 blank_back()
+        if binding_landscape is None and writer.pages:
+            binding_landscape = writer.pages[0].mediabox.width > writer.pages[0].mediabox.height
+        edge = '/DuplexFlipShortEdge' if binding_landscape else '/DuplexFlipLongEdge'
         writer._root_object[NameObject('/ViewerPreferences')] = DictionaryObject({
-            NameObject('/Duplex'): NameObject('/DuplexFlipLongEdge' if duplex else '/Simplex')})
+            NameObject('/Duplex'): NameObject(edge if duplex else '/Simplex')})
         with target.open("wb") as handle:
             writer.write(handle)
         return {'sections':layout, 'blank_pages':blank_pages, 'total_pages':len(writer.pages)}

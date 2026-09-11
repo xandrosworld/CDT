@@ -257,7 +257,7 @@ def register_document_routes(app, context_factory):
             sides = request.args.get('sides', 'duplex')
             if sides not in {'simplex', 'duplex'}:
                 raise ValueError('Chọn cách in một mặt hoặc hai mặt')
-            digest = hashlib.sha256(('sheet-scope-v4:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
+            digest = hashlib.sha256(('sheet-scope-v5:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
             pdf = directory / f'{digest}.pdf'
             with PDF_LOCK:
                 if not pdf.exists():

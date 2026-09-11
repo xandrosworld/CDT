@@ -23,7 +23,7 @@ class ReceiptPrintSheetTests(unittest.TestCase):
         canvas.save()
         return {'sheet':name, 'path':path, 'pages':pages}
 
-    def check(self, sources, duplex):
+    def check(self, sources, duplex, edge='/DuplexFlipShortEdge'):
         originals = {s['path']:s['path'].read_bytes() for s in sources}
         target = self.root / 'result.pdf'
         layout = _merge_pdfs(sources, target, paper='A4', duplex=duplex)
@@ -38,7 +38,7 @@ class ReceiptPrintSheetTests(unittest.TestCase):
                     self.assertEqual(item['start_page'] % 2,1)
                     self.assertIn(item['end_page']+1,layout['blank_pages'])
         for p, data in originals.items():self.assertEqual(p.read_bytes(),data)
-        self.assertEqual(reader.trailer['/Root']['/ViewerPreferences']['/Duplex'], '/DuplexFlipLongEdge' if duplex else '/Simplex')
+        self.assertEqual(reader.trailer['/Root']['/ViewerPreferences']['/Duplex'], edge if duplex else '/Simplex')
         return layout,reader
 
     def test_odd_and_even_summary_pages_then_five_receipts(self):
@@ -53,7 +53,7 @@ class ReceiptPrintSheetTests(unittest.TestCase):
                 for i in range(1,6):self.assertEqual(full.count(f'PERSON_{i}'),1)
 
     def test_only_selected_receipts_still_get_individual_sheets(self):
-        layout,reader=self.check([self.source('biên nhận 02',1,'PERSON_2'),self.source('biên nhận 05',1,'PERSON_5')],True)
+        layout,reader=self.check([self.source('biên nhận 02',1,'PERSON_2'),self.source('biên nhận 05',1,'PERSON_5')],True,'/DuplexFlipLongEdge')
         self.assertEqual(layout['blank_pages'],[2,4])
         self.assertEqual(len(reader.pages),4)
 
@@ -61,6 +61,16 @@ class ReceiptPrintSheetTests(unittest.TestCase):
         layout,reader=self.check([self.source('bảng kê tổng',3,'SUMMARY',True),self.source('biên nhận',1,'PERSON_1'),self.source('biên nhận 02',1,'PERSON_2')],False)
         self.assertEqual(len(reader.pages),5)
         self.assertEqual(layout['blank_pages'],[])
+
+    def test_portrait_duplex_uses_long_edge_without_rotating_back(self):
+        _,reader=self.check([self.source('Báo cáo',2,'PORTRAIT')],True,'/DuplexFlipLongEdge')
+        self.assertTrue(all(p.rotation==0 for p in reader.pages))
+        self.assertIn('page 2',reader.pages[1].extract_text())
+
+    def test_landscape_duplex_uses_short_edge_without_rotating_back(self):
+        _,reader=self.check([self.source('bảng kê tổng',2,'LANDSCAPE',True)],True)
+        self.assertTrue(all(p.rotation==0 for p in reader.pages))
+        self.assertIn('page 2',reader.pages[1].extract_text())
 
     def test_summary_alone_and_other_documents_are_not_padded(self):
         layout,reader=self.check([self.source('bảng kê tổng',3,'SUMMARY',True),self.source('Báo cáo',1,'REPORT')],True)

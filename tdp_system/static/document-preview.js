@@ -43,8 +43,10 @@
       var busy = false, modeTouched = false;
       function printHelp() {
         var paper = 'Chọn khổ '+host.querySelector('.document-paper').value+' trong hộp thoại máy in. ';
+        var summary = Array.from(selected).some(function(i){return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase());});
+        var edge = summary ? 'Bảng kê nằm ngang: chọn LẬT CẠNH NGẮN (Flip on short edge) để mặt sau không ngược đầu. ' : 'Trang dọc: chọn LẬT CẠNH DÀI (Flip on long edge). ';
         return paper + (host.querySelector('.document-sides').value === 'duplex' ?
-          'Trong hộp thoại máy in, chọn in hai mặt và in tất cả trang, kể cả trang trắng. Bảng kê tổng được in hai mặt; mỗi biên nhận có mặt sau trắng để mỗi người một tờ riêng.' :
+          edge + 'Chọn in hai mặt và in tất cả trang, kể cả trang trắng. Mỗi biên nhận có mặt sau trắng để mỗi người một tờ riêng. Nếu máy in đang chọn cạnh khác, đổi lại trong hộp thoại máy in.' :
           'Trong hộp thoại máy in, chọn in một mặt. Mỗi biên nhận in trên một tờ riêng.');
       }
       function update() {
