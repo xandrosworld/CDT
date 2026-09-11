@@ -164,6 +164,16 @@ class WaitingTests(unittest.TestCase):
         self.assertIn('đơn ghi gói, kho dùng kg',result['held_line_issues'][0]['message'])
         with server.db() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],0)
 
+    def test_bk_hold_remains_ready_when_other_contractor_has_unmarked_same_code(self):
+        self.seed(stock=0)
+        with server.db() as c:c.execute('UPDATE orders SET purchase_list=1')
+        self.assertEqual(self.refresh()['rows'][0]['ready_qty'],10)
+        with server.db() as c:self.add_batch(c,'2026-09-02',[{'contractor':'NT-B','qty':5}])
+        response=self.client.get('/api/outgoing-invoices/unissued?to=2026-09-07')
+        report=response.get_json()
+        self.assertEqual(report['warnings'],[])
+        self.assertEqual({r['contractor']:r['ready_qty'] for r in report['rows']},{'NT-A':10,'NT-B':0})
+
     def test_refresh_and_excel_are_idempotent_and_repeat_does_not_consume_stock(self):
         self.seed();self.refresh()
         with server.db() as c:before=c.serialize()

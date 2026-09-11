@@ -7,13 +7,13 @@ try:
     from .outgoing_consolidation import _write_draft, decimal, export_quantity
     from .outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from .stock_tax_policy import exempt_order_codes
-    from .outgoing_line_policy import unit_issues
+    from .outgoing_line_policy import unit_issues, draft_policy_rows
 except ImportError:
     from outgoing_unissued import issued_allocations
     from outgoing_consolidation import _write_draft, decimal, export_quantity
     from outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from stock_tax_policy import exempt_order_codes
-    from outgoing_line_policy import unit_issues
+    from outgoing_line_policy import unit_issues, draft_policy_rows
 
 
 def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
@@ -138,9 +138,9 @@ def waiting_readiness(conn,orders,issued):
     held=defaultdict(float);valid=defaultdict(float);warnings=[]
     stock=canonical_available_stock(conn)
     by_order={r['id']:r for r in orders}
-    exempt=exempt_order_codes(conn,orders)
     units=unit_issues(conn,orders)
     for d in conn.execute("SELECT id,contractor FROM outgoing_invoice_drafts WHERE status='draft'"):
+        exempt=exempt_order_codes(conn,draft_policy_rows(conn,d['id']))
         expected={r['product_code']:r['qty'] for r in conn.execute('SELECT product_code,SUM(qty) qty FROM outgoing_invoice_lines WHERE draft_id=? GROUP BY product_code',(d['id'],))}
         reserved={r['product_code']:r['qty'] for r in conn.execute("SELECT product_code,SUM(qty_out) qty FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved' GROUP BY product_code",(str(d['id']),))}
         for r in conn.execute('SELECT order_id,product_code,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
