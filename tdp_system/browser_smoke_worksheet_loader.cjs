@@ -29,8 +29,8 @@ const bundle='window.TDPWorksheet={isOpen:()=>!!document.querySelector("#opened"
   await p.clock.install();await open(p);await hidden(p);
   const deadline=Date.now()+10000;while(!held&&Date.now()<deadline)await new Promise(r=>setTimeout(r,20));assert(held,'First download reached the network');
   await p.waitForFunction(()=>document.querySelector('script[src*="worksheet-bundle"]'));
-  await p.clock.fastForward(31000);
-  await p.getByText('Tải bảng Excel quá 30 giây.',{exact:false}).waitFor();
+  await p.clock.fastForward(91000);
+  await p.getByText('Tải bảng Excel quá 90 giây.',{exact:false}).waitFor();
   assert.equal(await p.locator('.worksheet-load-retry').isVisible(),true);
   await p.screenshot({path:path.join(out,'02_MO_PHONG_QUA_THOI_GIAN_CHO.png')});
   await p.locator('.worksheet-load-retry').dblclick();

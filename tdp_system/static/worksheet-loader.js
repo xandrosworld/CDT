@@ -18,8 +18,8 @@
         if(error){script.remove();reject(error);}else resolve(engine);
       }
       var timer=setTimeout(function(){
-        finish(new Error('Tải bảng Excel quá 30 giây. Bấm Thử lại để tải lại, hoặc Hủy để quay về.'));
-      },30000);
+        finish(new Error('Tải bảng Excel quá 90 giây. Bấm Thử lại để tải lại, hoặc Hủy để quay về.'));
+      },90000);
       request.cancel=function(){finish(new Error('Đã hủy mở bảng Excel.'));};
       script.onload=function(){
         // A removed script may finish late. Restore the facade even then, but
