@@ -12,13 +12,13 @@ from openpyxl import load_workbook
 
 try:
     from .document_preview import create_snapshot, snapshot_files, PDF_LOCK
-    from .excel_print_renderer import build_excel_pdf_bundle, ExcelPrintError
+    from .excel_print_renderer import build_excel_pdf_bundle, ExcelPrintError, is_receipt_sheet
     from .invoice_payment_scope import issued_invoice_payment_scope
     from .invoice_payment_documents import invoice_payment_request_workbook
     from .contract_modules import invoice_delivery_statement_scope_workbook
 except ImportError:
     from document_preview import create_snapshot, snapshot_files, PDF_LOCK
-    from excel_print_renderer import build_excel_pdf_bundle, ExcelPrintError
+    from excel_print_renderer import build_excel_pdf_bundle, ExcelPrintError, is_receipt_sheet
     from invoice_payment_scope import issued_invoice_payment_scope
     from invoice_payment_documents import invoice_payment_request_workbook
     from contract_modules import invoice_delivery_statement_scope_workbook
@@ -225,6 +225,20 @@ def register_document_routes(app, context_factory):
             if output not in {'excel', 'pdf'}:
                 return jsonify(ok=False, error='Định dạng không hợp lệ'), 404
             directory, books, selection = snapshot_selection(root(), token, request.args.get('sheets'))
+            paper = request.args.get('paper', 'A4').upper()
+            if paper not in {'A4', 'A5'}:
+                raise ValueError('Chọn khổ giấy A4 hoặc A5')
+            if paper == 'A5':
+                if any(not is_receipt_sheet(sheet.title) for _, book in books for sheet in book if sheet.sheet_state == 'visible'):
+                    raise ValueError('Chọn riêng các biên nhận để in A5. Bảng kê tổng in A4.')
+                for _, book in books:
+                    for sheet in book:
+                        sheet.page_setup.paperSize = sheet.PAPERSIZE_A5
+                        sheet.page_setup.fitToWidth = 1
+                        sheet.page_setup.fitToHeight = 1
+                        sheet.page_margins.left = sheet.page_margins.right = 0.2
+                        sheet.page_margins.top = sheet.page_margins.bottom = 0.2
+                        sheet.page_margins.header = sheet.page_margins.footer = 0.1
             if output == 'excel':
                 if len(books) == 1:
                     stream = io.BytesIO()
@@ -243,7 +257,7 @@ def register_document_routes(app, context_factory):
             sides = request.args.get('sides', 'duplex')
             if sides not in {'simplex', 'duplex'}:
                 raise ValueError('Chọn cách in một mặt hoặc hai mặt')
-            digest = hashlib.sha256(('sheet-scope-v3:' + sides + ':' + selection).encode()).hexdigest()[:20]
+            digest = hashlib.sha256(('sheet-scope-v4:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
             pdf = directory / f'{digest}.pdf'
             with PDF_LOCK:
                 if not pdf.exists():
@@ -252,7 +266,7 @@ def register_document_routes(app, context_factory):
                         path = directory / f'print_{digest}_{index}.xlsx'
                         workbook.save(path)
                         sources.append({'path':path, 'document_type':'selected', 'title':'Chứng từ đã chọn'})
-                    build_excel_pdf_bundle(sources, pdf, paper='A4', duplex=sides == 'duplex')
+                    build_excel_pdf_bundle(sources, pdf, paper=paper, duplex=sides == 'duplex')
             return send_file(pdf, mimetype='application/pdf', as_attachment=False, download_name='Chung_tu_da_chon.pdf')
         except ExcelPrintError as exc:
             if getattr(exc, 'code', '') == 'receipt_requires_one_page':

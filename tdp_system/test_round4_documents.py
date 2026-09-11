@@ -159,6 +159,35 @@ class Round4DocumentTests(SelectedDocumentExportTests):
             self.assertEqual(renderer.call_count,2)
             self.assertEqual(self.client.get(url+'&sides=unknown').status_code,422)
 
+    def test_a5_receipts_have_separate_pdf_cache_and_excel_paper(self):
+        from .document_preview import create_snapshot
+        book=Workbook();book.active.title='bảng kê tổng';book.active['A1']='Bảng tổng'
+        book.create_sheet('biên nhận')['A1']='Một người'
+        data=create_snapshot(server.DATA_DIR/'document_previews',[('test.xlsx',book)]);book.close()
+        def build(sources,target,**kwargs):
+            generated=load_workbook(sources[0]['path'])
+            self.assertEqual(generated.sheetnames,['biên nhận'])
+            if kwargs['paper']=='A5':
+                self.assertEqual(str(generated.active.page_setup.paperSize),'11')
+                self.assertEqual(generated.active.page_setup.fitToHeight,1)
+            generated.close()
+            target.write_bytes(b'%PDF-1.4 '+kwargs['paper'].encode())
+        url='/api/documents/'+data['token']
+        with patch('tdp_system.round4_documents.build_excel_pdf_bundle',side_effect=build) as renderer:
+            a4=self.client.get(url+'/pdf?sheets=1&paper=A4&sides=simplex')
+            a5=self.client.get(url+'/pdf?sheets=1&paper=A5&sides=simplex')
+            self.assertEqual((a4.status_code,a5.status_code),(200,200))
+            self.assertNotEqual(a4.data,a5.data)
+            self.client.get(url+'/pdf?sheets=1&paper=A5&sides=simplex')
+            self.assertEqual(renderer.call_count,2)
+            self.assertEqual(self.client.get(url+'/pdf?sheets=0,1&paper=A5').status_code,422)
+            self.assertEqual(self.client.get(url+'/pdf?sheets=1&paper=A6').status_code,422)
+        exported=self.client.get(url+'/excel?sheets=1&paper=A5')
+        self.assertEqual(exported.status_code,200)
+        generated=load_workbook(io.BytesIO(exported.data));self.assertEqual(str(generated.active.page_setup.paperSize),'11');generated.close()
+        original=load_workbook(server.DATA_DIR/'document_previews'/data['token']/'0.xlsx')
+        self.assertIsNone(original['biên nhận'].page_setup.paperSize);original.close()
+
     def test_receipt_page_error_is_actionable(self):
         from .excel_print_renderer import ReceiptPrintError
         data=self.preview().get_json()

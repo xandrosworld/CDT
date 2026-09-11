@@ -29,11 +29,12 @@
         '<button type="button" class="btn btn-small btn-outline" data-doc="all">Chọn tất cả</button>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="none">Bỏ chọn</button>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="excel">Tải Excel đã chọn</button>' +
+        '<label>Khổ giấy <select class="document-paper" aria-label="Khổ giấy"><option value="A4">A4</option><option value="A5">A5 · biên nhận</option></select></label>' +
         '<label>Cách in <select class="document-sides" aria-label="Cách in"><option value="simplex">Một mặt</option><option value="duplex">Hai mặt · biên nhận tờ riêng</option></select></label>' +
         '<button type="button" class="btn btn-small btn-primary" data-doc="print">In phiếu đã chọn</button>' +
         '<label>Cỡ chữ <select class="document-zoom" aria-label="Phóng to chứng từ"><option value="0.8">80%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="refresh">Đọc lại dữ liệu mới</button></div>' +
-        '<p class="document-note">Bản xem, Excel và PDF dùng cùng số liệu tại lúc mở. Có thay đổi đơn thì bấm Đọc lại dữ liệu mới. Bản in A4 nền trắng.</p>' +
+        '<p class="document-note">Bản xem, Excel và PDF dùng cùng số liệu tại lúc mở. Có thay đổi đơn thì bấm Đọc lại dữ liệu mới. Bảng kê tổng in A4; chọn riêng biên nhận để đổi sang A5.</p>' +
         '<p class="document-note document-print-help" role="status"></p>' +
         (data.warnings || []).map(function (warning) { return '<p class="document-note tag-warn" role="alert">' + esc(warning) + '</p>'; }).join('') +
         '<div class="document-sheet-list" role="group" aria-label="Chọn từng chứng từ">' +
@@ -41,12 +42,18 @@
         '</div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false;
       function printHelp() {
-        return host.querySelector('.document-sides').value === 'duplex' ?
+        var paper = 'Chọn khổ '+host.querySelector('.document-paper').value+' trong hộp thoại máy in. ';
+        return paper + (host.querySelector('.document-sides').value === 'duplex' ?
           'Trong hộp thoại máy in, chọn in hai mặt và in tất cả trang, kể cả trang trắng. Bảng kê tổng được in hai mặt; mỗi biên nhận có mặt sau trắng để mỗi người một tờ riêng.' :
-          'Trong hộp thoại máy in, chọn in một mặt. Mỗi biên nhận in trên một tờ riêng.';
+          'Trong hộp thoại máy in, chọn in một mặt. Mỗi biên nhận in trên một tờ riêng.');
       }
       function update() {
         var mode = host.querySelector('.document-sides');
+        var paper = host.querySelector('.document-paper');
+        var receiptsOnly = selected.size > 0 && Array.from(selected).every(function(i){return /(?:^| · )biên nhận(?:\s+\d+)?$/.test(data.sheets[i].name.trim().toLowerCase());});
+        paper.querySelector('[value=A5]').disabled = !receiptsOnly;
+        if(!receiptsOnly) paper.value='A4';
+        paper.disabled=busy;
         if (!modeTouched) mode.value = Array.from(selected).some(function(i){return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase());}) ? 'duplex' : 'simplex';
         mode.disabled = busy;
         host.querySelector('.document-print-help').textContent = printHelp();
@@ -73,6 +80,7 @@
         var errorBox = host.querySelector('.document-error');
         errorBox.textContent = type === 'print' ? 'Đang tạo PDF đúng mẫu, vui lòng chờ…' : '';
         var url = '/api/documents/' + data.token + '/' + (type === 'print' ? 'pdf' : 'excel') + '?sheets=' + Array.from(selected).sort(function(a,b){return a-b;}).join(',');
+        url += '&paper=' + host.querySelector('.document-paper').value;
         if(type === 'print') url += '&sides=' + host.querySelector('.document-sides').value;
         try {
           var response = await checked(await fetch(url));
@@ -119,6 +127,7 @@
         }
         if (event.target.matches('.document-zoom')) show(current);
         if (event.target.matches('.document-sides')) { modeTouched = true; update(); }
+        if (event.target.matches('.document-paper')) update();
       };
       update(); show(0);
       if (printNow) await output('print');

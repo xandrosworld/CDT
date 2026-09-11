@@ -17,16 +17,21 @@ const server=http.createServer((req,res)=>{
  try{
   await page.goto('http://127.0.0.1:'+server.address().port);
   const mode=page.getByLabel('Cách in',{exact:true});await mode.waitFor();assert.equal(await mode.inputValue(),'duplex');
+  const paper=page.getByLabel('Khổ giấy',{exact:true});assert.equal(await paper.inputValue(),'A4');
+  assert.equal(await paper.locator('[value=A5]').evaluate(e=>e.disabled),true);
   assert.match(await page.locator('.document-print-help').innerText(),/kể cả trang trắng/);
   await page.locator('[data-doc=none]').click();assert.equal(await page.locator('[data-doc=print]').isDisabled(),true);
   await page.locator('[data-sheet="2"]').check();assert.equal(await mode.inputValue(),'simplex');
   await page.locator('[data-doc=print]').click();await page.locator('.document-pdf iframe').waitFor();
-  assert.match(requests.at(-1),/sheets=2&sides=simplex/);
+  assert.match(requests.at(-1),/sheets=2&paper=A4&sides=simplex/);
+  await paper.selectOption('A5');await page.locator('[data-doc=print]').click();await page.waitForFunction(()=>!document.querySelector('[data-doc=print]').disabled);
+  assert.match(requests.at(-1),/sheets=2&paper=A5&sides=simplex/);
   await mode.selectOption('duplex');await page.locator('[data-doc=all]').click();
+  assert.equal(await paper.inputValue(),'A4');assert.equal(await paper.locator('[value=A5]').evaluate(e=>e.disabled),true);
   await page.locator('[data-doc=print]').click();await page.waitForFunction(()=>!document.querySelector('[data-doc=print]').disabled);
-  assert.match(requests.at(-1),/sheets=0,1,2,3,4,5&sides=duplex/);
+  assert.match(requests.at(-1),/sheets=0,1,2,3,4,5&paper=A4&sides=duplex/);
   await mode.selectOption('simplex');await page.locator('[data-doc=print]').click();await page.waitForFunction(()=>!document.querySelector('[data-doc=print]').disabled);
-  assert.match(requests.at(-1),/sheets=0,1,2,3,4,5&sides=simplex/);
+  assert.match(requests.at(-1),/sheets=0,1,2,3,4,5&paper=A4&sides=simplex/);
   prefixed=true;await page.reload();await mode.waitFor();assert.equal(await mode.inputValue(),'duplex');
   assert.deepEqual(errors,[]);const result={ok:true,checks:['Mixed selection defaults to duplex, including multiple workbooks','Receipt alone defaults to simplex','Empty selection cannot print','PDF requests carry exact sheet scope and chosen sides'],requests,errors};fs.writeFileSync(path.join(out,'KIEM_THU_GIAO_DIEN.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
  }finally{await browser.close();server.close();}

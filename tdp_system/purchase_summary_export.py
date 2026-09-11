@@ -699,6 +699,18 @@ def build_purchase_summary_workbook(
         sheet[f"H{signature_last}"].alignment = Alignment(horizontal='center', vertical='center')
         sheet.row_dimensions[signature_last].height = max(24, sheet.row_dimensions[signature_last].height or 0)
 
+        for row in range(8, total_row + 1):
+            ratio = 1.0
+            for cell in sheet[row]:
+                if isinstance(cell, MergedCell):continue
+                font = copy(cell.font)
+                old_size = font.sz or 13
+                font.sz = old_size + 1
+                cell.font = font
+                ratio = max(ratio, font.sz / old_size)
+            height = sheet.row_dimensions[row].height or sheet.sheet_format.defaultRowHeight
+            sheet.row_dimensions[row].height = height * ratio
+
         sheet.print_area = f"A1:J{signature_last}"
         sheet.print_title_rows = "$8:$10"
         sheet.page_setup.paperSize = "9"
@@ -706,6 +718,8 @@ def build_purchase_summary_workbook(
         sheet.page_setup.scale = None
         sheet.page_setup.fitToWidth = 1
         sheet.page_setup.fitToHeight = 0
+        sheet.page_margins.top = 0.2
+        sheet.page_margins.header = 0.1
         sheet.page_margins.bottom = 0.5
         sheet.sheet_properties.pageSetUpPr.fitToPage = True
         sheet.freeze_panes = None
