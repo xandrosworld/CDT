@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -22,16 +23,25 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from pypdf import PdfReader, PdfWriter, Transformation
+from pypdf.generic import DictionaryObject, NameObject
 from reportlab.lib.pagesizes import A4, A5
 
 
 EXCEL_PAPER_SIZES = {"A4": 9, "A5": 11}
 PDF_PAPER_SIZES = {"A4": A4, "A5": A5}
-FORMAT_VERSION = "tdp-excel-artwork-pdf-v2"
+FORMAT_VERSION = "tdp-excel-artwork-pdf-v3"
 
 
 class ExcelPrintError(RuntimeError):
     """Raised when an exact-form Excel print bundle cannot be produced."""
+
+
+class ReceiptPrintError(ExcelPrintError):
+    code = 'receipt_requires_one_page'
+
+
+def is_receipt_sheet(name: str) -> bool:
+    return bool(re.fullmatch(r'biên nhận(?:\s+\d+)?', str(name).strip().casefold()))
 
 
 def _clean_source(source: Mapping[str, Any]) -> dict[str, Any]:
@@ -48,10 +58,11 @@ def _clean_source(source: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _input_sha256(sources: Sequence[Mapping[str, Any]], paper: str) -> str:
+def _input_sha256(sources: Sequence[Mapping[str, Any]], paper: str, duplex: bool = False) -> str:
     digest = hashlib.sha256()
     digest.update(FORMAT_VERSION.encode("ascii"))
     digest.update(paper.encode("ascii"))
+    digest.update(b'duplex' if duplex else b'simplex')
     for source in sources:
         metadata = {
             "document_type": source["document_type"],
@@ -278,7 +289,7 @@ def _export_visible_sheets(
         pythoncom.CoUninitialize()
 
 
-def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: str) -> None:
+def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: str, duplex: bool = False) -> dict:
     """Merge and normalize pages to real A4/A5 dimensions without distortion.
 
     Excel's PDF exporter may follow the Windows default printer's Letter media
@@ -288,9 +299,20 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
     """
 
     writer = PdfWriter()
+    layout, blank_pages = [], []
+    def blank_back():
+        previous = writer.pages[-1]
+        writer.add_blank_page(width=float(previous.mediabox.width), height=float(previous.mediabox.height))
+        blank_pages.append(len(writer.pages))
     try:
         for item in rendered:
             reader = PdfReader(str(item["path"]))
+            receipt = is_receipt_sheet(item.get('sheet', ''))
+            if receipt and len(reader.pages) != 1:
+                raise ReceiptPrintError(f"Biên nhận {item.get('sheet')} đang có {len(reader.pages)} trang. Cần dàn về một trang trước khi in để mỗi người có một tờ riêng.")
+            if duplex and receipt and len(writer.pages) % 2:
+                blank_back()
+            start_page = len(writer.pages) + 1
             for page in reader.pages:
                 source_width = float(page.mediabox.width)
                 source_height = float(page.mediabox.height)
@@ -307,8 +329,15 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
                     page,
                     Transformation().scale(scale).translate(offset_x, offset_y),
                 )
+            layout.append({'sheet':item.get('sheet',''), 'start_page':start_page,
+                           'end_page':len(writer.pages), 'receipt':receipt})
+            if duplex and receipt:
+                blank_back()
+        writer._root_object[NameObject('/ViewerPreferences')] = DictionaryObject({
+            NameObject('/Duplex'): NameObject('/DuplexFlipLongEdge' if duplex else '/Simplex')})
         with target.open("wb") as handle:
             writer.write(handle)
+        return {'sections':layout, 'blank_pages':blank_pages, 'total_pages':len(writer.pages)}
     finally:
         writer.close()
 
@@ -319,6 +348,7 @@ def build_excel_pdf_bundle(
     *,
     paper: str,
     generated_at: str | None = None,
+    duplex: bool = False,
 ) -> dict[str, Any]:
     """Export and merge visible Excel sheets while preserving their artwork."""
 
@@ -335,11 +365,11 @@ def build_excel_pdf_bundle(
     temp_target = render_dir / "merged.pdf"
     try:
         rendered = _export_visible_sheets(normalized, paper=paper_name, render_dir=render_dir)
-        _merge_pdfs(rendered, temp_target, paper=paper_name)
+        layout = _merge_pdfs(rendered, temp_target, paper=paper_name, duplex=duplex)
         verification = verify_excel_pdf(
             temp_target,
             paper=paper_name,
-            minimum_pages=sum(int(item["pages"]) for item in rendered),
+            minimum_pages=layout['total_pages'],
         )
         os.replace(temp_target, target)
     except ExcelPrintError:
@@ -369,8 +399,10 @@ def build_excel_pdf_bundle(
         "pages": verification["pages"],
         "paper": paper_name,
         "orientation": "mixed",
+        "duplex": duplex,
+        "page_layout": layout,
         "generated_at": generated_at or datetime.now().replace(microsecond=0).isoformat(),
-        "input_sha256": _input_sha256(normalized, paper_name),
+        "input_sha256": _input_sha256(normalized, paper_name, duplex),
         "section_count": len(sections),
         "document_count": len(document_types),
         "sections": sections,

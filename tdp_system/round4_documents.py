@@ -240,7 +240,10 @@ def register_document_routes(app, context_factory):
                         archive.writestr(name, payload.getvalue())
                 stream.seek(0)
                 return send_file(stream, as_attachment=True, download_name='Chung_tu_da_chon.zip', mimetype='application/zip')
-            digest = hashlib.sha256(('sheet-scope-v2:' + selection).encode()).hexdigest()[:20]
+            sides = request.args.get('sides', 'duplex')
+            if sides not in {'simplex', 'duplex'}:
+                raise ValueError('Chọn cách in một mặt hoặc hai mặt')
+            digest = hashlib.sha256(('sheet-scope-v3:' + sides + ':' + selection).encode()).hexdigest()[:20]
             pdf = directory / f'{digest}.pdf'
             with PDF_LOCK:
                 if not pdf.exists():
@@ -249,9 +252,11 @@ def register_document_routes(app, context_factory):
                         path = directory / f'print_{digest}_{index}.xlsx'
                         workbook.save(path)
                         sources.append({'path':path, 'document_type':'selected', 'title':'Chứng từ đã chọn'})
-                    build_excel_pdf_bundle(sources, pdf, paper='A4')
+                    build_excel_pdf_bundle(sources, pdf, paper='A4', duplex=sides == 'duplex')
             return send_file(pdf, mimetype='application/pdf', as_attachment=False, download_name='Chung_tu_da_chon.pdf')
-        except ExcelPrintError:
+        except ExcelPrintError as exc:
+            if getattr(exc, 'code', '') == 'receipt_requires_one_page':
+                return jsonify(ok=False, error=str(exc), code=exc.code), 422
             return jsonify(ok=False, error='Chưa tạo được bản in đúng mẫu. Hãy thử lại hoặc tải Excel để in; nếu lỗi tiếp diễn, kiểm tra bộ chuyển PDF trên máy chủ.'), 503
         except (ValueError, OSError) as exc:
             return jsonify(ok=False, error=str(exc)), 422

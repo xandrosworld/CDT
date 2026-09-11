@@ -118,7 +118,7 @@ class ExcelPrintRendererTests(unittest.TestCase):
                     self.skipTest(str(exc))
                 raise
             self.assertTrue(target.is_file())
-            self.assertEqual(manifest["format_version"], "tdp-excel-artwork-pdf-v2")
+            self.assertEqual(manifest["format_version"], "tdp-excel-artwork-pdf-v3")
             self.assertEqual(manifest["section_count"], 1)
             self.assertEqual(manifest["sections"][0]["sheet"], "Phiếu in")
             self.assertEqual(len(PdfReader(str(target)).pages), manifest["pages"])

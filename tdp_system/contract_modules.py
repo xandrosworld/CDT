@@ -9742,6 +9742,7 @@ def register_contract_routes(app, ctx):
                         pdf_path,
                         generated_at=now_iso(),
                         paper=paper,
+                        duplex=paper == 'A4',
                     )
                     manifest_path = write_manifest(
                         manifest, attempt_dir / f"{document_type}.manifest.json"

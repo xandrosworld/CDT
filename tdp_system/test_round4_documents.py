@@ -114,6 +114,29 @@ class Round4DocumentTests(SelectedDocumentExportTests):
             self.assertEqual(422,response.status_code)
             self.assertIn('hết hạn',response.get_json()['error'])
 
+    def test_simplex_and_duplex_pdf_caches_are_distinct(self):
+        data=self.preview().get_json()
+        def build(sources,target,**kwargs):
+            target.write_bytes(b'%PDF-1.4 '+str(kwargs['duplex']).encode())
+        with patch('tdp_system.round4_documents.build_excel_pdf_bundle',side_effect=build) as renderer:
+            url='/api/documents/'+data['token']+'/pdf?sheets=1'
+            duplex=self.client.get(url+'&sides=duplex')
+            simplex=self.client.get(url+'&sides=simplex')
+            self.assertEqual(duplex.status_code,200)
+            self.assertEqual(simplex.status_code,200)
+            self.assertNotEqual(duplex.data,simplex.data)
+            self.client.get(url+'&sides=duplex')
+            self.assertEqual(renderer.call_count,2)
+            self.assertEqual(self.client.get(url+'&sides=unknown').status_code,422)
+
+    def test_receipt_page_error_is_actionable(self):
+        from .excel_print_renderer import ReceiptPrintError
+        data=self.preview().get_json()
+        with patch('tdp_system.round4_documents.build_excel_pdf_bundle',side_effect=ReceiptPrintError('Cần dàn về một trang')):
+            response=self.client.get('/api/documents/'+data['token']+'/pdf?sheets=0&sides=duplex')
+            self.assertEqual(response.status_code,422)
+            self.assertEqual(response.get_json()['code'],'receipt_requires_one_page')
+
     def test_snapshot_changed_on_disk_is_rejected(self):
         data=self.preview().get_json()
         artifact=server.DATA_DIR/'document_previews'/data['token']/'0.xlsx'
