@@ -4435,6 +4435,11 @@ def api_export_order_invoices():
                 selected_orders.extend(dict(r) for r in conn.execute(
                     "SELECT * FROM orders WHERE batch_id=? AND (?='' OR contractor=?) ORDER BY id",
                     (batch['id'],contractor,contractor)))
+            try:
+                from .outgoing_line_policy import unit_issues
+            except ImportError:
+                from outgoing_line_policy import unit_issues
+            held_issues=unit_issues(conn,selected_orders)
             draft_ids=[]
             for party in sorted({r['contractor'] for r in selected_orders if net_delivered(r)>1e-9}):
                 conn.execute('SAVEPOINT export_contractor')
@@ -4442,7 +4447,7 @@ def api_export_order_invoices():
                     refreshed=refresh_waiting(conn,now_iso(),fill=False,contractor=party)
                     if refreshed['warnings']:
                         raise InvoiceTaxExportError(refreshed['warnings'][0]['message'],code='issued_source_unresolved')
-                    party_orders=[r for r in selected_orders if r['contractor']==party]
+                    party_orders=[r for r in selected_orders if r['contractor']==party and r['id'] not in held_issues]
                     replenish=replenishable_scopes(conn,party_orders,[b['id'] for b in batches])
                     for batch in batches:
                         if not any(r['batch_id']==batch['id'] for r in party_orders):continue
@@ -4475,7 +4480,8 @@ def api_export_order_invoices():
                 allocated=from_alloc.get('drafted_qty',0)+from_alloc.get('issued_qty',0)
                 remaining = max(net_delivered(order)-allocated,0)
                 if remaining>1e-8:
-                    pending.append(f"{order['work_date']} · {order['contractor']} · {order['product_code']} · {order['product_name']}: còn {remaining:g} {order['unit']}")
+                    reason=' · '+held_issues[order['id']]['message'] if order['id'] in held_issues else ''
+                    pending.append(f"{order['work_date']} · {order['contractor']} · {order['product_code']} · {order['product_name']}: còn {remaining:g} {order['unit']}"+reason)
             with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
                 for draft_id in draft_ids:
                     draft=conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?',(draft_id,)).fetchone()
@@ -4491,7 +4497,7 @@ def api_export_order_invoices():
                     f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế. '+('Cộng dồn toàn bộ đơn đã duyệt đến hết ngày chọn, trừ lượng đã ký đến hiện tại, kể cả hóa đơn ký sau ngày đơn.' if cumulative else 'Gộp tất cả ngày đã chọn.'),
                     'Cùng mã và cùng giá bán trên đơn đã duyệt được cộng lượng. Khác giá bán giữ dòng riêng để đối chiếu, không tự tạo giá bình quân mới. Hàng khuyến mại giữ riêng tính chất.',
                     'Kg làm tròn xuống theo 0,1 Kg; cái, quả, con, chiếc lấy số nguyên sau khi cộng mã. Phần lẻ giữ lại.',
-                    'Chỉ gồm lượng đủ tồn; chỉ dòng có tên chứa dấu BK được hưởng ngoại lệ âm kho. KKKNT không tự được miễn kiểm tra tồn. Chưa ký/phát hành hóa đơn.',
+                    'Chỉ gồm lượng đủ tồn; dòng đánh dấu BK ở cột Bảng kê được hưởng ngoại lệ âm kho. KKKNT không tự được miễn kiểm tra tồn. Dòng khác đơn vị kho giữ chờ, không tự quy đổi. Chưa ký/phát hành hóa đơn.',
                     'Dùng file gộp này thay các file tách ngày chưa phát hành, không nhập thêm cả hai bộ file.',
                     'Tải file hoặc tạo nháp chưa tính là đã xuất hóa đơn. Bảng chưa xuất cộng dồn lấy lượng đã duyệt trừ lượng đã phát hành được đồng bộ/xác nhận.',
                     f'NHÀ THẦU CHƯA TẠO FILE: {len(blocked)}. Các nhà thầu này giữ nguyên phần chờ, cần sửa trước khi tải riêng:',
@@ -4503,6 +4509,7 @@ def api_export_order_invoices():
         response.headers['X-Invoice-Files']=str(len(draft_ids))
         response.headers['X-Pending-Order-Lines']=str(len(pending))
         response.headers['X-Blocked-Contractors']=str(len(blocked))
+        response.headers['X-Held-Unit-Lines']=str(len(held_issues))
         response.headers['X-Order-Scope']='unissued' if cumulative else 'range'
         return response
     except (ValueError,InvoiceTaxExportError,OutgoingReadinessError) as exc:
@@ -4543,6 +4550,18 @@ def api_export(kind, batch_id):
             if batch["status"] != "approved":
                 return jsonify({"ok": False, "error": "Phải duyệt phiên đơn trước khi tạo file hóa đơn"}), 409
             try:
+                if setting_get(conn,'minvoice_active_connection',''):
+                    try:
+                        from .outgoing_source_refresh import refresh_sources
+                        from .order_export_scope import business_today
+                    except ImportError:
+                        from outgoing_source_refresh import refresh_sources
+                        from order_export_scope import business_today
+                    try:
+                        refresh_sources(db,create_minvoice_client,now_iso,batch['work_date'],business_today())
+                    except (ValueError,MinvoiceError) as exc:
+                        raise InvoiceTaxExportError('Chưa cập nhật đủ hóa đơn đã ký. '+str(exc),code='issued_sync_required') from exc
+                conn.execute('BEGIN IMMEDIATE')
                 payload = export_invoices_zip(conn, batch, orders)
             except InvoiceTaxExportError as error:
                 return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status

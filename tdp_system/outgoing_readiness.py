@@ -23,8 +23,10 @@ from openpyxl.worksheet.page import PageMargins
 
 try:
     from .stock_tax_policy import exempt_order_codes
+    from .outgoing_line_policy import unit_issues, draft_policy_rows
 except ImportError:
     from stock_tax_policy import exempt_order_codes
+    from outgoing_line_policy import unit_issues, draft_policy_rows
 
 try:
     from invoice_inventory import invoice_stock_rows, _minimum_balance_from, selected_opening_snapshot
@@ -360,7 +362,32 @@ def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     """Read-only recheck before handing off a file or saving a remote draft."""
     required = defaultdict(float)
     lines = conn.execute("SELECT product_code,product_name,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
-    exempt = exempt_order_codes(conn, lines)
+    policy_rows=draft_policy_rows(conn,draft_id)
+    # A legacy download or remote-draft action must not bypass reconciliation.
+    try:
+        from .outgoing_unissued import issued_allocations
+    except ImportError:
+        from outgoing_unissued import issued_allocations
+    external={}
+    issued,warnings=issued_allocations(conn,external_quantities=external)
+    parties={r['contractor'] for r in policy_rows}
+    relevant=[w for w in warnings if not w['contractor'] or w['contractor'] in parties]
+    if relevant:
+        raise OutgoingReadinessError(relevant[0]['message'],code='issued_source_unresolved')
+    held_by_order={r['order_id']:r['qty'] for r in conn.execute("""SELECT a.order_id,SUM(a.qty) qty
+        FROM outgoing_order_allocations a JOIN outgoing_invoice_drafts d ON d.id=a.draft_id
+        WHERE d.status='draft' GROUP BY a.order_id""")}
+    for r in policy_rows:
+        settlement=conn.execute('SELECT external_issued_qty FROM outgoing_waiting_settlements WHERE order_id=?',(r['order_id'],)).fetchone()
+        if external.get(r['order_id'],0)>(settlement['external_issued_qty'] if settlement else 0)+EPSILON:
+            raise OutgoingReadinessError(f"{r['product_code']}: có hóa đơn vừa ký chưa đối trừ vào phần giữ chờ; cập nhật bảng kê trước khi tải.",code='issued_quantity_in_draft')
+        order=conn.execute('SELECT actual_delivered,customer_return_qty FROM orders WHERE id=?',(r['order_id'],)).fetchone()
+        if held_by_order.get(r['order_id'],0)+issued.get(r['order_id'],0)>order['actual_delivered']-order['customer_return_qty']+EPSILON:
+            raise OutgoingReadinessError(f"{r['product_code']}: phần chờ còn chứa lượng đã ký; cập nhật bảng kê trước khi tải.",code='issued_quantity_in_draft')
+    units=unit_issues(conn,policy_rows)
+    if units:
+        raise OutgoingReadinessError(next(iter(units.values()))['message'],code='order_unit_mismatch')
+    exempt = exempt_order_codes(conn, policy_rows)
     for line in lines:
         tax_error = invoice_tax_error(line['tax'])
         if tax_error:
@@ -395,7 +422,11 @@ def validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, in
     not deduct the same physical invoice twice. Other drafts keep their holds.
     """
     lines = conn.execute("SELECT product_code,product_name,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
-    exempt = exempt_order_codes(conn, lines)
+    policy_rows=draft_policy_rows(conn,draft_id)
+    units=unit_issues(conn,policy_rows)
+    if units:
+        raise OutgoingReadinessError(next(iter(units.values()))['message'],code='order_unit_mismatch')
+    exempt = exempt_order_codes(conn, policy_rows)
     if not lines or any(not math.isfinite(float(r["qty"])) or float(r["qty"]) <= 0 for r in lines):
         raise OutgoingReadinessError("Dự thảo thiếu dòng hàng hoặc có số lượng không hợp lệ", code="invalid_draft_quantity")
     conn.execute("SAVEPOINT validate_issued_stock")
@@ -505,6 +536,7 @@ def _project_rows(
     available = {code: item["available_qty"] for code, item in stock.items()}
     allocated = allocation_by_order(conn, batch_ids)
     exempt = exempt_order_codes(conn, orders)
+    units=unit_issues(conn,orders)
     rows: list[dict[str, Any]] = []
     for item in orders:
         demand = _net_delivered(item)
@@ -521,7 +553,7 @@ def _project_rows(
         remaining = max(demand - drafted - issued, 0)
         code = str(item["product_code"]).strip()
         have = max(available.get(code, 0), 0)
-        invoiceable = remaining if code in exempt else min(remaining, have)
+        invoiceable = 0 if item['id'] in units else remaining if code in exempt else min(remaining, have)
         pending = max(remaining - invoiceable, 0)
         available[code] = max(have - invoiceable, 0)
         unit_price = _vnd(item.get("sell_price"))
@@ -541,7 +573,7 @@ def _project_rows(
             "allocated_qty": drafted + issued,
             "invoiceable_qty": invoiceable,
             "pending_qty": pending,
-            "pending_reason": (
+            "pending_reason": units[item['id']]['message'] if item['id'] in units else (
                 f"Thiếu {pending:g} {item.get('unit') or ''} tồn hóa đơn khả dụng "
                 "sau khi trừ phần đã giữ/đã phát hành. Phần thiếu được giữ lại để xử lý tiếp."
                 if pending > EPSILON else ""

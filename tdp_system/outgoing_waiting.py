@@ -7,11 +7,13 @@ try:
     from .outgoing_consolidation import _write_draft, decimal, export_quantity
     from .outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from .stock_tax_policy import exempt_order_codes
+    from .outgoing_line_policy import unit_issues
 except ImportError:
     from outgoing_unissued import issued_allocations
     from outgoing_consolidation import _write_draft, decimal, export_quantity
     from outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from stock_tax_policy import exempt_order_codes
+    from outgoing_line_policy import unit_issues
 
 
 def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
@@ -48,18 +50,20 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
             capacity[r['product_code']]=capacity.get(r['product_code'],Decimal(0))+decimal(r['qty_out'])
     capacity={code:max(q,Decimal(0)) for code,q in capacity.items()}
     for d in drafts:
-        rows=[dict(r) for r in conn.execute("""SELECT l.*,o.batch_id,o.work_date,o.buy_price,a.source_unit_price
+        rows=[dict(r) for r in conn.execute("""SELECT l.*,o.batch_id,o.work_date,o.buy_price,o.purchase_list,o.unit order_unit,a.source_unit_price
             FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id
             LEFT JOIN outgoing_line_allocations a ON a.line_id=l.id AND a.order_id=l.order_id
             WHERE l.draft_id=? ORDER BY o.work_date,o.id,l.id""",(d['id'],))]
         kept=[];changed=False
         exempt=exempt_order_codes(conn,rows)
+        units=unit_issues(conn,rows)
         for r in rows:
             used=min(decimal(r['qty']),consume.get(r['order_id'],Decimal(0)))
             consume[r['order_id']]=max(consume.get(r['order_id'],Decimal(0))-used,Decimal(0))
             qty=min(decimal(r['qty'])-used,need.get(r['order_id'],Decimal(0)))
             code=r['product_code']
             if code not in exempt:qty=min(qty,capacity.get(code,Decimal(0)))
+            if r['order_id'] in units:qty=Decimal(0)
             capacity[code]=max(capacity.get(code,Decimal(0))-qty,Decimal(0))
             if qty<=Decimal('0.00000001'):qty=Decimal(0)
             changed=changed or (qty==0 and decimal(r['qty'])>0) or abs(qty-decimal(r['qty']))>Decimal('0.00000001')
@@ -90,6 +94,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
         stock=canonical_available_stock(conn)
         available={code:max(decimal(r['raw_available_qty']),Decimal(0)) for code,r in stock.items()}
         exempt=exempt_order_codes(conn,orders)
+        units=unit_issues(conn,orders)
         additions=defaultdict(list)
         already_held=defaultdict(lambda:Decimal(0))
         def price_key(o):
@@ -98,6 +103,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
             already_held[price_key(o)]+=max(decimal(o['actual_delivered'])-decimal(o['customer_return_qty'])-decimal(issued.get(o['id'],0))-need.get(o['id'],Decimal(0)),Decimal(0))
         for o in orders:
             if need.get(o['id'],0)<=Decimal('0.00000001'):continue
+            if o['id'] in units:continue
             issues=invoice_order_issues([o])
             try:
                 validate_demand_orders(conn,[o])
@@ -133,6 +139,7 @@ def waiting_readiness(conn,orders,issued):
     stock=canonical_available_stock(conn)
     by_order={r['id']:r for r in orders}
     exempt=exempt_order_codes(conn,orders)
+    units=unit_issues(conn,orders)
     for d in conn.execute("SELECT id,contractor FROM outgoing_invoice_drafts WHERE status='draft'"):
         expected={r['product_code']:r['qty'] for r in conn.execute('SELECT product_code,SUM(qty) qty FROM outgoing_invoice_lines WHERE draft_id=? GROUP BY product_code',(d['id'],))}
         reserved={r['product_code']:r['qty'] for r in conn.execute("SELECT product_code,SUM(qty_out) qty FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved' GROUP BY product_code",(str(d['id']),))}
@@ -141,7 +148,7 @@ def waiting_readiness(conn,orders,issued):
             oid=r['order_id'];code=r['product_code'];held[oid]+=r['qty']
             if abs(expected.get(code,0)-reserved.get(code,0))>1e-8 or (code not in exempt and stock.get(code,{}).get('raw_available_qty',0)<-1e-8):
                 warnings.append({'contractor':d['contractor'],'message':code+': lượng giữ chờ cần đối chiếu lại với tồn hiện tại.'})
-            else:valid[oid]+=r['qty']
+            elif oid not in units:valid[oid]+=r['qty']
     for oid,o in by_order.items():
         remaining=max(o['actual_delivered']-o['customer_return_qty']-issued.get(oid,0),0)
         if held[oid]>remaining+1e-8:

@@ -6,8 +6,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font,PatternFill
 try:
     from .outgoing_source_scope import resolve_scope
+    from .outgoing_line_policy import unit_issues
 except ImportError:
     from outgoing_source_scope import resolve_scope
+    from outgoing_line_policy import unit_issues
 
 
 def _identity(r,local=False):
@@ -90,6 +92,7 @@ def unissued_payload(conn,asof,contractor=''):
     except ImportError:
         from outgoing_waiting import waiting_readiness
     ready,stock_warnings=waiting_readiness(conn,orders,issued)
+    units=unit_issues(conn,orders)
     warnings.extend(stock_warnings)
     drafted={r['order_id']:r['qty'] for r in conn.execute("SELECT l.order_id,SUM(l.qty) qty FROM outgoing_order_allocations l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id WHERE d.status='draft' GROUP BY l.order_id")}
     grouped={};details=[]
@@ -101,6 +104,7 @@ def unissued_payload(conn,asof,contractor=''):
            'product_name':o['product_name'],'unit':o['unit'],'approved_qty':q,'issued_qty':done,'drafted_qty':drafted.get(o['id'],0),'unissued_qty':left,'unit_price':o['sell_price'],
            'ready_qty':min(ready.get(o['id'],0),left) if not any(not w['contractor'] or w['contractor']==o['contractor'] for w in warnings) else 0}
         r['waiting_qty']=max(left-r['ready_qty'],0)
+        r['pending_reason']=units[o['id']]['message'] if o['id'] in units else ''
         details.append(r)
         key=(o['contractor'],o['product_code'],o['unit'].strip().casefold())
         g=grouped.setdefault(key,{**r,'approved_qty':0,'issued_qty':0,'drafted_qty':0,'unissued_qty':0,'ready_qty':0,'waiting_qty':0,'first_date':o['work_date'],'last_date':o['work_date']})
@@ -112,7 +116,13 @@ def unissued_payload(conn,asof,contractor=''):
     for r in grouped.values():
         for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty'):totals[r['unit'].strip().casefold()][field]+=r[field]
     warnings=[w for w in warnings if not contractor or not w['contractor'] or w['contractor']==contractor]
+    try:
+        from .outgoing_signed_stock_review import signed_stock_issues
+    except ImportError:
+        from outgoing_signed_stock_review import signed_stock_issues
     return {'asof':asof,'contractor':contractor,'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
+            'signed_stock_issues':signed_stock_issues(conn,contractor),
+            'held_line_issues':[{**units[o['id']],'contractor':o['contractor'],'work_date':o['work_date']} for o in orders if o['id'] in units and o['actual_delivered']-o['customer_return_qty']-issued.get(o['id'],0)>1e-8],
             'totals_by_unit':dict(totals),'source_order_rows':len(details),'unissued_order_rows':sum(r['unissued_qty']>1e-8 for r in details),
             'warnings':warnings,'reconciliation_complete':not warnings,
             'policy':'Cộng dồn đơn đã duyệt đến ngày chọn, trừ lượng hóa đơn đã phát hành được đồng bộ hoặc xác nhận đến hiện tại, kể cả hóa đơn phát hành sau ngày đơn. Tải file và tạo nháp không làm giảm lượng chưa xuất.'}
@@ -128,6 +138,11 @@ def unissued_workbook(payload):
     note=w.create_sheet('Ghi chu');note.append(['Cộng dồn đến ngày',payload['asof']]);note.append(['Cách tính',payload['policy']])
     note.append(['Đối chiếu M-Invoice','Nếu đã ký bên ngoài, đồng bộ hóa đơn hoặc xác nhận đúng số hóa đơn đã phát hành trước khi lập tiếp.'])
     for warning in payload['warnings']:note.append(['Cần đối chiếu',warning['message']])
+    for issue in payload.get('held_line_issues',[]):note.append(['Dòng giữ riêng',issue['work_date'],issue['contractor'],issue['message']])
+    if payload.get('signed_stock_issues'):
+        review=w.create_sheet('Hoa don da ky can doi chieu')
+        review.append(['Hóa đơn','Ngày hóa đơn','Thời điểm ký','Nhà thầu','Mã hàng','Tên hàng','ĐVT','Lượng hóa đơn đã ký','Tồn đầu','Đầu vào','Tồn hiện tại','Cần xử lý'])
+        for r in payload['signed_stock_issues']:review.append([r[k] for k in ('invoice_number','invoice_date','signed_at','contractor','product_code','product_name','unit','signed_qty','opening_qty','input_qty','closing_qty','message')])
     for s in w:
         s.freeze_panes='A2';s.auto_filter.ref=s.dimensions
         for cell in s[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='163247')

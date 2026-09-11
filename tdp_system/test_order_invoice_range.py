@@ -25,29 +25,30 @@ class OrderInvoiceRangeTests(unittest.TestCase):
             b,_=self.add_batch(c,'2026-09-02',[{'qty':5}])
         return a,b
 
-    def test_all_exports_valid_party_and_reports_unit_conflict_without_changing_its_holds(self):
+    def test_unit_mismatch_holds_only_affected_row_and_exports_both_parties(self):
         self.seed(stock=100)
         with server.db() as c:
             self.add_batch(c,'2026-09-01',[{'qty':5,'contractor':'NT-B'}])
             bid,_=self.add_batch(c,'2026-09-02',[{'qty':4,'contractor':'NT-B'}])
             c.execute("UPDATE orders SET unit='gói' WHERE batch_id=?",(bid,))
-        # Preexisting daily drafts must survive a failed consolidation unchanged.
         self.assertEqual(self.request('NT-B',start='2026-09-01',end='2026-09-01').status_code,200)
-        self.assertEqual(self.request('NT-B',start='2026-09-02',end='2026-09-02').status_code,200)
-        def held(c):
-            return [tuple(r) for r in c.execute("SELECT t.* FROM inventory_transactions t JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id WHERE t.source_type='OUTGOING_DRAFT' AND d.contractor='NT-B' ORDER BY t.id")]
-        with server.db() as c:before=held(c)
+        self.assertEqual(self.request('NT-B',start='2026-09-02',end='2026-09-02').status_code,409)
+        before=None
         for _ in range(2):
             result=self.request(contractor='')
             self.assertEqual(result.status_code,200,result.get_json(silent=True))
-            self.assertEqual(result.headers['X-Blocked-Contractors'],'1')
+            self.assertEqual(result.headers['X-Blocked-Contractors'],'0')
+            self.assertEqual(result.headers['X-Held-Unit-Lines'],'1')
             with zipfile.ZipFile(io.BytesIO(result.data)) as archive:
                 excel=[n for n in archive.namelist() if n.endswith('.xlsx')]
-                self.assertEqual(len(excel),1);self.assertIn('NT-A',excel[0])
+                self.assertEqual(len(excel),2)
                 guide=archive.read('HUONG_DAN_VA_PHAN_CHUA_XUAT.txt').decode('utf-8-sig')
-                self.assertIn('NT-B',guide);self.assertIn('HH-01 (gói, kg)',guide)
-            with server.db() as c:self.assertEqual(held(c),before)
-        self.assertEqual(self.request('NT-B').status_code,409)
+                self.assertIn('NT-B',guide);self.assertIn('đơn ghi gói, kho dùng kg',guide)
+            with server.db() as c:
+                self.assertEqual(c.execute("SELECT COALESCE(SUM(qty_out),0) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],15)
+                if before is not None:self.assertEqual(c.serialize(),before)
+                before=c.serialize()
+        self.assertEqual(self.request('NT-B').status_code,200)
 
     def test_two_days_cap_stock_and_repeat_does_not_change_reservations(self):
         self.seed()
@@ -177,6 +178,7 @@ class OrderInvoiceRangeTests(unittest.TestCase):
             a,_=self.add_batch(c,'2026-09-01',[{'qty':108.9,'sell_price':2700}])
             b,_=self.add_batch(c,'2026-09-03',[{'qty':108,'sell_price':2800}])
             c.execute("UPDATE orders SET unit='Quả'")
+            c.execute("UPDATE products SET unit='Quả' WHERE code='HH-01'")
             c.execute("INSERT OR REPLACE INTO product_prices(product_code,price_group,price_text,price_value) VALUES('HH-01','NT-A','X',NULL)")
             before=[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')]
         try:

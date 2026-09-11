@@ -191,3 +191,32 @@ class SourceScopeTests(unittest.TestCase):
         self.assertEqual(second['posted'],[])
         self.assertEqual(self.report()['rows'][0]['unissued_qty'],8)
         with server.db() as c:self.assertEqual(ledger,[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')])
+
+    def test_legacy_draft_download_cannot_repeat_fully_signed_order(self):
+        a,b=self.seed(stock=100)
+        self.assertEqual(self.request().status_code,200)
+        sid=self.source(qty=10);self.assign(sid)
+        response=self.client.get('/api/export/invoices/'+str(b))
+        self.assertEqual(response.status_code,409)
+        self.assertEqual(response.get_json()['code'],'issued_quantity_in_draft')
+
+    def test_legacy_download_cannot_repeat_partial_issue_below_total_demand(self):
+        a,b=self.seed(stock=20)
+        with server.db() as c:c.execute('UPDATE orders SET actual_delivered=100')
+        self.assertEqual(self.request().status_code,200)
+        sid=self.source(qty=3);self.assign(sid)
+        with server.db() as c:anchor=c.execute("SELECT batch_id FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0]
+        response=self.client.get('/api/export/invoices/'+str(anchor))
+        self.assertEqual(response.status_code,409)
+        self.assertEqual(response.get_json()['code'],'issued_quantity_in_draft')
+
+    def test_signed_stock_problem_is_visible_and_source_ledger_is_preserved(self):
+        self.seed(stock=0)
+        sid=self.source(qty=3);self.assign(sid)
+        with server.db() as c:before=[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')]
+        report=self.report()
+        self.assertEqual(len(report['signed_stock_issues']),1)
+        issue=report['signed_stock_issues'][0]
+        self.assertEqual((issue['signed_qty'],issue['input_qty'],issue['closing_qty']),(3,0,-3))
+        self.assertEqual(report['rows'][0]['ready_qty'],0)
+        with server.db() as c:self.assertEqual(before,[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')])

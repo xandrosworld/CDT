@@ -2641,7 +2641,7 @@
       var status = n(item.pending_qty) > 0
         ? '<span class="tag tag-warn">Còn chờ</span>'
         : n(item.invoiceable_qty) > 0
-          ? '<span class="tag tag-ok">' + (item.negative_stock_allowed ? 'Tên BK · ngoại lệ tồn' : 'Đủ lượng') + '</span>'
+          ? '<span class="tag tag-ok">' + (item.negative_stock_allowed ? 'Đánh dấu BK · ngoại lệ tồn' : 'Đủ lượng') + '</span>'
           : n(item.drafted_qty) > 0
             ? '<span class="tag">Đang giữ trong dự thảo</span>'
             : '<span class="tag tag-ok">Đã phát hành</span>';
@@ -2673,7 +2673,7 @@
       '<button class="btn btn-small btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button></div>',
       '<div class="card-body">',
       !approved ? '<div class="warning-summary">Đơn chưa duyệt. <button class="btn btn-outline" data-view="orders">Mở đơn để sửa / duyệt</button></div>' : '',
-      (readiness.negative_stock_warnings || []).length ? '<div class="warning-summary">Dòng có tên BK được hưởng ngoại lệ tồn: ' + readiness.negative_stock_warnings.map(function(r) { return esc(r.product_code) + ' (' + stockQty(r.qty) + ' ' + esc(r.unit) + ')'; }).join(' · ') + '. Số âm vẫn được theo dõi.</div>' : '',
+      (readiness.negative_stock_warnings || []).length ? '<div class="warning-summary">Dòng đánh dấu BK được hưởng ngoại lệ tồn: ' + readiness.negative_stock_warnings.map(function(r) { return esc(r.product_code) + ' (' + stockQty(r.qty) + ' ' + esc(r.unit) + ')'; }).join(' · ') + '. Số âm vẫn được theo dõi.</div>' : '',
       orderIssues.length ? '<div class="error-summary" id="invoice-order-issues"><strong>Còn ' + orderIssues.length + ' dòng đơn cần sửa trước khi lập hóa đơn.</strong>' + orderIssues.map(function(item) {
         return '<div class="stock-block-row"><span><strong>' + esc(item.product_name || item.product_code) + '</strong> · ' + esc(item.product_code) + ' · Bếp ' + esc(item.kitchen) + (item.source_row ? ' · Dòng Excel ' + esc(item.source_row) : '') + '<br>' + (item.messages || []).map(esc).join('<br>') + '</span><button class="btn btn-outline" data-action="resolve-invoice-order" data-id="' + item.order_id + '">Sửa dòng này</button></div>';
       }).join('') + '</div>' : '',
@@ -2686,7 +2686,7 @@
       stockBlocks.length
         ? '<div class="error-summary" id="outgoing-stock-blocks" style="margin-top:14px"><strong>Chưa tạo được file: ' + stockBlocks.length + ' mã tồn âm.</strong><p>Mở từng mã, đối chiếu tồn đầu và nhập/xuất, sửa đúng nguồn rồi bấm Kiểm tra lại.</p>' + stockBlocks.map(function(r) { return '<div class="stock-block-row"><span>' + esc(r.product_name || r.product_code) + ' (' + esc(r.product_code) + ') đang âm <strong>' + stockQty(-r.qty) + ' ' + esc(r.unit || '') + '</strong>. Cần kiểm tra trước khi tạo file.</span><button class="btn btn-outline" data-action="show-stock-cause" data-code="' + esc(r.product_code) + '">Xử lý ' + esc(r.product_code) + '</button></div>'; }).join('') + '</div>'
         : allReady
-        ? '<div class="ok-summary" style="margin-top:14px">Toàn bộ phần còn lại đủ điều kiện về tồn; chỉ dòng có tên BK được hưởng ngoại lệ âm kho.</div>'
+        ? '<div class="ok-summary" style="margin-top:14px">Toàn bộ phần còn lại đủ điều kiện về tồn; chỉ dòng đánh dấu BK được hưởng ngoại lệ âm kho.</div>'
         : '<div class="warning-summary" style="margin-top:14px">' + (approved ? 'Có thể tạo dự thảo cho phần đủ lượng.' : 'Duyệt đơn trước khi tạo dự thảo cho phần đủ lượng.') + ' Phần còn thiếu giữ lại để lập tiếp.</div>',
       '</div><div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Tổng cần</th><th>Đã dự thảo</th><th>Đã phát hành</th><th>Có thể lập</th><th>Còn thiếu</th></tr></thead><tbody>',
       contractorRows || '<tr><td colspan="6"><div class="empty">Không có nhà thầu cần lập hóa đơn trong đơn hàng này.</div></td></tr>',
@@ -2900,7 +2900,7 @@
       '<button type="submit" value="sync" class="btn btn-outline">Cập nhật hóa đơn đã ký</button>' +
       '<button type="submit" value="export" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
       '<p>Trước mỗi lần tải bảng kê, hệ thống cập nhật hóa đơn đã ký từ M-Invoice để trừ phần đã xuất. Khi chọn tất cả, nhà thầu đủ điều kiện vẫn tải được; nhà thầu cần sửa được ghi rõ trong file hướng dẫn kèm ZIP. Hóa đơn chưa xác định được nhà thầu cần đối chiếu trước để tránh xuất trùng.</p>' +
-      '<p>Chỉ lấy lượng đủ tồn, không âm kho; chỉ dòng có tên chứa dấu BK được hưởng ngoại lệ. KKKNT không tự được phép âm kho.</p>' +
+      '<p>Chỉ lấy lượng đủ tồn, không âm kho; dòng đánh dấu BK ở cột Bảng kê được hưởng ngoại lệ. KKKNT không tự được phép âm kho. Dòng khác đơn vị kho được giữ riêng chờ xác nhận, các dòng hợp lệ vẫn tải được.</p>' +
       '<p><strong>Cộng dồn đơn đã duyệt đến hết ngày chọn, trừ lượng đã ký M-Invoice đến hiện tại.</strong> Hóa đơn ký sau ngày đơn vẫn được trừ. Hóa đơn chưa ký và phần còn thiếu giữ chờ. Tải file chưa tính là đã phát hành.</p>' +
       '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng. Kg lấy một chữ số thập phân; cái, quả, con, chiếc lấy số nguyên. Phần lẻ giữ lại.</p>' +
       (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + sourceScopeReviewHtml() + '</div></section>';
@@ -2926,6 +2926,8 @@
       '<label>Cộng dồn đến ngày<input type="date" name="to" required value="'+esc(f.to)+'"></label><button class="btn btn-outline" type="submit" value="view">Cập nhật phần chờ xuất</button><button class="btn btn-primary" type="submit" value="excel">Tải bảng chưa xuất</button></form>'+
       (d ? '<p class="code-note" role="status">Đến '+esc(dateVN(d.asof))+' · '+rows.length+' mã còn chưa xuất · '+d.unissued_order_rows+' dòng đơn nguồn. Phần đã nháp vẫn nằm trong số chưa xuất.</p>'+ (d.warnings||[]).map(function(w){return '<div class="warning-summary">'+esc(w.message)+'</div>';}).join('') : '<p>Chọn ngày để xem số chưa xuất cộng dồn từ các đơn đã duyệt.</p>')+
       (d?'<p class="code-note">'+esc(d.policy)+' Hóa đơn đã ký bên ngoài cần được tải về ở Hóa đơn đầu ra hoặc ghi nhận số hóa đơn đã phát hành, rồi bấm Xem / cập nhật.</p>':'')+
+      (d && d.held_line_issues && d.held_line_issues.length ? '<div class="warning-summary"><strong>'+d.held_line_issues.length+' dòng giữ riêng do khác đơn vị kho:</strong>'+d.held_line_issues.map(function(r){return '<p>'+esc(dateVN(r.work_date)+' · '+r.contractor+' · '+r.message)+'</p>';}).join('')+'</div>' : '')+
+      (d && d.signed_stock_issues && d.signed_stock_issues.length ? '<details class="warning-summary" open><summary>Hóa đơn đã ký cần đối chiếu với đầu vào · '+d.signed_stock_issues.length+' dòng</summary>'+d.signed_stock_issues.map(function(r){return '<p><strong>'+esc(r.invoice_number+' · '+(r.contractor || r.buyer)+' · '+r.product_code+' · '+r.product_name)+'</strong><br>'+esc('Đã ký '+stockQty(r.signed_qty)+' '+r.unit+'; tồn đầu '+stockQty(r.opening_qty)+', đầu vào '+stockQty(r.input_qty)+', tồn hiện tại '+stockQty(r.closing_qty)+'. '+r.message)+'</p>';}).join('')+'</details>' : '')+
       (state.unissuedError?'<div class="error-summary">'+esc(state.unissuedError)+'</div>':'')+'</div>'+
       (d?'<div class="table-wrap" style="max-height:380px;overflow:auto"><table><thead><tr><th>Nhà thầu</th><th>Mã / Tên hàng</th><th>ĐVT</th><th>Đã duyệt</th><th>Đã phát hành</th><th>Tổng chưa xuất</th><th>Đủ điều kiện · giữ chờ xuất</th><th>Chưa đủ / chờ cộng lẻ</th></tr></thead><tbody>'+rows.map(function(r){return '<tr><td>'+esc(r.contractor)+'</td><td>'+esc(r.product_code)+' · '+esc(r.product_name)+'</td><td>'+esc(r.unit)+'</td><td>'+stockQty(r.approved_qty)+'</td><td>'+stockQty(r.issued_qty)+'</td><td>'+stockQty(r.unissued_qty)+'</td><td><strong>'+stockQty(r.ready_qty)+'</strong></td><td>'+stockQty(r.waiting_qty)+'</td></tr>';}).join('')+'</tbody></table></div>':'')+'</section>';
   }

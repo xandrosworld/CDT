@@ -18,11 +18,12 @@ def kkknt_codes(conn):
 
 
 def exempt_order_codes(conn, orders):
-    """Only rows explicitly named BK may exceed stock; tax is not permission."""
+    """Only an explicit BK marker/name permits the exception, never tax alone."""
     names={r['code']:r['name'] for r in conn.execute('SELECT code,name FROM products')}
     allowed=set();blocked=set()
     for row in orders:
         code=row['product_code']
         name=row['product_name'] if 'product_name' in row.keys() else names.get(code,'')
-        (allowed if has_bk_name(name) else blocked).add(code)
+        marked='purchase_list' in row.keys() and str(row['purchase_list']).strip() in {'1','True'}
+        (allowed if marked or has_bk_name(name) else blocked).add(code)
     return allowed-blocked

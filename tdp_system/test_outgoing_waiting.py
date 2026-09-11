@@ -144,6 +144,26 @@ class WaitingTests(unittest.TestCase):
             result=refresh_waiting(c,server.now_iso())
             self.assertEqual(result['created'],[])
 
+    def test_explicit_bk_column_survives_draft_roundtrip_without_renaming_goods(self):
+        self.seed(stock=0)
+        with server.db() as c:
+            c.execute("UPDATE orders SET purchase_list=1,tax='KKKNT'")
+            c.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
+        self.assertEqual(self.refresh()['rows'][0]['ready_qty'],10)
+        self.assertEqual(sum(r[3] for r in self.excel_rows(self.request())),10)
+        with server.db() as c:before=c.serialize()
+        self.assertEqual(self.refresh()['rows'][0]['ready_qty'],10)
+        with server.db() as c:self.assertEqual(c.serialize(),before)
+
+    def test_old_unit_mismatch_hold_is_released_even_with_bk_marker(self):
+        self.seed(stock=10);self.refresh()
+        with server.db() as c:
+            c.execute("UPDATE orders SET unit='gói',purchase_list=1")
+        result=self.refresh()
+        self.assertEqual(result['rows'][0]['ready_qty'],0)
+        self.assertIn('đơn ghi gói, kho dùng kg',result['held_line_issues'][0]['message'])
+        with server.db() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],0)
+
     def test_refresh_and_excel_are_idempotent_and_repeat_does_not_consume_stock(self):
         self.seed();self.refresh()
         with server.db() as c:before=c.serialize()
