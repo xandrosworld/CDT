@@ -4,6 +4,9 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(__dirname,'static');
 const server=http.createServer((req,res)=>{
  const pathname=req.url.split('?')[0];
+ if(pathname==='/static/worksheet-bundle/manifest.json'){
+  res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({script:'worksheet-0000000000000000.js',bytes:bundle.length}));
+ }
  if(pathname==='/'){
   res.setHeader('Content-Type','text/html; charset=utf-8');
   return res.end('<link rel="stylesheet" href="/shared/styles.css"><link rel="stylesheet" href="/static/real.css"><script src="/static/worksheet-loader.js"></script><p>KIỂM THỬ MÔ PHỎNG MẠNG CHẬM · KHÔNG GHI DỮ LIỆU KHÁCH</p>');
@@ -19,7 +22,7 @@ const bundle='window.TDPWorksheet={isOpen:()=>!!document.querySelector("#opened"
  const browser=await chromium.launch({channel:'chrome',headless:true});const checks=[],errors=[];
  const pageFor=async handler=>{
   const p=await browser.newPage({viewport:{width:1400,height:850}});p.on('pageerror',e=>errors.push(e.message));
-  await p.route('**/worksheet-bundle/worksheet.js*',handler);await p.goto(base);return p;
+  await p.route('**/worksheet-bundle/worksheet-*.js*',handler);await p.goto(base);return p;
  };
  const open=async p=>p.evaluate(()=>{window.openJob=window.TDPWorksheet.open({title:'Bảng kiểm thử'});});
  const hidden=async p=>assert.equal(await p.locator('.worksheet-load-retry').isVisible(),false);
@@ -28,9 +31,8 @@ const bundle='window.TDPWorksheet={isOpen:()=>!!document.querySelector("#opened"
   const p=await pageFor(r=>{attempts++;if(attempts===1)held=r;else r.fulfill({contentType:'text/javascript',body:bundle});});
   await p.clock.install();await open(p);await hidden(p);
   const deadline=Date.now()+10000;while(!held&&Date.now()<deadline)await new Promise(r=>setTimeout(r,20));assert(held,'First download reached the network');
-  await p.waitForFunction(()=>document.querySelector('script[src*="worksheet-bundle"]'));
-  await p.clock.fastForward(91000);
-  await p.getByText('Tải bảng Excel quá 90 giây.',{exact:false}).waitFor();
+  await p.clock.fastForward(46000);
+  await p.getByText('Tải bảng Excel bị gián đoạn.',{exact:false}).waitFor();
   assert.equal(await p.locator('.worksheet-load-retry').isVisible(),true);
   await p.screenshot({path:path.join(out,'02_MO_PHONG_QUA_THOI_GIAN_CHO.png')});
   await p.locator('.worksheet-load-retry').dblclick();
@@ -50,7 +52,9 @@ const bundle='window.TDPWorksheet={isOpen:()=>!!document.querySelector("#opened"
 
   attempts=0;let cancelled;
   const r=await pageFor(route=>{attempts++;if(attempts===1)cancelled=route;else route.fulfill({contentType:'text/javascript',body:bundle});});
-  await open(r);await hidden(r);await r.locator('.worksheet-load-cancel').click();
+  await open(r);await hidden(r);
+  const cancelDeadline=Date.now()+10000;while(!cancelled&&Date.now()<cancelDeadline)await new Promise(done=>setTimeout(done,20));assert(cancelled);
+  await r.locator('.worksheet-load-cancel').click();
   assert.equal(await r.evaluate(()=>window.openJob),null);assert.equal(await r.evaluate(()=>window.TDPWorksheet.isOpen()),false);
   await open(r);await r.locator('#opened').waitFor();
   if(cancelled)await cancelled.fulfill({contentType:'text/javascript',body:bundle}).catch(()=>{});

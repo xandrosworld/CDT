@@ -100,7 +100,8 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'SAMEORIGIN'
         response.headers['Referrer-Policy'] = 'same-origin'
-        response.headers['Cache-Control'] = 'private, no-store'
+        if not getattr(response, '_tdp_versioned_asset', False):
+            response.headers['Cache-Control'] = 'private, no-store'
         if secure:
             response.headers['Strict-Transport-Security'] = 'max-age=31536000'
         if (response.status_code == 200 and request.accept_encodings['gzip'] > 0

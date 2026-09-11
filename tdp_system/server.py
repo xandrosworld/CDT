@@ -452,6 +452,11 @@ INVOICE_HEADERS = [
 MASTER_FORMAT_VERSION = "2"
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
+try:
+    from . import worksheet_assets
+except ImportError:
+    import worksheet_assets
+worksheet_assets.register(app, STATIC_DIR)
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 PENDING_IMPORTS = {}
 PENDING_IMPORT_LOCK = threading.Lock()
@@ -464,7 +469,7 @@ ORDER_IMPORT_MAX_ROWS = 100_000
 @app.after_request
 def prevent_stale_application_assets(response):
     """A replaced EXE/source must never leave the browser running old UI code."""
-    if request.path == "/" or request.path.startswith("/static/"):
+    if (request.path == "/" or request.path.startswith("/static/")) and not getattr(response, '_tdp_versioned_asset', False):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
