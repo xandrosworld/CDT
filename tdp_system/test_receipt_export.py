@@ -96,6 +96,8 @@ class ReceiptExportTests(unittest.TestCase):
             first = workbook["biên nhận"]
             self.assertEqual(first["C3"].value, "GIẤY BIÊN NHẬN")
             self.assertIn("03.09.2026", first["C4"].value)
+            self.assertIn('CÔNG TY KIỂM THỬ',first['C4'].value)
+            self.assertNotIn('Phát triển',first['C4'].value)
             self.assertEqual(first["C5"].value, "I - Tên đơn vị mua: CÔNG TY KIỂM THỬ")
             self.assertIn("Người mua kiểm thử", first["C6"].value)
             self.assertEqual(first["C7"].value, "Địa chỉ: Địa chỉ công ty kiểm thử")

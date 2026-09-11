@@ -14,7 +14,7 @@ def resolve_scope(conn, body, validate_date):
     if contractor == '*':
         contractor = ''
     if cumulative:
-        end = business_today()
+        end = validate_date(body['to'], 'Đến hết ngày đơn') if body.get('to') else business_today()
         first = conn.execute("""SELECT MIN(b.work_date) FROM batches b
             WHERE b.status='approved' AND b.work_date<=?
               AND EXISTS(SELECT 1 FROM orders o WHERE o.batch_id=b.id

@@ -40,6 +40,12 @@ def decimal(value):
 def money(value):
     return decimal(value).quantize(Decimal('1'),rounding=ROUND_HALF_UP)
 
+
+def export_quantity(value, unit):
+    unit=str(unit or '').strip().casefold()
+    quantum=Decimal('.1') if unit=='kg' else Decimal('1') if unit in {'cái','quả','con','chiếc'} else None
+    return value.quantize(quantum,rounding=ROUND_DOWN) if quantum else value
+
 def replenishable_scopes(conn, orders, batch_ids):
     """Add newly available stock only when it increases an exported quantity."""
     try:
@@ -55,10 +61,7 @@ def replenishable_scopes(conn, orders, batch_ids):
     for key,rows in groups.items():
         held=sum((decimal(r['drafted_qty']) for r in rows),Decimal(0))
         extra=sum((decimal(r['invoiceable_qty']) for r in rows),Decimal(0))
-        if key[2]=='kg':
-            increased=(held+extra).quantize(Decimal('.1'),rounding=ROUND_DOWN)>held.quantize(Decimal('.1'),rounding=ROUND_DOWN)
-        else:
-            increased=extra>Decimal('0.00000001')
+        increased=export_quantity(held+extra,key[2])>export_quantity(held,key[2])
         if increased:
             result.update((r['batch_id'],r['contractor']) for r in rows if r['invoiceable_qty']>1e-8)
     return result
@@ -74,7 +77,7 @@ def _groups(rows, floor_kg=True):
     for (code,unit,nature,price),items in sorted(grouped.items()):
         units[code].add(unit)
         qty=sum((decimal(r['qty']) for r in items),Decimal(0))
-        if floor_kg and unit=='kg':qty=qty.quantize(Decimal('.1'),rounding=ROUND_DOWN)
+        if floor_kg:qty=export_quantity(qty,unit)
         if qty>0:result.append((code,unit,nature,price,qty,items))
     conflicts=[code+' ('+', '.join(sorted(values))+')' for code,values in units.items() if len(values)>1]
     if conflicts:

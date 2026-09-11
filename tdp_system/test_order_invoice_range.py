@@ -114,16 +114,18 @@ class OrderInvoiceRangeTests(unittest.TestCase):
             self.assertEqual(self.request().status_code,409)
         with server.db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM outgoing_invoice_drafts').fetchone()[0],0)
 
-    def test_decreased_stock_blocks_redownload(self):
+    def test_decreased_stock_caps_redownload(self):
         self.seed();self.assertEqual(self.request().status_code,200)
         with server.db() as c:c.execute("UPDATE inventory_transactions SET qty_in=1 WHERE source_type='OPENING'")
-        self.assertEqual(self.request().status_code,409)
+        self.assertEqual(sum(r[3] for r in self.excel_rows(self.request())),1)
 
-    def test_kkknt_exception_still_exports_without_stock(self):
+    def test_only_bk_named_rows_export_without_stock(self):
         self.seed(stock=0)
         with server.db() as c:
             c.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
             c.execute("UPDATE orders SET tax='KKKNT'")
+        self.assertEqual(self.request().status_code,409)
+        with server.db() as c:c.execute("UPDATE orders SET product_name='Hàng thử BK'")
         r=self.request();self.assertEqual(r.status_code,200,r.get_json(silent=True))
         self.assertEqual(r.headers['X-Pending-Order-Lines'],'0')
         with server.db() as c:self.assertEqual(c.execute("SELECT SUM(l.qty) FROM outgoing_invoice_lines l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id WHERE d.status='draft'").fetchone()[0],10)
@@ -179,10 +181,10 @@ class OrderInvoiceRangeTests(unittest.TestCase):
             before=[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')]
         try:
             rows=self.excel_rows(self.request())
-            self.assertEqual([(r[3],r[4],r[8]) for r in rows],[(108.9,2700,294030),(108,2800,302400)])
+            self.assertEqual([(r[3],r[4],r[8]) for r in rows],[(108,2700,291600),(108,2800,302400)])
             with server.db() as c:
                 self.assertEqual(before,[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')])
-                self.assertEqual(sum(r['drafted_qty'] for r in allocation_by_order(c,[a,b]).values()),216.9)
+                self.assertEqual(sum(r['drafted_qty'] for r in allocation_by_order(c,[a,b]).values()),216)
         finally:
             with server.db() as c:c.execute("DELETE FROM product_prices WHERE product_code='HH-01' AND price_group='NT-A'")
 
@@ -297,6 +299,27 @@ class OrderInvoiceRangeTests(unittest.TestCase):
 
     def cumulative(self, contractor='NT-A', **extra):
         return self.client.post('/api/export/order-invoices',json={'contractor':contractor,'scope':'unissued',**extra})
+
+    def test_explicit_order_cutoff_excludes_later_orders_but_deducts_later_signed_invoice(self):
+        with server.db() as c:
+            self.add_opening(c,100)
+            _,ids=self.add_batch(c,'2026-09-07',[{'qty':10}])
+            self.add_batch(c,'2026-09-08',[{'qty':20}])
+            Fixture.add_local_issued_draft(c,c.execute('SELECT batch_id FROM orders WHERE id=?',(ids[0],)).fetchone()[0],ids[0],number='790',invoice_date='2026-09-10',qty=3)
+        response=self.cumulative(to='2026-09-07')
+        self.assertEqual(sum(r[3] for r in self.excel_rows(response)),7)
+        self.assertIn('2026-09-07',response.headers['Content-Disposition'])
+
+    def test_signed_buns_are_deducted_and_fractional_piece_is_not_exported(self):
+        with server.db() as c:
+            self.add_opening(c,27.6)
+            bid,ids=self.add_batch(c,'2026-09-02',[{'qty':83}])
+            c.execute("UPDATE orders SET unit='Cái'")
+            c.execute("UPDATE products SET unit='Cái' WHERE code='HH-01'")
+            Fixture.add_local_issued_draft(c,bid,ids[0],number='790',invoice_date='2026-09-10',qty=27)
+        self.assertEqual(self.cumulative(to='2026-09-07').status_code,409)
+        with server.db() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0],0)
 
     def test_cumulative_includes_prior_month_ignores_stale_dates_and_excludes_drafts_future(self):
         with server.db() as c:

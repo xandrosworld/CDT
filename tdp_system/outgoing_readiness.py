@@ -359,7 +359,7 @@ def invoice_order_issues(orders):
 def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     """Read-only recheck before handing off a file or saving a remote draft."""
     required = defaultdict(float)
-    lines = conn.execute("SELECT product_code,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    lines = conn.execute("SELECT product_code,product_name,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
     exempt = exempt_order_codes(conn, lines)
     for line in lines:
         tax_error = invoice_tax_error(line['tax'])
@@ -394,7 +394,7 @@ def validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, in
     Matching an already posted M-Invoice must release only this draft's hold,
     not deduct the same physical invoice twice. Other drafts keep their holds.
     """
-    lines = conn.execute("SELECT product_code,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    lines = conn.execute("SELECT product_code,product_name,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
     exempt = exempt_order_codes(conn, lines)
     if not lines or any(not math.isfinite(float(r["qty"])) or float(r["qty"]) <= 0 for r in lines):
         raise OutgoingReadinessError("Dự thảo thiếu dòng hàng hoặc có số lượng không hợp lệ", code="invalid_draft_quantity")

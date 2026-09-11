@@ -2641,7 +2641,7 @@
       var status = n(item.pending_qty) > 0
         ? '<span class="tag tag-warn">Còn chờ</span>'
         : n(item.invoiceable_qty) > 0
-          ? '<span class="tag tag-ok">' + (item.negative_stock_allowed ? 'KKKNT · được phép âm' : 'Đủ lượng') + '</span>'
+          ? '<span class="tag tag-ok">' + (item.negative_stock_allowed ? 'Tên BK · ngoại lệ tồn' : 'Đủ lượng') + '</span>'
           : n(item.drafted_qty) > 0
             ? '<span class="tag">Đang giữ trong dự thảo</span>'
             : '<span class="tag tag-ok">Đã phát hành</span>';
@@ -2673,7 +2673,7 @@
       '<button class="btn btn-small btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button></div>',
       '<div class="card-body">',
       !approved ? '<div class="warning-summary">Đơn chưa duyệt. <button class="btn btn-outline" data-view="orders">Mở đơn để sửa / duyệt</button></div>' : '',
-      (readiness.negative_stock_warnings || []).length ? '<div class="warning-summary">KKKNT vẫn được lập bảng kê dù tồn âm: ' + readiness.negative_stock_warnings.map(function(r) { return esc(r.product_code) + ' (' + stockQty(r.qty) + ' ' + esc(r.unit) + ')'; }).join(' · ') + '. Số âm vẫn được theo dõi và chuyển sang tháng sau.</div>' : '',
+      (readiness.negative_stock_warnings || []).length ? '<div class="warning-summary">Dòng có tên BK được hưởng ngoại lệ tồn: ' + readiness.negative_stock_warnings.map(function(r) { return esc(r.product_code) + ' (' + stockQty(r.qty) + ' ' + esc(r.unit) + ')'; }).join(' · ') + '. Số âm vẫn được theo dõi.</div>' : '',
       orderIssues.length ? '<div class="error-summary" id="invoice-order-issues"><strong>Còn ' + orderIssues.length + ' dòng đơn cần sửa trước khi lập hóa đơn.</strong>' + orderIssues.map(function(item) {
         return '<div class="stock-block-row"><span><strong>' + esc(item.product_name || item.product_code) + '</strong> · ' + esc(item.product_code) + ' · Bếp ' + esc(item.kitchen) + (item.source_row ? ' · Dòng Excel ' + esc(item.source_row) : '') + '<br>' + (item.messages || []).map(esc).join('<br>') + '</span><button class="btn btn-outline" data-action="resolve-invoice-order" data-id="' + item.order_id + '">Sửa dòng này</button></div>';
       }).join('') + '</div>' : '',
@@ -2686,7 +2686,7 @@
       stockBlocks.length
         ? '<div class="error-summary" id="outgoing-stock-blocks" style="margin-top:14px"><strong>Chưa tạo được file: ' + stockBlocks.length + ' mã tồn âm.</strong><p>Mở từng mã, đối chiếu tồn đầu và nhập/xuất, sửa đúng nguồn rồi bấm Kiểm tra lại.</p>' + stockBlocks.map(function(r) { return '<div class="stock-block-row"><span>' + esc(r.product_name || r.product_code) + ' (' + esc(r.product_code) + ') đang âm <strong>' + stockQty(-r.qty) + ' ' + esc(r.unit || '') + '</strong>. Cần kiểm tra trước khi tạo file.</span><button class="btn btn-outline" data-action="show-stock-cause" data-code="' + esc(r.product_code) + '">Xử lý ' + esc(r.product_code) + '</button></div>'; }).join('') + '</div>'
         : allReady
-        ? '<div class="ok-summary" style="margin-top:14px">Toàn bộ phần còn lại đủ điều kiện về tồn; hàng KKKNT được phép âm.</div>'
+        ? '<div class="ok-summary" style="margin-top:14px">Toàn bộ phần còn lại đủ điều kiện về tồn; chỉ dòng có tên BK được hưởng ngoại lệ âm kho.</div>'
         : '<div class="warning-summary" style="margin-top:14px">' + (approved ? 'Có thể tạo dự thảo cho phần đủ lượng.' : 'Duyệt đơn trước khi tạo dự thảo cho phần đủ lượng.') + ' Phần còn thiếu giữ lại để lập tiếp.</div>',
       '</div><div class="table-wrap"><table><thead><tr><th>Nhà thầu</th><th>Tổng cần</th><th>Đã dự thảo</th><th>Đã phát hành</th><th>Có thể lập</th><th>Còn thiếu</th></tr></thead><tbody>',
       contractorRows || '<tr><td colspan="6"><div class="empty">Không có nhà thầu cần lập hóa đơn trong đơn hàng này.</div></td></tr>',
@@ -2889,19 +2889,20 @@
 
   function orderInvoiceExportHtml() {
     var filters = state.orderInvoiceFilters || {contractor:''};
+    var cutoff = filters.to || (state.data.batch && state.data.batch.work_date) || currentWorkDate();
     var result = state.orderInvoiceExportResult;
     return '<section class="card"><div class="card-head"><div><h3>Bảng kê từ đơn hàng để đưa lên M-Invoice</h3>' +
       '<p>Đơn đã duyệt → Bảng kê theo tồn kho → Chị chủ động quyết định xuất hóa đơn.</p></div></div>' +
       '<div class="card-body"><form id="orderInvoiceExportForm" class="document-contractor-form">' +
       '<label>Nhà thầu<select name="contractor" required><option value="">Chọn nhà thầu cần xuất</option><option value="*"'+(filters.contractor==='*'?' selected':'')+'>Tất cả nhà thầu</option>' + state.data.master.contractors.map(function(item) {
         return '<option value="'+esc(item.code)+'"'+(filters.contractor===item.code?' selected':'')+'>'+esc(item.code+' · '+item.name)+'</option>';
-      }).join('') + '</select></label><input type="hidden" name="scope" value="unissued">' +
+      }).join('') + '</select></label><label>Đến hết ngày đơn<input type="date" name="to" value="'+esc(cutoff)+'" required></label><input type="hidden" name="scope" value="unissued">' +
       '<button type="submit" value="sync" class="btn btn-outline">Cập nhật hóa đơn đã ký</button>' +
       '<button type="submit" value="export" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
       '<p>Trước mỗi lần tải bảng kê, hệ thống cập nhật hóa đơn đã ký từ M-Invoice để trừ phần đã xuất. Khi chọn tất cả, nhà thầu đủ điều kiện vẫn tải được; nhà thầu cần sửa được ghi rõ trong file hướng dẫn kèm ZIP. Hóa đơn chưa xác định được nhà thầu cần đối chiếu trước để tránh xuất trùng.</p>' +
-      '<p>Hàng thông thường chỉ lấy lượng đủ tồn, không âm kho; phần thiếu giữ lại. KKKNT giữ ngoại lệ đã thống nhất.</p>' +
-      '<p><strong>Tự cộng dồn toàn bộ phần đủ điều kiện chưa xuất từ trước đến hôm nay.</strong> Không cần chọn ngày. Chị quyết định xuất phần nào, lúc nào; phần còn lại giữ chờ và cộng với đơn mới đã duyệt. Tải file chưa tính là đã phát hành.</p>' +
-      '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng để đối chiếu. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
+      '<p>Chỉ lấy lượng đủ tồn, không âm kho; chỉ dòng có tên chứa dấu BK được hưởng ngoại lệ. KKKNT không tự được phép âm kho.</p>' +
+      '<p><strong>Cộng dồn đơn đã duyệt đến hết ngày chọn, trừ lượng đã ký M-Invoice đến hiện tại.</strong> Hóa đơn ký sau ngày đơn vẫn được trừ. Hóa đơn chưa ký và phần còn thiếu giữ chờ. Tải file chưa tính là đã phát hành.</p>' +
+      '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng. Kg lấy một chữ số thập phân; cái, quả, con, chiếc lấy số nguyên. Phần lẻ giữ lại.</p>' +
       (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + sourceScopeReviewHtml() + '</div></section>';
   }
 
@@ -2921,7 +2922,7 @@
     var f=state.unissuedFilters || {to:currentWorkDate(),contractor:''}, d=state.unissued;
     var rows=d && d.rows || [];
     return '<section class="card"><div class="card-head"><div><h3>Hàng chưa xuất hóa đơn · cộng dồn</h3><p>Đơn đã duyệt − lượng đã phát hành. Tải bảng kê và tạo nháp không làm giảm số chưa xuất.</p></div></div><div class="card-body">'+
-      '<p>Phần đủ điều kiện được giữ chờ, không cấp lại cho đơn mới. Nút tải phía trên tự lấy phần chưa xuất đến hôm nay. Ngày bên dưới chỉ dùng để xem lại số liệu cộng dồn.</p><form id="unissuedForm" class="document-contractor-form"><label>Nhà thầu<select name="contractor"><option value="">Tất cả nhà thầu</option>'+state.data.master.contractors.map(function(r){return '<option value="'+esc(r.code)+'"'+(f.contractor===r.code?' selected':'')+'>'+esc(r.code)+'</option>';}).join('')+'</select></label>'+
+      '<p>Phần đủ điều kiện được giữ chờ, không cấp lại cho đơn mới. Ngày trên nút tải quyết định phạm vi đơn trong bảng kê; ngày dưới đây dùng để xem số liệu đối chiếu.</p><form id="unissuedForm" class="document-contractor-form"><label>Nhà thầu<select name="contractor"><option value="">Tất cả nhà thầu</option>'+state.data.master.contractors.map(function(r){return '<option value="'+esc(r.code)+'"'+(f.contractor===r.code?' selected':'')+'>'+esc(r.code)+'</option>';}).join('')+'</select></label>'+
       '<label>Cộng dồn đến ngày<input type="date" name="to" required value="'+esc(f.to)+'"></label><button class="btn btn-outline" type="submit" value="view">Cập nhật phần chờ xuất</button><button class="btn btn-primary" type="submit" value="excel">Tải bảng chưa xuất</button></form>'+
       (d ? '<p class="code-note" role="status">Đến '+esc(dateVN(d.asof))+' · '+rows.length+' mã còn chưa xuất · '+d.unissued_order_rows+' dòng đơn nguồn. Phần đã nháp vẫn nằm trong số chưa xuất.</p>'+ (d.warnings||[]).map(function(w){return '<div class="warning-summary">'+esc(w.message)+'</div>';}).join('') : '<p>Chọn ngày để xem số chưa xuất cộng dồn từ các đơn đã duyệt.</p>')+
       (d?'<p class="code-note">'+esc(d.policy)+' Hóa đơn đã ký bên ngoài cần được tải về ở Hóa đơn đầu ra hoặc ghi nhận số hóa đơn đã phát hành, rồi bấm Xem / cập nhật.</p>':'')+
@@ -5551,6 +5552,8 @@
   });
   batchSelect.addEventListener("change", function () {
     state.batchId = Number(batchSelect.value) || null;
+    if(state.orderInvoiceFilters) delete state.orderInvoiceFilters.to;
+    state.orderInvoiceExportResult=null;
     state.quoteItems = null;
     state.supplierNeeds = null;
     state.purchaseOrderPreview = null;
@@ -5991,17 +5994,17 @@
           var syncedSource=await api('/api/outgoing-invoices/sync-issued',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
           state.outgoingSourceReview=syncedSource.sources;
           state.orderInvoiceExportResult='Đã cập nhật hóa đơn ký đến '+dateVN(syncedSource.to)+'. '+(syncedSource.waiting.warnings.length?'Còn hóa đơn cần đối chiếu bên dưới; chưa xuất lại phần cũ.':'Đã đối chiếu phần đã phát hành với đơn đã duyệt.');
-          state.unissuedFilters={to:syncedSource.to,contractor:selectedOrderScope.contractor==='*'?'':selectedOrderScope.contractor};
+          state.unissuedFilters={to:selectedOrderScope.to || currentWorkDate(),contractor:selectedOrderScope.contractor==='*'?'':selectedOrderScope.contractor};
           state.unissued=await api('/api/outgoing-invoices/unissued?'+new URLSearchParams(state.unissuedFilters).toString());
           return;
         }
         var exported = await downloadFile('/api/export/order-invoices', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
-        state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel để up M-Invoice. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa phân bổ vào file này.' : 'Đã phân bổ lượng được chọn vào file.')+' Tải file chưa tính là đã xuất; xem bảng chưa xuất cộng dồn bên dưới.';
+        state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel cho đơn đến hết '+dateVN(selectedOrderScope.to)+'. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa phân bổ vào file này.' : 'Đã phân bổ lượng được chọn vào file.')+' Đã trừ hóa đơn ký đến hiện tại. Tải file chưa tính là đã xuất; xem bảng chưa xuất cộng dồn bên dưới.';
         if(exported.blockedContractors) state.orderInvoiceExportResult+=' Có '+exported.blockedContractors+' nhà thầu chưa tạo file do cần sửa. Xem tên nhà thầu và lý do trong HUONG_DAN_VA_PHAN_CHUA_XUAT.txt kèm ZIP.';
         showToast('Đã tải bảng kê từ đơn hàng để up M-Invoice');
         state.outgoingInvoices = null; state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
         await Promise.all([fetchOutgoingInvoices(),fetchOutgoingReadiness()]);
-        state.unissuedFilters={to:currentWorkDate(),contractor:selectedOrderScope.contractor==='*'?'':selectedOrderScope.contractor};
+        state.unissuedFilters={to:selectedOrderScope.to || currentWorkDate(),contractor:selectedOrderScope.contractor==='*'?'':selectedOrderScope.contractor};
         state.unissued=await api('/api/outgoing-invoices/unissued?'+new URLSearchParams(state.unissuedFilters).toString());
       } catch(error) {
         state.orderInvoiceExportResult = error.message;

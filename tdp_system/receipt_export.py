@@ -456,8 +456,7 @@ def _populate_receipt_sheet(
         sheet,
         "C4",
         "Hôm nay, vào lúc 6 giờ 00 phút, ngày "
-        f"{work_date.strftime('%d.%m.%Y')}. Tại địa chỉ Công ty TNHH Phát triển "
-        "Thương mại Thành Đạt Phát chúng tôi gồm",
+        f"{work_date.strftime('%d.%m.%Y')}. Tại {_plain(company_name) or 'đơn vị mua'}, chúng tôi gồm",
     )
     if _plain(company_name):
         write_literal(sheet, "C5", f"I - Tên đơn vị mua: {_plain(company_name)}")

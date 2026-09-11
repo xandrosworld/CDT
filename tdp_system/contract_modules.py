@@ -4601,6 +4601,7 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
         code: -(raw_available.get(code, 0) + released.get(code, 0))
         for code in demand_codes
         if raw_available.get(code, 0) + released.get(code, 0) < -1e-9
+        and stock.get(code, {}).get('reserved_qty', 0) - released.get(code, 0) > 1e-9
     }
     if unresolved_holds:
         details = ", ".join(
@@ -8019,6 +8020,10 @@ def register_contract_routes(app, ctx):
             conn.execute("BEGIN IMMEDIATE")
             try:
                 result = create_partial_outgoing_drafts(conn, batch_id, now_iso)
+                if not result['drafts'] and result['pending_qty']>1e-9:
+                    issues=batch_readiness_payload(conn,batch_id).get('blocking_issues',[])
+                    if issues:
+                        raise OutgoingReadinessError(issues[0]['message'],code='canonical_stock_overcommitted')
             except OutgoingReadinessError as exc:
                 conn.rollback()
                 return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status

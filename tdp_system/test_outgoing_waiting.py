@@ -95,18 +95,54 @@ class WaitingTests(unittest.TestCase):
         self.assertEqual((r['issued_qty'],r['ready_qty'],r['waiting_qty']),(7,0,3))
         with server.db() as c:self.assertEqual(canonical_available_stock(c)['HH-01']['raw_available_qty'],0)
 
-    def test_kkknt_waiting_keeps_the_authorized_stock_exception(self):
+    def test_bk_named_waiting_keeps_the_authorized_stock_exception(self):
         self.seed(stock=0)
         with server.db() as c:
             c.execute("UPDATE orders SET tax='KKKNT'")
             c.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
+        r=self.refresh()['rows'][0];self.assertEqual((r['ready_qty'],r['waiting_qty']),(0,10))
+        with server.db() as c:c.execute("UPDATE orders SET product_name='Hàng thử BK'")
         r=self.refresh()['rows'][0];self.assertEqual((r['ready_qty'],r['waiting_qty']),(10,0))
 
-    def test_changed_stock_removes_safe_label_without_silently_reassigning_hold(self):
+    def test_changed_stock_reduces_mutable_holds_to_available_stock(self):
         self.seed();self.refresh()
         with server.db() as c:c.execute("UPDATE inventory_transactions SET qty_in=2 WHERE source_type='OPENING'")
-        r=self.refresh();self.assertTrue(r['warnings']);self.assertEqual(r['rows'][0]['ready_qty'],0)
+        r=self.refresh();self.assertEqual(r['warnings'],[]);self.assertEqual(r['rows'][0]['ready_qty'],2)
+        self.assertEqual(sum(r[3] for r in self.excel_rows(self.request())),2)
+
+    def test_old_kkknt_holds_are_removed_and_cannot_unlock_negative_stock(self):
+        from unittest.mock import patch
+        self.seed(stock=0)
+        with server.db() as c:
+            c.execute("UPDATE orders SET tax='KKKNT'")
+            c.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
+            with patch('tdp_system.outgoing_waiting.exempt_order_codes',return_value={'HH-01'}):
+                refresh_waiting(c,server.now_iso())
+            self.assertEqual(c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],10)
+        report=self.refresh()
+        self.assertEqual(report['rows'][0]['ready_qty'],0)
+        self.assertEqual(report['rows'][0]['waiting_qty'],10)
+        with server.db() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],0)
         self.assertEqual(self.request().status_code,409)
+
+    def test_locked_remote_hold_is_not_rewritten_after_stock_decreases(self):
+        self.seed();self.refresh()
+        with server.db() as c:
+            c.execute("UPDATE outgoing_invoice_drafts SET minvoice_status='saved' WHERE status='draft'")
+            c.execute("UPDATE inventory_transactions SET qty_in=2 WHERE source_type='OPENING'")
+            before=c.serialize()
+            result=refresh_waiting(c,server.now_iso())
+            self.assertTrue(result['warnings'])
+            self.assertEqual(c.serialize(),before)
+
+    def test_bk_exception_does_not_leak_to_unmarked_rows_of_same_code(self):
+        self.seed(stock=0)
+        with server.db() as c:
+            c.execute("UPDATE orders SET product_name='Hàng BK'")
+            self.add_batch(c,'2026-09-02',[{'qty':5}])
+            result=refresh_waiting(c,server.now_iso())
+            self.assertEqual(result['created'],[])
 
     def test_refresh_and_excel_are_idempotent_and_repeat_does_not_consume_stock(self):
         self.seed();self.refresh()

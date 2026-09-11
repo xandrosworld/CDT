@@ -4,12 +4,12 @@ from decimal import Decimal, ROUND_DOWN
 
 try:
     from .outgoing_unissued import issued_allocations
-    from .outgoing_consolidation import _write_draft, decimal
+    from .outgoing_consolidation import _write_draft, decimal, export_quantity
     from .outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from .stock_tax_policy import exempt_order_codes
 except ImportError:
     from outgoing_unissued import issued_allocations
-    from outgoing_consolidation import _write_draft, decimal
+    from outgoing_consolidation import _write_draft, decimal, export_quantity
     from outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from stock_tax_policy import exempt_order_codes
 
@@ -39,16 +39,28 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
     drafts=[dict(r) for r in conn.execute("""SELECT * FROM outgoing_invoice_drafts WHERE status='draft'
         AND (?='' OR contractor=?)
         ORDER BY CASE WHEN minvoice_status IN ('saved','saving','unknown') THEN 0 ELSE 1 END,id""",(contractor,contractor))]
+    stock=canonical_available_stock(conn)
+    capacity={code:decimal(r['raw_available_qty']) for code,r in stock.items()}
+    # Recheck old holds too: a changed policy or stock cannot keep an invalid
+    # quantity invoiceable. Restore only this scope's holds into its budget.
+    for d in drafts:
+        for r in conn.execute("SELECT product_code,qty_out FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'",(str(d['id']),)):
+            capacity[r['product_code']]=capacity.get(r['product_code'],Decimal(0))+decimal(r['qty_out'])
+    capacity={code:max(q,Decimal(0)) for code,q in capacity.items()}
     for d in drafts:
         rows=[dict(r) for r in conn.execute("""SELECT l.*,o.batch_id,o.work_date,o.buy_price,a.source_unit_price
             FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id
             LEFT JOIN outgoing_line_allocations a ON a.line_id=l.id AND a.order_id=l.order_id
             WHERE l.draft_id=? ORDER BY o.work_date,o.id,l.id""",(d['id'],))]
         kept=[];changed=False
+        exempt=exempt_order_codes(conn,rows)
         for r in rows:
             used=min(decimal(r['qty']),consume.get(r['order_id'],Decimal(0)))
             consume[r['order_id']]=max(consume.get(r['order_id'],Decimal(0))-used,Decimal(0))
             qty=min(decimal(r['qty'])-used,need.get(r['order_id'],Decimal(0)))
+            code=r['product_code']
+            if code not in exempt:qty=min(qty,capacity.get(code,Decimal(0)))
+            capacity[code]=max(capacity.get(code,Decimal(0))-qty,Decimal(0))
             if qty<=Decimal('0.00000001'):qty=Decimal(0)
             changed=changed or (qty==0 and decimal(r['qty'])>0) or abs(qty-decimal(r['qty']))>Decimal('0.00000001')
             need[r['order_id']]=max(need.get(r['order_id'],Decimal(0))-qty,Decimal(0))
@@ -103,7 +115,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
         by_tax=defaultdict(list)
         for key,rows in additions.items():
             total=sum((decimal(r['qty']) for r in rows),Decimal(0))
-            if key[2]=='kg':total=max((already_held[key]+total).quantize(Decimal('.1'),rounding=ROUND_DOWN)-already_held[key],Decimal(0))
+            total=max(export_quantity(already_held[key]+total,key[2])-already_held[key],Decimal(0))
             for r in rows:
                 take=min(total,decimal(r['qty']));total-=take
                 if take>0:by_tax[(key[0],key[3])].append({**r,'qty':float(take)})

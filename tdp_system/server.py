@@ -4488,10 +4488,10 @@ def api_export_order_invoices():
                         raise InvoiceTaxExportError('Tên file nhà thầu bị trùng; cần kiểm tra mã nhà thầu.')
                     archive.writestr(filename,payload)
                 guide=['FILE TỪ ĐƠN HÀNG ĐỂ NHẬP M-INVOICE',f'Ngày {start} đến {end}. Nhà thầu: {contractor or "Tất cả"}.',
-                    f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế. '+('Cộng dồn toàn bộ đơn đã duyệt đến hôm nay, trừ lượng đã phát hành.' if cumulative else 'Gộp tất cả ngày đã chọn.'),
+                    f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế. '+('Cộng dồn toàn bộ đơn đã duyệt đến hết ngày chọn, trừ lượng đã ký đến hiện tại, kể cả hóa đơn ký sau ngày đơn.' if cumulative else 'Gộp tất cả ngày đã chọn.'),
                     'Cùng mã và cùng giá bán trên đơn đã duyệt được cộng lượng. Khác giá bán giữ dòng riêng để đối chiếu, không tự tạo giá bình quân mới. Hàng khuyến mại giữ riêng tính chất.',
-                    'Kg làm tròn xuống theo 0,1 Kg sau khi cộng mã; tính tiền theo lượng xuất, phần lẻ giữ lại.',
-                    'Chỉ gồm lượng đã giữ tồn; KKKNT giữ ngoại lệ đã xác nhận. Chưa ký/phát hành hóa đơn.',
+                    'Kg làm tròn xuống theo 0,1 Kg; cái, quả, con, chiếc lấy số nguyên sau khi cộng mã. Phần lẻ giữ lại.',
+                    'Chỉ gồm lượng đủ tồn; chỉ dòng có tên chứa dấu BK được hưởng ngoại lệ âm kho. KKKNT không tự được miễn kiểm tra tồn. Chưa ký/phát hành hóa đơn.',
                     'Dùng file gộp này thay các file tách ngày chưa phát hành, không nhập thêm cả hai bộ file.',
                     'Tải file hoặc tạo nháp chưa tính là đã xuất hóa đơn. Bảng chưa xuất cộng dồn lấy lượng đã duyệt trừ lượng đã phát hành được đồng bộ/xác nhận.',
                     f'NHÀ THẦU CHƯA TẠO FILE: {len(blocked)}. Các nhà thầu này giữ nguyên phần chờ, cần sửa trước khi tải riêng:',
