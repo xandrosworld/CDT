@@ -271,5 +271,69 @@ class OrderInvoiceRangeTests(unittest.TestCase):
         self.assertEqual(self.request('MISSING').status_code,409)
         self.assertEqual(self.request(start='2026-09-03',end='2026-09-01').status_code,409)
 
+    def cumulative(self, contractor='NT-A', **extra):
+        return self.client.post('/api/export/order-invoices',json={'contractor':contractor,'scope':'unissued',**extra})
+
+    def test_cumulative_includes_prior_month_ignores_stale_dates_and_excludes_drafts_future(self):
+        with server.db() as c:
+            self.add_opening(c,50)
+            self.add_batch(c,'2026-08-31',[{'qty':2}])
+            self.add_batch(c,'2026-09-03',[{'qty':3}])
+            draft,_=self.add_batch(c,'2026-09-04',[{'qty':10}])
+            c.execute("UPDATE batches SET status='draft' WHERE id=?",(draft,))
+            self.add_batch(c,'2099-09-01',[{'qty':20}])
+            before=[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')]
+        r=self.cumulative(**{'from':'2026-09-03','to':'2026-09-03'})
+        self.assertEqual(r.headers['X-Order-Scope'],'unissued')
+        self.assertEqual(self.excel_rows(r)[0][3],5)
+        with server.db() as c:
+            self.assertEqual(before,[tuple(r) for r in c.execute('SELECT * FROM orders ORDER BY id')])
+            self.assertEqual(c.execute('SELECT status FROM batches WHERE id=?',(draft,)).fetchone()[0],'draft')
+            snapshot=c.serialize()
+        self.assertEqual(self.cumulative().status_code,200)
+        with server.db() as c:self.assertEqual(c.serialize(),snapshot)
+
+    def test_cumulative_new_day_adds_to_old_download_and_issued_amount_disappears(self):
+        with server.db() as c:
+            self.add_opening(c,20)
+            self.add_batch(c,'2026-09-01',[{'qty':3}])
+        self.assertEqual(self.excel_rows(self.cumulative())[0][3],3)
+        with server.db() as c:self.add_batch(c,'2026-09-04',[{'qty':2}])
+        self.assertEqual(self.excel_rows(self.cumulative())[0][3],5)
+        self.client.put('/api/outgoing-buyers/NT-A',json={'legal_name':'Công ty thử','tax_code':'0100000001','address':'Địa chỉ thử'})
+        with server.db() as c:did=c.execute("SELECT id FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0]
+        issued=self.client.post(f'/api/outgoing-invoices/{did}/confirm-issued',json={'confirmed':True,'invoice_number':'5678','invoice_series':'C26TEST','invoice_date':'2026-09-05'})
+        self.assertEqual(issued.status_code,200,issued.get_json())
+        self.assertEqual(self.cumulative().status_code,409)
+        with server.db() as c:self.add_batch(c,'2026-09-06',[{'qty':4}])
+        self.assertEqual(self.excel_rows(self.cumulative())[0][3],4)
+
+    def test_cumulative_has_no_100_batch_cutoff(self):
+        with server.db() as c:
+            self.add_opening(c,110)
+            for _ in range(101):self.add_batch(c,'2026-09-01',[{'qty':1}])
+        self.assertEqual(self.excel_rows(self.cumulative())[0][3],101)
+
+    def test_no_dates_defaults_to_backlog_and_sync_uses_earliest_approved(self):
+        self.seed()
+        response=self.client.post('/api/export/order-invoices',json={'contractor':'NT-A'})
+        self.assertEqual(self.excel_rows(response)[0][3],7)
+        with patch('tdp_system.outgoing_source_refresh.refresh_sources',return_value={'to':'2026-09-11'}) as sync:
+            r=self.client.post('/api/outgoing-invoices/sync-issued',json={'scope':'unissued','contractor':'NT-A'})
+            self.assertEqual(r.status_code,200)
+            self.assertEqual(sync.call_args.args[3],'2026-09-01')
+
+    def test_cumulative_sync_failure_never_exports_stale_quantities(self):
+        self.seed()
+        with server.db() as c:c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('minvoice_active_connection','test')")
+        try:
+            with patch('tdp_system.outgoing_source_refresh.refresh_sources',side_effect=ValueError('test connection failed')):
+                r=self.cumulative()
+                self.assertEqual(r.status_code,409)
+                self.assertEqual(r.get_json()['code'],'issued_sync_required')
+            with server.db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM outgoing_invoice_drafts').fetchone()[0],0)
+        finally:
+            with server.db() as c:c.execute("DELETE FROM settings WHERE key='minvoice_active_connection'")
+
 
 if __name__=='__main__':unittest.main()

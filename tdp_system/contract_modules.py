@@ -4305,6 +4305,7 @@ def parse_canonical_purchase_workbook(
         parsed.append({
             "source_sheet": worksheet.title, "source_row": source_row,
             "format": "customer_canonical", "row_key": row_key, "order_id": order_id,
+            "_issue_columns": fields,
             "product_code": product_code, "kitchen": kitchen, "work_date": work_date,
             "product_name": product_name, "base_qty": numbers["base_qty"], "unit": unit,
             "supplier": supplier, "note": note, "buy_price": numbers["buy_price"],
@@ -4476,6 +4477,7 @@ def parse_purchase_order_workbook(conn, workbook, batch_id: int, formula_workboo
             parsed.append({
                 "source_sheet": worksheet.title, "source_row": source_row,
                 "format": "legacy_13", "row_key": row_key,
+                "_issue_columns": fields,
                 "order_id": order_id, "demand_qty": demand_qty,
                 "physical_stock_used": physical, "order_qty": max(order_qty, 0),
                 "supplier": supplier, "buy_price": effective_buy_price,

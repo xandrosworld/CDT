@@ -250,6 +250,11 @@ class DailyWorkbookImportTests(unittest.TestCase):
         self.assertTrue(repeated.json['idempotent'])
         invalid = self.continuous_analyze(self.continuous_file(qty=4, complete=False))
         self.assertFalse(invalid['sheets'][0]['confirmAvailable'])
+        details=invalid['sheets'][0]['issueDetails']
+        self.assertTrue(details)
+        self.assertEqual(details[0]['row'],3)
+        self.assertTrue(details[0]['errors'])
+        self.assertNotIn('cccd',details[0])
         self.assertEqual(self.confirm_api(invalid).status_code, 400)
         with server.db() as conn:
             self.assertEqual(conn.execute('SELECT qty FROM orders WHERE batch_id=?', (first.json['batch']['id'],)).fetchone()[0], 3)

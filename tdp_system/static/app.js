@@ -2888,21 +2888,19 @@
   }
 
   function orderInvoiceExportHtml() {
-    var selectedDay = (state.data.batch && state.data.batch.work_date) || currentWorkDate();
-    var filters = state.orderInvoiceFilters || {from:selectedDay,to:selectedDay,contractor:''};
+    var filters = state.orderInvoiceFilters || {contractor:''};
     var result = state.orderInvoiceExportResult;
     return '<section class="card"><div class="card-head"><div><h3>Bảng kê từ đơn hàng để đưa lên M-Invoice</h3>' +
       '<p>Đơn đã duyệt → Bảng kê theo tồn kho → Chị chủ động quyết định xuất hóa đơn.</p></div></div>' +
       '<div class="card-body"><form id="orderInvoiceExportForm" class="document-contractor-form">' +
       '<label>Nhà thầu<select name="contractor" required><option value="">Chọn nhà thầu cần xuất</option><option value="*"'+(filters.contractor==='*'?' selected':'')+'>Tất cả nhà thầu</option>' + state.data.master.contractors.map(function(item) {
         return '<option value="'+esc(item.code)+'"'+(filters.contractor===item.code?' selected':'')+'>'+esc(item.code+' · '+item.name)+'</option>';
-      }).join('') + '</select></label><label>Từ ngày<input name="from" type="date" required value="'+esc(filters.from)+'"></label>' +
-      '<label>Đến ngày<input name="to" type="date" required value="'+esc(filters.to)+'"></label>' +
+      }).join('') + '</select></label><input type="hidden" name="scope" value="unissued">' +
       '<button type="submit" value="sync" class="btn btn-outline">Cập nhật hóa đơn đã ký</button>' +
       '<button type="submit" value="export" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
       '<p>Trước mỗi lần tải bảng kê, hệ thống cập nhật hóa đơn đã ký từ M-Invoice để trừ phần đã xuất. Nếu còn hóa đơn chưa khớp nhà thầu hoặc mã hàng, cần đối chiếu trước khi tải tiếp.</p>' +
       '<p>Hàng thông thường chỉ lấy lượng đủ tồn, không âm kho; phần thiếu giữ lại. KKKNT giữ ngoại lệ đã thống nhất.</p>' +
-      '<p>Xuất theo ngày: chọn cùng ngày bắt đầu và kết thúc. Xuất theo tháng: chọn khoảng ngày trong tháng. Chỉ lấy nhà thầu và ngày chị chọn; tải file chưa tính là đã phát hành.</p>' +
+      '<p><strong>Tự cộng dồn toàn bộ phần đủ điều kiện chưa xuất từ trước đến hôm nay.</strong> Không cần chọn ngày. Chị quyết định xuất phần nào, lúc nào; phần còn lại giữ chờ và cộng với đơn mới đã duyệt. Tải file chưa tính là đã phát hành.</p>' +
       '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng để đối chiếu. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
       (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + sourceScopeReviewHtml() + '</div></section>';
   }
@@ -2923,7 +2921,7 @@
     var f=state.unissuedFilters || {to:currentWorkDate(),contractor:''}, d=state.unissued;
     var rows=d && d.rows || [];
     return '<section class="card"><div class="card-head"><div><h3>Hàng chưa xuất hóa đơn · cộng dồn</h3><p>Đơn đã duyệt − lượng đã phát hành. Tải bảng kê và tạo nháp không làm giảm số chưa xuất.</p></div></div><div class="card-body">'+
-      '<p>Phần đủ điều kiện được giữ chờ, không cấp lại cho đơn mới. Chị chọn nhà thầu và ngày xuất ở phía trên; chưa phát hành thì vẫn cộng dồn.</p><form id="unissuedForm" class="document-contractor-form"><label>Nhà thầu<select name="contractor"><option value="">Tất cả nhà thầu</option>'+state.data.master.contractors.map(function(r){return '<option value="'+esc(r.code)+'"'+(f.contractor===r.code?' selected':'')+'>'+esc(r.code)+'</option>';}).join('')+'</select></label>'+
+      '<p>Phần đủ điều kiện được giữ chờ, không cấp lại cho đơn mới. Nút tải phía trên tự lấy phần chưa xuất đến hôm nay. Ngày bên dưới chỉ dùng để xem lại số liệu cộng dồn.</p><form id="unissuedForm" class="document-contractor-form"><label>Nhà thầu<select name="contractor"><option value="">Tất cả nhà thầu</option>'+state.data.master.contractors.map(function(r){return '<option value="'+esc(r.code)+'"'+(f.contractor===r.code?' selected':'')+'>'+esc(r.code)+'</option>';}).join('')+'</select></label>'+
       '<label>Cộng dồn đến ngày<input type="date" name="to" required value="'+esc(f.to)+'"></label><button class="btn btn-outline" type="submit" value="view">Cập nhật phần chờ xuất</button><button class="btn btn-primary" type="submit" value="excel">Tải bảng chưa xuất</button></form>'+
       (d ? '<p class="code-note" role="status">Đến '+esc(dateVN(d.asof))+' · '+rows.length+' mã còn chưa xuất · '+d.unissued_order_rows+' dòng đơn nguồn. Phần đã nháp vẫn nằm trong số chưa xuất.</p>'+ (d.warnings||[]).map(function(w){return '<div class="warning-summary">'+esc(w.message)+'</div>';}).join('') : '<p>Chọn ngày để xem số chưa xuất cộng dồn từ các đơn đã duyệt.</p>')+
       (d?'<p class="code-note">'+esc(d.policy)+' Hóa đơn đã ký bên ngoài cần được tải về ở Hóa đơn đầu ra hoặc ghi nhận số hóa đơn đã phát hành, rồi bấm Xem / cập nhật.</p>':'')+
@@ -4083,7 +4081,7 @@
   function openImportModal(payload) {
     state.editingId = null;
     state.modalMode = "import";
-    setOrderModalWide(false);
+    setOrderModalWide(Boolean(payload.strictDaily));
     state.pendingImport = payload;
     document.getElementById("modalTitle").textContent = payload.phase === "finalization"
       ? "File cuối ngày còn phần cần kiểm tra" : "Chọn trang Excel của đơn hàng";
@@ -4139,6 +4137,29 @@
         payload.ignoredSheets.map(function (item) { return esc(item.name); }).join(", ") +
         '. Các trang CCCD, BÁO GIÁ và gộp đơn được bảo vệ; dữ liệu danh mục khác chỉ thay đổi ở màn hình riêng sau khi xem và xác nhận.</div></div>'
       : "";
+    var importDetails = payload.strictDaily ? payload.sheets.map(function(sheet) {
+      var rows = sheet.issueDetails || [];
+      var errors = rows.filter(function(row) { return row.errors && row.errors.length; });
+      var warnings = rows.filter(function(row) { return row.warnings && row.warnings.length; });
+      var reasons = {
+        row_count_mismatch:'Số dòng đọc được khác số dòng trong trang. Kiểm tra hàng tiêu đề và các dòng có số lượng.',
+        customer_scope_must_be_loaded_first:'Cần nhập trang đơn khách trước khi cập nhật trang đặt hàng.',
+        customer_scope_conflict:'Có dòng đơn đã liên kết chứng từ bị bỏ khỏi file. Giữ lại dòng đó hoặc đối chiếu chứng từ trước khi thay đơn.',
+        workday_finalized:'Ngày này đã chốt. Cần kiểm tra chứng từ đã liên kết trước khi thay dữ liệu.',
+        purchase_scope_parse_failed:'Không đọc được trang đặt hàng theo mẫu. Xem lý do bên dưới.'
+      };
+      function table(items, key) {
+        return '<div class="table-wrap" style="max-height:300px;overflow:auto"><table><thead><tr><th>Dòng / ô Excel</th><th>Mã / tên hàng · bếp</th><th>'+ (key==='errors'?'Lỗi cần sửa':'Cảnh báo') +'</th></tr></thead><tbody>'+items.map(function(row) {
+          return '<tr><td><strong>'+esc(row.row || '—')+'</strong>'+(row.cells && row.cells.length?'<br>'+esc(row.cells.join(', ')):'')+'</td><td>'+esc([row.code,row.name,row.kitchen].filter(Boolean).join(' · '))+'</td><td>'+row[key].map(esc).join('<br>')+'</td></tr>';
+        }).join('')+'</tbody></table></div>';
+      }
+      var reason=sheet.previewMessage || reasons[sheet.previewIssue] || '';
+      if(!errors.length && !warnings.length && !reason) return '';
+      return '<div class="form-field span-4 import-issue-details"><h4>Trang '+esc(sheet.name)+'</h4>'+
+        (reason?'<p class="error-summary">'+esc(reason)+'</p>':'')+
+        (errors.length?'<p><strong>Sửa '+errors.length+' dòng dưới đây trong file Excel, lưu file rồi tải lại.</strong> Số dòng là số ở mép trái của Excel.</p>'+table(errors,'errors'):'')+
+        (warnings.length?'<details><summary>'+warnings.length+' dòng cảnh báo · không chặn nhập</summary>'+table(warnings,'warnings')+'</details>':'')+'</div>';
+    }).join('') : '';
     orderForm.innerHTML = html([
       '<div class="form-grid"><div class="form-field span-4"><div class="code-note"><strong>File: ',
       esc(payload.filename), "</strong><br>",
@@ -4148,9 +4169,10 @@
       "</div></div>",
       referenceNote,
       '<div class="form-field span-4"><label>Trang Excel cần nhập</label><div class="sheet-list">', sheetCards, "</div></div>",
+      importDetails,
       field("Ngày làm việc dự phòng", "work_date", fallback, "date", "required", "span-2"),
       '<div class="form-actions"><button type="button" class="btn btn-outline" data-action="close-modal">Hủy</button>',
-      '<button type="submit" class="btn btn-primary">',
+      '<button type="submit" class="btn btn-primary" '+(payload.strictDaily && !payload.sheets.some(function(sheet) {return sheet.confirmAvailable;})?'disabled':'')+'>',
       payload.phase === "finalization" ? "Dùng các phần đạt làm bản mới nhất" : "Nhập các trang đã chọn",
       "</button></div></div>"
     ]);
@@ -5968,7 +5990,7 @@
           var syncedSource=await api('/api/outgoing-invoices/sync-issued',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
           state.outgoingSourceReview=syncedSource.sources;
           state.orderInvoiceExportResult='Đã cập nhật hóa đơn ký đến '+dateVN(syncedSource.to)+'. '+(syncedSource.waiting.warnings.length?'Còn hóa đơn cần đối chiếu bên dưới; chưa xuất lại phần cũ.':'Đã đối chiếu phần đã phát hành với đơn đã duyệt.');
-          state.unissuedFilters={to:selectedOrderScope.to,contractor:selectedOrderScope.contractor==='*'?'':selectedOrderScope.contractor};
+          state.unissuedFilters={to:syncedSource.to,contractor:selectedOrderScope.contractor==='*'?'':selectedOrderScope.contractor};
           state.unissued=await api('/api/outgoing-invoices/unissued?'+new URLSearchParams(state.unissuedFilters).toString());
           return;
         }
@@ -5977,12 +5999,11 @@
         showToast('Đã tải bảng kê từ đơn hàng để up M-Invoice');
         state.outgoingInvoices = null; state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
         await Promise.all([fetchOutgoingInvoices(),fetchOutgoingReadiness()]);
-        if(state.unissued && state.unissuedFilters) {
-          state.unissued=await api('/api/outgoing-invoices/unissued?'+new URLSearchParams(state.unissuedFilters).toString());
-        }
+        state.unissuedFilters={to:currentWorkDate(),contractor:selectedOrderScope.contractor==='*'?'':selectedOrderScope.contractor};
+        state.unissued=await api('/api/outgoing-invoices/unissued?'+new URLSearchParams(state.unissuedFilters).toString());
       } catch(error) {
         state.orderInvoiceExportResult = error.message;
-        try {state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?from='+encodeURIComponent(selectedOrderScope.from)+'&to='+encodeURIComponent(currentWorkDate()))).items;} catch(_) {}
+        try {state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?scope=unissued')).items;} catch(_) {}
         showToast(error.message,true);
       } finally { renderDocuments(); }
       return;
@@ -5993,9 +6014,9 @@
       var scopeButton=event.submitter;scopeButton.disabled=true;
       try {
         await api('/api/outgoing-invoices/source-scopes/'+sourceForm.dataset.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:sourceForm.dataset.token,scope:choice==='outside'?'outside':'orders',contractor:choice==='outside'?'':choice,note:new FormData(sourceForm).get('note')})});
-        var sourceDates=state.orderInvoiceFilters;
-        state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?from='+encodeURIComponent(sourceDates.from)+'&to='+encodeURIComponent(currentWorkDate()))).items;
-        state.unissuedFilters={to:sourceDates.to,contractor:sourceDates.contractor==='*'?'':sourceDates.contractor};
+        var sourceDates=state.orderInvoiceFilters || {};
+        state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?scope=unissued')).items;
+        state.unissuedFilters={to:currentWorkDate(),contractor:sourceDates.contractor==='*'?'':sourceDates.contractor || ''};
         state.unissued=await api('/api/outgoing-invoices/unissued/refresh?'+new URLSearchParams(state.unissuedFilters).toString(),{method:'POST'});
         showToast('Đã lưu phạm vi đối chiếu hóa đơn');
       } catch(error) {showToast(error.message,true);} finally {renderDocuments();}

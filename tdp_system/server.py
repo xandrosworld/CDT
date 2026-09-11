@@ -1403,6 +1403,8 @@ def parse_workbook(path: Path, fallback_date: str, selected_sheets=None):
                 order = resolve_order(conn, raw, fallback_date, by_code, by_name)
                 order["source_sheet"] = ws.title
                 order["source_row"] = row
+                if order.get('errors') or order.get('warnings'):
+                    order['_issue_columns'] = mapping
                 parsed.append(order)
                 sheet_count += 1
             if sheet_count == 0:
@@ -1539,6 +1541,10 @@ def workbook_date_token(value) -> tuple[int, int] | None:
 
 def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False) -> dict | None:
     """Return a safe structure-first preview, or None for legacy workbooks."""
+    try:
+        from .daily_import_issues import issue_details
+    except ImportError:
+        from daily_import_issues import issue_details
     analysis = analyze_daily_workbook(path)
     if not analysis["strictCustomerWorkbook"]:
         return None
@@ -1571,6 +1577,7 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
         sheet["parsedRows"] = len(orders)
         sheet["errorRows"] = sum(bool(item.get("errors")) for item in orders)
         sheet["warningRows"] = sum(bool(item.get("warnings")) for item in orders)
+        sheet["issueDetails"] = issue_details(orders)
         sheet["writeScope"] = "customer_orders"
         if skipped or len(orders) != int(sheet.get("rows") or 0):
             sheet["confirmAvailable"] = False
@@ -1641,16 +1648,18 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
                                 writeScope="purchase_orders",
                                 confirmAvailable=bool(purchase_preview["can_confirm"]),
                                 diff=purchase_diff,
+                                issueDetails=issue_details(purchase_preview['items']),
                             )
                             purchase_sheet.pop("previewIssue", None)
                             if not purchase_preview["can_confirm"]:
                                 purchase_sheet["previewIssue"] = "purchase_scope_has_errors"
-                        except ValueError:
+                        except ValueError as exc:
                             purchase_sheet.update(
                                 confirmAvailable=False,
                                 errorRows=max(int(purchase_sheet.get("rows") or 0), 1),
                                 writeScope="purchase_orders",
                                 previewIssue="purchase_scope_parse_failed",
+                                previewMessage=str(exc),
                                 diff={
                                     "added": 0, "updated": 0, "unchanged": 0,
                                     "removed": 0, "conflicts": 1,
@@ -4308,15 +4317,16 @@ def api_outgoing_unissued():
 def api_sync_issued_orders():
     try:
         from .outgoing_source_refresh import refresh_sources
+        from .order_export_scope import resolve_scope, business_today
     except ImportError:
         from outgoing_source_refresh import refresh_sources
+        from order_export_scope import resolve_scope, business_today
     try:
         body=request.get_json(silent=True) or {}
         if not isinstance(body,dict):raise ValueError('Khoảng ngày không hợp lệ.')
-        start=valid_iso_date(body.get('from'),'Từ ngày')
-        requested_end=valid_iso_date(body.get('to'),'Đến ngày')
-        if start>requested_end:raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày.')
-        end=max(requested_end,date.today().isoformat())
+        with db() as conn:
+            start,requested_end,_,_=resolve_scope(conn,body,valid_iso_date)
+        end=max(requested_end,business_today())
         return jsonify(ok=True,**refresh_sources(db,create_minvoice_client,now_iso,start,end))
     except (ValueError,MinvoiceError) as exc:
         return jsonify(ok=False,error='Chưa cập nhật đủ hóa đơn đã ký; chưa được xuất file mới. '+str(exc)),409
@@ -4327,8 +4337,10 @@ def api_sync_issued_orders():
 def api_outgoing_source_scopes(invoice_id=None):
     try:
         from .outgoing_source_scope import scope_report,set_scope
+        from .order_export_scope import resolve_scope
     except ImportError:
         from outgoing_source_scope import scope_report,set_scope
+        from order_export_scope import resolve_scope
     try:
         with db() as conn:
             if invoice_id is not None:
@@ -4336,8 +4348,7 @@ def api_outgoing_source_scopes(invoice_id=None):
                 if not isinstance(body,dict):raise ValueError('Dữ liệu xác nhận không hợp lệ.')
                 conn.execute('BEGIN IMMEDIATE')
                 return jsonify(ok=True,**set_scope(conn,invoice_id,body,now_iso()))
-            start=valid_iso_date(request.args.get('from'),'Từ ngày')
-            end=valid_iso_date(request.args.get('to'),'Đến ngày')
+            start,end,_,_=resolve_scope(conn,request.args,valid_iso_date)
             return jsonify(ok=True,items=scope_report(conn,start,end))
     except ValueError as exc:
         return jsonify(ok=False,error=str(exc)),409
@@ -4355,23 +4366,20 @@ def api_export_order_invoices():
         from .outgoing_consolidation import consolidate, replenishable_scopes
         from .outgoing_unissued import issued_allocations
         from .invoice_tax_export import build_invoice_workbook, _safe_name
+        from .order_export_scope import resolve_scope, business_today
     except ImportError:
         from contract_modules import create_partial_outgoing_drafts, net_delivered, invoice_tax_percent
         from outgoing_readiness import OutgoingReadinessError, allocation_by_order
         from outgoing_consolidation import consolidate, replenishable_scopes
         from outgoing_unissued import issued_allocations
         from invoice_tax_export import build_invoice_workbook, _safe_name
+        from order_export_scope import resolve_scope, business_today
     try:
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             raise ValueError('Khoảng ngày và nhà thầu không hợp lệ')
-        start = valid_iso_date(body.get('from'), 'Từ ngày')
-        end = valid_iso_date(body.get('to'), 'Đến ngày')
-        contractor = clean_text(body.get('contractor')).upper()
-        if contractor=='*':contractor=''
-        if start > end:
-            raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày')
         with db() as conn:
+            start,end,contractor,cumulative=resolve_scope(conn,body,valid_iso_date)
             connected=setting_get(conn,'minvoice_active_connection','')
         if connected:
             try:
@@ -4379,7 +4387,7 @@ def api_export_order_invoices():
             except ImportError:
                 from outgoing_source_refresh import refresh_sources
             try:
-                refresh_sources(db,create_minvoice_client,now_iso,start,max(end,date.today().isoformat()))
+                refresh_sources(db,create_minvoice_client,now_iso,start,max(end,business_today()))
             except (ValueError,MinvoiceError) as exc:
                 raise InvoiceTaxExportError('Chưa cập nhật đủ hóa đơn đã ký từ M-Invoice; chưa tạo file để tránh xuất trùng. '+str(exc),code='issued_sync_required') from exc
         output = io.BytesIO()
@@ -4400,9 +4408,12 @@ def api_export_order_invoices():
             if source_warnings:
                 raise InvoiceTaxExportError('Cần đối chiếu hóa đơn đã phát hành trước khi lập tiếp để tránh xuất trùng. '+source_warnings[0]['message'],code='issued_source_unresolved')
             batches = conn.execute("""SELECT b.* FROM batches b WHERE b.work_date BETWEEN ? AND ?
+                AND (?=0 OR b.status='approved')
                 AND EXISTS(SELECT 1 FROM orders o WHERE o.batch_id=b.id AND (?='' OR o.contractor=?))
-                ORDER BY b.work_date,b.id""", (start,end,contractor,contractor)).fetchall()
-            if not batches or len(batches)>100:
+                ORDER BY b.work_date,b.id""", (start,end,int(cumulative),contractor,contractor)).fetchall()
+            if not batches:
+                raise ValueError('Chưa có đơn đã duyệt của nhà thầu này để lập bảng kê')
+            if not cumulative and len(batches)>100:
                 raise ValueError('Chọn khoảng ngày có từ 1 đến 100 phiên đơn cần xuất')
             for batch in batches:
                 if batch['status'] != 'approved':
@@ -4444,7 +4455,7 @@ def api_export_order_invoices():
                         raise InvoiceTaxExportError('Tên file nhà thầu bị trùng; cần kiểm tra mã nhà thầu.')
                     archive.writestr(filename,payload)
                 guide=['FILE TỪ ĐƠN HÀNG ĐỂ NHẬP M-INVOICE',f'Ngày {start} đến {end}. Nhà thầu: {contractor or "Tất cả"}.',
-                    f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế, gộp tất cả ngày đã chọn.',
+                    f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế. '+('Cộng dồn toàn bộ đơn đã duyệt đến hôm nay, trừ lượng đã phát hành.' if cumulative else 'Gộp tất cả ngày đã chọn.'),
                     'Cùng mã và cùng giá bán trên đơn đã duyệt được cộng lượng. Khác giá bán giữ dòng riêng để đối chiếu, không tự tạo giá bình quân mới. Hàng khuyến mại giữ riêng tính chất.',
                     'Kg làm tròn xuống theo 0,1 Kg sau khi cộng mã; tính tiền theo lượng xuất, phần lẻ giữ lại.',
                     'Chỉ gồm lượng đã giữ tồn; KKKNT giữ ngoại lệ đã xác nhận. Chưa ký/phát hành hóa đơn.',
@@ -4456,6 +4467,7 @@ def api_export_order_invoices():
         response=send_file(output,as_attachment=True,download_name=f'BANG_KE_UP_M_INVOICE_{start}_{end}.zip',mimetype='application/zip')
         response.headers['X-Invoice-Files']=str(len(draft_ids))
         response.headers['X-Pending-Order-Lines']=str(len(pending))
+        response.headers['X-Order-Scope']='unissued' if cumulative else 'range'
         return response
     except (ValueError,InvoiceTaxExportError,OutgoingReadinessError) as exc:
         return jsonify({'ok':False,'error':str(exc),'code':getattr(exc,'code','invalid_order_invoice_export')}),getattr(exc,'status',409)
