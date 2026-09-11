@@ -3,6 +3,11 @@ from .daily_import_issues import issue_details
 
 
 class IssueDetailsTests(unittest.TestCase):
+    def test_wrong_day_shows_source_date_and_exact_date_cell(self):
+        result=issue_details([{'source_row':42,'work_date':'2026-08-28','_issue_columns':{'work_date':4},'errors':['Ngày dòng đặt hàng không khớp phiên đang chọn']}])
+        self.assertEqual(result[0]['cells'],['D42'])
+        self.assertEqual(result[0]['workDate'],'2026-08-28')
+
     def test_real_excel_row_column_and_no_identity_fields(self):
         rows=[{'source_row':90,'product_code':'I000067','product_name':'Khế chua',
                'kitchen':'B1','cccd':'PRIVATE-ID','seller':'PRIVATE-SELLER',

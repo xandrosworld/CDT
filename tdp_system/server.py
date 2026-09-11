@@ -1780,6 +1780,23 @@ def strict_order_index(orders, *, finalization=False, continuous=False):
     return output
 
 
+def refresh_matching_order_diagnostics(conn, batch_id, incoming_orders):
+    """Refresh stale validation after a master fix without rewriting business data."""
+    batch = conn.execute('SELECT status FROM batches WHERE id=?', (batch_id,)).fetchone()
+    if not batch or batch['status'] != 'draft':
+        return
+    current = strict_order_index(rows_dict(conn.execute('SELECT * FROM orders WHERE batch_id=?', (batch_id,))), continuous=True)
+    for key, value in strict_order_index(incoming_orders, continuous=True).items():
+        previous = current.get(key)
+        if not previous or previous['payload_hash'] != value['payload_hash']:
+            continue
+        old, new = previous['order'], value['order']
+        errors, warnings = new.get('errors') or [], new.get('warnings') or []
+        if json.loads(old['errors'] or '[]') != errors or json.loads(old['warnings'] or '[]') != warnings:
+            conn.execute('UPDATE orders SET errors=?,warnings=?,updated_at=? WHERE id=?',
+                         (json.dumps(errors,ensure_ascii=False), json.dumps(warnings,ensure_ascii=False), now_iso(), old['id']))
+
+
 def strict_order_removal_conflicts(conn, order_ids):
     conflicts = set()
     for order_id in order_ids:
@@ -1895,6 +1912,7 @@ def apply_strict_customer_scope(conn, batch_id: int, incoming_orders, *, continu
             "Có dòng cũ đã đi vào đặt NCC hoặc hóa đơn; không thể tự xóa khi chốt lại",
             code="customer_scope_conflict",
         )
+    refresh_matching_order_diagnostics(conn, batch_id, incoming_orders)
     current_rows = rows_dict(conn.execute(
         "SELECT * FROM orders WHERE batch_id=? ORDER BY source_row,id", (batch_id,),
     ))
@@ -2727,6 +2745,7 @@ def confirm_strict_daily_import(pending, body):
             existing = valid_order_import_batch(conn, import_key)
             if existing:
                 batch_id = int(existing["id"])
+                refresh_matching_order_diagnostics(conn, batch_id, orders)
                 payload = batch_payload(conn, batch_id)
                 payload.update(
                     ok=True,

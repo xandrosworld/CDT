@@ -4150,7 +4150,7 @@
       };
       function table(items, key) {
         return '<div class="table-wrap" style="max-height:300px;overflow:auto"><table><thead><tr><th>Dòng / ô Excel</th><th>Mã / tên hàng · bếp</th><th>'+ (key==='errors'?'Lỗi cần sửa':'Cảnh báo') +'</th></tr></thead><tbody>'+items.map(function(row) {
-          return '<tr><td><strong>'+esc(row.row || '—')+'</strong>'+(row.cells && row.cells.length?'<br>'+esc(row.cells.join(', ')):'')+'</td><td>'+esc([row.code,row.name,row.kitchen].filter(Boolean).join(' · '))+'</td><td>'+row[key].map(esc).join('<br>')+'</td></tr>';
+          return '<tr><td><strong>'+esc(row.row || '—')+'</strong>'+(row.cells && row.cells.length?'<br>'+esc(row.cells.join(', ')):'')+(row.workDate?'<br>Ngày '+esc(dateVN(row.workDate)):'')+'</td><td>'+esc([row.code,row.name,row.kitchen].filter(Boolean).join(' · '))+'</td><td>'+row[key].map(esc).join('<br>')+'</td></tr>';
         }).join('')+'</tbody></table></div>';
       }
       var reason=sheet.previewMessage || reasons[sheet.previewIssue] || '';

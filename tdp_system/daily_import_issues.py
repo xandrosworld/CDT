@@ -13,6 +13,7 @@ def issue_details(rows):
         ('tên hàng', ('product_name',)), ('ncc', ('supplier',)),
         ('nhà cung cấp', ('supplier',)), ('đơn vị', ('unit',)),
         ('số lượng', ('qty', 'base_qty', 'order_qty')),
+        ('ngày', ('work_date', 'date')),
     )
     for row in rows:
         errors, warnings = row.get('errors') or [], row.get('warnings') or []
@@ -34,5 +35,6 @@ def issue_details(rows):
                         'code': row.get('product_code') or '',
                         'name': row.get('product_name') or '',
                         'kitchen': row.get('kitchen') or '',
+                        'workDate': row.get('work_date') or '',
                         'errors': errors, 'warnings': warnings})
     return details

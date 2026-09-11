@@ -216,6 +216,27 @@ class DailyWorkbookImportTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         return response.json
 
+    def test_same_file_refreshes_diagnostics_after_missing_kitchen_is_added(self):
+        workbook=load_workbook(io.BytesIO(self.continuous_file()))
+        workbook['01.09']['C3']='NEW-KITCHEN'
+        stream=io.BytesIO();workbook.save(stream);workbook.close();data=stream.getvalue()
+        first=self.confirm_api(self.continuous_analyze(data))
+        self.assertEqual(first.status_code,200,first.json)
+        self.assertIn('Mã bếp chưa có trong danh mục',first.json['orders'][0]['errors'])
+        with server.db() as c:
+            before=dict(c.execute('SELECT * FROM orders WHERE batch_id=?',(first.json['batch']['id'],)).fetchone())
+            c.execute("INSERT INTO kitchens(code,contractor,name) VALUES('NEW-KITCHEN','C1','New Kitchen')")
+        try:
+            replay=self.confirm_api(self.continuous_analyze(data))
+            self.assertEqual(replay.status_code,200,replay.json)
+            self.assertEqual(replay.json['orders'][0]['errors'],[])
+            with server.db() as c:
+                after=dict(c.execute('SELECT * FROM orders WHERE id=?',(before['id'],)).fetchone())
+            excluded={'errors','warnings','updated_at'}
+            self.assertEqual({k:v for k,v in before.items() if k not in excluded},{k:v for k,v in after.items() if k not in excluded})
+        finally:
+            with server.db() as c:c.execute("DELETE FROM kitchens WHERE code='NEW-KITCHEN'")
+
     def test_continuous_day_accepts_incomplete_first_then_three_revisions(self):
         first = self.confirm_api(self.continuous_analyze(self.continuous_file(complete=False)))
         self.assertEqual(first.status_code, 200, first.json)
