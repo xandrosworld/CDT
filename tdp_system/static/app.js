@@ -2888,16 +2888,18 @@
   }
 
   function orderInvoiceExportHtml() {
-    var filters = state.orderInvoiceFilters || {from:currentWorkDate(),to:currentWorkDate(),contractor:''};
+    var selectedDay = (state.data.batch && state.data.batch.work_date) || currentWorkDate();
+    var filters = state.orderInvoiceFilters || {from:selectedDay,to:selectedDay,contractor:''};
     var result = state.orderInvoiceExportResult;
     return '<section class="card"><div class="card-head"><div><h3>Bảng kê từ đơn hàng để đưa lên M-Invoice</h3>' +
-      '<p>Chọn nhà thầu và ngày đơn đã duyệt. Lấy phần đủ tồn để lên hóa đơn; phần thiếu giữ lại. KKKNT giữ ngoại lệ đã xác nhận.</p></div></div>' +
+      '<p>Đơn đã duyệt → Bảng kê theo tồn kho → Chị chủ động quyết định xuất hóa đơn.</p></div></div>' +
       '<div class="card-body"><form id="orderInvoiceExportForm" class="document-contractor-form">' +
       '<label>Nhà thầu<select name="contractor" required><option value="">Chọn nhà thầu cần xuất</option><option value="*"'+(filters.contractor==='*'?' selected':'')+'>Tất cả nhà thầu</option>' + state.data.master.contractors.map(function(item) {
         return '<option value="'+esc(item.code)+'"'+(filters.contractor===item.code?' selected':'')+'>'+esc(item.code+' · '+item.name)+'</option>';
       }).join('') + '</select></label><label>Từ ngày<input name="from" type="date" required value="'+esc(filters.from)+'"></label>' +
       '<label>Đến ngày<input name="to" type="date" required value="'+esc(filters.to)+'"></label>' +
       '<button type="submit" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
+      '<p>Hàng thông thường chỉ lấy lượng đủ tồn, không âm kho; phần thiếu giữ lại. KKKNT giữ ngoại lệ đã thống nhất.</p>' +
       '<p>Xuất theo ngày: chọn cùng ngày bắt đầu và kết thúc. Xuất theo tháng: chọn khoảng ngày trong tháng. Chỉ lấy nhà thầu và ngày chị chọn; tải file chưa tính là đã phát hành.</p>' +
       '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng để đối chiếu. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
       (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + '</div></section>';
