@@ -706,6 +706,7 @@ def build_purchase_summary_workbook(
         sheet.page_setup.scale = None
         sheet.page_setup.fitToWidth = 1
         sheet.page_setup.fitToHeight = 0
+        sheet.page_margins.bottom = 0.5
         sheet.sheet_properties.pageSetUpPr.fitToPage = True
         sheet.freeze_panes = None
         workbook.active = 0
