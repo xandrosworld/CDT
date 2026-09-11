@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from openpyxl.cell.cell import MergedCell
+from openpyxl.styles import Alignment
 
 try:
     from template_workbook import (
@@ -679,6 +680,24 @@ def build_purchase_summary_workbook(
             f"H{signature_first}",
             f"Hải Phòng, ngày {_display_date(last_date)}",
         )
+
+        # Leave twice the template's signing space for the company seal.
+        for row in range(signature_first + 3, signature_last):
+            height = sheet.row_dimensions[row].height or sheet.sheet_format.defaultRowHeight
+            sheet.row_dimensions[row].height = height * 2
+        signer = sheet.cell(signature_last, 9)
+        signer_name = signer.value
+        signer_font = copy(signer.font)
+        signer_font.sz = 16
+        signer_font.bold = True
+        signer_font.color = '000000'
+        write_literal(sheet, signer.coordinate, None)
+        sheet.merge_cells(start_row=signature_last, start_column=8,
+                          end_row=signature_last, end_column=10)
+        write_literal(sheet, f"H{signature_last}", signer_name)
+        sheet[f"H{signature_last}"].font = signer_font
+        sheet[f"H{signature_last}"].alignment = Alignment(horizontal='center', vertical='center')
+        sheet.row_dimensions[signature_last].height = max(24, sheet.row_dimensions[signature_last].height or 0)
 
         sheet.print_area = f"A1:J{signature_last}"
         sheet.print_title_rows = "$8:$10"
