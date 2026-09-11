@@ -14,6 +14,36 @@ from .test_selected_document_export import SelectedDocumentExportTests
 
 
 class PreviewFormattingTests(unittest.TestCase):
+    def test_excel_overflow_labels_get_empty_space_without_covering_other_fields(self):
+        from openpyxl.styles import Alignment, Border, Side
+        from html.parser import HTMLParser
+        class Cells(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.rows=[]; self.current=None
+            def handle_starttag(self, tag, attrs):
+                if tag=='tr': self.rows.append([])
+                if tag=='td':
+                    self.current=dict(attrs); self.current['text']=''; self.rows[-1].append(self.current)
+            def handle_data(self, data):
+                if self.current is not None: self.current['text']+=data
+            def handle_endtag(self, tag):
+                if tag=='td': self.current=None
+        book=Workbook(); ws=book.active; ws.print_area='A1:D4'
+        ws['A1']='Tên doanh nghiệp rất dài'; ws['D1']='Mã số thuế'
+        ws['A2']='Địa chỉ dài'; ws.merge_cells('C2:D2'); ws['C2']='Trường gộp'
+        ws['A3']='Nội dung phải xuống dòng'; ws['A3'].alignment=Alignment(wrap_text=True)
+        ws['A4']='Dừng ở ô có khung'; ws['B4'].border=Border(left=Side(style='thin'))
+        before_merges=str(ws.merged_cells)
+        parser=Cells(); parser.feed(sheet_preview(ws)['html']); rows=parser.rows
+        self.assertEqual(rows[0][0]['colspan'],'3')
+        self.assertEqual(rows[0][1]['text'],'Mã số thuế')
+        self.assertEqual(rows[1][0]['colspan'],'2')
+        self.assertEqual(rows[1][1]['text'],'Trường gộp')
+        self.assertEqual(rows[2][0]['colspan'],'1')
+        self.assertEqual(rows[3][0]['colspan'],'1')
+        self.assertEqual(str(ws.merged_cells),before_merges)
+        self.assertIsNone(ws['B1'].value)
+
     def test_all_thirteen_customer_rounding_examples(self):
         examples = [('42500', '42,500'), ('42000','42,000'), ('152000.994706','152,001'),
                     ('5208','5,208'), ('29629.665','29,630'), ('9196.25149','9,196'),

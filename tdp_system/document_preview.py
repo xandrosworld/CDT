@@ -158,6 +158,22 @@ def sheet_preview(sheet):
             align = cell.alignment.horizontal
             if align not in {'left', 'center', 'right'}:
                 align = 'right' if isinstance(value, (int,float,Decimal)) else 'left'
+            # Excel lets unwrapped labels extend across adjacent empty cells.
+            # Give those labels the same space in HTML without changing the
+            # workbook, crossing a populated/merged cell or removing borders.
+            def bordered(candidate):
+                return any(getattr(candidate.border, side) and getattr(candidate.border, side).style
+                           for side in ('left', 'right', 'top', 'bottom'))
+            if (isinstance(value, str) and value and align == 'left'
+                    and not cell.alignment.wrap_text and rowspan == colspan == 1
+                    and (r,c) not in merged and not bordered(cell)):
+                for next_column in columns[columns.index(c)+1:]:
+                    candidate = sheet.cell(r, next_column)
+                    if ((r,next_column) in merged or (r,next_column) in skipped
+                            or candidate.value is not None or bordered(candidate)):
+                        break
+                    colspan += 1
+                    skipped.add((r,next_column))
             style = [f'text-align:{align}', 'vertical-align:middle',
                      f'font-size:{cell.font.sz or 11}pt',
                      f'font-family:{"Times New Roman" if "Times" in (cell.font.name or "") else "Arial"}',
