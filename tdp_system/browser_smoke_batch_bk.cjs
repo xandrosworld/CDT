@@ -11,7 +11,7 @@ const {chromium} = require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
   const initial=await status();
   await page.locator('[data-action="approve-batch"]').click();
   const modal=page.getByRole('dialog',{name:'Bảng kê cần kiểm tra'});
-  await modal.waitFor();assert.match(await modal.innerText(),/Thiếu giá bán/);
+  await modal.waitFor();assert.match(await modal.innerText(),/Giá bán phải là số hữu hạn lớn hơn 0/);
   await modal.screenshot({path:'bk-missing-price.png'});
   assert.equal((await status()).lines,0);
   await modal.getByRole('button',{name:'Sửa dòng'}).click();

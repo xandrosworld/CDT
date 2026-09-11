@@ -210,6 +210,26 @@ def _number(value: Decimal) -> int | float:
     return int(value) if value == value.to_integral_value() else float(value)
 
 
+def _prefilled_unit_cost(row, rate, *, purchase_only=False):
+    """Price a standalone confirmed purchase without manufacturing a sale.
+
+    Linked sales always retain the configured percentage policy, even when
+    their sales price is missing. Only a purchase with no sales link uses its
+    own confirmed buy price, as the purchase summary already does.
+    """
+    label = 'Giá mua đã chốt' if purchase_only else 'Giá bán'
+    try:
+        price = Decimal(str(row.get('buy_price' if purchase_only else 'sell_price')))
+        if not price.is_finite() or price <= 0:
+            raise ValueError()
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError(label + ' phải là số hữu hạn lớn hơn 0 để tính giá bảng kê') from None
+    cost = (price if purchase_only else price * rate).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+    if cost <= 0:
+        raise ValueError('Giá bảng kê phải lớn hơn 0')
+    return cost
+
+
 def _purchase_rate(conn) -> Decimal:
     row = conn.execute("SELECT value FROM settings WHERE key='purchase_rate'").fetchone()
     try:
@@ -253,7 +273,7 @@ def _template_rows_for_batch(conn, batch_id: int) -> list[dict[str, Any]]:
             """SELECT l.source_row,l.id,l.work_date,l.product_code,l.product_name,l.unit,
                       l.actual_qty qty,l.supplier source_party,l.note,
                       COALESCE(o.purchase_list,p.purchase_list,0) purchase_list,l.status,
-                      COALESCE(o.sell_price,0) sell_price
+                      COALESCE(o.sell_price,0) sell_price,l.buy_price,l.order_id,o.id linked_order_id
                  FROM purchase_workbook_lines l
                  LEFT JOIN orders o ON o.id=l.order_id
                  LEFT JOIN products p ON p.code=l.product_code
@@ -285,15 +305,16 @@ def _template_rows_for_batch(conn, batch_id: int) -> list[dict[str, Any]]:
     result = []
     for index, row in enumerate(rows, start=1):
         qty = Decimal(str(row["qty"] or 0))
-        sell_price = Decimal(str(row["sell_price"] or 0))
-        if not sell_price.is_finite() or sell_price <= 0:
+        purchase_only = bool(canonical) and row.get('order_id') is None
+        try:
+            if canonical and not purchase_only and row.get('linked_order_id') is None:
+                raise ValueError('Dòng bán liên kết không còn tồn tại; cần đối chiếu phần mua')
+            unit_cost = _prefilled_unit_cost(row, rate, purchase_only=purchase_only)
+        except ValueError as exc:
             raise BKImportError(
-                f"Dòng BK nguồn {row['source_row']}: thiếu giá bán dương để tính giá BK",
-                code="bk_sales_price_missing", status=409,
-            )
-        # Customer rule: the prefilled BK cost is exactly the configured rate
-        # (95% by default) of the row's sales price. Never substitute buy cost.
-        unit_cost = (sell_price * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+                f"Dòng BK nguồn {row['source_row']}: {exc}",
+                code='bk_purchase_price_missing' if purchase_only else 'bk_sales_price_missing', status=409,
+            ) from None
         amount = (qty * unit_cost).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         result.append({
             "document_date": _iso_date(row["work_date"]),
@@ -309,7 +330,9 @@ def _template_rows_for_batch(conn, batch_id: int) -> list[dict[str, Any]]:
             "amount": _number(amount),
             "source_party": _plain(row["source_party"]),
             "note": (
-                f"Giá BK mặc định {rate * 100}% giá bán; dòng nguồn {row['source_row']}. "
+                ("Giá BK theo giá mua đã chốt (không có dòng bán); " if purchase_only
+                 else f"Giá BK mặc định {rate * 100}% giá bán; ")
+                + f"dòng nguồn {row['source_row']}. "
                 + _plain(row["note"])
             ).strip(),
         })

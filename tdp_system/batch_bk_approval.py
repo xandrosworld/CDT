@@ -73,6 +73,7 @@ def prepare(conn, batch_id):
         'people': people, 'prior_bk': prior_bk})
     result = {'rows': [], 'issues': [], 'overlaps': [], 'excludedRows': 0, 'sourceHash': fingerprint,
               'alreadyPosted': False, 'documentId': None, 'amount': 0, 'ratePercent': float(rate * 100),
+              'purchasePricedRows': 0, 'purchasePricedAmount': 0,
               '_source_state_hash': source_state_hash}
     if previous and previous['status'] == 'posted':
         if previous['batch_source_hash'] != source_state_hash:
@@ -108,12 +109,10 @@ def prepare(conn, batch_id):
                     raise ValueError('Lượng hỏng/trả vượt lượng thực nhận')
             if qty == 0:
                 continue
-            price = _number((order or {}).get('sell_price'), 'Giá bán')
-            if price <= 0:
-                raise ValueError('Thiếu giá bán để tính giá bảng kê')
-            cost = (price * rate).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
-            if cost <= 0:
-                raise ValueError('Giá bảng kê phải lớn hơn 0')
+            purchase_only = bool(canonical) and line.get('order_id') is None
+            if canonical and not purchase_only and order is None:
+                raise ValueError('Dòng bán liên kết không thuộc phiên đơn; cần đối chiếu phần mua')
+            cost = bk._prefilled_unit_cost(line if purchase_only else order, rate, purchase_only=purchase_only)
         except ValueError as exc:
             errors.append(str(exc))
             qty = cost = Decimal(0)
@@ -126,7 +125,10 @@ def prepare(conn, batch_id):
             errors.append('Ngày mua khác ngày đơn')
         if errors:
             result['issues'].append({'row': row_ref, 'code': line.get('product_code'),
-                                     'name': line.get('product_name'), 'orderId': (order or {}).get('id'), 'errors': errors})
+                                     'name': line.get('product_name'), 'orderId': (order or {}).get('id'),
+                                     'sourceSheet': line.get('source_sheet') or '',
+                                     'workDate': line.get('work_date') or '',
+                                     'kitchen': line.get('kitchen') or '', 'errors': errors})
             continue
         result['rows'].append({'document_date': line['work_date'], 'source_type': bk.BK_IMPORT_SOURCE_TYPE,
             '_source_row': row_ref, '_order_id': (order or {}).get('id'),
@@ -134,7 +136,12 @@ def prepare(conn, batch_id):
             'product_name': product['name'], 'unit': product['unit'], 'qty': float(qty),
             'unit_cost': float(cost), 'amount': float((qty*cost).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)),
             'source_party': line.get('supplier') or seller,
-            'note': f'Duyệt đơn và bảng kê; dòng nguồn {row_ref}; giá BK {rate * 100}% giá bán.'})
+            'note': f'Duyệt đơn và bảng kê; dòng nguồn {row_ref}; ' + (
+                'giá BK theo giá mua đã chốt (không có dòng bán).' if purchase_only
+                else f'giá BK {rate * 100}% giá bán.')})
+        if purchase_only:
+            result['purchasePricedRows'] += 1
+            result['purchasePricedAmount'] += result['rows'][-1]['amount']
         matches = conn.execute("""SELECT DISTINCT i.invoice_series,i.invoice_number FROM invoice_inventory_effective_ledger l
             JOIN msmi_invoices i ON i.id=l.source_invoice_id
             WHERE l.source_invoice_table='msmi_invoices' AND l.direction='input' AND l.status='posted'

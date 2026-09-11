@@ -4485,8 +4485,8 @@
         var dialog = document.createElement('dialog');
         dialog.className = 'inventory-totals-dialog batch-bk-approval-dialog';
         dialog.setAttribute('aria-label', 'Bảng kê cần kiểm tra');
-        dialog.innerHTML = '<div class="inventory-totals-heading"><h3>Bảng kê cần kiểm tra</h3><button type="button" class="icon-button" aria-label="Đóng">×</button></div><p>Sửa các dòng dưới đây rồi duyệt lại. Đơn và kho chưa thay đổi.</p><div class="inventory-totals-body"><table><thead><tr><th>Dòng</th><th>Mặt hàng</th><th>Cần sửa</th><th></th></tr></thead><tbody>' +
-          (preview.issues || []).map(function (r) { return '<tr><td>' + esc(r.row) + '</td><td>' + esc(r.code) + ' · ' + esc(r.name || '') + '</td><td>' + esc((r.errors || []).join('; ')) + '</td><td>' + (r.orderId ? '<button type="button" class="btn btn-outline" data-bk-edit="' + esc(r.orderId) + '">Sửa dòng</button>' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+        dialog.innerHTML = '<div class="inventory-totals-heading"><h3>Bảng kê cần kiểm tra</h3><button type="button" class="icon-button" aria-label="Đóng">×</button></div><p>Sửa các dòng dưới đây rồi duyệt lại. Đơn và kho chưa thay đổi.</p><div class="inventory-totals-body"><table><thead><tr><th>Sheet / dòng Excel</th><th>Ngày / bếp</th><th>Mặt hàng</th><th>Cần sửa</th><th></th></tr></thead><tbody>' +
+          (preview.issues || []).map(function (r) { return '<tr><td>' + esc((r.sourceSheet ? r.sourceSheet + ' · ' : '') + r.row) + '</td><td>' + esc([r.workDate, r.kitchen].filter(Boolean).join(' · ')) + '</td><td>' + esc(r.code) + ' · ' + esc(r.name || '') + '</td><td>' + esc((r.errors || []).join('; ')) + '</td><td>' + (r.orderId ? '<button type="button" class="btn btn-outline" data-bk-edit="' + esc(r.orderId) + '">Sửa dòng</button>' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
         dialog.querySelector('button').onclick = function () { dialog.close(); };
         dialog.querySelectorAll('[data-bk-edit]').forEach(function (button) { button.onclick = function () { dialog.close(); openOrderModal(Number(button.getAttribute('data-bk-edit'))); }; });
         dialog.addEventListener('close', function () { dialog.remove(); });
@@ -4494,8 +4494,9 @@
         return null;
       }
       var text = preview.alreadyPosted ? "Đơn đã có bảng kê nhập kho. Kiểm tra lại trạng thái duyệt?" :
-        preview.rowCount ? "Duyệt đơn và ghi nhập kho " + preview.rowCount + " dòng bảng kê, " + money(preview.amount) + "?\nSố lượng dùng theo thực nhận trong đơn. Giá bảng kê bằng " + preview.ratePercent + "% giá bán." : "Duyệt đơn hàng này? Không có dòng bảng kê cần nhập kho.";
+        preview.rowCount ? "Duyệt đơn và ghi nhập kho " + preview.rowCount + " dòng bảng kê, " + money(preview.amount) + "?\nSố lượng dùng theo thực nhận đã chốt. Các dòng có đơn bán tính giá bảng kê bằng " + preview.ratePercent + "% giá bán." : "Duyệt đơn hàng này? Không có dòng bảng kê cần nhập kho.";
       if (preview.excludedRows) text += "\n" + preview.excludedRows + " dòng thuộc người bán đã loại khỏi bảng kê.";
+      if (preview.purchasePricedRows) text += "\n" + preview.purchasePricedRows + " dòng mua riêng không có dòng bán: dùng giá mua đã chốt, tổng " + money(preview.purchasePricedAmount) + ". Các dòng có đơn bán tính theo tỷ lệ trên.";
       if ((preview.overlaps || []).length) text += "\n\nCác mã đã nhập kho cùng ngày từ hóa đơn hoặc bảng kê: " + Array.from(new Set(preview.overlaps.map(function (r) { return r.code; }))).join(', ') + ".\nChỉ đồng ý nếu đây là lần mua riêng, chưa nằm trong phần đã nhập kho.";
       if (!window.confirm(text)) return null;
       return api("/api/batches/" + batchId + "/approve", { method: "POST", headers: { "Content-Type": "application/json" },

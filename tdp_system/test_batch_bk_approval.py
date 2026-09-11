@@ -85,6 +85,103 @@ class BatchBKApprovalTests(unittest.TestCase):
         self.assertFalse(self.preview()['canApprove'])
         self.assertEqual(self.post().status_code,409);self.assert_empty_draft()
 
+    def add_standalone_purchase(self, conn, *, price=100, work_date='2026-09-03', status='confirmed'):
+        return conn.execute('''INSERT INTO purchase_workbook_lines(batch_id,row_key,source_sheet,
+            source_row,product_code,kitchen,work_date,product_name,unit,supplier,
+            actual_qty,buy_price,status,created_at,updated_at)
+            VALUES(?,?,'đặt hàng',42,'BK-P1','K1',?,'Hàng BK','kg','BK-S1',2,?,?,?,?)''',
+            (self.batch,'unlinked',work_date,price,status,NOW,NOW)).lastrowid
+
+    def test_standalone_purchase_uses_confirmed_cost_without_creating_sales(self):
+        with server.db() as conn:
+            self.add_standalone_purchase(conn)
+            before = conn.serialize()
+            preview = approval.prepare(conn, self.batch)
+            self.assertEqual(before, conn.serialize())
+            sales_before = [dict(r) for r in conn.execute('SELECT * FROM orders')]
+        self.assertTrue(preview['canApprove'])
+        self.assertEqual((preview['amount'], preview['purchasePricedRows'], preview['purchasePricedAmount']), (200,1,200))
+        self.assertEqual(preview['rows'][0]['unit_cost'], 100)
+        self.assertIn('giá mua đã chốt', preview['rows'][0]['note'])
+        self.assertEqual(self.post().status_code,200)
+        self.assertEqual(self.post().get_json()['bk']['newInventoryLines'],0)
+        with server.db() as conn:
+            self.assertEqual([dict(r) for r in conn.execute('SELECT * FROM orders')],sales_before)
+            self.assertEqual(tuple(conn.execute('SELECT sum(qty_delta),max(unit_cost) FROM invoice_inventory_ledger').fetchone()),(2,100))
+        book=load_workbook(io.BytesIO(self.client.get(f'/api/bk-import/template?batch_id={self.batch}').data),data_only=True)
+        self.assertEqual([book.active.cell(4,col).value for col in (8,9,10)],[2,100,200])
+        book.close()
+
+    def test_unlinked_purchase_reports_invalid_buy_price_and_source(self):
+        for work_date in ('2026-08-28', '2026-09-03'):
+            with self.subTest(work_date=work_date):
+                with server.db() as conn:
+                    conn.execute('DELETE FROM purchase_workbook_lines WHERE batch_id=?', (self.batch,))
+                    self.add_standalone_purchase(conn,price=0,work_date=work_date)
+                    before = conn.serialize()
+                    preview = approval.public_preview(approval.prepare(conn, self.batch))
+                    self.assertEqual(before, conn.serialize())
+                self.assertFalse(preview['canApprove'])
+                issue = preview['issues'][0]
+                self.assertEqual((issue['sourceSheet'], issue['row'], issue['workDate'], issue['kitchen']),
+                                 ('đặt hàng', 42, work_date, 'K1'))
+                self.assertIsNone(issue['orderId'])
+                self.assertIn('Giá mua đã chốt', issue['errors'][0])
+                self.assertNotIn('Giá bán không hợp lệ', issue['errors'])
+                self.assertEqual('Ngày mua khác ngày đơn' in issue['errors'], work_date != '2026-09-03')
+                self.assertEqual(self.post().status_code, 409)
+                self.assert_empty_draft()
+
+    def test_standalone_purchase_requires_matching_date_and_confirmation(self):
+        for work_date, status in [('2026-08-28','confirmed'), ('2026-09-03','draft')]:
+            with self.subTest(work_date=work_date,status=status):
+                with server.db() as conn:
+                    conn.execute('DELETE FROM purchase_workbook_lines WHERE batch_id=?',(self.batch,))
+                    self.add_standalone_purchase(conn,work_date=work_date,status=status)
+                self.assertFalse(self.preview()['canApprove'])
+                self.assertEqual(self.post().status_code,409)
+                self.assert_empty_draft()
+
+    def test_linked_purchase_missing_sales_price_never_falls_back_to_buy_price(self):
+        with server.db() as conn:
+            row_id=self.add_standalone_purchase(conn)
+            conn.execute('UPDATE purchase_workbook_lines SET order_id=? WHERE id=?',(self.order,row_id))
+            conn.execute('UPDATE orders SET sell_price=0 WHERE id=?',(self.order,))
+        self.assertFalse(self.preview()['canApprove'])
+        self.assertIn('Giá bán',self.preview()['issues'][0]['errors'][0])
+        self.assertEqual(self.post().status_code,409)
+        self.assert_empty_draft()
+
+    def test_mixed_purchase_prices_export_consistently_and_changed_cost_is_stale(self):
+        with server.db() as conn:
+            row_id=self.add_standalone_purchase(conn)
+            conn.execute('''INSERT INTO purchase_workbook_lines(batch_id,row_key,order_id,source_row,
+                product_code,work_date,product_name,unit,supplier,actual_qty,buy_price,status,created_at,updated_at)
+                VALUES(?,?,?,43,'BK-P1','2026-09-03','Hàng BK','kg','BK-S1',1,999,'confirmed',?,?)''',
+                (self.batch,'linked',self.order,NOW,NOW))
+            preview=approval.prepare(conn,self.batch)
+            self.assertEqual((preview['rowCount'],preview['amount'],preview['purchasePricedRows']),(2,390,1))
+            # Older approved batches without a posted BK must use the same costs.
+            conn.execute("UPDATE batches SET status='approved' WHERE id=?",(self.batch,))
+            exported=approval.bk._template_rows_for_batch(conn,self.batch)
+            self.assertEqual([(r['qty'],r['unit_cost']) for r in exported],[(2,100),(1,190)])
+            conn.execute("UPDATE batches SET status='draft' WHERE id=?",(self.batch,))
+            conn.execute('UPDATE purchase_workbook_lines SET buy_price=110 WHERE id=?',(row_id,))
+        response=self.client.post(f'/api/batches/{self.batch}/approve',json={
+            'source_hash':preview['sourceHash'],'confirm_bk':True})
+        self.assertEqual(response.status_code,409)
+        self.assert_empty_draft()
+
+    def test_standalone_purchase_invalid_costs_cannot_post(self):
+        for price in (-1, 'bad', float('inf')):
+            with self.subTest(price=price):
+                with server.db() as conn:
+                    conn.execute('DELETE FROM purchase_workbook_lines WHERE batch_id=?',(self.batch,))
+                    self.add_standalone_purchase(conn,price=price)
+                self.assertFalse(self.preview()['canApprove'])
+                self.assertEqual(self.post().status_code,409)
+                self.assert_empty_draft()
+
     def test_wrong_product_name_and_unit_block(self):
         with server.db() as conn:conn.execute("UPDATE orders SET product_name='Khác mặt hàng',unit='thùng' WHERE id=?",(self.order,))
         self.assertFalse(self.preview()['canApprove']);self.assertEqual(self.post().status_code,409)
