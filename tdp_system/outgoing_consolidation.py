@@ -44,7 +44,13 @@ def money(value):
 def export_quantity(value, unit):
     unit=str(unit or '').strip().casefold()
     quantum=Decimal('.1') if unit=='kg' else Decimal('1') if unit in {'cái','quả','con','chiếc'} else None
-    return value.quantize(quantum,rounding=ROUND_DOWN) if quantum else value
+    if quantum is None:return value
+    # SQLite REAL subtraction can leave 0.7999999999999999 for 0.8.
+    # Remove only noise below the stock guard's epsilon before flooring;
+    # a real remainder such as 0.799999 must still export 0.7, not 0.8.
+    nearest=value.quantize(quantum,rounding=ROUND_HALF_UP)
+    if abs(nearest-value)<Decimal('0.000000001'):value=nearest
+    return value.quantize(quantum,rounding=ROUND_DOWN)
 
 def replenishable_scopes(conn, orders, batch_ids):
     """Add newly available stock only when it increases an exported quantity."""

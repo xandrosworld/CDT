@@ -14,10 +14,12 @@
 - Ghi rõ dòng giữ riêng và lý do trong giao diện, file bảng chưa xuất và hướng dẫn kèm ZIP.
 - Thêm mục đối chiếu hóa đơn đã ký với sổ âm: số hóa đơn, ngày ký, mã hàng, lượng đã ký, tồn đầu, đầu vào và tồn hiện tại. Mục này chỉ đọc và không cản các mã hợp lệ.
 - Đường tải dự thảo cũ cũng cập nhật nguồn M-Invoice khi kết nối và kiểm tra lượng đã ký chưa đối trừ. Cả trường hợp xuất một phần thấp hơn tổng lượng đơn cũng bị chặn nếu phần giữ chưa cập nhật.
+- Điều kiện BK của phần giữ chờ được tính theo dòng nguồn của từng nhà thầu, tránh dòng không BK của nhà thầu khác vô hiệu hóa ngoại lệ hợp lệ.
+- Khi tải lặp trên web thật, phát hiện tám dòng kg thay đổi 0,1 do sai số số thực tại ngưỡng làm tròn xuống. Chỉ loại sai số nhỏ hơn 0,000000001 trước khi lấy số lượng xuất: 0,7999999999999999 thành 0,8; 0,799999 vẫn lấy 0,7; bánh bao 27,6 vẫn lấy 27. Có kiểm thử tái hiện lỗi trước sửa, đối chiếu lượng và tiền trong file sau sửa, và tải lặp không đổi dữ liệu giữ chờ.
 
 ## Xác minh
 
-104 kiểm thử qua: phạm vi đơn, hóa đơn đã ký/nháp, lượng giữ chờ, tồn chuẩn, dấu BK qua dự thảo, đơn vị khác danh mục, xuất lại không thay số lượng, đường tải cũ và biên nhận.
+138 kiểm thử qua: phạm vi đơn, hóa đơn đã ký/nháp, lượng giữ chờ, tồn chuẩn, dấu BK qua dự thảo và giữa các nhà thầu, đơn vị khác danh mục, sai số số thực sát ngưỡng xuất, xuất lại không thay số lượng, đường tải cũ và biên nhận.
 
 Chạy bản sửa trên bản sao dữ liệu thật trong bộ nhớ: BIADAUVOI có các dòng hợp lệ để xuất, không còn nhà thầu bị lỗi gộp đơn vị; G000002 và H000006 không vào file mới. Mã có dấu BK được ngoại lệ theo đúng dòng nguồn, còn dòng không BK vẫn chịu giới hạn tồn.
 

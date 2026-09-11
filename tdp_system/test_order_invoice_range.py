@@ -91,6 +91,28 @@ class OrderInvoiceRangeTests(unittest.TestCase):
         rows=self.excel_rows(self.request())
         self.assertEqual((rows[0][3],rows[0][4]),(.9,20000))
 
+    def test_float_residual_does_not_lose_tenth_or_change_redownload(self):
+        with server.db() as c:
+            self.add_opening(c,0)
+            self.add_batch(c,'2026-09-01',[
+                {'qty':.1+.7,'sell_price':40000},
+                {'qty':.799999,'sell_price':50000},
+            ])
+            c.execute('UPDATE orders SET purchase_list=1')
+        first=self.excel_rows(self.request())
+        self.assertEqual([(r[3],r[4],r[8]) for r in first],[(.8,40000,32000),(.7,50000,35000)])
+        with server.db() as c:before=c.serialize()
+        for _ in range(2):
+            self.assertEqual(self.excel_rows(self.request()),first)
+            with server.db() as c:self.assertEqual(c.serialize(),before)
+
+    def test_piece_float_residual_is_not_treated_as_a_whole_piece_shortage(self):
+        from decimal import Decimal
+        from .outgoing_consolidation import export_quantity
+        self.assertEqual(export_quantity(Decimal('26.999999999999996'),'Cái'),Decimal('27'))
+        self.assertEqual(export_quantity(Decimal('26.999999'),'Cái'),Decimal('26'))
+        self.assertEqual(export_quantity(Decimal('27.6'),'Cái'),Decimal('27'))
+
     def test_contractor_filter_does_not_touch_other_drafts(self):
         with server.db() as c:
             self.add_opening(c,20)
