@@ -56,11 +56,46 @@ class SourceScopeTests(unittest.TestCase):
         self.assertFalse(self.report()['reconciliation_complete'])
         self.assertEqual(self.report()['rows'][0]['unissued_qty'],10)
 
+    def test_full_external_issue_does_not_leave_a_float_dust_draft(self):
+        from .outgoing_waiting import refresh_waiting
+        self.seed(stock=20);self.assertEqual(self.request().status_code,200)
+        sid=self.source(qty=9.999999999999998);self.assign(sid)
+        with server.db() as c:
+            result=refresh_waiting(c,server.now_iso(),fill=False)
+            self.assertEqual(result['warnings'],[])
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0],0)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND status='reserved'").fetchone()[0],0)
+
     def test_stale_review_or_missing_contractor_cannot_be_saved(self):
         self.seed();sid=self.source()
         response=self.client.put('/api/outgoing-invoices/source-scopes/'+str(sid),json={'token':'old','scope':'outside','note':'Test'})
         self.assertEqual(response.status_code,409)
         with self.assertRaises(ValueError):self.assign(sid,'orders','NOT-A-CONTRACTOR')
+
+    def test_review_waits_for_source_writer_then_rechecks_identity(self):
+        import threading
+        self.seed();sid=self.source()
+        with server.db() as c:
+            token=review_token(c.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(sid,)).fetchone())
+        locked=threading.Event();release=threading.Event();failures=[]
+        def writer():
+            try:
+                with server.db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    c.execute("UPDATE outgoing_source_invoices SET buyer_name='Người mua mới' WHERE id=?",(sid,))
+                    locked.set()
+                    if not release.wait(5):raise AssertionError('Writer not released')
+            except Exception as exc:failures.append(exc);locked.set()
+        thread=threading.Thread(target=writer);thread.start()
+        self.assertTrue(locked.wait(5))
+        timer=threading.Timer(.15,release.set);timer.start()
+        try:
+            response=self.client.put('/api/outgoing-invoices/source-scopes/'+str(sid),json={'token':token,'scope':'outside','note':'Nguồn vừa thay đổi'})
+        finally:
+            release.set();thread.join(5);timer.cancel()
+        self.assertEqual(failures,[])
+        self.assertEqual(response.status_code,409)
+        with server.db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM outgoing_source_order_scopes').fetchone()[0],0)
 
     def test_unmatched_issued_code_blocks_another_export(self):
         self.seed(stock=20)

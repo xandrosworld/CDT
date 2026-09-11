@@ -4334,12 +4334,16 @@ def api_outgoing_source_scopes(invoice_id=None):
             if invoice_id is not None:
                 body=request.get_json(silent=True) or {}
                 if not isinstance(body,dict):raise ValueError('Dữ liệu xác nhận không hợp lệ.')
+                conn.execute('BEGIN IMMEDIATE')
                 return jsonify(ok=True,**set_scope(conn,invoice_id,body,now_iso()))
             start=valid_iso_date(request.args.get('from'),'Từ ngày')
             end=valid_iso_date(request.args.get('to'),'Đến ngày')
             return jsonify(ok=True,items=scope_report(conn,start,end))
     except ValueError as exc:
         return jsonify(ok=False,error=str(exc)),409
+    except sqlite3.OperationalError as exc:
+        if 'locked' not in str(exc).lower():raise
+        return jsonify(ok=False,error='Hệ thống đang cập nhật hóa đơn. Chờ cập nhật xong rồi lưu đối chiếu lại; xác nhận này chưa được lưu.'),409
 
 
 @app.post("/api/export/order-invoices")

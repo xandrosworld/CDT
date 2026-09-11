@@ -43,7 +43,8 @@ def refresh_waiting(conn, timestamp, *, fill=True):
             used=min(decimal(r['qty']),consume.get(r['order_id'],Decimal(0)))
             consume[r['order_id']]=max(consume.get(r['order_id'],Decimal(0))-used,Decimal(0))
             qty=min(decimal(r['qty'])-used,need.get(r['order_id'],Decimal(0)))
-            changed=changed or abs(qty-decimal(r['qty']))>Decimal('0.00000001')
+            if qty<=Decimal('0.00000001'):qty=Decimal(0)
+            changed=changed or (qty==0 and decimal(r['qty'])>0) or abs(qty-decimal(r['qty']))>Decimal('0.00000001')
             need[r['order_id']]=max(need.get(r['order_id'],Decimal(0))-qty,Decimal(0))
             if qty>0:
                 kept.append({**r,'qty':float(qty),'_source_price':decimal(r['source_unit_price'] if r['source_unit_price'] is not None else r['unit_price'])})
