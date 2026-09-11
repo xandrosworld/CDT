@@ -280,6 +280,54 @@ class DailyWorkbookImportTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual(conn.execute('SELECT qty FROM orders WHERE batch_id=?', (first.json['batch']['id'],)).fetchone()[0], 3)
 
+    def test_combined_continuous_import_preserves_reviewed_purchase_price_and_replays(self):
+        data = self.continuous_file(qty=3)
+        first = self.confirm_api(self.continuous_analyze(data)).json
+        book = load_workbook(io.BytesIO(data))
+        book['01.09']['I3'] = 11000
+        book['đặt hàng']['F3'] = 'S1'
+        stream = io.BytesIO();book.save(stream);book.close()
+        revised = stream.getvalue()
+        preview = self.continuous_analyze(revised)
+        self.assertTrue(all(s['confirmAvailable'] for s in preview['sheets']), preview)
+        response = self.confirm_api(preview, sheets=['01.09', 'đặt hàng'])
+        self.assertEqual(response.status_code,200,response.json)
+        with server.db() as conn:
+            sale=conn.execute('SELECT buy_price FROM orders WHERE batch_id=?',(first['batch']['id'],)).fetchone()[0]
+            purchase=dict(conn.execute('SELECT * FROM purchase_workbook_lines WHERE batch_id=?',(first['batch']['id'],)).fetchone())
+        self.assertEqual(sale,11000)
+        self.assertEqual((purchase['buy_price'],purchase['amount']),(10000,30000))
+        replay=self.confirm_api(self.continuous_analyze(revised),sheets=['01.09','đặt hàng'])
+        self.assertEqual(replay.status_code,200,replay.json)
+        self.assertTrue(replay.json['idempotent'])
+        with server.db() as conn:
+            after=dict(conn.execute('SELECT * FROM purchase_workbook_lines WHERE batch_id=?',(first['batch']['id'],)).fetchone())
+        self.assertEqual(purchase,after)
+
+    def test_combined_reimport_links_existing_purchase_to_new_sales_row_once(self):
+        full=self.finalization_workbook_bytes(extra_qty=2)
+        book=load_workbook(io.BytesIO(full));book['01.09'].delete_rows(4)
+        stream=io.BytesIO();book.save(stream);book.close();initial=stream.getvalue()
+        first=self.confirm_api(self.continuous_analyze(self.continuous_file(qty=10))).json
+        batch_id=first['batch']['id']
+        first_purchase=self.confirm_api(self.continuous_analyze(initial),sheets=['01.09','đặt hàng'])
+        self.assertEqual(first_purchase.status_code,200,first_purchase.json)
+        with server.db() as conn:
+            before=[dict(r) for r in conn.execute('SELECT * FROM purchase_workbook_lines WHERE batch_id=? ORDER BY id',(batch_id,))]
+        self.assertEqual(len(before),2);self.assertIsNone(before[1]['order_id'])
+        updated=self.confirm_api(self.continuous_analyze(full),sheets=['01.09','đặt hàng'])
+        self.assertEqual(updated.status_code,200,updated.json)
+        with server.db() as conn:
+            after=[dict(r) for r in conn.execute('SELECT * FROM purchase_workbook_lines WHERE batch_id=? ORDER BY id',(batch_id,))]
+        self.assertIsNotNone(after[1]['order_id'])
+        self.assertEqual(after[1]['revision'],before[1]['revision']+1)
+        self.assertEqual([(r['buy_price'],r['amount']) for r in before],[(r['buy_price'],r['amount']) for r in after])
+        replay=self.confirm_api(self.continuous_analyze(full),sheets=['01.09','đặt hàng'])
+        self.assertEqual(replay.status_code,200,replay.json)
+        self.assertTrue(replay.json['idempotent'])
+        with server.db() as conn:
+            self.assertEqual(after,[dict(r) for r in conn.execute('SELECT * FROM purchase_workbook_lines WHERE batch_id=? ORDER BY id',(batch_id,))])
+
     def test_continuous_new_file_restores_note_even_when_other_values_match(self):
         import zipfile
         data = self.continuous_file(qty=3)

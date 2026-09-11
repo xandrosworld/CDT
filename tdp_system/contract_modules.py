@@ -3960,6 +3960,11 @@ def apply_purchase_order_preview(
                 "Bản đặt hàng này đã bị phiên bản mới hơn thay thế; hãy tải file mới nhất",
                 code="superseded_purchase_version",
             )
+        current_by_key = {row['row_key']: row for row in current_items}
+        # Prices/quantities can be identical while a newly imported sales row
+        # supplies a previously missing link. Persist that link once.
+        already = not any(purchase_line_changed(current_by_key.get(item['row_key']), item) for item in items)
+    if already:
         result = purchase_order_payload(conn, batch_id)
         audit(
             conn, now_iso, "purchase_orders.import", "unchanged",
@@ -4089,7 +4094,7 @@ def apply_purchase_order_preview(
 
 
 def parse_canonical_purchase_workbook(
-    conn, workbook, batch_id: int, expected: dict, formula_workbook=None,
+    conn, workbook, batch_id: int, expected: dict, formula_workbook=None, *, pricing_orders=None,
 ) -> dict | None:
     batch = conn.execute("SELECT work_date FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
@@ -4128,6 +4133,18 @@ def parse_canonical_purchase_workbook(
         orders_by_identity[identity].append(order)
     for matches in orders_by_identity.values():
         matches.sort(key=lambda row: int(row["id"]))
+
+    # A combined daily confirmation applies sales first. Resolve links against
+    # those updated rows, but keep the pricing inputs used by the validated
+    # purchase preview: writing sales must not silently reprice purchasing.
+    pricing_by_identity = orders_by_identity
+    if pricing_orders is not None:
+        pricing_by_identity = defaultdict(list)
+        for order in pricing_orders:
+            identity = (mapping_key(order['product_code']), mapping_key(order['kitchen']))
+            pricing_by_identity[identity].append(order)
+        for matches in pricing_by_identity.values():
+            matches.sort(key=lambda row: int(row['id']))
 
     parsed = []
     occurrences = Counter()
@@ -4214,8 +4231,14 @@ def parse_canonical_purchase_workbook(
         order_id = int(matched_order["id"]) if matched_order and not deduction else None
         sheet_buy_price = numbers["buy_price"]
         quoted_buy_price = 0
-        if matched_order and not deduction and (not previous or previous.get("price_source") == "Bảng báo giá"):
-            quoted_buy_price = max(as_number(matched_order.get("buy_price")), 0)
+        price_matches = pricing_by_identity.get(identity) or []
+        pricing_order = price_matches[occurrence - 1] if occurrence <= len(price_matches) else None
+        if previous and previous.get('price_source') == 'Bảng báo giá' and not deduction:
+            # A confirmed purchase owns its quoted cost. Reimporting sales must
+            # not rewrite that quote or make an identical purchase file drift.
+            quoted_buy_price = max(as_number(previous.get('buy_price')), 0)
+        elif pricing_order and not deduction and not previous:
+            quoted_buy_price = max(as_number(pricing_order.get("buy_price")), 0)
         if quoted_buy_price > 0:
             numbers["buy_price"] = quoted_buy_price
             price_source = "Bảng báo giá"
@@ -4363,7 +4386,7 @@ def purchase_order_header_fields(row) -> dict:
     return found
 
 
-def parse_purchase_order_workbook(conn, workbook, batch_id: int, formula_workbook=None) -> dict:
+def parse_purchase_order_workbook(conn, workbook, batch_id: int, formula_workbook=None, *, pricing_orders=None) -> dict:
     expected = {
         row["id"]: dict(row) for row in conn.execute(
             """SELECT o.*,p.price_source plan_price_source
@@ -4375,6 +4398,7 @@ def parse_purchase_order_workbook(conn, workbook, batch_id: int, formula_workboo
         raise ValueError("Phiên đơn không có dòng đặt hàng")
     canonical = parse_canonical_purchase_workbook(
         conn, workbook, batch_id, expected, formula_workbook=formula_workbook,
+        pricing_orders=pricing_orders,
     )
     if canonical is not None:
         return canonical

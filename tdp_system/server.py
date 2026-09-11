@@ -1893,12 +1893,13 @@ def strict_daily_database_state_hash(conn, batch_id: int, work_date: str, day_sh
     return digest.hexdigest().upper()
 
 
-def strict_purchase_preview_from_path(conn, path: Path, batch_id: int):
+def strict_purchase_preview_from_path(conn, path: Path, batch_id: int, *, pricing_orders=None):
     workbook = load_workbook(path, read_only=True, data_only=True, keep_links=False)
     formula_workbook = load_workbook(path, read_only=True, data_only=False, keep_links=False)
     try:
         return parse_purchase_order_workbook(
             conn, workbook, batch_id, formula_workbook=formula_workbook,
+            pricing_orders=pricing_orders,
         )
     finally:
         workbook.close()
@@ -2101,7 +2102,7 @@ def confirm_strict_daily_finalization(pending, body, sheets):
                     )
                 if "customer_orders" in selected_scopes:
                     refreshed_purchase = strict_purchase_preview_from_path(
-                        conn, pending["path"], batch_id,
+                        conn, pending["path"], batch_id, pricing_orders=old_orders,
                     )
                     if (
                         not refreshed_purchase["can_confirm"]
