@@ -4304,6 +4304,44 @@ def api_outgoing_unissued():
         return jsonify(ok=False,error=str(exc)),400
 
 
+@app.post('/api/outgoing-invoices/sync-issued')
+def api_sync_issued_orders():
+    try:
+        from .outgoing_source_refresh import refresh_sources
+    except ImportError:
+        from outgoing_source_refresh import refresh_sources
+    try:
+        body=request.get_json(silent=True) or {}
+        if not isinstance(body,dict):raise ValueError('Khoảng ngày không hợp lệ.')
+        start=valid_iso_date(body.get('from'),'Từ ngày')
+        requested_end=valid_iso_date(body.get('to'),'Đến ngày')
+        if start>requested_end:raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày.')
+        end=max(requested_end,date.today().isoformat())
+        return jsonify(ok=True,**refresh_sources(db,create_minvoice_client,now_iso,start,end))
+    except (ValueError,MinvoiceError) as exc:
+        return jsonify(ok=False,error='Chưa cập nhật đủ hóa đơn đã ký; chưa được xuất file mới. '+str(exc)),409
+
+
+@app.get('/api/outgoing-invoices/source-scopes')
+@app.put('/api/outgoing-invoices/source-scopes/<int:invoice_id>')
+def api_outgoing_source_scopes(invoice_id=None):
+    try:
+        from .outgoing_source_scope import scope_report,set_scope
+    except ImportError:
+        from outgoing_source_scope import scope_report,set_scope
+    try:
+        with db() as conn:
+            if invoice_id is not None:
+                body=request.get_json(silent=True) or {}
+                if not isinstance(body,dict):raise ValueError('Dữ liệu xác nhận không hợp lệ.')
+                return jsonify(ok=True,**set_scope(conn,invoice_id,body,now_iso()))
+            start=valid_iso_date(request.args.get('from'),'Từ ngày')
+            end=valid_iso_date(request.args.get('to'),'Đến ngày')
+            return jsonify(ok=True,items=scope_report(conn,start,end))
+    except ValueError as exc:
+        return jsonify(ok=False,error=str(exc)),409
+
+
 @app.post("/api/export/order-invoices")
 def api_export_order_invoices():
     """One ZIP; one consolidated invoice per contractor/tax across selected days."""
@@ -4329,6 +4367,17 @@ def api_export_order_invoices():
         if contractor=='*':contractor=''
         if start > end:
             raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày')
+        with db() as conn:
+            connected=setting_get(conn,'minvoice_active_connection','')
+        if connected:
+            try:
+                from .outgoing_source_refresh import refresh_sources
+            except ImportError:
+                from outgoing_source_refresh import refresh_sources
+            try:
+                refresh_sources(db,create_minvoice_client,now_iso,start,max(end,date.today().isoformat()))
+            except (ValueError,MinvoiceError) as exc:
+                raise InvoiceTaxExportError('Chưa cập nhật đủ hóa đơn đã ký từ M-Invoice; chưa tạo file để tránh xuất trùng. '+str(exc),code='issued_sync_required') from exc
         output = io.BytesIO()
         pending, selected_orders = [], []
         with db() as conn:

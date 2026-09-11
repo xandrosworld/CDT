@@ -2898,11 +2898,25 @@
         return '<option value="'+esc(item.code)+'"'+(filters.contractor===item.code?' selected':'')+'>'+esc(item.code+' · '+item.name)+'</option>';
       }).join('') + '</select></label><label>Từ ngày<input name="from" type="date" required value="'+esc(filters.from)+'"></label>' +
       '<label>Đến ngày<input name="to" type="date" required value="'+esc(filters.to)+'"></label>' +
-      '<button type="submit" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
+      '<button type="submit" value="sync" class="btn btn-outline">Cập nhật hóa đơn đã ký</button>' +
+      '<button type="submit" value="export" class="btn btn-primary">Tải bảng kê để up M-Invoice</button></form>' +
+      '<p>Trước mỗi lần tải bảng kê, hệ thống cập nhật hóa đơn đã ký từ M-Invoice để trừ phần đã xuất. Nếu còn hóa đơn chưa khớp nhà thầu hoặc mã hàng, cần đối chiếu trước khi tải tiếp.</p>' +
       '<p>Hàng thông thường chỉ lấy lượng đủ tồn, không âm kho; phần thiếu giữ lại. KKKNT giữ ngoại lệ đã thống nhất.</p>' +
       '<p>Xuất theo ngày: chọn cùng ngày bắt đầu và kết thúc. Xuất theo tháng: chọn khoảng ngày trong tháng. Chỉ lấy nhà thầu và ngày chị chọn; tải file chưa tính là đã phát hành.</p>' +
       '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng để đối chiếu. Kg lấy một chữ số thập phân, phần lẻ giữ lại.</p>' +
-      (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + '</div></section>';
+      (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + sourceScopeReviewHtml() + '</div></section>';
+  }
+
+  function sourceScopeReviewHtml() {
+    if(!state.outgoingSourceReview) return '';
+    return '<details open><summary>Hóa đơn đã ký vừa đối chiếu · '+state.outgoingSourceReview.length+' hóa đơn</summary>'+state.outgoingSourceReview.map(function(r){
+      var status=r.scope==='outside'?'Đơn riêng · không trừ đơn đã duyệt':r.scope==='orders'?'Trừ đơn của '+r.contractor:'Chưa xác định đơn liên quan';
+      return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
+        (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
+        '<details><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Sửa phạm vi đối chiếu')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
+        '<label>Hóa đơn này thuộc<select name="choice" required><option value="">Chọn đúng nguồn đơn</option><option value="outside"'+(r.scope==='outside'?' selected':'')+'>Đơn riêng, chưa đưa vào phần mềm</option>'+state.data.master.contractors.map(function(c){return '<option value="'+esc(c.code)+'"'+(r.scope==='orders'&&r.contractor===c.code?' selected':'')+'>Đơn đã duyệt · '+esc(c.code)+'</option>';}).join('')+'</select></label>'+
+        '<label>Lý do xác nhận<input name="note" required placeholder="Đối chiếu theo đơn / hóa đơn nào"></label><button type="submit" class="btn btn-outline">Lưu đối chiếu</button></form></details></div>';
+    }).join('')+'</details>';
   }
 
   function unissuedHtml() {
@@ -5949,6 +5963,15 @@
       orderExportButton.disabled = true;
       orderExportButton.textContent = 'Đang kiểm tra tồn và tạo file…';
       try {
+        if(event.submitter && event.submitter.value==='sync') {
+          orderExportButton.textContent='Đang cập nhật hóa đơn đã ký…';
+          var syncedSource=await api('/api/outgoing-invoices/sync-issued',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
+          state.outgoingSourceReview=syncedSource.sources;
+          state.orderInvoiceExportResult='Đã cập nhật hóa đơn ký đến '+dateVN(syncedSource.to)+'. '+(syncedSource.waiting.warnings.length?'Còn hóa đơn cần đối chiếu bên dưới; chưa xuất lại phần cũ.':'Đã đối chiếu phần đã phát hành với đơn đã duyệt.');
+          state.unissuedFilters={to:selectedOrderScope.to,contractor:selectedOrderScope.contractor==='*'?'':selectedOrderScope.contractor};
+          state.unissued=await api('/api/outgoing-invoices/unissued?'+new URLSearchParams(state.unissuedFilters).toString());
+          return;
+        }
         var exported = await downloadFile('/api/export/order-invoices', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
         state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel để up M-Invoice. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa phân bổ vào file này.' : 'Đã phân bổ lượng được chọn vào file.')+' Tải file chưa tính là đã xuất; xem bảng chưa xuất cộng dồn bên dưới.';
         showToast('Đã tải bảng kê từ đơn hàng để up M-Invoice');
@@ -5959,8 +5982,23 @@
         }
       } catch(error) {
         state.orderInvoiceExportResult = error.message;
+        try {state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?from='+encodeURIComponent(selectedOrderScope.from)+'&to='+encodeURIComponent(currentWorkDate()))).items;} catch(_) {}
         showToast(error.message,true);
       } finally { renderDocuments(); }
+      return;
+    }
+    if(event.target.classList.contains('source-order-scope')) {
+      event.preventDefault();
+      var sourceForm=event.target,choice=new FormData(sourceForm).get('choice');
+      var scopeButton=event.submitter;scopeButton.disabled=true;
+      try {
+        await api('/api/outgoing-invoices/source-scopes/'+sourceForm.dataset.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:sourceForm.dataset.token,scope:choice==='outside'?'outside':'orders',contractor:choice==='outside'?'':choice,note:new FormData(sourceForm).get('note')})});
+        var sourceDates=state.orderInvoiceFilters;
+        state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?from='+encodeURIComponent(sourceDates.from)+'&to='+encodeURIComponent(currentWorkDate()))).items;
+        state.unissuedFilters={to:sourceDates.to,contractor:sourceDates.contractor==='*'?'':sourceDates.contractor};
+        state.unissued=await api('/api/outgoing-invoices/unissued/refresh?'+new URLSearchParams(state.unissuedFilters).toString(),{method:'POST'});
+        showToast('Đã lưu phạm vi đối chiếu hóa đơn');
+      } catch(error) {showToast(error.message,true);} finally {renderDocuments();}
       return;
     }
     if (event.target.id === 'unissuedForm') {

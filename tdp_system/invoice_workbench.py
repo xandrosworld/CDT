@@ -115,6 +115,14 @@ CREATE INDEX IF NOT EXISTS idx_outgoing_source_invoices_period
     ON outgoing_source_invoices(tenant,invoice_date,id DESC);
 CREATE INDEX IF NOT EXISTS idx_outgoing_source_invoices_status
     ON outgoing_source_invoices(source_status_class,stock_status,id DESC);
+CREATE TABLE IF NOT EXISTS outgoing_source_order_scopes (
+    invoice_id INTEGER PRIMARY KEY REFERENCES outgoing_source_invoices(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL CHECK(scope IN ('orders','outside')),
+    contractor TEXT NOT NULL DEFAULT '',
+    identity_snapshot TEXT NOT NULL,
+    note TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS outgoing_source_invoice_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_id INTEGER NOT NULL REFERENCES outgoing_source_invoices(id) ON DELETE CASCADE,

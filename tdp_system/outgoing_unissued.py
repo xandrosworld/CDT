@@ -4,6 +4,10 @@ from io import BytesIO
 
 from openpyxl import Workbook
 from openpyxl.styles import Font,PatternFill
+try:
+    from .outgoing_source_scope import resolve_scope
+except ImportError:
+    from outgoing_source_scope import resolve_scope
 
 
 def _identity(r,local=False):
@@ -30,7 +34,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
             for r in conn.execute('SELECT product_code,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
                 local[r['product_code']]+=r['qty']
             for s in matching:
-                posted={r['product_code']:r['qty'] for r in conn.execute("""SELECT product_code,-SUM(qty_delta) qty FROM invoice_inventory_ledger
+                posted={r['product_code']:r['qty'] for r in conn.execute("""SELECT product_code,-SUM(qty_delta) qty FROM invoice_inventory_effective_ledger
                     WHERE direction='output' AND status='posted' AND source_invoice_table='outgoing_source_invoices'
                     AND source_invoice_id=? GROUP BY product_code""",(s['id'],))}
                 if s['source_status_class']!='issued' or s['sync_status']!='synced' or set(local)!=set(posted) or any(abs(q-posted.get(code,0))>1e-8 for code,q in local.items()):
@@ -46,11 +50,11 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
     seen=set()
     for s in sources:
         if s['id'] in linked or s['invoice_date']<earliest or s['source_status_class'] in ('draft','cancelled','replaced'):continue
-        parties=profiles.get(s['buyer_tax_code'].strip().upper(),[])
-        if len(parties)!=1:
-            if s['source_status_class']=='issued':warnings.append({'contractor':'','message':'Hóa đơn '+s['invoice_number']+' chưa ghép duy nhất với nhà thầu; chưa trừ vào bảng cộng dồn.'})
+        party,scope_error=resolve_scope(conn,s,profiles)
+        if scope_error:
+            if s['source_status_class']=='issued':warnings.append({'contractor':'','message':scope_error})
             continue
-        party=parties[0]
+        if party is None:continue
         if not any(o['contractor']==party and o['work_date']<=s['invoice_date'] for o in orders):continue
         identity=_identity(s)
         if identity in seen:
@@ -59,7 +63,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
         if s['source_status_class']!='issued' or s['sync_status']!='synced' or s['stock_status'] not in ('posted','not_inventory'):
             warnings.append({'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' chưa đủ đối chiếu mã/lượng để trừ khỏi đơn.'});continue
         # The posted stock ledger already includes reviewed conversions and reversals.
-        lines=conn.execute("""SELECT il.product_code,p.unit,-SUM(il.qty_delta) qty FROM invoice_inventory_ledger il
+        lines=conn.execute("""SELECT il.product_code,p.unit,-SUM(il.qty_delta) qty FROM invoice_inventory_effective_ledger il
             JOIN products p ON p.code=il.product_code WHERE il.direction='output' AND il.status='posted'
             AND il.source_invoice_table='outgoing_source_invoices' AND il.source_invoice_id=? GROUP BY il.product_code,p.unit""",(s['id'],)).fetchall()
         for line in lines:
@@ -71,6 +75,8 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
                 take=min(need,remaining);quantities[o['id']]+=take;remaining-=take
                 if external_quantities is not None:external_quantities[o['id']]=external_quantities.get(o['id'],0)+take
                 if remaining<=1e-8:break
+            if remaining>1e-8:
+                warnings.append({'contractor':party,'message':'Hóa đơn '+s['invoice_number']+': còn '+format(remaining,'.10g')+' '+line['unit']+' mã '+line['product_code']+' đã xuất chưa khớp đơn đã duyệt. Kiểm tra đúng mã hàng hoặc phạm vi đơn trước khi xuất tiếp.'})
     return dict(quantities),warnings
 
 
