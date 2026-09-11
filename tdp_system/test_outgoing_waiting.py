@@ -173,6 +173,11 @@ class WaitingTests(unittest.TestCase):
         report=response.get_json()
         self.assertEqual(report['warnings'],[])
         self.assertEqual({r['contractor']:r['ready_qty'] for r in report['rows']},{'NT-A':10,'NT-B':0})
+        with server.db() as c:
+            bid,_=self.add_batch(c,'2026-09-03',[{'contractor':'NT-A','qty':3}])
+            c.execute('UPDATE orders SET purchase_list=1 WHERE batch_id=?',(bid,))
+        self.assertEqual(self.refresh()['rows'][0]['ready_qty'],13)
+        self.assertEqual(self.refresh('NT-B')['rows'][0]['ready_qty'],0)
 
     def test_refresh_and_excel_are_idempotent_and_repeat_does_not_consume_stock(self):
         self.seed();self.refresh()

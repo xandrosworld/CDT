@@ -93,7 +93,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
     if fill:
         stock=canonical_available_stock(conn)
         available={code:max(decimal(r['raw_available_qty']),Decimal(0)) for code,r in stock.items()}
-        exempt=exempt_order_codes(conn,orders)
+        exempt_by_party={party:exempt_order_codes(conn,[o for o in orders if o['contractor']==party]) for party in {o['contractor'] for o in orders}}
         units=unit_issues(conn,orders)
         additions=defaultdict(list)
         already_held=defaultdict(lambda:Decimal(0))
@@ -113,7 +113,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
                 warnings.append({'contractor':o['contractor'],'message':o['product_code']+': '+ '; '.join(issues[0]['messages'])})
                 continue
             code=o['product_code'];have=available.get(code,Decimal(0))
-            qty=need[o['id']] if code in exempt else min(need[o['id']],have)
+            qty=need[o['id']] if code in exempt_by_party[o['contractor']] else min(need[o['id']],have)
             available[code]=max(have-qty,Decimal(0))
             if qty<=Decimal('0.00000001'):continue
             row={**o,'order_id':o['id'],'qty':float(qty),'_source_price':decimal(o['sell_price'])}
