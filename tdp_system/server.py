@@ -105,6 +105,11 @@ except ImportError:
     )
 
 try:
+    from .supplier_plan import capture_supplier_plan
+except ImportError:
+    from supplier_plan import capture_supplier_plan
+
+try:
     from invoice_workbench import init_invoice_workbench_schema, register_invoice_workbench_routes
 except ImportError:
     from .invoice_workbench import init_invoice_workbench_schema, register_invoice_workbench_routes
@@ -1875,6 +1880,7 @@ def strict_daily_database_state_hash(conn, batch_id: int, work_date: str, day_sh
     ]
     if batch_id:
         queries.extend([
+            ("supplier_plan", "SELECT source_hash,content_hash,revision FROM supplier_plan_sources WHERE batch_id=?", (batch_id,)),
             ("batch", "SELECT id,work_date,source_name,status,created_at,approved_at "
              "FROM batches WHERE id=?", (batch_id,)),
             ("orders", "SELECT * FROM orders WHERE batch_id=? ORDER BY id", (batch_id,)),
@@ -2136,6 +2142,9 @@ def confirm_strict_daily_finalization(pending, body, sheets):
             )
             scope_results[scope] = {**applied, "confirmation": confirmed}
 
+        if analysis.get('continuous') and 'customer_orders' in selected_scopes and 'purchase_orders' not in selected_scopes:
+            capture_supplier_plan(conn, batch_id=batch_id, path=pending['path'],
+                                  source_hash=source_hash, source_name=pending['name'], now_iso=now_iso)
         remaining = int(conn.execute(
             """SELECT COUNT(*) n FROM daily_import_scopes
                WHERE version_id=? AND state!='confirmed'""",
@@ -2747,6 +2756,9 @@ def confirm_strict_daily_import(pending, body):
             if existing:
                 batch_id = int(existing["id"])
                 refresh_matching_order_diagnostics(conn, batch_id, orders)
+                capture_supplier_plan(conn, batch_id=batch_id, path=pending['path'],
+                                      source_hash=source_hash, source_name=pending['name'],
+                                      now_iso=now_iso, only_missing=True)
                 payload = batch_payload(conn, batch_id)
                 payload.update(
                     ok=True,
@@ -2808,6 +2820,9 @@ def confirm_strict_daily_import(pending, body):
                     (work_date, pending["name"], batch_id),
                 )
                 save_imported_orders(conn, batch_id, orders)
+            capture_supplier_plan(conn, batch_id=batch_id, path=pending['path'],
+                                  source_hash=source_hash, source_name=pending['name'],
+                                  now_iso=now_iso, only_missing=is_existing_current)
             scope = next(
                 item for item in contract["scopes"] if item["scope"] == "customer_orders"
             )
@@ -3621,6 +3636,10 @@ def export_supplier_orders(conn, batch, orders):
         from .document_totals import quantity_cell
     ws = wb.active
     payload = purchase_order_payload(conn, int(batch["id"]))
+    if payload['source_issues'] or (not payload['send_available'] and conn.execute(
+        'SELECT 1 FROM daily_workdays WHERE batch_id=?', (batch['id'],),
+    ).fetchone()):
+        raise ValueError(payload['source_message'])
     has_money_adjustments = bool(payload.get("money_adjustments"))
     headers = [
         "Mã hàngNCC", "Mã hàng", "Mã bếp", "", "Tên hàng ", "Số lượng",
@@ -4522,7 +4541,11 @@ def api_export(kind, batch_id):
         batch, orders = require_batch(conn, batch_id)
         stamp = batch["work_date"]
         if kind == "suppliers":
-            return send_xlsx(export_supplier_orders(conn, batch, orders), f"Don_dat_hang_NCC_{stamp}.xlsx")
+            try:
+                workbook = export_supplier_orders(conn, batch, orders)
+            except ValueError as error:
+                return jsonify(ok=False, error=str(error), code='supplier_sheet_required'), 409
+            return send_xlsx(workbook, f"Don_dat_hang_NCC_{stamp}.xlsx")
         if kind == "deliveries":
             try:
                 workbook = export_deliveries(conn, batch, orders)

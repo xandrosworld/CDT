@@ -1699,6 +1699,7 @@
   function purchaseOrderPreviewHtml() {
     var preview = state.purchaseOrderPreview;
     if (!preview) return "";
+    var planOnly = Boolean(preview.plan_only);
     var needsByOrder = {};
     ((state.supplierNeeds && state.supplierNeeds.rows) || []).forEach(function (item) {
       if (item.order_id != null) needsByOrder[String(item.order_id)] = item;
@@ -1739,9 +1740,11 @@
       rows || '<tr><td colspan="8"><div class="empty">File không có dòng để nhập.</div></td></tr>',
       '</tbody></table></div>',
       issueRows.length ? '<div class="card-body muted">Đang ưu tiên hiện toàn bộ dòng lỗi/cảnh báo; các dòng hợp lệ vẫn được kiểm tra.</div>' : '',
-      '<div class="card-body"><div class="simple-warning"><strong>Trước khi xác nhận:</strong> SL thực tế = Số lượng + Thêm − Hỏng − Giảm − Thiếu; Thành tiền được làm tròn VND từ SL thực tế × Giá mua. Mua ngoài có lượng dương bắt buộc có giá mua; Kho được phép giá 0. Đơn khách và giá bán không bị thay đổi.</div>',
+      '<div class="card-body"><div class="simple-warning">', planOnly ?
+      'Nạp đúng sheet đặt hàng để tạo ảnh gửi NCC. Có thể bổ sung giá mua khi chốt tiền hàng.' :
+      '<strong>Trước khi xác nhận:</strong> SL thực tế = Số lượng + Thêm − Hỏng − Giảm − Thiếu; Thành tiền được làm tròn VND từ SL thực tế × Giá mua. Mua ngoài có lượng dương bắt buộc có giá mua; Kho được phép giá 0. Đơn khách và giá bán không bị thay đổi.', '</div>',
       '<div class="form-actions"><button class="btn btn-primary" data-action="confirm-purchase-order-import" ',
-      preview.can_confirm ? '' : 'disabled', '>Xác nhận nạp file đặt nhà cung cấp</button></div>',
+      preview.can_confirm ? '' : 'disabled', '>', planOnly ? 'Xác nhận sheet đặt hàng để tạo ảnh' : 'Xác nhận nạp file đặt nhà cung cấp', '</button></div>',
       preview.can_confirm ? '' : '<div class="code-note"><strong>Chưa thể nạp:</strong> mở Excel sửa các dòng màu đỏ, lưu file rồi chọn lại.</div>',
       '</div></div>'
     ]);
@@ -1759,6 +1762,9 @@
       return;
     }
     var needs = state.supplierNeeds;
+    var sourceBanner = '<div class="card supplier-plan-source"><div class="card-body"><strong>' +
+      esc(needs.source_message || '') + '</strong><div class="form-actions"><button class="btn btn-outline" data-action="choose-supplier-plan-file">Nạp sheet đặt hàng từ Excel</button></div>' +
+      (state.purchaseOrderPreview && state.purchaseOrderPreview.plan_only ? purchaseOrderPreviewHtml() : '') + '</div></div>';
     var checklistCounts = needs.checklist_counts || { pending: 0, reopened: 0, ordered: 0 };
     var checklistOpen = n(checklistCounts.pending) + n(checklistCounts.reopened);
     var cards = (needs.checklist || []).map(function (supplier) {
@@ -1778,22 +1784,22 @@
         esc(group.supplier_key || supplier) + '" data-order-status="' + orderStatus + '"><div class="group-title supplier-order-title"><div class="supplier-order-summary"><strong>Nhà cung cấp ' + esc(supplier.toUpperCase()) +
         "</strong><span>" + esc(group.kitchen) + " · " + rawLineCount + " dòng gốc · " + items.length +
         ' dòng gửi</span></div><div class="supplier-order-actions"><span class="tag ' + statusClass + '">' + statusText +
-        '</span><button class="btn btn-small btn-primary" data-action="copy-supplier-image" data-group-index="' +
-        groupIndex + '">Sao chép ảnh</button>' + reopenControl + '</div></div><div class="group-total"><span>Tổng đặt nhà cung cấp</span><strong>' +
+        '</span><button class="btn btn-small btn-primary" data-action="copy-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' +
+        groupIndex + '">Sao chép ảnh</button><button class="btn btn-small btn-outline" data-action="download-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' + groupIndex + '">Tải ảnh</button>' + reopenControl + '</div></div><div class="group-total"><span>Tổng đặt nhà cung cấp</span><strong>' +
         esc(stockQuantitySummary(items, 'order_qty')) + (group.total_amount != null ? " · " + stockMoney(group.total_amount) : "") + '</strong></div>' +
         '<details class="supplier-lines"><summary>Xem ' + items.length + ' dòng đặt hàng</summary><div class="table-wrap round2-table"><table><thead><tr><th>Bếp</th><th>Hàng</th><th>SL đặt</th><th>ĐVT</th><th>Giá mua</th><th>Thành tiền</th><th>Ghi chú</th></tr></thead><tbody>' +
         items.map(function (item) { return '<tr><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td>' + stockQty(item.order_qty) + '</td><td>' + esc(item.unit) + '</td><td>' + (item.mixed_buy_prices ? 'Nhiều giá' : stockMoney(item.buy_price)) + '</td><td>' + stockMoney(item.amount) + '</td><td>' + esc(item.note) + '</td></tr>'; }).join('') +
         '</tbody></table></div></details></div>';
     }).join("");
-    content.innerHTML = '<div class="supplier-order-overview fade-in"><div><strong>' + checklistOpen +
+    content.innerHTML = sourceBanner + '<div class="supplier-order-overview fade-in"><div><strong>' + checklistOpen +
       ' nhà cung cấp chưa đặt</strong><span>' + n(checklistCounts.ordered) + ' đã đặt · tổng ' +
       (needs.checklist || []).length + ' nhà cung cấp</span></div><small>Sao chép thành công toàn bộ ảnh của NCC mới ghi nhận đã đặt.</small></div>' +
       '<div class="supplier-order-list fade-in">' +
-      (cards || '<div class="card"><div class="empty">Tồn hiện có đã đáp ứng toàn bộ nhu cầu.</div></div>') + "</div>";
-    content.innerHTML += '<details class="operation-details fade-in"><summary>Chỉnh số lượng và giá mua bằng Excel</summary><div class="operation-details-body">' +
+      (cards || '<div class="card"><div class="empty">' + (needs.send_available ? 'Không có dòng cần đặt NCC.' : esc(needs.source_message)) + '</div></div>') + "</div>";
+    content.innerHTML += '<details class="operation-details fade-in" ' + (state.purchaseOrderPreview && !state.purchaseOrderPreview.plan_only ? 'open' : '') + '><summary>Chỉnh số lượng và giá mua bằng Excel</summary><div class="operation-details-body">' +
       '<div class="compact-controls"><button class="btn btn-outline" data-action="download-document" data-url="' +
       exportUrl("suppliers") + '">Tải file để chỉnh</button><button class="btn btn-primary" data-action="choose-purchase-order-file">Chọn file đã chỉnh</button></div>' +
-      purchaseOrderPreviewHtml() +
+      (state.purchaseOrderPreview && !state.purchaseOrderPreview.plan_only ? purchaseOrderPreviewHtml() : '') +
       '<div class="code-note" style="margin-top:14px">File Excel chỉ cập nhật phần mua và công nợ phải trả; không làm thay đổi đơn khách.</div>' +
       '</div></details>';
     if ((needs.money_adjustments || []).length) {
@@ -4662,14 +4668,25 @@
     });
   }
 
-  async function handleSupplierImage(groupIndex, downloadOnly) {
-    var group = state.supplierNeeds && state.supplierNeeds.groups[Number(groupIndex)];
+  async function handleSupplierImage(groupIndex, downloadOnly, supplierKey) {
+    var group = state.supplierNeeds && (supplierKey ? state.supplierNeeds.groups.find(function (item) {
+      return item.supplier_key === supplierKey;
+    }) : state.supplierNeeds.groups[Number(groupIndex)]);
     if (!group) { showToast("Không tìm thấy nhóm đơn nhà cung cấp", true); return; }
     var requestedBatch = state.batchId;
-    group = supplierPresentation(group);
-    var planHash = state.supplierNeeds.plan_hash;
+    var requestedSupplier = group.supplier_key;
     try {
+      var freshPlan = await api('/api/supplier-needs/' + requestedBatch);
+      if (state.batchId !== requestedBatch) throw new Error('Phiên đơn đã đổi; hãy chọn lại NCC.');
+      if (!freshPlan.send_available) throw new Error(freshPlan.source_message);
+      state.supplierNeeds = freshPlan;
+      group = freshPlan.groups.find(function (item) { return item.supplier_key === requestedSupplier; });
+      if (!group) throw new Error('NCC không còn dòng đặt hàng; hãy tải lại màn hình.');
+      group = supplierPresentation(group);
+      var planHash = freshPlan.plan_hash;
       var blob = await supplierOrderImageBlob(group);
+      var verifiedPlan = await api('/api/supplier-needs/' + requestedBatch);
+      if (verifiedPlan.plan_hash !== planHash || state.batchId !== requestedBatch) throw new Error('Đơn đặt NCC vừa thay đổi; hãy tạo lại ảnh.');
       var filename = supplierImageFilename(group);
       if (downloadOnly) {
         downloadBlob(blob, filename);
@@ -5493,16 +5510,21 @@
 
   async function previewPurchaseOrderFile(file) {
     if (!file || !state.batchId) return;
+    var requestedBatch = state.batchId;
     try {
       var form = new FormData();
       form.append("file", file);
       form.append("batch_id", state.batchId);
-      state.purchaseOrderPreview = await api("/api/purchase-orders/import/preview", {
+      if (state.purchasePlanOnly) form.append('plan_only', '1');
+      var preview = await api("/api/purchase-orders/import/preview", {
         method: "POST", body: form
       });
+      if (state.batchId !== requestedBatch) return;
+      state.purchaseOrderPreview = preview;
       renderPurchases();
       showToast("Đã kiểm tra file đặt nhà cung cấp · xem lại số lượng và giá rồi xác nhận");
     } catch (error) {
+      if (state.batchId !== requestedBatch) return;
       state.purchaseOrderPreview = null;
       renderPurchases();
       showToast(error.message, true);
@@ -5527,7 +5549,7 @@
       await fetchSupplierNeeds();
       if (state.debtFrom && state.debtTo) await fetchDebtPeriod();
       var processed = result.processed == null ? (result.count == null ? "" : result.count) : result.processed;
-      showToast("Đã nạp " + (processed === "" ? "file" : processed + " dòng") + " đặt nhà cung cấp · công nợ phải trả đã tính lại");
+      showToast(result.plan_only ? 'Đã nạp sheet đặt hàng để tạo ảnh gửi NCC' : "Đã nạp " + (processed === "" ? "file" : processed + " dòng") + " đặt nhà cung cấp · công nợ phải trả đã tính lại");
     } catch (error) {
       button.disabled = false;
       button.textContent = "Xác nhận nạp file đặt nhà cung cấp";
@@ -6910,7 +6932,8 @@
       state.payablesImportPreview = null;
       payablesWorkbookInput.click();
     }
-    if (action === "choose-purchase-order-file") {
+    if (action === "choose-purchase-order-file" || action === "choose-supplier-plan-file") {
+      state.purchasePlanOnly = action === 'choose-supplier-plan-file';
       state.purchaseOrderPreview = null;
       purchaseOrderInput.click();
     }
@@ -7000,7 +7023,7 @@
       try {
         button.disabled = true;
         button.textContent = "Đang tạo ảnh…";
-        await handleSupplierImage(button.dataset.groupIndex, action === "download-supplier-image");
+        await handleSupplierImage(button.dataset.groupIndex, action === "download-supplier-image", button.dataset.supplierKey);
       } finally {
         button.disabled = false;
         button.textContent = imageLabel;

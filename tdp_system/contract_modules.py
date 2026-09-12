@@ -21,6 +21,10 @@ from pathlib import Path
 from statistics import median
 
 from flask import jsonify, request, send_file
+try:
+    from .supplier_plan import parse_supplier_plan, save_supplier_plan, reopen_changed_suppliers
+except ImportError:
+    from supplier_plan import parse_supplier_plan, save_supplier_plan, reopen_changed_suppliers
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -356,6 +360,28 @@ CREATE TABLE IF NOT EXISTS purchase_order_imports (
     UNIQUE(batch_id,source_hash)
 );
 
+CREATE TABLE IF NOT EXISTS supplier_plan_sources (
+    batch_id INTEGER PRIMARY KEY REFERENCES batches(id) ON DELETE CASCADE,
+    source_hash TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    source_sheet TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    items_json TEXT NOT NULL,
+    issues_json TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS supplier_plan_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    source_hash TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    items_json TEXT NOT NULL,
+    issues_json TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS purchase_workbook_lines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
@@ -3516,7 +3542,7 @@ def supplier_order_status_map(conn, batch_id: int) -> dict[str, dict]:
     }
 
 
-def purchase_order_payload(conn, batch_id: int) -> dict:
+def purchase_order_payload(conn, batch_id: int, *, for_sending=False) -> dict:
     """Return the editable NCC-order plan without touching invoice inventory.
 
     Physical leftovers in the freezer/cabinet are an operational purchasing
@@ -3535,13 +3561,17 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
         "SELECT * FROM purchase_workbook_lines WHERE batch_id=? ORDER BY source_row,id",
         (batch_id,),
     )]
+    plan_source = conn.execute("SELECT * FROM supplier_plan_sources WHERE batch_id=?", (batch_id,)).fetchone()
+    source_issues = json.loads(plan_source['issues_json']) if plan_source else []
+    if plan_source:
+        canonical_sources = [{**item, 'status': 'planned'} for item in json.loads(plan_source['items_json'])]
     if canonical_sources:
         for item in canonical_sources:
             base_qty = max(as_number(item["base_qty"]), 0)
             actual_qty = max(as_number(item["actual_qty"]), 0)
             row = {
                 "row_key": item["row_key"], "order_id": item["order_id"],
-                "source_row": item["source_row"],
+                "source_row": item["source_row"], "source_sheet": item["source_sheet"],
                 "line_kind": item.get("line_kind", "goods"),
                 "product_code": item["product_code"], "product_name": item["product_name"],
                 "kitchen": item["kitchen"], "work_date": item["work_date"],
@@ -3560,7 +3590,7 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
             ordered_total += base_qty
             required_total += actual_qty
             amount_total += row["amount"]
-    else:
+    elif not plan_source:
         for source in conn.execute(
             """SELECT o.*,p.physical_stock_used,p.order_qty,p.supplier plan_supplier,
                       p.buy_price plan_buy_price,p.price_source plan_price_source,
@@ -3595,6 +3625,12 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
             physical_total += physical_stock_used
             amount_total += row["amount"]
 
+    send_available = not source_issues and bool(rows) and (bool(plan_source) or all(item['confirmed'] for item in rows))
+    source_message = ('Đang đọc sheet ' + plan_source['source_sheet'] + ' · ' + plan_source['source_name']) if plan_source else (
+        'Đang đọc file đặt NCC đã xác nhận' if send_available else
+        'Chưa có sheet đặt hàng của phiên này. Chọn file Excel gốc để nạp đúng đơn đặt NCC.')
+    if source_issues:
+        source_message = 'Sheet đặt hàng cần sửa: ' + ' · '.join(source_issues[:5])
     manual_rules = {}
     for rule in conn.execute(
         "SELECT supplier_code,combine_kitchens FROM supplier_rules ORDER BY updated_at,supplier_code"
@@ -3604,6 +3640,8 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
     order_statuses = supplier_order_status_map(conn, batch_id)
     groups = {}
     for item in rows:
+        if for_sending and not send_available:
+            continue
         if item["order_qty"] <= 1e-9:
             continue
         supplier_key = supplier_merge_key(item["supplier"])
@@ -3714,7 +3752,11 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
     }
     return {
         "batch_id": batch_id, "work_date": batch["work_date"],
-        "format": "customer_canonical" if canonical_sources else "legacy_or_customer_orders",
+        "format": "supplier_sheet_plan" if plan_source else "customer_canonical" if canonical_sources else "legacy_or_customer_orders",
+        "send_available": send_available, "source_message": source_message,
+        "source_sheet": plan_source['source_sheet'] if plan_source else '',
+        "source_name": plan_source['source_name'] if plan_source else '',
+        "source_issues": source_issues,
         "formula": "Số đặt NCC do người dùng chốt sau khi trừ tồn tủ thực tế",
         "ordered_qty": ordered_total, "required_qty": required_total,
         "physical_stock_used": physical_total, "total_amount": amount_total,
@@ -3726,7 +3768,7 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
         "raw_line_count": len(rows),
         "presented_line_count": sum(len(group["items"]) for group in group_list),
         "checklist": checklist, "checklist_counts": checklist_counts,
-        "rows": rows, "groups": group_list,
+        "rows": rows if not for_sending or send_available else [], "groups": group_list,
         "money_adjustments": [row for row in rows if row.get("line_kind") == DEDUCTION_KIND],
         "plan_hash": purchase_order_database_state_hash(conn, batch_id),
     }
@@ -3734,6 +3776,8 @@ def purchase_order_payload(conn, batch_id: int) -> dict:
 
 def purchase_order_database_state_hash(conn, batch_id: int) -> str:
     return query_database_state_hash(conn, (
+        ("supplier_plan_sources", "SELECT source_hash,content_hash,revision FROM supplier_plan_sources WHERE batch_id=?", (batch_id,)),
+        ("supplier_rules", "SELECT supplier_code,combine_kitchens FROM supplier_rules ORDER BY supplier_code", ()),
         (
             "orders",
             "SELECT id,batch_id,work_date,kitchen,product_code,product_name,qty,unit,supplier,buy_price,note "
@@ -3946,6 +3990,7 @@ def apply_purchase_order_preview(
     blocked = mutation_blocker(conn, batch_id)
     if blocked:
         raise PurchaseOrderApplyError(blocked, code='batch_bk_posted')
+    before_plan = purchase_order_payload(conn, batch_id, for_sending=True)
     already = conn.execute(
         "SELECT 1 FROM purchase_order_imports WHERE batch_id=? AND source_hash=?",
         (batch_id, source_hash),
@@ -3965,6 +4010,8 @@ def apply_purchase_order_preview(
         # supplies a previously missing link. Persist that link once.
         already = not any(purchase_line_changed(current_by_key.get(item['row_key']), item) for item in items)
     if already:
+        conn.execute('DELETE FROM supplier_plan_sources WHERE batch_id=?', (batch_id,))
+        reopen_changed_suppliers(conn, batch_id, before_plan, now_iso)
         result = purchase_order_payload(conn, batch_id)
         audit(
             conn, now_iso, "purchase_orders.import", "unchanged",
@@ -4085,6 +4132,8 @@ def apply_purchase_order_preview(
             "components": purchase_component_totals(items),
         },
     )
+    conn.execute('DELETE FROM supplier_plan_sources WHERE batch_id=?', (batch_id,))
+    reopen_changed_suppliers(conn, batch_id, before_plan, now_iso)
     payable_ledger = refresh_payable_ledger(conn, timestamp)
     return {
         "processed": changed_count, "count": len(items), "idempotent": False,
@@ -4094,7 +4143,7 @@ def apply_purchase_order_preview(
 
 
 def parse_canonical_purchase_workbook(
-    conn, workbook, batch_id: int, expected: dict, formula_workbook=None, *, pricing_orders=None,
+    conn, workbook, batch_id: int, expected: dict, formula_workbook=None, *, pricing_orders=None, plan_only=False,
 ) -> dict | None:
     batch = conn.execute("SELECT work_date FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
@@ -4106,6 +4155,8 @@ def parse_canonical_purchase_workbook(
     }
     target = None
     for worksheet in workbook.worksheets:
+        if plan_only and mapping_key(worksheet.title) != 'dathang':
+            continue
         for row_index, values in enumerate(
             worksheet.iter_rows(min_row=1, max_row=min(20, worksheet.max_row), values_only=True), 1
         ):
@@ -4127,6 +4178,9 @@ def parse_canonical_purchase_workbook(
             "SELECT * FROM purchase_workbook_lines WHERE batch_id=?", (batch_id,)
         )
     }
+    if plan_only:
+        existing_by_key = {}
+        expected = {}
     orders_by_identity = defaultdict(list)
     for order in expected.values():
         identity = (mapping_key(order["product_code"]), mapping_key(order["kitchen"]))
@@ -4310,7 +4364,7 @@ def parse_canonical_purchase_workbook(
             errors.append("Giá mua không được âm")
         if actual_qty > 1e-9 and not supplier:
             errors.append("Dòng có đặt hàng phải có NCC")
-        if actual_qty > 1e-9 and numbers["buy_price"] <= 0 and not is_internal_stock_supplier(supplier):
+        if actual_qty > 1e-9 and numbers["buy_price"] <= 0 and not is_internal_stock_supplier(supplier) and not plan_only:
             errors.append("Dòng mua ngoài có số lượng dương phải có giá mua lớn hơn 0")
         if deduction:
             if not supplier or is_internal_stock_supplier(supplier):
@@ -7238,7 +7292,7 @@ def register_contract_routes(app, ctx):
     def api_supplier_needs(batch_id):
         with db_factory() as conn:
             try:
-                payload = purchase_order_payload(conn, batch_id)
+                payload = purchase_order_payload(conn, batch_id, for_sending=True)
             except ValueError as exc:
                 return jsonify({"ok": False, "error": str(exc)}), 404
             return jsonify({"ok": True, **payload})
@@ -7294,7 +7348,9 @@ def register_contract_routes(app, ctx):
             conn.execute("BEGIN IMMEDIATE")
             if not conn.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone():
                 return jsonify({"ok": False, "error": "Không tìm thấy phiên đơn"}), 404
-            current_payload = purchase_order_payload(conn, batch_id)
+            current_payload = purchase_order_payload(conn, batch_id, for_sending=True)
+            if not current_payload['send_available']:
+                return jsonify(ok=False, error=current_payload['source_message'], code='supplier_sheet_required'), 409
             if body.get("plan_hash") and body["plan_hash"] != current_payload["plan_hash"]:
                 return jsonify(ok=False, error="Nội dung đặt NCC đã đổi trong lúc tạo ảnh; tải lại và sao chép ảnh mới", code="stale_supplier_plan"), 409
             checklist_item = next(
@@ -7391,6 +7447,7 @@ def register_contract_routes(app, ctx):
 
     @app.post("/api/purchase-orders/import/preview")
     def api_purchase_order_import_preview():
+        plan_only = request.form.get('plan_only') == '1'
         upload = request.files.get("file")
         if not upload or not upload.filename:
             return jsonify({"ok": False, "error": "Chưa chọn file đặt NCC đã chỉnh"}), 400
@@ -7432,9 +7489,8 @@ def register_contract_routes(app, ctx):
                 io.BytesIO(payload), read_only=True, data_only=False, keep_links=False
             )
             with db_factory() as conn:
-                preview = parse_purchase_order_workbook(
-                    conn, workbook, batch_id, formula_workbook=formula_workbook,
-                )
+                parser = parse_supplier_plan if plan_only else parse_purchase_order_workbook
+                preview = parser(conn, workbook, batch_id, formula_workbook=formula_workbook)
                 database_state_hash = purchase_order_database_state_hash(conn, batch_id)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
@@ -7456,7 +7512,7 @@ def register_contract_routes(app, ctx):
                 "source_hash": source_hash, "items": items,
                 "file_hash": file_hash, "format": preview["format"],
                 "database_state_hash": database_state_hash,
-                "has_errors": not preview["can_confirm"],
+                "has_errors": not preview["can_confirm"], "plan_only": plan_only,
             }
         return jsonify({
             "ok": True, "token": token, "filename": filename,
@@ -7486,6 +7542,11 @@ def register_contract_routes(app, ctx):
                         "ok": False,
                         "error": "Dữ liệu đơn đã thay đổi sau khi xem trước; hãy nạp lại file",
                     }), 409
+                if pending.get('plan_only'):
+                    result = save_supplier_plan(conn, batch_id=batch_id,
+                        preview={'items': pending['items'], 'sheet': pending['items'][0]['source_sheet']},
+                        source_hash=pending['file_hash'], source_name=pending['filename'], now_iso=now_iso)
+                    return jsonify(ok=True, **result)
                 result = apply_purchase_order_preview(
                     conn,
                     batch_id=batch_id,
