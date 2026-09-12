@@ -1,4 +1,10 @@
 """Excel round trip for internal inventory codes; issued invoice fields are immutable."""
+
+try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
 import hashlib
 import io
 import json
@@ -318,7 +324,7 @@ def export_workbook(conn, start, end, scope='all'):
         for row in sheet:
             for cell in row:
                 if isinstance(cell.value, str): cell.data_type = 's'
-    output = io.BytesIO(); wb.save(output); return output.getvalue()
+    output = io.BytesIO(); white_print_style(wb).save(output); return output.getvalue()
 
 
 def _set_overrides(conn, changes, timestamp):

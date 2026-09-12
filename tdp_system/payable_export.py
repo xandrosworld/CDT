@@ -11,6 +11,11 @@ payment and allocation history is retained instead of being flattened away.
 from __future__ import annotations
 
 try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
+try:
     from document_totals import quantity_totals, quantity_text, quantity_cell
 except ImportError:
     from .document_totals import quantity_totals, quantity_text, quantity_cell
@@ -557,7 +562,7 @@ def register_payable_export_routes(app, ctx: dict[str, Any]) -> None:
                 )
                 workbook = payable_workbook(data)
             stream = io.BytesIO()
-            workbook.save(stream)
+            white_print_style(workbook).save(stream)
             workbook.close()
             stream.seek(0)
             suffix = f"_{_filename_token(data['supplier'])}" if data["supplier"] else ""

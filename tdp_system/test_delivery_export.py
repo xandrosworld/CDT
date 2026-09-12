@@ -119,10 +119,8 @@ class DeliveryExportTests(unittest.TestCase):
             self.assertIn("C6:J6", {str(value) for value in priced.merged_cells.ranges})
             self.assertEqual(priced["C6"].alignment.horizontal, "center")
             self.assertGreaterEqual(priced["C6"].font.sz or 0, 14)
-            self.assertTrue(priced["C6"].font.bold)
-            self.assertTrue(priced["C1"].font.bold)
-            self.assertTrue(priced["C2"].font.bold)
-            self.assertTrue(priced["C3"].font.bold)
+            for address in ('C6', 'C1', 'C2', 'C3'):
+                self.assertFalse(priced[address].font.bold)
             self.assertEqual(priced["C9"].value, "Hình thức thanh toán: TM/CK")
             self.assertEqual(priced["H10"].value, "Đơn giá")
             self.assertEqual(priced["I10"].value, "Thành tiền")
@@ -147,7 +145,7 @@ class DeliveryExportTests(unittest.TestCase):
             self.assertTrue(hidden.column_dimensions["I"].hidden)
             self.assertEqual(hidden["C6"].value, "Ngày 02 tháng 09 năm 2026")
             self.assertGreaterEqual(hidden["C6"].font.sz or 0, 14)
-            self.assertTrue(hidden["C6"].font.bold)
+            self.assertFalse(hidden["C6"].font.bold)
             self.assertEqual(hidden["C6"].alignment.horizontal, "center")
             self.assertIn("C6:J6", {str(value) for value in hidden.merged_cells.ranges})
             self.assertIn("C7:J7", {str(value) for value in hidden.merged_cells.ranges})
@@ -195,8 +193,8 @@ class DeliveryExportTests(unittest.TestCase):
             self.assertEqual(hidden["C14"].value, "Ngày ..... tháng ..... năm ........")
             self.assertIn("Người giao hàng", hidden["C15"].value)
             self.assertEqual(hidden["C16"].value.count("Ký và ghi rõ họ tên"), 4)
-            self.assertEqual(priced["C14"].border.top.style, "medium")
-            self.assertEqual(hidden["C14"].border.top.style, "medium")
+            self.assertEqual(priced["C14"].border.top.style, "hair")
+            self.assertEqual(hidden["C14"].border.top.style, "hair")
 
             self.assertEqual(
                 [column["label"] for column in sections[0]["columns"]],

@@ -11,13 +11,13 @@ from flask import jsonify, request, send_file
 from openpyxl import load_workbook
 
 try:
-    from .document_preview import create_snapshot, snapshot_files, PDF_LOCK
+    from .document_preview import create_snapshot, snapshot_files, PDF_LOCK, white_print_style
     from .excel_print_renderer import build_excel_pdf_bundle, ExcelPrintError, is_receipt_sheet
     from .invoice_payment_scope import issued_invoice_payment_scope
     from .invoice_payment_documents import invoice_payment_request_workbook
     from .contract_modules import invoice_delivery_statement_scope_workbook
 except ImportError:
-    from document_preview import create_snapshot, snapshot_files, PDF_LOCK
+    from document_preview import create_snapshot, snapshot_files, PDF_LOCK, white_print_style
     from excel_print_renderer import build_excel_pdf_bundle, ExcelPrintError, is_receipt_sheet
     from invoice_payment_scope import issued_invoice_payment_scope
     from invoice_payment_documents import invoice_payment_request_workbook
@@ -225,6 +225,8 @@ def register_document_routes(app, context_factory):
             if output not in {'excel', 'pdf'}:
                 return jsonify(ok=False, error='Định dạng không hợp lệ'), 404
             directory, books, selection = snapshot_selection(root(), token, request.args.get('sheets'))
+            for _, workbook in books:
+                white_print_style(workbook)
             paper = request.args.get('paper', 'A4').upper()
             if paper not in {'A4', 'A5'}:
                 raise ValueError('Chọn khổ giấy A4 hoặc A5')
@@ -257,7 +259,7 @@ def register_document_routes(app, context_factory):
             sides = request.args.get('sides', 'duplex')
             if sides not in {'simplex', 'duplex'}:
                 raise ValueError('Chọn cách in một mặt hoặc hai mặt')
-            digest = hashlib.sha256(('sheet-scope-v5:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
+            digest = hashlib.sha256(('sheet-scope-v6-plain-print:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
             pdf = directory / f'{digest}.pdf'
             with PDF_LOCK:
                 if not pdf.exists():

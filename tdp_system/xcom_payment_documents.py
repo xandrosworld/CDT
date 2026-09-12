@@ -14,6 +14,11 @@ approval/audit workflows.
 
 from __future__ import annotations
 
+try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
 import copy
 import hashlib
 import hmac
@@ -924,7 +929,11 @@ def build_simple_payment_request_docx(summary: dict[str, Any], issue_date: Any) 
     document.core_properties.last_modified_by = "Thành Đạt Phát"
     document.core_properties.title = f"Đề nghị thanh toán {summary['profile_code']} {summary['date_from']} {summary['date_to']}"
     stream = io.BytesIO()
-    document.save(stream)
+    try:
+        from .document_preview import plain_docx_print_style
+    except ImportError:
+        from document_preview import plain_docx_print_style
+    plain_docx_print_style(document).save(stream)
     return _canonicalize_office_zip(stream.getvalue())
 
 
@@ -1210,7 +1219,7 @@ def _build_bot_payment_bundle_xlsx_obsolete(summary: dict[str, Any], issue_date:
     workbook.properties.modified = fixed_datetime
     workbook.properties.title = f"Bộ chứng từ suất ăn {summary['profile_code']} {summary['date_from']} {summary['date_to']}"
     stream = io.BytesIO()
-    workbook.save(stream)
+    white_print_style(workbook).save(stream)
     return _canonicalize_office_zip(stream.getvalue())
 
 
@@ -1510,7 +1519,7 @@ def build_bot_payment_bundle_xlsx(summary: dict[str, Any], issue_date: Any) -> b
         f"{summary['date_from']} {summary['date_to']}"
     )
     stream = io.BytesIO()
-    workbook.save(stream)
+    white_print_style(workbook).save(stream)
     workbook.close()
     return _canonicalize_office_zip(stream.getvalue())
 

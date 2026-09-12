@@ -1,4 +1,10 @@
 """Source invoice amounts and quantities, independent of stock posting."""
+
+try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
 from decimal import Decimal
 from io import BytesIO
 try:
@@ -95,5 +101,5 @@ def output_sales_workbook(payload):
     ws.page_setup.orientation = 'landscape'; ws.page_setup.paperSize = ws.PAPERSIZE_A3
     ws.page_setup.fitToWidth = 1; ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    output = BytesIO(); wb.save(output); output.seek(0)
+    output = BytesIO(); white_print_style(wb).save(output); output.seek(0)
     return output

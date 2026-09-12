@@ -1,4 +1,10 @@
 """Explain monetary holds and refresh one verified source, without posting stock."""
+
+try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
 import hashlib
 import json
 from decimal import Decimal
@@ -159,7 +165,7 @@ def support_workbook(report):
     ws.page_setup.orientation = 'landscape'; ws.page_setup.paperSize = ws.PAPERSIZE_A3
     ws.page_setup.fitToWidth = 1; ws.page_setup.fitToHeight = 0
     ws.print_title_rows = '1:12'; ws.print_options.horizontalCentered = True
-    out = BytesIO(); wb.save(out); out.seek(0); return out
+    out = BytesIO(); white_print_style(wb).save(out); out.seek(0); return out
 
 
 def register_amount_support_routes(app, ctx):

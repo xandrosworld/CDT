@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
 import io
 import hashlib
 import json
@@ -9397,7 +9402,7 @@ def register_contract_routes(app, ctx):
             wb = meal_po_workbook(plans, work_date)
             approval_label = "DA_DUYET" if all(plan["status"] == "approved" for plan in plans) else "NHAP"
             stream = io.BytesIO()
-            wb.save(stream)
+            white_print_style(wb).save(stream)
             stream.seek(0)
             return send_file(stream, as_attachment=True,
                              download_name=f"PO_xuong_com_{approval_label}_{work_date}.xlsx",
@@ -9803,7 +9808,7 @@ def register_contract_routes(app, ctx):
                     f"Bao_cao_{batch['work_date']}.xlsx",
                 )
                 for _, (workbook, filename) in documents.items():
-                    workbook.save(attempt_dir / filename)
+                    white_print_style(workbook).save(attempt_dir / filename)
                 bundle_inputs = (
                     (
                         "delivery_pdf", "A4",
@@ -10795,7 +10800,7 @@ def style_export_sheet(ws, title: str, subtitle: str, headers: list[str], money_
 
 def send_workbook(workbook: Workbook, filename: str):
     stream = io.BytesIO()
-    workbook.save(stream)
+    white_print_style(workbook).save(stream)
     stream.seek(0)
     return send_file(
         stream,

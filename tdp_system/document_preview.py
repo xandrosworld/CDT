@@ -16,6 +16,7 @@ from html import escape
 from pathlib import Path
 
 from openpyxl.styles import PatternFill
+import unicodedata
 from openpyxl.utils import get_column_letter, range_boundaries, column_index_from_string
 
 PDF_LOCK = threading.Lock()
@@ -31,7 +32,18 @@ def white_print_style(workbook):
                 cell.fill = PatternFill(fill_type=None)
                 font = copy(cell.font)
                 font.color = '000000'
+                name = unicodedata.normalize('NFC', str(cell.value or '')).strip().casefold()
+                font.b = name == 'vũ thị thụy'
                 cell.font = font
+                border = copy(cell.border)
+                for side in ('left', 'right', 'top', 'bottom', 'diagonal', 'vertical', 'horizontal'):
+                    original = getattr(border, side)
+                    if original and original.style:
+                        thin = copy(original)
+                        thin.style = 'hair'
+                        thin.color = '000000'
+                        setattr(border, side, thin)
+                cell.border = border
                 if isinstance(cell.value, (int,float,Decimal)) and '#,##0' in cell.number_format:
                     alignment=copy(cell.alignment)
                     alignment.shrinkToFit=True
@@ -41,6 +53,39 @@ def white_print_style(workbook):
                 if isinstance(cell.value, (int,float,Decimal)) and not isinstance(cell.value, bool):
                     if Decimal(str(cell.value)) == Decimal(str(cell.value)).to_integral_value():
                         cell.number_format = re.sub(r'\.#+', '', cell.number_format)
+    return workbook
+
+
+def plain_docx_print_style(document):
+    """Normalize generated Word copies, including headers and table styles."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    roots = [document.element, document.styles.element]
+    for section in document.sections:
+        roots.extend([section.header._element, section.footer._element])
+    for root in roots:
+        for shading in root.xpath('.//w:shd'):
+            shading.set(qn('w:fill'), 'FFFFFF')
+            shading.set(qn('w:val'), 'clear')
+            for attr in ('themeFill', 'themeFillTint', 'themeFillShade'):
+                shading.attrib.pop(qn('w:' + attr), None)
+        for border in root.xpath('.//w:tblBorders/* | .//w:tcBorders/* | .//w:pBdr/*'):
+            if border.get(qn('w:val')) not in ('nil', 'none'):
+                border.set(qn('w:val'), 'single')
+                border.set(qn('w:sz'), '2')
+                border.set(qn('w:color'), '000000')
+        for run in root.xpath('.//w:r'):
+            text = ''.join(run.xpath('.//w:t/text()')).strip().casefold()
+            props = run.get_or_add_rPr()
+            for tag, val in [('b', '1' if text == 'vũ thị thụy' else '0'), ('bCs', '0'), ('color', '000000')]:
+                element = props.find(qn('w:' + tag))
+                if element is None:
+                    element = OxmlElement('w:' + tag)
+                    props.append(element)
+                element.set(qn('w:val'), val)
+                if tag == 'color':
+                    element.attrib.pop(qn('w:themeColor'), None)
+    return document
 
 
 def display_value(value, number_format='General'):
@@ -178,12 +223,12 @@ def sheet_preview(sheet):
                      f'font-size:{cell.font.sz or 11}pt',
                      f'font-family:{"Times New Roman" if "Times" in (cell.font.name or "") else "Arial"}',
                      f'height:{sheet.row_dimensions[r].height or 15}pt']
-            if cell.font.b: style.append('font-weight:bold')
+            style.extend(['color:#000', 'background:#fff', 'font-weight:bold' if cell.font.b else 'font-weight:normal'])
             if cell.font.i: style.append('font-style:italic')
             for side in ('left','right','top','bottom'):
                 border = getattr(cell.border, side)
                 if border and border.style:
-                    style.append(f'border-{side}:1px solid #000')
+                    style.append(f'border-{side}:0.5px solid #000')
             shrink = bool(cell.alignment.shrinkToFit and not cell.alignment.wrap_text)
             nowrap = ' style="white-space:nowrap"' if shrink or (r == header and len(text) <= 4) else ''
             if shrink: nowrap += ' data-shrink="true"'

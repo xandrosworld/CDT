@@ -3275,6 +3275,7 @@
       '<button class="btn btn-outline" data-action="download-document" data-url="/api/bk-import/template">Tải mẫu trắng</button>',
       state.batchId ? '<button class="btn btn-outline" data-action="download-document" data-url="/api/bk-import/template?batch_id=' + encodeURIComponent(state.batchId) + '">Tải theo đơn đang chọn</button>' : '',
       '<button class="btn btn-primary" data-action="choose-bk-workbook">Chọn file bảng kê đã sửa</button>',
+      '<button class="btn btn-outline" data-action="open-bk-draft">Lập bảng kê bổ sung từ tồn âm</button>',
       '<button class="btn btn-outline" data-action="reload-bk-documents">Tải lại lịch sử bảng kê</button></div>',
       bkImportPreviewHtml(), bkDocumentsHtml(),
       '<details><summary>Điều chỉnh dùng nội bộ</summary><p>Điều chỉnh này có lịch sử, không dùng để mở khóa xuất hóa đơn.</p>',
@@ -3657,6 +3658,7 @@
       '<button class="btn btn-primary" data-action="print-selected-documents" ', selectedCount ? '' : 'disabled', '>In phần đã chọn</button>',
       '<button class="btn btn-outline" data-action="download-selected-documents" ', selectedCount ? '' : 'disabled', '>Tải file đã chọn</button>',
       state.printingDocument === "purchases" ? '<button class="btn btn-primary" data-action="download-approved-input-bk" ' + (selectedCount ? '' : 'disabled') + '>Tải bảng kê đầu vào</button>' : '',
+      state.printingDocument === "purchases" ? '<button class="btn btn-outline" data-action="open-bk-draft">Lập bảng kê bổ sung từ tồn âm</button><button class="btn btn-outline" data-action="choose-bk-workbook">Nhập bảng kê bổ sung</button>' : '',
       '</div>',
       state.printingDocument === "purchases" ? '<p class="muted">Tải bảng kê đầu vào: gộp các ngày đã chọn vào một file Excel, theo lượng và giá đã ghi nhập kho khi duyệt đơn.</p>' : '',
       state.printingDocument === 'deliveries' ? '<label class="print-customer-filter">Khách hàng / bếp <select id="printingCustomer"><option value="">Tất cả bếp</option>' + state.data.master.kitchens.map(function(k) { return '<option value="' + esc(k.code) + '" ' + (state.printingCustomer === k.code ? 'selected' : '') + '>' + esc(k.name || k.code) + '</option>'; }).join('') + '</select></label>' : '', '</div>',
@@ -3665,6 +3667,7 @@
       '</th><th>Số dòng</th><th>Trạng thái</th><th>Xem</th></tr></thead><tbody>',
       batchRows || '<tr><td colspan="5"><div class="empty">' + esc(state.printingListError || 'Khoảng ngày này chưa có giấy tờ phù hợp.') + '</div></td></tr>',
       '</tbody></table></div></div><div id="printingPreview"></div>',
+      state.printingDocument === "purchases" ? bkImportPreviewHtml() : '',
       '<details class="operation-details fade-in"><summary>', directPrinting ? 'In trực tiếp trọn bộ của ngày đang chọn' : 'Cách in trên máy tính và lịch sử in', '</summary><div class="operation-details-body">',
       directPrinting ? html([
       '<div class="toolbar"><div class="status-bar">Dùng khi muốn gửi thẳng bộ giấy của đơn đang chọn sang máy in</div><div class="compact-controls">',
@@ -4564,107 +4567,8 @@
   }
 
   function supplierOrderImageBlob(group) {
-    return new Promise(function (resolve, reject) {
-      var scale = 2;
-      var logicalWidth = 1400;
-      var left = 30;
-      var tableTop = 110;
-      var headerHeight = 58;
-      var rowHeight = 76;
-      var logicalHeight = tableTop + headerHeight + group.items.length * rowHeight + 30;
-      scale = Math.min(scale, 30000 / logicalHeight);
-      var canvas = document.createElement("canvas");
-      canvas.width = logicalWidth * scale;
-      canvas.height = logicalHeight * scale;
-      var ctx = canvas.getContext("2d");
-      if (!ctx) { reject(new Error("Trình duyệt không tạo được ảnh")); return; }
-      ctx.scale(scale, scale);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, logicalWidth, logicalHeight);
-      ctx.textBaseline = "middle";
-
-      ctx.fillStyle = "#17324d";
-      ctx.font = "bold 30px Arial, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("ĐƠN ĐẶT HÀNG – NHÀ CUNG CẤP " + String(group.supplier || "").toUpperCase() + " – " +
-        dateVN(state.data.batch.work_date), logicalWidth / 2, 45);
-
-      var imageContract = (state.supplierNeeds && state.supplierNeeds.image_contract) || {};
-      var imageColumns = imageContract.columns || [
-        { key: "kitchen", label: "Mã bếp" }, { key: "work_date", label: "Ngày" },
-        { key: "product_name", label: "Tên hàng" }, { key: "order_qty", label: "Số lượng" },
-        { key: "unit", label: "Đơn vị" }, { key: "supplier", label: "Nhà cung cấp" },
-        { key: "note", label: "Ghi chú" }
-      ];
-      var widthByKey = { kitchen: 140, work_date: 150, product_name: 360, order_qty: 140,
-        unit: 80, supplier: 140, note: 320 };
-      var widths = imageColumns.map(function (column) { return widthByKey[column.key] || 140; });
-      var headers = imageColumns.map(function (column) { return column.label; });
-      var tableWidth = widths.reduce(function (sum, value) { return sum + value; }, 0);
-      var x = left;
-      ctx.fillStyle = "#087f73";
-      ctx.fillRect(left, tableTop, tableWidth, headerHeight);
-      ctx.font = "bold 21px Arial, sans-serif";
-      ctx.fillStyle = "#ffffff";
-      headers.forEach(function (label, index) {
-        ctx.textAlign = "center";
-        ctx.fillText(label, x + widths[index] / 2, tableTop + headerHeight / 2);
-        x += widths[index];
-      });
-
-      group.items.forEach(function (item, rowIndex) {
-        var y = tableTop + headerHeight + rowIndex * rowHeight;
-        ctx.fillStyle = rowIndex % 2 ? "#f4f8fb" : "#ffffff";
-        ctx.fillRect(left, y, tableWidth, rowHeight);
-        var rowData = {
-          kitchen: item.kitchen,
-          work_date: dateVN(item.work_date || state.data.batch.work_date),
-          product_name: item.product_name,
-          order_qty: stockQty(item.order_qty == null ? item.required_qty : item.order_qty),
-          unit: item.unit,
-          supplier: item.supplier || group.supplier,
-          note: item.note || ""
-        };
-        var values = imageColumns.map(function (column) { return rowData[column.key] || ""; });
-        x = left;
-        values.forEach(function (value, colIndex) {
-          var columnKey = imageColumns[colIndex].key;
-          ctx.fillStyle = "#172b3e";
-          ctx.font = (columnKey === "order_qty" ? "bold " : "") + "20px Arial, sans-serif";
-          if (columnKey === "product_name" || columnKey === "note") {
-            ctx.textAlign = "left";
-            var lines = canvasTextLines(ctx, value, widths[colIndex] - 24, 3);
-            var lineGap = 23;
-            var firstY = y + rowHeight / 2 - (lines.length - 1) * lineGap / 2;
-            lines.forEach(function (line, lineIndex) {
-              ctx.fillText(line, x + 12, firstY + lineIndex * lineGap);
-            });
-          } else if (columnKey === "order_qty") {
-            ctx.textAlign = "right";
-            ctx.fillText(value, x + widths[colIndex] - 14, y + rowHeight / 2);
-          } else {
-            ctx.textAlign = "center";
-            ctx.fillText(value, x + widths[colIndex] / 2, y + rowHeight / 2);
-          }
-          x += widths[colIndex];
-        });
-      });
-
-      ctx.strokeStyle = "#9fb0bf";
-      ctx.lineWidth = 1;
-      var bottom = tableTop + headerHeight + group.items.length * rowHeight;
-      x = left;
-      ctx.beginPath();
-      ctx.rect(left, tableTop, tableWidth, bottom - tableTop);
-      widths.forEach(function (width) { x += width; ctx.moveTo(x, tableTop); ctx.lineTo(x, bottom); });
-      for (var row = 0; row <= group.items.length; row += 1) {
-        var rowY = tableTop + headerHeight + row * rowHeight;
-        ctx.moveTo(left, rowY); ctx.lineTo(left + tableWidth, rowY);
-      }
-      ctx.stroke();
-      canvas.toBlob(function (blob) {
-        if (blob) resolve(blob); else reject(new Error("Không tạo được file ảnh PNG"));
-      }, "image/png");
+    return window.TdpSupplierImage.blob(group, {
+      date: state.data.batch.work_date, dateText: dateVN, quantity: stockQty
     });
   }
 
@@ -5375,7 +5279,7 @@
       state.bkImportPreview = await api("/api/bk-import/preview", {
         method: "POST", body: form
       });
-      renderInventory();
+      if (state.view === 'printing') renderPrinting(); else renderInventory();
       showToast("Đã kiểm tra file bảng kê · xem kỹ rồi xác nhận nhập kho");
     } catch (error) {
       state.bkImportPreview = null;
@@ -6923,6 +6827,11 @@
       state.openingImportPreview = null;
       openingWorkbookInput.click();
     }
+    if (action === "open-bk-draft") {
+      window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,
+        from:state.view === 'printing' ? state.printingFrom : state.inventoryFrom,
+        to:state.view === 'printing' ? state.printingTo : state.inventoryTo});
+    }
     if (action === "choose-bk-workbook") {
       state.bkImportPreview = null;
       bkWorkbookInput.click();
@@ -6953,7 +6862,7 @@
     }
     if (action === "cancel-bk-import") {
       state.bkImportPreview = null;
-      renderInventory();
+      if (state.view === 'printing') renderPrinting(); else renderInventory();
     }
     if (action === "confirm-bk-import") await confirmBkImport(button);
     if (action === "reverse-bk-import") await reverseBkImport(button);

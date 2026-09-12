@@ -29,7 +29,7 @@ from reportlab.lib.pagesizes import A4, A5
 
 EXCEL_PAPER_SIZES = {"A4": 9, "A5": 11}
 PDF_PAPER_SIZES = {"A4": A4, "A5": A5}
-FORMAT_VERSION = "tdp-excel-artwork-pdf-v4"
+FORMAT_VERSION = "tdp-excel-artwork-pdf-v5-plain-print"
 
 
 class ExcelPrintError(RuntimeError):
@@ -370,7 +370,24 @@ def build_excel_pdf_bundle(
     render_dir = Path(tempfile.mkdtemp(prefix="tdp_excel_print_", dir=target.parent))
     temp_target = render_dir / "merged.pdf"
     try:
-        rendered = _export_visible_sheets(normalized, paper=paper_name, render_dir=render_dir)
+        from openpyxl import load_workbook
+        try:
+            from .document_preview import white_print_style
+        except ImportError:
+            from document_preview import white_print_style
+        styled_sources = []
+        for index, source in enumerate(normalized):
+            styled_dir = render_dir / ('source_' + str(index))
+            styled_dir.mkdir()
+            styled_path = styled_dir / source['path'].name
+            workbook = load_workbook(source['path'], data_only=False)
+            try:
+                white_print_style(workbook)
+                workbook.save(styled_path)
+            finally:
+                workbook.close()
+            styled_sources.append({**source, 'path': styled_path})
+        rendered = _export_visible_sheets(styled_sources, paper=paper_name, render_dir=render_dir)
         layout = _merge_pdfs(rendered, temp_target, paper=paper_name, duplex=duplex)
         verification = verify_excel_pdf(
             temp_target,

@@ -9,6 +9,11 @@ written to the workbook.
 
 from __future__ import annotations
 
+try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
 import io
 import math
 import re
@@ -397,7 +402,7 @@ def register_invoice_input_export_routes(app, ctx) -> None:
                 return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
             stream = io.BytesIO()
             try:
-                workbook.save(stream)
+                white_print_style(workbook).save(stream)
             finally:
                 workbook.close()
             if now_iso is not None:

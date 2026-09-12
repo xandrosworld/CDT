@@ -1,6 +1,11 @@
 """Read-only, date-scoped invoice rows shared by the screen and its Excel export."""
 from __future__ import annotations
 
+try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 
@@ -383,6 +388,6 @@ def range_workbook(payload):
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     output = BytesIO()
-    wb.save(output)
+    white_print_style(wb).save(output)
     output.seek(0)
     return output

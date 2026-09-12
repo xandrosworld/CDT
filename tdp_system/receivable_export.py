@@ -9,6 +9,11 @@ selected period.  Issued VAT invoices are deliberately outside this export.
 from __future__ import annotations
 
 try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
+try:
     from document_totals import quantity_totals, quantity_text, quantity_cell
 except ImportError:
     from .document_totals import quantity_totals, quantity_text, quantity_cell
@@ -521,7 +526,7 @@ def receivable_workbook(data: dict[str, Any]) -> Workbook:
 
 def _workbook_bytes(workbook: Workbook) -> bytes:
     stream = io.BytesIO()
-    workbook.save(stream)
+    white_print_style(workbook).save(stream)
     workbook.close()
     return stream.getvalue()
 

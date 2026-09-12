@@ -344,7 +344,7 @@ def _template_rows_for_batch(conn, batch_id: int) -> list[dict[str, Any]]:
     return result
 
 
-def build_bk_import_template(rows: Iterable[Mapping[str, Any]] = (), *, posted: bool = False) -> bytes:
+def build_bk_import_template(rows: Iterable[Mapping[str, Any]] = (), *, posted: bool = False, draft: bool = False) -> bytes:
     """Return the official formula-free BK input template, optionally prefilled."""
     workbook = Workbook()
     sheet = workbook.active
@@ -370,7 +370,8 @@ def build_bk_import_template(rows: Iterable[Mapping[str, Any]] = (), *, posted: 
             cell.font = Font(name="Times New Roman", size=11)
     for item in rows:
         sheet.append([
-            _excel_date(item.get(field)) if field == "document_date" else item.get(field, "")
+            (None if draft and not item.get(field) else _excel_date(item.get(field)))
+            if field == "document_date" else item.get(field, "")
             for field, _label in BK_IMPORT_COLUMNS
         ])
     widths = (15, 34, 20, 12, 17, 28, 11, 14, 17, 17, 23, 42)
@@ -398,6 +399,17 @@ def build_bk_import_template(rows: Iterable[Mapping[str, Any]] = (), *, posted: 
     sheet.print_options.horizontalCentered = True
     workbook.properties.title = "Mẫu nhập BK hàng mua vào không có hóa đơn"
     workbook.properties.subject = "Nguồn Excel BK độc lập; preview và xác nhận trước khi ghi kho"
+    if draft:
+        sheet.cell(1, 1).value = "BẢNG KÊ BỔ SUNG – CHƯA GHI NHẬP KHO"
+        sheet.cell(2, 1).value = (
+            "Điền ngày mua thực tế, số bảng kê, lượng, giá và người bán theo hàng thực mua. "
+            "Lượng gợi ý từ tồn âm cần kiểm tra lại. Tải và in không tự cộng kho. "
+            "Sau khi điền đủ, tải lại file lên web để kiểm tra và xác nhận nhập kho."
+        )
+        for cells in sheet.iter_rows(min_row=4):
+            for cell in cells:
+                if cell.data_type == 'f':
+                    cell.data_type = 's'
     if posted:
         sheet.cell(1, 1).value = "BẢNG KÊ ĐẦU VÀO ĐÃ GHI NHẬP KHO"
         sheet.cell(2, 1).value = (

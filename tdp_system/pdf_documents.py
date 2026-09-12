@@ -67,18 +67,18 @@ except ImportError as exc:  # pragma: no cover - exercised by deployment checks.
     ) from exc
 
 
-PDF_FORMAT_VERSION = "1"
+PDF_FORMAT_VERSION = "2-plain-print"
 PAPER_NAME = "A4"
 PAPER_SIZE = A4
 PAPER_SIZES = {"A4": A4, "A5": A5}
 MAX_SECTIONS = 100
 MAX_ROWS_PER_SECTION = 50_000
 
-NAVY = colors.HexColor("#17324D")
-TEAL = colors.HexColor("#087F73")
-PALE = colors.HexColor("#F5F8FB")
-GRAY = colors.HexColor("#5E7083")
-LIGHT_BORDER = colors.HexColor("#CBD5E1")
+NAVY = colors.black
+TEAL = colors.white
+PALE = colors.white
+GRAY = colors.black
+LIGHT_BORDER = colors.black
 
 
 class PdfDocumentError(ValueError):
@@ -313,8 +313,9 @@ class _NumberedCanvas(Canvas):
 def _styles(fonts: Mapping[str, str]) -> dict[str, ParagraphStyle]:
     base = getSampleStyleSheet()
     regular = fonts["regular_name"]
-    bold = fonts["bold_name"]
+    bold = regular
     return {
+        "signer_name": ParagraphStyle("TDPSignerName", parent=base["Normal"], fontName=fonts["bold_name"], textColor=colors.black),
         "title": ParagraphStyle(
             "TDPTitle",
             parent=base["Title"],
@@ -341,7 +342,7 @@ def _styles(fonts: Mapping[str, str]) -> dict[str, ParagraphStyle]:
             fontName=bold,
             fontSize=8,
             leading=10,
-            textColor=colors.white,
+            textColor=colors.black,
             alignment=TA_CENTER,
         ),
         "left": ParagraphStyle(
@@ -415,13 +416,19 @@ def _section_story(
     styles: Mapping[str, ParagraphStyle],
     available_width: float,
 ) -> list[Any]:
+    def paragraph(value, key):
+        style = styles[key]
+        if unicodedata.normalize('NFC', str(value or '')).strip().casefold() == 'vũ thị thụy':
+            style = ParagraphStyle('TDPNamedSigner', parent=style, fontName=styles['signer_name'].fontName)
+        return Paragraph(_safe_text(value), style)
+
     title = str(section["title"]).strip()
     subtitle = str(section.get("subtitle") or "").strip()
     columns = list(section["columns"])
     rows = list(section.get("rows", []))
-    story: list[Any] = [Paragraph(_safe_text(title), styles["title"])]
+    story: list[Any] = [paragraph(title, "title")]
     if subtitle:
-        story.append(Paragraph(_safe_text(subtitle), styles["subtitle"]))
+        story.append(paragraph(subtitle, "subtitle"))
 
     weights = []
     for column in columns:
@@ -436,7 +443,7 @@ def _section_story(
     column_widths = [available_width * weight / total_weight for weight in weights]
 
     table_data: list[list[Any]] = [
-        [Paragraph(_safe_text(column["label"]), styles["header"]) for column in columns]
+        [paragraph(column["label"], "header") for column in columns]
     ]
     if rows:
         for row in rows:
@@ -455,7 +462,7 @@ def _section_story(
                     raise PdfDocumentError(
                         f"Cột {column.get('key')!r} có căn lề không hợp lệ: {align!r}."
                     )
-                values.append(Paragraph(_safe_text(formatted), styles[align]))
+                values.append(paragraph(formatted, align))
             table_data.append(values)
     else:
         table_data.append(
@@ -507,11 +514,11 @@ def _section_story(
             else:
                 raise PdfDocumentError(f"Dòng tổng hợp của {title!r} không hợp lệ.")
             summary_rows.append(
-                [Paragraph(_safe_text(label), styles["signature"]), Paragraph(_safe_text(value), styles["right"])]
+                [paragraph(label, "signature"), paragraph(value, "right")]
             )
         summary_table = Table(summary_rows, colWidths=[available_width * 0.72, available_width * 0.28])
         summary_table.setStyle(TableStyle([
-            ("LINEABOVE", (0, 0), (-1, 0), 0.8, NAVY),
+            ("LINEABOVE", (0, 0), (-1, 0), 0.25, NAVY),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("LEFTPADDING", (0, 0), (-1, -1), 4),
             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
@@ -532,7 +539,7 @@ def _section_story(
                 hint = "Ký, ghi rõ họ tên"
             signature_cells.append(
                 [
-                    Paragraph(_safe_text(signature_title), styles["signature"]),
+                    paragraph(signature_title, "signature"),
                     Paragraph(f"({_safe_text(hint)})", styles["signature_hint"]),
                     Spacer(1, 22 * mm),
                 ]
@@ -678,7 +685,7 @@ def build_pdf_bundle(
         _NumberedCanvas,
         company=company,
         font_name=fonts["regular_name"],
-        bold_font_name=fonts["bold_name"],
+        bold_font_name=fonts["regular_name"],
         paper_size=paper_size,
     )
     try:

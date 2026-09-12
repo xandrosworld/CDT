@@ -330,7 +330,8 @@ class BKImportTests(unittest.TestCase):
                        actual_delivered,unit,buy_price,sell_price,tax,purchase_list,
                        errors,warnings,updated_at
                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (batch_id, "2026-09-01", "C1", "K1", "BK-P1", "Hàng BK", 3, 3, 3, "kg",
+                # This order has no BK marker/name: it must stay stock-limited.
+                (batch_id, "2026-09-01", "C1", "K1", "BK-P1", "Hàng mua bổ sung", 3, 3, 3, "kg",
                  100, 150, "8%", 0, "[]", "[]", NOW),
             )
         readiness = self.client.get(f"/api/outgoing-invoices/readiness/{batch_id}")

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+try:
+    from .document_preview import white_print_style
+except ImportError:
+    from document_preview import white_print_style
+
 import copy
 import io
 import hashlib
@@ -3488,7 +3493,7 @@ def api_product_search():
 
 def workbook_bytes(wb: Workbook):
     stream = io.BytesIO()
-    wb.save(stream)
+    white_print_style(wb).save(stream)
     stream.seek(0)
     return stream
 
@@ -5256,6 +5261,12 @@ register_bk_import_routes(app, {
     "now_iso": now_iso,
     "audit_event": audit_event,
 })
+
+try:
+    from .bk_draft import register_bk_draft_routes
+except ImportError:
+    from bk_draft import register_bk_draft_routes
+register_bk_draft_routes(app, {"db": db, "data_dir": lambda: DATA_DIR})
 
 register_payable_ledger_routes(app, {
     "db": db,
