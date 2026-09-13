@@ -45,6 +45,7 @@ class SupplierPlanSourceTests(unittest.TestCase):
             'file': (io.BytesIO(data), 'Đơn hàng 01.09.2026.xlsx'),
         })
         self.assertEqual(result.status_code, 200, result.get_json())
+        self.assertEqual(result.get_json()['batch_id'], bid)
         return result.get_json()
 
     def confirm(self, preview, status=200):

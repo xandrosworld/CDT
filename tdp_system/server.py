@@ -3794,9 +3794,9 @@ def export_deliveries(conn, batch, orders, kitchen_codes=None):
     )
 
 
-def export_report(conn, batch, orders):
+def export_report(conn, batch, orders, *, date_from=None, date_to=None):
     period, report_rows = collect_monthly_report_rows(
-        conn, batch, orders, totals_fn=order_totals,
+        conn, batch, orders, totals_fn=order_totals, date_from=date_from, date_to=date_to,
     )
     present = {clean_text(row["kitchen"]).casefold() for row in report_rows}
     for kitchen in conn.execute("SELECT code,contractor FROM kitchens ORDER BY contractor,code"):
@@ -3815,6 +3815,7 @@ def export_report(conn, batch, orders):
         period=period,
         template_path=MASTER_SOURCE,
         configured_groups=configured_groups,
+        date_from=date_from, date_to=date_to,
     )
 
 

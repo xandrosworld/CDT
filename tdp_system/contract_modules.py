@@ -7293,6 +7293,26 @@ def register_contract_routes(app, ctx):
                   metadata={"qty": qty, "reference": source_id})
             return jsonify({"ok": True})
 
+    @app.get("/api/supplier-needs")
+    def api_supplier_needs_range():
+        try:
+            start, end = request.args.get("from", ""), request.args.get("to", "")
+            for value in (start, end):
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                    raise ValueError("Chọn đủ Từ ngày và Đến ngày hợp lệ")
+                date.fromisoformat(value)
+            if start > end:
+                raise ValueError("Từ ngày không được lớn hơn đến ngày")
+            with db_factory() as conn:
+                conn.execute("BEGIN")
+                batches = conn.execute("SELECT id FROM batches WHERE work_date>=? AND work_date<=? ORDER BY work_date,id", (start, end)).fetchall()
+                days = [purchase_order_payload(conn, row["id"], for_sending=True) for row in batches]
+            # Keep source checks, grouping rules and status revisions per day.
+            # A missing plan on one day must not hide valid plans on other days.
+            return jsonify(ok=True, date_from=start, date_to=end, days=days)
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+
     @app.get("/api/supplier-needs/<int:batch_id>")
     def api_supplier_needs(batch_id):
         with db_factory() as conn:
@@ -7524,6 +7544,7 @@ def register_contract_routes(app, ctx):
             "source_hash": source_hash,
             "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
             **preview,
+            "batch_id": batch_id,
         })
 
     @app.post("/api/purchase-orders/import/confirm")

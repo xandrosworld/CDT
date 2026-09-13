@@ -5,6 +5,14 @@
   .topbar { min-height:42px; padding:5px 10px; gap:8px; }
   .topbar .eyebrow { display:none; }
   .topbar h1 { margin:0; font-size:18px; line-height:1.25; }
+  body[data-workspace-view="home"] .topbar > div:not(.top-actions) { display:none; }
+  body[data-workspace-view="home"] .top-actions { margin-left:auto; }
+  body[data-workspace-view="home"] .daily-range { justify-content:flex-end; }
+  body[data-workspace-view="home"] .daily-action-card > .form-actions { grid-column:1/-1; justify-content:flex-start; margin:0; padding:0; border:0; }
+  body[data-workspace-view="home"] .daily-action-card > small { grid-column:1/-1; color:#455e73; }
+  body:is([data-workspace-view="purchases"],[data-workspace-view="reports"]) #batchSelect { display:none; }
+  .supplier-day { display:block; margin:16px 0 28px; }
+  .supplier-day + .supplier-day { border-top:2px solid #94a3b8; padding-top:16px; }
   .top-actions { gap:6px; }
   .top-actions .batch-select { min-height:30px; height:30px; padding:3px 8px; font-size:13px; }
   .top-actions .user-chip { height:30px; min-height:30px; padding:3px 8px; font-size:13px; }

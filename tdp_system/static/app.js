@@ -100,6 +100,8 @@
     invoiceLineFilter: storedInvoiceFilters.line_filter || "all",
     invoicePending: storedInvoiceFilters.scope_version === 2 && storedInvoiceFilters.pending === true,
     supplierNeeds: null,
+    supplierFrom: "", supplierTo: "", supplierSerial: 0, supplierLoading: false, supplierError: "",
+    purchaseOrderBatchId: null,
     purchaseOrderPreview: null,
     deliveryDetailsOpen: false,
     debtSection: "",
@@ -144,6 +146,7 @@
     opsDate: todayIso,
     opsMonth: todayIso.slice(0, 7),
     reportPeriod: "",
+    reportFrom: "", reportTo: "",
     reportData: null, reportLoading: false, reportError: "", reportSerial: 0,
     debtSerial: 0, debtError: "", receiptHistory: [], receivableOffset: 0, payableOffset: 0, payableHistoryOffset: 0,
     printingFrom: "",
@@ -161,8 +164,8 @@
   };
 
   var titles = {
-    home: "Công việc hằng ngày",
-    orders: "Nhập và sửa đơn",
+    home: "Đơn hàng - bảng kê",
+    orders: "Duyệt đơn - sửa đơn",
     purchases: "Đặt hàng nhà cung cấp",
     physical: "Kho thực tế · hàng còn và thiếu",
     deliveries: "Phiếu giao hàng",
@@ -856,6 +859,11 @@
       if (!state.homeFrom || !state.homeTo) state.homeFrom = state.homeTo = anchorDate;
       if (!state.printingFrom || !state.printingTo) state.printingFrom = state.printingTo = anchorDate;
       if (!state.reportPeriod) state.reportPeriod = String(anchorDate).slice(0, 7);
+      if (!state.reportFrom) state.reportFrom = String(anchorDate).slice(0, 7) + "-01";
+      if (!state.reportTo) state.reportTo = anchorDate;
+      if (!state.supplierFrom) state.supplierFrom = anchorDate;
+      if (!state.supplierTo) state.supplierTo = anchorDate;
+      state.supplierSerial++; state.supplierLoading = false; state.supplierError = "";
       state.reportSerial++; state.reportData = null; state.reportLoading = false; state.reportError = "";
       state.supplierNeeds = null;
       state.purchaseOrderPreview = null;
@@ -1128,15 +1136,20 @@
     batchSelect.disabled = !batches.length;
   }
 
+  function syncNavigationChrome(view) {
+    document.querySelectorAll(".nav-item").forEach(function (button) {
+      button.classList.toggle("active", button.dataset.view === (view === "orders" ? "home" : view));
+    });
+    pageTitle.textContent = view === "orders" ? "Duyệt đơn - sửa đơn" : titles[view] || "Vận hành";
+    document.body.dataset.workspaceView = view;
+  }
+
   function navigate(view) {
     // Legacy data stays in the database; retired modules have no daily screen.
     if (view === "kitchen" || view === "payroll") view = "home";
     if (view === "debts" && state.view !== "debts") state.debtSection = "";
     state.view = view;
-    document.querySelectorAll(".nav-item").forEach(function (button) {
-      button.classList.toggle("active", button.dataset.view === view);
-    });
-    pageTitle.textContent = titles[view] || "Vận hành";
+    syncNavigationChrome(view);
     sidebar.classList.remove("open");
     window.scrollTo(0, 0);
     if (view === "physical") { loadPhysicalStock(); return; }
@@ -1523,9 +1536,6 @@
     var errorCount = hasBatch ? n(s.errors) : 0;
     var warningCount = hasBatch ? n(s.warnings) : 0;
     var approved = hasBatch && d.batch.status === "approved";
-    var currentText = hasBatch
-      ? "Đơn đang chọn: " + dateVN(d.batch.work_date) + " · " + d.orders.length + " dòng"
-      : "Chưa có đơn hàng được chọn";
     var reviewText = !hasBatch
       ? "Chưa có đơn để hoàn thiện"
       : approved
@@ -1536,8 +1546,7 @@
             ? warningCount + " dòng cần xem lại trước khi duyệt"
             : "Đã đủ dữ liệu để duyệt";
     content.innerHTML = html([
-      '<div class="daily-range card fade-in"><div><span class="daily-range-label">Chọn thời gian cần làm việc</span>',
-      '<strong>', esc(currentText), '</strong></div><div class="compact-controls">',
+      '<div class="daily-range card fade-in"><div class="compact-controls">',
       '<label>Từ ngày <input id="homeFrom" class="input-date" type="date" value="', esc(state.homeFrom), '"></label>',
       '<label>Đến ngày <input id="homeTo" class="input-date" type="date" value="', esc(state.homeTo), '"></label>',
       '</div></div>',
@@ -1553,10 +1562,12 @@
       '<section class="daily-action-card"><div class="daily-action-number">3</div><div><h3>Bảng kê và biên nhận</h3>',
       '<p>Xem ngay trên phần mềm, chọn phiếu cần in hoặc tải Excel.</p></div>',
       '<button class="btn btn-primary" data-action="open-print-workspace" data-document="purchases" ', hasBatch ? '' : 'disabled', '>Xem bảng kê và biên nhận</button></section>',
-      '<section class="daily-action-card ', errorCount ? 'has-error' : approved ? 'is-done' : '', '"><div class="daily-action-number">4</div><div><h3>Duyệt đơn</h3>',
-      '<p>', esc(reviewText), '</p></div>',
-      '<button class="btn ', errorCount ? 'btn-outline' : 'btn-primary', '" data-view="orders" ', hasBatch ? '' : 'disabled', '>',
-      approved ? 'Xem đơn đã duyệt' : errorCount ? 'Sửa các dòng đang thiếu' : 'Kiểm tra và duyệt', '</button></section>',
+      '<section class="daily-action-card ', errorCount ? 'has-error' : approved ? 'is-done' : '', '"><div class="daily-action-number">4</div><div><h3>Duyệt đơn - sửa đơn</h3>',
+      '<p>', hasBatch ? dateVN(d.batch.work_date) + ' · ' : '', esc(reviewText), '</p></div>',
+      '<div class="form-actions"><button class="btn ', errorCount ? 'btn-outline' : 'btn-primary', '" data-view="orders" ', hasBatch ? '' : 'disabled', '>',
+      approved ? 'Xem / sửa đơn đã duyệt' : errorCount ? 'Sửa các dòng đang thiếu' : 'Kiểm tra và duyệt', '</button>',
+      '<button class="btn btn-outline" data-action="download-order-input-bk" data-scope="range" ', batches.some(function (b) { return b.status === 'approved'; }) ? '' : 'disabled', '>Tải bảng kê đầu vào</button></div>',
+      '<small>Bảng kê theo khoảng ngày đã chọn, chỉ lấy ngày đã duyệt.</small></section>',
       '</div>',
       batches.length
         ? '<div class="daily-range-result">Trong khoảng đã chọn có <strong>' + batches.length + ' ngày dữ liệu</strong> và <strong>' + orderCount + ' phiếu theo bếp</strong>.</div>'
@@ -1617,6 +1628,8 @@
       ]);
     }).join("");
     content.innerHTML = html([
+      '<div class="toolbar"><button class="btn btn-outline" data-view="home">← Đơn hàng - bảng kê</button><strong>Duyệt đơn - sửa đơn · ', dateVN(d.batch.work_date), '</strong>',
+      '<button class="btn btn-primary" data-action="download-order-input-bk" ', approved ? '' : 'disabled', '>Tải bảng kê đầu vào ngày này</button></div>',
       '<div class="import-zone round2-import fade-in"><div><strong>Nguồn: ', esc(d.batch.source_name),
       "</strong><p>Ngày làm việc ", dateVN(d.batch.work_date), " · Dữ liệu tự lưu ngay sau mỗi lần sửa</p></div>",
       '<div class="compact-controls"><button class="btn btn-outline" data-view="physical">Xem kho thực tế</button><button class="btn btn-outline" data-view="deliveries">Xem phiếu giao</button><button class="btn btn-outline" data-action="choose-excel">Chọn file đơn hàng khác</button>',
@@ -1687,13 +1700,22 @@
   }
 
   async function fetchSupplierNeeds() {
-    var requestedBatch = state.batchId;
+    var serial = ++state.supplierSerial;
+    state.supplierLoading = true; state.supplierNeeds = null; state.supplierError = "";
+    if (state.view === 'purchases') renderPurchases();
     try {
-      var result = await api("/api/supplier-needs/" + requestedBatch);
-      if (requestedBatch !== state.batchId) return;
+      var result = await api('/api/supplier-needs?from=' + encodeURIComponent(state.supplierFrom) + '&to=' + encodeURIComponent(state.supplierTo));
+      if (serial !== state.supplierSerial) return;
+      result.rows = result.days.reduce(function (rows, day) { return rows.concat(day.rows); }, []);
       state.supplierNeeds = result;
-      if (state.view === "purchases") renderPurchases();
-    } catch (error) { showToast(error.message, true); }
+    } catch (error) {
+      if (serial === state.supplierSerial) state.supplierError = error.message;
+    } finally {
+      if (serial === state.supplierSerial) {
+        state.supplierLoading = false;
+        if (state.view === 'purchases') renderPurchases();
+      }
+    }
   }
 
   function purchaseOrderPreviewHtml() {
@@ -1751,25 +1773,30 @@
   }
 
   function renderPurchases() {
-    var d = state.data;
-    if (!d.batch) {
-      content.innerHTML = emptyBatch("Chưa có dữ liệu đặt hàng", "Nạp đơn để hệ thống tự gộp số lượng theo nhà cung cấp.");
-      return;
-    }
-    if (!state.supplierNeeds) {
-      content.innerHTML = '<div class="loading-panel"><div class="spinner"></div><strong>Đang nạp kế hoạch đặt nhà cung cấp…</strong></div>';
-      setTimeout(fetchSupplierNeeds, 0);
-      return;
-    }
-    var needs = state.supplierNeeds;
-    var sourceBanner = '<div class="card supplier-plan-source"><div class="card-body"><strong>' +
-      esc(needs.source_message || '') + '</strong><div class="form-actions"><button class="btn btn-outline" data-action="choose-supplier-plan-file">Nạp sheet đặt hàng từ Excel</button></div>' +
-      (state.purchaseOrderPreview && state.purchaseOrderPreview.plan_only ? purchaseOrderPreviewHtml() : '') + '</div></div>';
+    if (!state.supplierNeeds && !state.supplierLoading && !state.supplierError) setTimeout(fetchSupplierNeeds, 0);
+    var days = state.supplierNeeds ? state.supplierNeeds.days : [];
+    content.innerHTML = '<div class="toolbar"><label>Từ ngày <input id="supplierFrom" type="date" value="' + esc(state.supplierFrom) + '"></label>' +
+      '<label>Đến ngày <input id="supplierTo" type="date" value="' + esc(state.supplierTo) + '"></label><button class="btn btn-outline" data-action="refresh-supplier-range">Tải lại</button></div>' +
+      '<div class="code-note">Đơn đặt NCC theo khoảng ngày. Mỗi ngày giữ riêng đơn và trạng thái đã đặt.</div>' +
+      (days.length ? '<div class="supplier-day-links toolbar">' + days.map(function (day) { return '<button class="btn btn-outline" data-action="jump-supplier-day" data-batch-id="' + day.batch_id + '">' + dateVN(day.work_date) + ' · ' + day.checklist.length + ' NCC</button>'; }).join('') + '</div>' : '') +
+      (state.supplierError ? '<div class="error-summary" role="alert">' + esc(state.supplierError) + '</div>' : '') +
+      (state.supplierLoading ? '<div class="loading-panel">Đang nạp kế hoạch đặt nhà cung cấp…</div>' : '') +
+      days.map(renderSupplierDay).join('') +
+      (!state.supplierLoading && !state.supplierError && !days.length ? '<div class="card empty">Khoảng ngày đã chọn chưa có đơn hàng.</div>' : '');
+  }
+
+  function renderSupplierDay(needs) {
+    var preview = state.purchaseOrderBatchId === needs.batch_id ? state.purchaseOrderPreview : null;
+    var batchAttr = ' data-batch-id="' + needs.batch_id + '"';
+    var sourceBanner = '<section class="supplier-day" data-batch-id="' + needs.batch_id + '" data-work-date="' + esc(needs.work_date) + '">' +
+      '<div class="card supplier-plan-source"><div class="card-body"><h3>Ngày ' + dateVN(needs.work_date) + '</h3><strong>' +
+      esc(needs.source_message || '') + '</strong><div class="form-actions"><button class="btn btn-outline" data-action="choose-supplier-plan-file"' + batchAttr + '>Nạp sheet đặt hàng ngày này</button></div>' +
+      (preview && preview.plan_only ? purchaseOrderPreviewHtml() : '') + '</div></div>';
     var checklistCounts = needs.checklist_counts || { pending: 0, reopened: 0, ordered: 0 };
     var checklistOpen = n(checklistCounts.pending) + n(checklistCounts.reopened);
     var cards = (needs.checklist || []).map(function (supplier) {
       var groupIndex = needs.groups.findIndex(function (group) { return group.supplier_key === supplier.supplier_key; });
-      var group = supplierPresentation(needs.groups[groupIndex]);
+      var group = Object.assign(supplierPresentation(needs.groups[groupIndex], needs), {batch_id: needs.batch_id, work_date: needs.work_date});
       var supplier = group.supplier, items = group.items;
       var rawLineCount = group.raw_line_count == null ? items.length : group.raw_line_count;
       var orderStatus = group.order_status || "pending";
@@ -1777,7 +1804,7 @@
       var statusClass = orderStatus === "ordered" ? "tag-ok" : orderStatus === "reopened" ? "tag-warn" : "tag-red";
       var reopenControl = orderStatus === "ordered"
         ? '<button class="btn btn-small btn-link" data-action="set-supplier-order-status" data-supplier-key="' +
-          esc(group.supplier_key || supplier) + '" data-status="reopened" data-revision="' +
+          esc(group.supplier_key || supplier) + '"' + batchAttr + ' data-status="reopened" data-revision="' +
           n(group.order_status_revision) + '">Mở lại</button>'
         : '';
       return '<div class="group-card supplier-order-card is-' + orderStatus + '" data-supplier-key="' +
@@ -1785,32 +1812,33 @@
         "</strong><span>" + esc(group.kitchen) + " · " + rawLineCount + " dòng gốc · " + items.length +
         ' dòng gửi</span></div><div class="supplier-order-actions"><span class="tag ' + statusClass + '">' + statusText +
         '</span><button class="btn btn-small btn-primary" data-action="copy-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' +
-        groupIndex + '">Sao chép ảnh</button><button class="btn btn-small btn-outline" data-action="download-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' + groupIndex + '">Tải ảnh</button>' + reopenControl + '</div></div><div class="group-total"><span>Tổng đặt nhà cung cấp</span><strong>' +
+        groupIndex + '"' + batchAttr + '>Sao chép ảnh</button><button class="btn btn-small btn-outline" data-action="download-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' + groupIndex + '"' + batchAttr + '>Tải ảnh</button>' + reopenControl + '</div></div><div class="group-total"><span>Tổng đặt nhà cung cấp</span><strong>' +
         esc(stockQuantitySummary(items, 'order_qty')) + (group.total_amount != null ? " · " + stockMoney(group.total_amount) : "") + '</strong></div>' +
         '<details class="supplier-lines"><summary>Xem ' + items.length + ' dòng đặt hàng</summary><div class="table-wrap round2-table"><table><thead><tr><th>Bếp</th><th>Hàng</th><th>SL đặt</th><th>ĐVT</th><th>Giá mua</th><th>Thành tiền</th><th>Ghi chú</th></tr></thead><tbody>' +
         items.map(function (item) { return '<tr><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td>' + stockQty(item.order_qty) + '</td><td>' + esc(item.unit) + '</td><td>' + (item.mixed_buy_prices ? 'Nhiều giá' : stockMoney(item.buy_price)) + '</td><td>' + stockMoney(item.amount) + '</td><td>' + esc(item.note) + '</td></tr>'; }).join('') +
         '</tbody></table></div></details></div>';
     }).join("");
-    content.innerHTML = sourceBanner + '<div class="supplier-order-overview fade-in"><div><strong>' + checklistOpen +
+    var markup = sourceBanner + '<div class="supplier-order-overview fade-in"><div><strong>' + checklistOpen +
       ' nhà cung cấp chưa đặt</strong><span>' + n(checklistCounts.ordered) + ' đã đặt · tổng ' +
       (needs.checklist || []).length + ' nhà cung cấp</span></div><small>Sao chép thành công toàn bộ ảnh của NCC mới ghi nhận đã đặt.</small></div>' +
       '<div class="supplier-order-list fade-in">' +
       (cards || '<div class="card"><div class="empty">' + (needs.send_available ? 'Không có dòng cần đặt NCC.' : esc(needs.source_message)) + '</div></div>') + "</div>";
-    content.innerHTML += '<details class="operation-details fade-in" ' + (state.purchaseOrderPreview && !state.purchaseOrderPreview.plan_only ? 'open' : '') + '><summary>Chỉnh số lượng và giá mua bằng Excel</summary><div class="operation-details-body">' +
+    markup += '<details class="operation-details fade-in" ' + (preview && !preview.plan_only ? 'open' : '') + '><summary>Chỉnh số lượng và giá mua bằng Excel</summary><div class="operation-details-body">' +
       '<div class="compact-controls"><button class="btn btn-outline" data-action="download-document" data-url="' +
-      exportUrl("suppliers") + '">Tải file để chỉnh</button><button class="btn btn-primary" data-action="choose-purchase-order-file">Chọn file đã chỉnh</button></div>' +
-      (state.purchaseOrderPreview && !state.purchaseOrderPreview.plan_only ? purchaseOrderPreviewHtml() : '') +
+      '/api/export/suppliers/' + needs.batch_id + '">Tải file để chỉnh</button><button class="btn btn-primary" data-action="choose-purchase-order-file"' + batchAttr + '>Chọn file đã chỉnh</button></div>' +
+      (preview && !preview.plan_only ? purchaseOrderPreviewHtml() : '') +
       '<div class="code-note" style="margin-top:14px">File Excel chỉ cập nhật phần mua và công nợ phải trả; không làm thay đổi đơn khách.</div>' +
       '</div></details>';
     if ((needs.money_adjustments || []).length) {
-      content.innerHTML += '<div class="card purchase-money-adjustments"><div class="card-head"><h3>Trừ tiền mua hộ do hàng hỏng</h3></div><div class="card-body"><p>Các khoản này trừ vào công nợ phải trả khi đơn được duyệt. Doanh thu và số lượng hàng giữ nguyên.</p><div class="table-wrap"><table><thead><tr><th>NCC</th><th>Bếp</th><th>Nội dung</th><th>Khoản trừ</th></tr></thead><tbody>' +
+      markup += '<div class="card purchase-money-adjustments"><div class="card-head"><h3>Trừ tiền mua hộ do hàng hỏng</h3></div><div class="card-body"><p>Các khoản này trừ vào công nợ phải trả khi đơn được duyệt. Doanh thu và số lượng hàng giữ nguyên.</p><div class="table-wrap"><table><thead><tr><th>NCC</th><th>Bếp</th><th>Nội dung</th><th>Khoản trừ</th></tr></thead><tbody>' +
         needs.money_adjustments.map(function (item) { return '<tr><td>' + esc(item.supplier) + '</td><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td class="num-cell">' + money(item.amount) + '</td></tr>'; }).join('') +
         '</tbody><tfoot><tr><td colspan="3">Tổng khoản trừ</td><td class="num-cell">' + money(needs.money_adjustments.reduce(function (total, item) { return total + n(item.amount); }, 0)) + '</td></tr></tfoot></table></div></div></div>';
     }
+    return markup + '</section>';
   }
 
-  function supplierPresentation(group) {
-    var related = state.supplierNeeds.groups.filter(function (item) { return item.supplier_key === group.supplier_key; });
+  function supplierPresentation(group, needs) {
+    var related = needs.groups.filter(function (item) { return item.supplier_key === group.supplier_key; });
     return Object.assign({}, group, {
       kitchen: related.length > 1 ? 'Nhiều bếp · giữ từng dòng theo quy tắc NCC' : group.kitchen,
       items: related.reduce(function (rows, item) { return rows.concat(item.items); }, []),
@@ -2379,11 +2407,11 @@
   }
 
   async function fetchMonthlyReport() {
-    var serial = ++state.reportSerial, period = state.reportPeriod;
+    var serial = ++state.reportSerial, start = state.reportFrom, end = state.reportTo;
     state.reportLoading = true; state.reportError = ""; state.reportData = null;
     if (state.view === "reports") renderReports();
     try {
-      var data = await api("/api/reports/monthly?period=" + encodeURIComponent(period));
+      var data = await api("/api/reports/summary?from=" + encodeURIComponent(start) + "&to=" + encodeURIComponent(end));
       if (serial === state.reportSerial) state.reportData = data;
     } catch (error) {
       if (serial === state.reportSerial) state.reportError = error.message;
@@ -2404,10 +2432,10 @@
         return '<td' + (index >= 3 ? ' class="num-cell"' : '') + '>' + (index >= 3 ? stockMoney(value) : esc(value || "")) + '</td>';
       }).join("") + '</tr>';
     }).join("") : "";
-    content.innerHTML = '<div class="toolbar"><label>Tháng cần xem <input id="reportPeriod" type="month" value="' + esc(state.reportPeriod) +
-      '"></label><button class="btn btn-outline" data-action="refresh-monthly-report">Tải lại</button>' +
-      (data ? '<a class="btn btn-primary" href="/api/reports/monthly/export?period=' + encodeURIComponent(state.reportPeriod) + '">Tải báo cáo tổng hợp</a>' : '') +
-      '</div><div class="code-note">Báo cáo tổng hợp theo nhà thầu và từng bếp trong tháng, chỉ cộng đơn đã duyệt. Bếp chưa phát sinh vẫn hiện; không lấy khoản thu/chi hay hóa đơn đỏ.' +
+    content.innerHTML = '<div class="toolbar"><label>Từ ngày <input id="reportFrom" type="date" value="' + esc(state.reportFrom) + '"></label>' +
+      '<label>Đến ngày <input id="reportTo" type="date" value="' + esc(state.reportTo) + '"></label><button class="btn btn-outline" data-action="refresh-monthly-report">Tải lại</button>' +
+      (data ? '<a class="btn btn-primary" href="/api/reports/summary/export?from=' + encodeURIComponent(data.date_from) + '&to=' + encodeURIComponent(data.date_to) + '">Tải báo cáo tổng hợp</a>' : '') +
+      '</div><div class="code-note">Báo cáo tổng hợp theo nhà thầu và từng bếp từ ngày đến ngày, chỉ cộng đơn đã duyệt. Bếp chưa phát sinh vẫn hiện; không lấy khoản thu/chi hay hóa đơn đỏ.' +
       (data && data.draft_count ? ' Còn ' + data.draft_count + ' phiên chưa duyệt, chưa cộng vào báo cáo.' : '') + '</div>' +
       (state.reportError ? '<div class="error-summary">' + esc(state.reportError) + '</div>' : '') +
       (state.reportLoading ? '<div class="loading-inline">Đang nạp báo cáo…</div>' : '') +
@@ -2977,7 +3005,7 @@
     var d = state.data;
     if (state.outgoingInvoices === null) setTimeout(fetchOutgoingInvoices, 0);
     if (!d.batch) {
-      content.innerHTML = '<section class="card"><div class="card-body"><h3>File đưa lên M-Invoice</h3><p>Chọn đơn hàng ở thanh trên để tạo file Excel. Nếu chưa có đơn, vào Nhập &amp; sửa đơn để nạp và duyệt trước.</p><button class="btn btn-outline" data-view="orders">Mở Nhập &amp; sửa đơn</button></div></section><section class="card"><div class="card-body"><h3>Hồ sơ thanh toán từ hóa đơn VAT</h3>' +
+      content.innerHTML = '<section class="card"><div class="card-body"><h3>File đưa lên M-Invoice</h3><p>Chọn đơn hàng ở thanh trên để tạo file Excel. Nếu chưa có đơn, vào Đơn hàng - bảng kê để nạp và duyệt trước.</p><button class="btn btn-outline" data-view="orders">Mở Đơn hàng - bảng kê</button></div></section><section class="card"><div class="card-body"><h3>Hồ sơ thanh toán từ hóa đơn VAT</h3>' +
         paymentRequestFormHtml() + '</div></section>' + invoicePaymentScopeHtml() + '<div id="paymentDocumentPreview"></div>';
       return;
     }
@@ -3660,7 +3688,6 @@
       '<button class="btn btn-outline" data-action="preview-selected-documents" ', selectedCount ? '' : 'disabled', '>Xem phần đã chọn</button>',
       '<button class="btn btn-primary" data-action="print-selected-documents" ', selectedCount ? '' : 'disabled', '>In phần đã chọn</button>',
       '<button class="btn btn-outline" data-action="download-selected-documents" ', selectedCount ? '' : 'disabled', '>Tải file đã chọn</button>',
-      state.printingDocument === "purchases" ? '<button class="btn btn-primary" data-action="download-approved-input-bk" ' + (selectedCount ? '' : 'disabled') + '>Tải bảng kê đầu vào</button>' : '',
       state.printingDocument === "purchases" ? '<button class="btn btn-outline" data-action="open-bk-draft">Lập bảng kê bổ sung từ tồn âm</button><button class="btn btn-outline" data-action="choose-bk-workbook">Nhập bảng kê bổ sung</button>' : '',
       '</div>',
       state.printingDocument === "purchases" ? '<p class="muted">Tải bảng kê đầu vào: gộp các ngày đã chọn vào một file Excel, theo lượng và giá đã ghi nhập kho khi duyệt đơn.</p>' : '',
@@ -3877,6 +3904,7 @@
 
   function render() {
     if (state.busy || !state.data) return;
+    syncNavigationChrome(state.view);
     var views = {
       home: renderHome,
       orders: renderOrders,
@@ -4532,7 +4560,7 @@
   function supplierImageFilename(group) {
     var supplier = String(group.supplier || "NCC").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
       .replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "NCC";
-    return "Don_dat_hang_" + supplier + "_" + state.data.batch.work_date + ".png";
+    return "Don_dat_hang_" + supplier + "_" + group.work_date + ".png";
   }
 
   function downloadBlob(blob, filename) {
@@ -4571,33 +4599,32 @@
 
   function supplierOrderImageBlob(group) {
     return window.TdpSupplierImage.blob(group, {
-      date: state.data.batch.work_date, dateText: dateVN, quantity: stockQty
+      date: group.work_date, dateText: dateVN, quantity: stockQty
     });
   }
 
-  async function handleSupplierImage(groupIndex, downloadOnly, supplierKey) {
-    var group = state.supplierNeeds && (supplierKey ? state.supplierNeeds.groups.find(function (item) {
-      return item.supplier_key === supplierKey;
-    }) : state.supplierNeeds.groups[Number(groupIndex)]);
-    if (!group) { showToast("Không tìm thấy nhóm đơn nhà cung cấp", true); return; }
-    var requestedBatch = state.batchId;
-    var requestedSupplier = group.supplier_key;
+  async function handleSupplierImage(groupIndex, downloadOnly, supplierKey, batchId) {
+    var requestedBatch = Number(batchId);
+    var rangeSerial = state.supplierSerial;
+    var day = state.supplierNeeds && state.supplierNeeds.days.find(function (item) { return item.batch_id === requestedBatch; });
+    var group = day && day.groups[Number(groupIndex)];
+    if (!group || group.supplier_key !== supplierKey) { showToast("Không tìm thấy đơn NCC của ngày đã chọn", true); return; }
+    var requestedSupplier = supplierKey;
     try {
       var freshPlan = await api('/api/supplier-needs/' + requestedBatch);
-      if (state.batchId !== requestedBatch) throw new Error('Phiên đơn đã đổi; hãy chọn lại NCC.');
+      if (rangeSerial !== state.supplierSerial) throw new Error('Khoảng ngày đã đổi; hãy chọn lại NCC.');
       if (!freshPlan.send_available) throw new Error(freshPlan.source_message);
-      state.supplierNeeds = freshPlan;
       group = freshPlan.groups.find(function (item) { return item.supplier_key === requestedSupplier; });
       if (!group) throw new Error('NCC không còn dòng đặt hàng; hãy tải lại màn hình.');
-      group = supplierPresentation(group);
+      group = Object.assign(supplierPresentation(group, freshPlan), {batch_id: requestedBatch, work_date: freshPlan.work_date});
       var planHash = freshPlan.plan_hash;
       var blob = await supplierOrderImageBlob(group);
       var verifiedPlan = await api('/api/supplier-needs/' + requestedBatch);
-      if (verifiedPlan.plan_hash !== planHash || state.batchId !== requestedBatch) throw new Error('Đơn đặt NCC vừa thay đổi; hãy tạo lại ảnh.');
+      if (verifiedPlan.plan_hash !== planHash || rangeSerial !== state.supplierSerial) throw new Error('Đơn đặt NCC vừa thay đổi; hãy tạo lại ảnh.');
       var filename = supplierImageFilename(group);
       if (downloadOnly) {
         downloadBlob(blob, filename);
-        showToast("Đã tải ảnh đơn đặt hàng");
+        showToast("Đã tải ảnh đơn đặt hàng ngày " + dateVN(group.work_date));
         return;
       }
       var imageMessage = "";
@@ -4616,6 +4643,7 @@
         }
       }
       if (!copied) { showToast(imageMessage + ' · chưa đánh dấu Đã đặt vì chưa sao chép thành công', true); return; }
+      if (rangeSerial !== state.supplierSerial) throw new Error('Khoảng ngày đã đổi; ảnh đã sao chép nhưng chưa đánh dấu Đã đặt.');
       if (group.order_status !== "ordered") {
         await api("/api/supplier-order-status/" + requestedBatch + "/" +
           encodeURIComponent(group.supplier_key || group.supplier), {
@@ -4623,7 +4651,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ status: "ordered", revision: n(group.order_status_revision), plan_hash: planHash })
           });
-        if (requestedBatch === state.batchId) {
+        if (rangeSerial === state.supplierSerial) {
           state.supplierNeeds = null;
           await fetchSupplierNeeds();
         }
@@ -5418,22 +5446,23 @@
   }
 
   async function previewPurchaseOrderFile(file) {
-    if (!file || !state.batchId) return;
-    var requestedBatch = state.batchId;
+    if (!file || !state.purchaseOrderBatchId) return;
+    var requestedBatch = state.purchaseOrderBatchId, rangeSerial = state.supplierSerial;
     try {
       var form = new FormData();
       form.append("file", file);
-      form.append("batch_id", state.batchId);
+      form.append("batch_id", requestedBatch);
       if (state.purchasePlanOnly) form.append('plan_only', '1');
       var preview = await api("/api/purchase-orders/import/preview", {
         method: "POST", body: form
       });
-      if (state.batchId !== requestedBatch) return;
+      if (state.purchaseOrderBatchId !== requestedBatch || rangeSerial !== state.supplierSerial) return;
+      if (preview.batch_id !== requestedBatch) throw new Error('Ngày nhận file đã đổi; hãy chọn lại file đặt NCC.');
       state.purchaseOrderPreview = preview;
       renderPurchases();
       showToast("Đã kiểm tra file đặt nhà cung cấp · xem lại số lượng và giá rồi xác nhận");
     } catch (error) {
-      if (state.batchId !== requestedBatch) return;
+      if (state.purchaseOrderBatchId !== requestedBatch || rangeSerial !== state.supplierSerial) return;
       state.purchaseOrderPreview = null;
       renderPurchases();
       showToast(error.message, true);
@@ -6135,6 +6164,12 @@
       renderDocuments();
       return;
     }
+    if (event.target.id === 'supplierFrom' || event.target.id === 'supplierTo') {
+      state[event.target.id] = event.target.value;
+      state.purchaseOrderPreview = null; state.purchaseOrderBatchId = null;
+      fetchSupplierNeeds();
+      return;
+    }
     if (event.target.id === 'orderIssueFilter') { state.orderIssueFilter = event.target.value; applyOrderFilter(); }
     if (event.target.id === "homeFrom" || event.target.id === "homeTo") {
       if (event.target.id === "homeFrom") state.homeFrom = event.target.value;
@@ -6229,8 +6264,8 @@
       renderQuotes();
       return;
     }
-    if (event.target.id === "reportPeriod") {
-      state.reportPeriod = event.target.value || todayIso.slice(0, 7);
+    if (event.target.id === "reportFrom" || event.target.id === "reportTo") {
+      state[event.target.id] = event.target.value;
       fetchMonthlyReport();
       return;
     }
@@ -6872,6 +6907,7 @@
       payablesWorkbookInput.click();
     }
     if (action === "choose-purchase-order-file" || action === "choose-supplier-plan-file") {
+      state.purchaseOrderBatchId = Number(button.dataset.batchId);
       state.purchasePlanOnly = action === 'choose-supplier-plan-file';
       state.purchaseOrderPreview = null;
       purchaseOrderInput.click();
@@ -6956,13 +6992,32 @@
     if (action === "add-order") openOrderModal(null);
     if (action === "edit-order") openOrderModal(button.dataset.id);
     if (action === "delete-order") deleteOrder(button.dataset.id);
+    if (action === "refresh-supplier-range") await fetchSupplierNeeds();
+    if (action === "jump-supplier-day") {
+      var target = content.querySelector('.supplier-day[data-batch-id="' + Number(button.dataset.batchId) + '"]');
+      if (target) { target.scrollIntoView({block:'start'}); window.scrollBy(0, -document.querySelector('.topbar').getBoundingClientRect().bottom - 8); }
+    }
+    if (action === "download-order-input-bk") {
+      var ids = button.dataset.scope === 'range'
+        ? batchesInRange(state.homeFrom, state.homeTo).filter(function (b) { return b.status === 'approved'; }).map(function (b) { return b.id; })
+        : [state.batchId];
+      if (!ids.length || (button.dataset.scope === 'range' && (!state.homeFrom || !state.homeTo || state.homeFrom > state.homeTo))) { showToast('Chọn khoảng ngày có đơn đã duyệt để tải bảng kê.', true); return; }
+      var label = button.textContent;
+      try {
+        button.disabled = true; button.textContent = 'Đang tạo bảng kê…';
+        await downloadFile('/api/bk-import/export-approved', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({batch_ids:ids})});
+        showToast('Đã tải bảng kê đầu vào đã ghi kho. Không cần nhập lại file này.');
+      } catch (error) { showToast(error.message, true); }
+      finally { button.disabled = false; button.textContent = label; }
+      return;
+    }
     if (action === "approve-batch") approveBatch();
     if (action === "copy-supplier-image" || action === "download-supplier-image") {
       var imageLabel = button.textContent;
       try {
         button.disabled = true;
         button.textContent = "Đang tạo ảnh…";
-        await handleSupplierImage(button.dataset.groupIndex, action === "download-supplier-image", button.dataset.supplierKey);
+        await handleSupplierImage(button.dataset.groupIndex, action === "download-supplier-image", button.dataset.supplierKey, button.dataset.batchId);
       } finally {
         button.disabled = false;
         button.textContent = imageLabel;
@@ -6975,7 +7030,7 @@
       try {
         button.disabled = true;
         button.textContent = "Đang cập nhật…";
-        await api("/api/supplier-order-status/" + state.batchId + "/" + encodeURIComponent(supplierKey), {
+        await api("/api/supplier-order-status/" + Number(button.dataset.batchId) + "/" + encodeURIComponent(supplierKey), {
           method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status: targetStatus, revision: n(button.dataset.revision) })
         });

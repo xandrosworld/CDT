@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import calendar
 import unicodedata
 from collections import defaultdict
 from copy import copy
@@ -89,30 +90,37 @@ def collect_monthly_report_rows(
     selected_orders: Iterable[Mapping[str, Any]],
     *,
     totals_fn: Callable[[Mapping[str, Any]], tuple[Any, Any, Any, Any]],
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Read approved orders in the selected month plus a selected draft preview.
+    """Read approved orders in an inclusive range, or the legacy monthly preview.
 
     The query deliberately excludes payments, balances and debt ledgers.  This
-    report is a monthly operating sales/cost view, not a receivable statement.
+    report is an operating sales/cost view, not a receivable statement. Explicit
+    ranges never include the draft preview accepted by older monthly callers.
     """
 
     batch_data = _row_dict(batch)
     work_date = _iso_date(batch_data.get("work_date"))
     period = work_date[:7]
-    date_from = period + "-01"
-    if period.endswith("-12"):
-        date_to = f"{int(period[:4]) + 1:04d}-01-01"
+    ranged = date_from is not None or date_to is not None
+    if ranged:
+        date_from = _iso_date(date_from, label="Từ ngày")
+        date_to = _iso_date(date_to, label="Đến ngày")
+        if date_from > date_to:
+            raise ReportExportError("Từ ngày không được lớn hơn đến ngày")
     else:
-        date_to = f"{period[:5]}{int(period[5:7]) + 1:02d}-01"
+        date_from = period + "-01"
+        date_to = period + f"-{calendar.monthrange(int(period[:4]), int(period[5:7]))[1]:02d}"
 
     sources: dict[int, dict[str, Any]] = {}
     batch_id = int(batch_data.get("id") or 0)
-    if batch_id:
+    if batch_id or ranged:
         for source in conn.execute(
             """SELECT o.*
                  FROM orders o
                  JOIN batches b ON b.id=o.batch_id
-                WHERE b.status='approved' AND b.work_date>=? AND b.work_date<?
+                WHERE b.status='approved' AND b.work_date>=? AND b.work_date<=?
                 ORDER BY b.work_date,o.id""",
             (date_from, date_to),
         ):
@@ -120,9 +128,9 @@ def collect_monthly_report_rows(
             sources[int(item.get("id") or 0)] = item
 
     selected = [_row_dict(row) for row in selected_orders]
-    if not batch_id:
+    if not batch_id and not ranged:
         sources = {index: item for index, item in enumerate(selected, start=1)}
-    elif _plain(batch_data.get("status")).casefold() != "approved":
+    elif not ranged and _plain(batch_data.get("status")).casefold() != "approved":
         for index, item in enumerate(selected, start=1):
             key = int(item.get("id") or 0) or -index
             sources[key] = item
@@ -270,9 +278,17 @@ def build_monthly_report_workbook(
     template_path: str | Path,
     configured_groups: Mapping[str, str] | None = None,
     expected_sha256: str = EM_THANH_SHA256,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> Any:
     if not re.fullmatch(r"\d{4}-\d{2}", _plain(period)):
         raise ReportExportError("Kỳ báo cáo phải có dạng YYYY-MM", code="invalid_report_period")
+    ranged = date_from is not None or date_to is not None
+    if ranged:
+        date_from = _iso_date(date_from, label="Từ ngày")
+        date_to = _iso_date(date_to, label="Đến ngày")
+        if date_from > date_to:
+            raise ReportExportError("Từ ngày không được lớn hơn đến ngày")
     aggregated = aggregate_monthly_report_rows(rows)
     if not aggregated:
         raise ReportExportError("Không có phát sinh để lập báo cáo tổng hợp", code="empty_monthly_report")
@@ -350,7 +366,7 @@ def build_monthly_report_workbook(
                 output_row += 1
 
         _apply_row_snapshot(sheet, output_row, subtotal_style)
-        write_literal(sheet, f"A{output_row}", "TỔNG THÁNG")
+        write_literal(sheet, f"A{output_row}", "TỔNG KỲ" if ranged else "TỔNG THÁNG")
         for column, field in zip((4, 5, 6, 7), month_totals):
             write_literal(sheet, f"{chr(64 + column)}{output_row}", _excel_number(month_totals[field]))
 
@@ -359,6 +375,13 @@ def build_monthly_report_workbook(
         sheet.freeze_panes = "A3"
         sheet.print_title_rows = "$2:$2"
         sheet.print_area = f"$A$2:$G${output_row}"
+        if ranged:
+            label = "BÁO CÁO TỔNG HỢP · " + date.fromisoformat(date_from).strftime("%d/%m/%Y") + " – " + date.fromisoformat(date_to).strftime("%d/%m/%Y")
+            write_literal(sheet, "A1", label)
+            if not any(str(area) == "A1:G1" for area in sheet.merged_cells.ranges):
+                sheet.merge_cells("A1:G1")
+            sheet.row_dimensions[1].height = 28
+            sheet.print_area = f"$A$1:$G${output_row}"
         sheet.sheet_properties.pageSetUpPr.fitToPage = True
         sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
         sheet.page_setup.orientation = sheet.ORIENTATION_LANDSCAPE

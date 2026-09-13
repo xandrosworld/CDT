@@ -62,31 +62,45 @@ def register_round3_routes(app, ctx):
 
     @app.get("/api/reports/monthly")
     @app.get("/api/reports/monthly/export")
+    @app.get("/api/reports/summary")
+    @app.get("/api/reports/summary/export")
     def monthly_report():
         period = request.args.get("period", "")
         try:
-            if not re.fullmatch(r"\d{4}-\d{2}", period):
-                raise ValueError("Chọn tháng báo cáo hợp lệ")
-            date.fromisoformat(period + "-01")
+            ranged = "/summary" in request.path
+            if ranged:
+                start = ctx["valid_iso_date"](request.args.get("from"), "Từ ngày")
+                end = ctx["valid_iso_date"](request.args.get("to"), "Đến ngày")
+                if start > end:
+                    raise ValueError("Từ ngày không được lớn hơn đến ngày")
+                period = start[:7]
+            else:
+                if not re.fullmatch(r"\d{4}-\d{2}", period):
+                    raise ValueError("Chọn tháng báo cáo hợp lệ")
+                date.fromisoformat(period + "-01")
             with db() as conn:
                 conn.execute("BEGIN")
                 # This monthly screen is approved-only. No arbitrary draft batch
                 # is included merely because it happened to be selected elsewhere.
                 batch = {"id": -1, "work_date": period + "-01", "status": "approved"}
-                book = ctx["export_report"](conn, batch, [])
-                draft_count = conn.execute(
-                    "SELECT COUNT(*) FROM batches WHERE substr(work_date,1,7)=? AND status!='approved'", (period,)
-                ).fetchone()[0]
+                book = ctx["export_report"](conn, batch, [], **({"date_from": start, "date_to": end} if ranged else {}))
+                if ranged:
+                    draft_count = conn.execute("SELECT COUNT(*) FROM batches WHERE work_date>=? AND work_date<=? AND status!='approved'", (start, end)).fetchone()[0]
+                else:
+                    draft_count = conn.execute(
+                        "SELECT COUNT(*) FROM batches WHERE substr(work_date,1,7)=? AND status!='approved'", (period,)
+                    ).fetchone()[0]
             if request.path.endswith("/export"):
                 try:
-                    return ctx["send_xlsx"](book, f"Bao_cao_tong_hop_{period}.xlsx")
+                    return ctx["send_xlsx"](book, f"Bao_cao_tong_hop_{start + '_' + end if ranged else period}.xlsx")
                 finally:
                     book.close()
             try:
                 ws = book.active
                 headers = [ws.cell(2, col).value or ("Nhóm" if col == 1 else "") for col in range(1, 8)]
                 rows = [[ws.cell(row, col).value for col in range(1, 8)] for row in range(3, ws.max_row + 1)]
-                return jsonify(ok=True, period=period, headers=headers, rows=rows, draft_count=draft_count)
+                return jsonify(ok=True, period=period, headers=headers, rows=rows, draft_count=draft_count,
+                               date_from=start if ranged else None, date_to=end if ranged else None)
             finally:
                 book.close()
         except (ValueError, ReportExportError) as error:
