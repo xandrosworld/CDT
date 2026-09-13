@@ -78,11 +78,11 @@ def replenishable_scopes(conn, orders, batch_ids):
 def _groups(rows, floor_kg=True):
     grouped=defaultdict(list)
     for row in rows:
-        key=(row['product_code'],row['unit'].strip().casefold(),row['invoice_nature'],row['_source_price'])
+        key=(row['product_code'],row['unit'].strip().casefold(),row['invoice_nature'],row['_source_price'],row.get('_weight_order',0))
         grouped[key].append(row)
     result=[]
     units=defaultdict(set)
-    for (code,unit,nature,price),items in sorted(grouped.items()):
+    for (code,unit,nature,price,weight_order),items in sorted(grouped.items()):
         units[code].add(unit)
         qty=sum((decimal(r['qty']) for r in items),Decimal(0))
         if floor_kg:qty=export_quantity(qty,unit)
@@ -94,6 +94,12 @@ def _groups(rows, floor_kg=True):
 
 
 def _write_draft(conn,party,rows,days,tax_percent,timestamp,*,floor_kg=True,kind='consolidated'):
+    try:
+        from .outgoing_weights import confirmed_weights
+    except ImportError:
+        from outgoing_weights import confirmed_weights
+    weights=confirmed_weights(conn)
+    rows=[{**r,'_weight_order':r['order_id'] if r['order_id'] in weights else 0} for r in rows]
     groups=_groups(rows,floor_kg)
     if not groups:return None
     anchor=max(rows,key=lambda r:(r['work_date'],r['batch_id']))
@@ -125,6 +131,11 @@ def _write_draft(conn,party,rows,days,tax_percent,timestamp,*,floor_kg=True,kind
 def consolidate(conn,batch_ids,contractor,tax_percent,timestamp):
     """Select editable quantities by day; preserve sale prices and other days' holds."""
     scope=set(batch_ids)
+    try:
+        from .outgoing_weights import confirmed_weights
+    except ImportError:
+        from outgoing_weights import confirmed_weights
+    weights=confirmed_weights(conn)
     drafts=[dict(r) for r in conn.execute('''SELECT DISTINCT d.* FROM outgoing_invoice_drafts d
         JOIN outgoing_order_allocations l ON l.draft_id=d.id JOIN orders o ON o.id=l.order_id
         WHERE d.status='draft' AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown')
@@ -137,7 +148,9 @@ def consolidate(conn,batch_ids,contractor,tax_percent,timestamp):
             FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id
             LEFT JOIN outgoing_line_allocations a ON a.line_id=l.id AND a.order_id=l.order_id
             WHERE l.draft_id=? ORDER BY o.work_date,l.order_id,l.id''',(d['id'],))]
-        for r in rows:r['_source_price']=decimal(r['source_unit_price'] if r['source_unit_price'] is not None else r['unit_price'])
+        for r in rows:
+            r['_source_price']=decimal(r['source_unit_price'] if r['source_unit_price'] is not None else r['unit_price'])
+            r['_weight_order']=r['order_id'] if r['order_id'] in weights else 0
         taxes={tax_percent(r['tax']) for r in rows}
         if len(taxes)!=1:raise InvoiceTaxExportError('Dự thảo còn lẫn thuế. Cần tính lại trước khi gộp file.')
         validate_draft_export_stock(conn,d['id'])

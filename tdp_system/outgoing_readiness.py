@@ -362,7 +362,11 @@ def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     """Read-only recheck before handing off a file or saving a remote draft."""
     required = defaultdict(float)
     lines = conn.execute("SELECT id,product_code,product_name,unit,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
-    line_units=unit_issues(conn,lines)
+    # Raw line IDs are not order IDs. Check stock units here and confirmed
+    # invoice conversions through the actual order allocations below.
+    catalog_units={r['code']:_normalized_unit(r['unit']) for r in conn.execute('SELECT code,unit FROM products')}
+    line_units={r['id']:{'message':f"{r['product_code']}: ĐVT dự thảo khác đơn vị kho; cần tính lại."}
+                for r in lines if _normalized_unit(r['unit'])!=catalog_units.get(r['product_code'])}
     if line_units:raise OutgoingReadinessError(next(iter(line_units.values()))['message'],code='order_unit_mismatch')
     policy_rows=draft_policy_rows(conn,draft_id)
     # A legacy download or remote-draft action must not bypass reconciliation.
@@ -389,6 +393,14 @@ def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     units=unit_issues(conn,policy_rows)
     if units:
         raise OutgoingReadinessError(next(iter(units.values()))['message'],code='order_unit_mismatch')
+    try:
+        from .outgoing_weights import invoice_rows
+    except ImportError:
+        from outgoing_weights import invoice_rows
+    try:
+        invoice_rows(conn, conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(draft_id,)).fetchall())
+    except ValueError as exc:
+        raise OutgoingReadinessError(str(exc),code='invalid_actual_weight') from None
     exempt = exempt_order_codes(conn, policy_rows)
     for line in lines:
         tax_error = invoice_tax_error(line['tax'])

@@ -482,6 +482,13 @@ def validated_input_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
 
 
 def validated_output_stock_snapshot(conn, item_id: int) -> dict[str, Any]:
+    try:
+        from .outgoing_weights import signed_stock_snapshot
+    except ImportError:
+        from outgoing_weights import signed_stock_snapshot
+    measured = signed_stock_snapshot(conn, item_id)
+    if measured:
+        return measured
     context = _line_context(conn, "output", int(item_id))
     if not context or not context["inventory_eligible"]:
         raise InvoiceMappingError("Dòng hóa đơn không đủ điều kiện ghi kho", code="not_inventory")

@@ -7,6 +7,11 @@ def unit_key(value):
 
 
 def unit_issues(conn, rows):
+    try:
+        from .outgoing_weights import confirmed_weights
+    except ImportError:
+        from outgoing_weights import confirmed_weights
+    weights = confirmed_weights(conn)
     catalog={r['code']:r['unit'] for r in conn.execute('SELECT code,unit FROM products')}
     invoice_units={r['product_code']:r['invoice_unit'] for r in conn.execute('SELECT product_code,invoice_unit FROM outgoing_product_units')}
     issues={}
@@ -20,6 +25,8 @@ def unit_issues(conn, rows):
                          'message':f'{code}: đơn ghi {order_unit or "(trống)"}, kho dùng {expected or "(trống)"}; giữ dòng này chờ xác nhận đơn vị/quy đổi.'}
         elif unit_key(invoice_unit)!=unit_key(expected):
             oid=row['order_id'] if 'order_id' in row.keys() else row['id']
+            if oid in weights and weights[oid]['product_code'] == code:
+                continue
             issues[oid]={'order_id':oid,'product_code':code,'unit':order_unit,'catalog_unit':expected,'invoice_unit':invoice_unit,
                          'message':f'{code}: ĐVT hóa đơn {invoice_unit}, đơn/kho {expected}; chưa có quy đổi được xác nhận. Giữ phần này chờ, không tự đổi số lượng hoặc đơn giá.'}
     return issues

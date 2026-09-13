@@ -461,6 +461,13 @@ def post_output_invoice(
         )
         created = 0
         for snapshot in snapshots:
+            if snapshot.get('actual_weight'):
+                # Preserve source Kg/price/amount. Only the derived stock fields
+                # use the frozen, explicitly confirmed package quantity.
+                conn.execute('''UPDATE outgoing_source_invoice_items SET conversion_factor=?,
+                    stock_qty=?,stock_unit_price=? WHERE id=? AND invoice_id=?''',
+                    (snapshot['conversion_factor'],snapshot['stock_qty'],snapshot['stock_unit_price'],
+                     snapshot['item_id'],safe_id))
             created += int(_append_event(
                 conn,
                 direction="output",

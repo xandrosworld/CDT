@@ -804,7 +804,12 @@ def init_contract_schema(conn, opening_template_path=None):
     except ImportError:
         from catalog_products import SCHEMA as CATALOG_SCHEMA
     conn.executescript(CATALOG_SCHEMA)
+    try:
+        from .outgoing_weights import SCHEMA as WEIGHT_SCHEMA
+    except ImportError:
+        from outgoing_weights import SCHEMA as WEIGHT_SCHEMA
     migrate_outgoing_invoice_rounds(conn)
+    conn.executescript(WEIGHT_SCHEMA)
     conn.execute(
         "INSERT OR IGNORE INTO settings(key,value) VALUES('installation_uuid',?)",
         (uuid.uuid4().hex.upper(),),
@@ -8423,6 +8428,15 @@ def register_contract_routes(app, ctx):
             if duplicate:
                 return jsonify({"ok": False, "error": "Ký hiệu và số hóa đơn này đã được ghi nhận"}), 409
             if draft["status"] != "issued":
+                try:
+                    from .outgoing_weights import invoice_rows
+                except ImportError:
+                    from outgoing_weights import invoice_rows
+                try:
+                    invoice_rows(conn, conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',
+                        (draft_id,)).fetchall(), freeze=True, timestamp=now_iso())
+                except ValueError as exc:
+                    return jsonify(ok=False, error=str(exc)), 409
                 conn.execute(
                     """UPDATE outgoing_invoice_drafts
                        SET status='issued',issued_at=?,issued_invoice_number=?,
@@ -8711,6 +8725,14 @@ def register_contract_routes(app, ctx):
                 lines = [dict(row) for row in conn.execute(
                     "SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id", (draft_id,),
                 )]
+                try:
+                    from .outgoing_weights import invoice_rows
+                except ImportError:
+                    from outgoing_weights import invoice_rows
+                try:
+                    lines = invoice_rows(conn, lines, freeze=not dry_run, timestamp=timestamp)
+                except ValueError as exc:
+                    return jsonify(ok=False, error=str(exc)), 409
                 if not lines:
                     return jsonify({"ok": False, "error": "Dự thảo chưa có dòng hàng"}), 400
                 payload = {
@@ -8781,6 +8803,14 @@ def register_contract_routes(app, ctx):
                     validation_lines = [dict(row) for row in validation_conn.execute(
                         "SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id", (draft_id,),
                     )]
+                    try:
+                        from .outgoing_weights import invoice_rows
+                    except ImportError:
+                        from outgoing_weights import invoice_rows
+                    try:
+                        validation_lines = invoice_rows(validation_conn, validation_lines)
+                    except ValueError as exc:
+                        return jsonify(ok=False, error=str(exc), reconcile_required=True), 409
                 mismatches = minvoice_reconciliation_mismatches(
                     remote.get("data"), validation_draft, series, validation_lines,
                 )

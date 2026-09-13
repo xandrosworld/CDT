@@ -4061,6 +4061,10 @@ def invoice_workbook(rows, invoice_names=None):
 
 def export_invoices_zip(conn, batch, orders, *, contractor_filter=""):
     try:
+        from .outgoing_weights import invoice_rows
+    except ImportError:
+        from outgoing_weights import invoice_rows
+    try:
         from outgoing_readiness import OutgoingReadinessError, validate_draft_export_stock
     except ImportError:
         from .outgoing_readiness import OutgoingReadinessError, validate_draft_export_stock
@@ -4087,6 +4091,7 @@ def export_invoices_zip(conn, batch, orders, *, contractor_filter=""):
         raise InvoiceTaxExportError(str(error), code=error.code, status=error.status) from None
     for line in lines:
         line["vat_percent"] = invoice_vat_percent(line["tax"])
+    lines = invoice_rows(conn, lines, freeze=True, timestamp=now_iso())
     tax_groups = defaultdict(set)
     for line in lines:
         tax_groups[line['draft_id']].add(line['vat_percent'])
@@ -4323,6 +4328,28 @@ def api_quotes():
         return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
 
 
+@app.route('/api/outgoing-invoices/actual-weights', methods=['GET'])
+@app.route('/api/outgoing-invoices/actual-weights/<int:order_id>', methods=['PUT'])
+def api_outgoing_actual_weights(order_id=None):
+    try:
+        from .outgoing_weights import workbench, save_weight
+    except ImportError:
+        from outgoing_weights import workbench, save_weight
+    try:
+        with db() as conn:
+            if request.method == 'PUT':
+                conn.execute('BEGIN IMMEDIATE')
+                result = save_weight(conn, order_id, request.get_json(silent=True), now_iso())
+                return jsonify(ok=True, **result)
+            conn.execute('PRAGMA query_only=ON')
+            conn.execute('BEGIN')
+            cutoff = valid_iso_date(request.args.get('to') or date.today().isoformat(), 'Đến ngày')
+            party = clean_text(request.args.get('contractor')).upper()
+            return jsonify(ok=True, **workbench(conn, cutoff, party))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 409 if request.method == 'PUT' else 400
+
+
 @app.get('/api/outgoing-invoices/unissued')
 @app.get('/api/outgoing-invoices/unissued.xlsx')
 @app.get('/api/outgoing-invoices/unissued-template.zip')
@@ -4529,6 +4556,11 @@ def api_export_order_invoices():
                     # Validate the actual workbook before committing this contractor's holds.
                     for did in party_drafts:
                         lines=[{**dict(r),'contractor':party} for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(did,))]
+                        try:
+                            from .outgoing_weights import invoice_rows
+                        except ImportError:
+                            from outgoing_weights import invoice_rows
+                        lines=invoice_rows(conn,lines)
                         build_invoice_workbook(lines,vat_percent=invoice_tax_percent(lines[0]['tax']),template_dir=TAX_TEMPLATE_DIR)
                     drafts_by_party[party]=party_drafts
                 except (ValueError,InvoiceTaxExportError,OutgoingReadinessError) as exc:
@@ -4578,6 +4610,11 @@ def api_export_order_invoices():
                 for draft_id in draft_ids:
                     draft=conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?',(draft_id,)).fetchone()
                     lines=[{**dict(r),'contractor':draft['contractor']} for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(draft_id,))]
+                    try:
+                        from .outgoing_weights import invoice_rows
+                    except ImportError:
+                        from outgoing_weights import invoice_rows
+                    lines=invoice_rows(conn,lines,freeze=True,timestamp=now_iso())
                     vat=invoice_tax_percent(lines[0]['tax'])
                     payload,_=build_invoice_workbook(lines,vat_percent=vat,template_dir=TAX_TEMPLATE_DIR)
                     label='KKKNT' if vat==-2 else 'KCT' if vat==-1 else f'VAT{vat:g}'
@@ -4588,7 +4625,7 @@ def api_export_order_invoices():
                 guide=['FILE TỪ ĐƠN HÀNG ĐỂ NHẬP M-INVOICE',f'Ngày {start} đến {end}. Nhà thầu: {contractor or "Tất cả"}.',
                     f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế. '+('Cộng dồn toàn bộ đơn đã duyệt đến hết ngày chọn, trừ lượng đã ký đến hiện tại, kể cả hóa đơn ký sau ngày đơn.' if cumulative else 'Gộp tất cả ngày đã chọn.'),
                     'Cùng mã và cùng giá bán trên đơn đã duyệt được cộng lượng. Khác giá bán giữ dòng riêng để đối chiếu, không tự tạo giá bình quân mới. Hàng khuyến mại giữ riêng tính chất.',
-                    'Kg làm tròn xuống theo 0,1 Kg; cái, quả, con, chiếc lấy số nguyên sau khi cộng mã. Phần lẻ giữ lại.',
+                    'Kg gốc làm tròn xuống theo 0,1 Kg; kg quy đổi dùng số thực tế đã xác nhận và giữ riêng từng dòng đơn, đơn giá tính lại để giữ thành tiền. Cái, quả, con, chiếc lấy số nguyên sau khi cộng mã. Phần lẻ giữ lại.',
                     'Chỉ gồm lượng đủ tồn; dòng đánh dấu BK ở cột Bảng kê được hưởng ngoại lệ âm kho. KKKNT không tự được miễn kiểm tra tồn. Dòng khác đơn vị kho giữ chờ, không tự quy đổi. Chưa ký/phát hành hóa đơn.',
                     'Dùng file gộp này thay các file tách ngày chưa phát hành, không nhập thêm cả hai bộ file.',
                     'Tải file hoặc tạo nháp chưa tính là đã xuất hóa đơn. Bảng chưa xuất cộng dồn lấy lượng đã duyệt trừ lượng đã phát hành được đồng bộ/xác nhận.',
