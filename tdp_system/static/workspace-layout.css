@@ -18,6 +18,16 @@
   #content .receivable-kitchen-summary { margin-top:12px; }
   #content .debt-download-toolbar { margin:8px 0; }
   #content .receivable-kitchen-table table { min-width:650px; }
+  /* Long totals by unit must not squeeze supplier and product names. */
+  #content .payable-ledger-table table { table-layout:fixed; }
+  #content .payable-ledger-table th:nth-child(1) { width:48px; }
+  #content .payable-ledger-table th:nth-child(2) { width:100px; }
+  #content .payable-ledger-table th:nth-child(3),
+  #content .payable-ledger-table th:nth-child(4) { width:110px; }
+  #content .payable-ledger-table th:nth-child(5) { width:230px; }
+  #content .payable-ledger-table th:nth-child(6) { width:150px; }
+  #content .payable-ledger-table th:nth-child(n+7) { width:120px; }
+  #content .payable-ledger-table tfoot td { overflow-wrap:anywhere; white-space:normal; }
   .supplier-day { display:block; margin:16px 0 28px; }
   .supplier-day + .supplier-day { border-top:2px solid #94a3b8; padding-top:16px; }
   .top-actions { gap:6px; }
