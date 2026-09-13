@@ -22,6 +22,8 @@
 .document-contractor-form { flex-wrap:wrap; align-items:flex-end; }
 .document-contractor-form label { display:flex; flex-direction:column; gap:6px; min-width:140px; }
 .document-contractor-form label:first-child { flex:1 1 240px; }
+.actual-weight-form .document-contractor-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); max-width:800px; align-items:start; }
+.actual-weight-form .document-contractor-form label { min-width:0; flex:initial; }
 .document-contractor-form input { min-height:40px; padding:8px; border:1px solid #b8c8ce; border-radius:6px; }
 body { min-width: 320px; }
 .batch-select { min-width: 230px; max-width: 310px; font-weight: 700; }
