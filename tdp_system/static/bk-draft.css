@@ -1,5 +1,6 @@
 .bk-draft-dialog{width:min(1320px,96vw);max-width:96vw;max-height:94vh;box-sizing:border-box;border:1px solid #b8c8cf;border-radius:12px;padding:20px;color:#183240;background:white}
 .bk-draft-dialog::backdrop{background:#122b3c80}
+.bk-price-source{max-width:190px;font-size:12px;white-space:normal;margin-top:5px}
 .bk-draft-table th{color:#183240}
 .bk-draft-head,.bk-draft-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin-bottom:14px}
 .bk-draft-head{align-items:center;justify-content:space-between}.bk-draft-head h2{margin:0;font-size:22px}

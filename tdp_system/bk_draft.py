@@ -14,11 +14,13 @@ try:
     from .document_preview import create_snapshot, white_print_style
     from .invoice_inventory import invoice_stock_rows, InvoiceInventoryError
     from .stock_tax_policy import is_kkknt
+    from .contract_modules import mapping_key
 except ImportError:
     from bk_import import build_bk_import_template, BK_IMPORT_SOURCE_TYPE
     from document_preview import create_snapshot, white_print_style
     from invoice_inventory import invoice_stock_rows, InvoiceInventoryError
     from stock_tax_policy import is_kkknt
+    from contract_modules import mapping_key
 
 
 def period(start, end):
@@ -29,6 +31,62 @@ def period(start, end):
     if first > last:
         raise ValueError('Từ ngày phải trước hoặc bằng Đến ngày.')
     return first.isoformat(), last.isoformat()
+
+
+def suggested_prices(conn, end, codes):
+    """95% of a verified selling price in the product's own unit.
+
+    No future/draft sales, tax-inclusive totals or guessed package weights.
+    The source is returned for review and the user may override the suggestion.
+    """
+    period(end, end)
+    codes = set(codes)
+    products = {r['code']: dict(r) for r in conn.execute('SELECT code,unit FROM products') if r['code'] in codes}
+    result = {code: {'unit_cost': '', 'price_source': 'Chưa có giá bán đã duyệt hoặc hóa đơn đã ký cùng ĐVT; nhập đơn giá.'} for code in products}
+    found = set()
+    for row in conn.execute("""SELECT o.id,o.product_code,o.unit,o.sell_price,o.work_date,o.contractor,o.kitchen
+        FROM orders o JOIN batches b ON b.id=o.batch_id
+        WHERE b.status='approved' AND o.work_date<=? AND b.work_date<=?
+        AND o.sell_price>0 AND COALESCE(o.actual_delivered,0)-COALESCE(o.customer_return_qty,0)>0
+        ORDER BY o.work_date DESC,o.id DESC""", (end, end)):
+        code = row['product_code']
+        if code not in products or code in found or not mapping_key(row['unit']) or mapping_key(row['unit']) != mapping_key(products[code]['unit']):
+            continue
+        try:
+            price = _number(row['sell_price'], 'Giá bán')
+            cost = (price * Decimal('0.95')).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        except (ValueError, InvalidOperation):
+            continue
+        if cost <= 0:
+            continue
+        found.add(code)
+        source = f"95% × {price:,.0f} giá bán ngày {date.fromisoformat(row['work_date']):%d/%m/%Y} · {row['contractor']} / {row['kitchen']}"
+        result[code] = {'unit_cost': float(cost), 'reference_sell_price': float(price),
+                        'price_order_id': row['id'], 'price_date': row['work_date'], 'price_source': source}
+    # Older shortages may predate the order import. Use a signed, posted sales
+    # invoice only when the code and unit match; never assume Kg equals Lit/Goi.
+    for row in conn.execute("""SELECT l.id,l.product_code,l.source_unit,l.unit_price,
+        i.invoice_number,i.invoice_date FROM outgoing_source_invoice_items l
+        JOIN outgoing_source_invoices i ON i.id=l.invoice_id
+        WHERE i.source_status_class='issued' AND i.stock_status='posted'
+        AND l.mapping_status='mapped' AND l.inventory_eligible=1 AND l.conversion_factor=1
+        AND i.invoice_date<=? AND l.qty>0 AND l.unit_price>0
+        ORDER BY i.invoice_date DESC,i.id DESC,l.id DESC""", (end,)):
+        code = row['product_code']
+        if code not in products or code in found or not mapping_key(row['source_unit']) or mapping_key(row['source_unit']) != mapping_key(products[code]['unit']):
+            continue
+        try:
+            price = _number(row['unit_price'], 'Giá bán hóa đơn')
+            cost = (price * Decimal('0.95')).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        except (ValueError, InvalidOperation):
+            continue
+        if cost <= 0:
+            continue
+        found.add(code)
+        result[code] = {'unit_cost': float(cost), 'reference_sell_price': float(price),
+            'price_invoice_item_id': row['id'], 'price_date': row['invoice_date'],
+            'price_source': f"95% × {price:,.2f} giá bán HĐ {row['invoice_number']} đã ký ngày {date.fromisoformat(row['invoice_date']):%d/%m/%Y}"}
+    return result
 
 
 def shortage_rows(conn, start, end, tax='KKKNT'):
@@ -46,6 +104,9 @@ def shortage_rows(conn, start, end, tax='KKKNT'):
         items.append({'product_code': row['product_code'], 'product_name': product.get('name', row['product_name']),
                       'unit': product.get('unit', row['unit']), 'tax': product.get('tax', ''),
                       'closing_qty': round(row['closing_qty'],6), 'suggested_qty': round(-row['closing_qty'],6)})
+    prices = suggested_prices(conn, end, [r['product_code'] for r in items])
+    for item in items:
+        item.update(prices.get(item['product_code'], {}))
     return {'ok': True, 'from': start, 'to': end, 'items': items, 'writesInventory': False}
 
 
@@ -146,6 +207,19 @@ def print_workbook(rows, start, end):
 
 
 def register_bk_draft_routes(app, ctx):
+    @app.get('/api/bk-import/suggested-price')
+    def get_suggested_price():
+        try:
+            code = request.args.get('product_code', '').strip().upper()
+            with ctx['db']() as conn:
+                conn.execute('PRAGMA query_only=ON')
+                result = suggested_prices(conn, request.args.get('to'), [code])
+                if code not in result:
+                    raise ValueError('Mã hàng chưa có trong danh mục.')
+                return jsonify(ok=True, product_code=code, **result[code])
+        except ValueError as error:
+            return jsonify(ok=False, error=str(error)), 400
+
     @app.get('/api/bk-import/shortages')
     def get_shortages():
         try:

@@ -10,7 +10,7 @@
       '<label>Đến ngày<input name="to" type="date" value="' + esc(options.to) + '"></label>' +
       '<label>Nhóm hàng<select name="tax"><option value="KKKNT">KKKNT</option><option value="all">Tất cả hàng tồn âm</option></select></label>' +
       '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div>' +
-      '<p class="muted">Có thể chọn lại tháng 8 hoặc kỳ trước. Lượng tồn âm chỉ để đối chiếu; sửa số lượng theo hàng thực mua.</p>' +
+      '<p class="muted">Có thể chọn lại tháng 8 hoặc kỳ trước. Lượng tồn âm chỉ để đối chiếu; sửa số lượng theo hàng thực mua. Đơn giá gợi ý bằng 95% giá bán gần nhất của đơn đã duyệt đến ngày đối chiếu, cùng ĐVT. Nếu chưa có đơn, dùng giá hóa đơn bán đã ký và ghi kho cùng ĐVT. Nguồn giá hiện dưới mỗi ô; có thể sửa trước khi tải.</p>' +
       '<div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label>' +
       '<label>Số bảng kê<input name="reference" maxlength="100" placeholder="Điền theo chứng từ"></label>' +
       '<label>Người bán / NCC chung<input name="source_party" maxlength="150" placeholder="Có thể điền riêng từng dòng"></label></div>' +
@@ -38,7 +38,7 @@
       dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Tồn cuối kỳ</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
         return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'</td><td>'+esc(r.unit)+'</td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
-          return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?1000:150)+'"')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'"></td>';
+          return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?1000:150)+'"')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'">'+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
         }).join('')+'</tr>';
       }).join('')+'</tbody></table>';
     }
@@ -64,7 +64,7 @@
           var result=await options.api('/api/bk-import/shortages?'+new URLSearchParams({from:field('from').value,to:field('to').value,tax:field('tax').value}));
           if(!dialog.isConnected)return;
           loadedPeriod={from:result.from,to:result.to};
-          rows=result.items.map(function(r){return Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:'',source_party:'',note:''});});
+          rows=result.items.map(function(r){return Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:'',note:''});});
           render(); status(rows.length+' mã đang âm cuối kỳ. Chọn những hàng đã mua cần bổ sung chứng từ.');
           dialog.querySelector('.bk-draft-preview').innerHTML='';
         } else if(name==='search') {
@@ -77,7 +77,9 @@
         } else if(name==='add') {
           var p=products[Number(field('product').value)]; if(!p)throw new Error('Tìm và chọn hàng trước khi thêm.');
           if(!loadedPeriod)throw new Error('Chọn khoảng ngày rồi bấm “Xem hàng tồn âm” trước.');
-          rows.push({product_code:p.code,product_name:p.name,unit:p.unit,qty:'',unit_cost:'',source_party:'',note:'',selected:true});render();
+          var price=await options.api('/api/bk-import/suggested-price?'+new URLSearchParams({product_code:p.code,to:loadedPeriod.to}));
+          if(!dialog.isConnected)return;
+          rows.push(Object.assign({},price,{product_code:p.code,product_name:p.name,unit:p.unit,qty:'',source_party:'',note:'',selected:true}));render();
         } else if(name==='all'||name==='none') {
           rows.forEach(function(r){r.selected=name==='all';});render();
         } else if(name==='excel') {

@@ -365,6 +365,13 @@ CREATE TABLE IF NOT EXISTS purchase_order_imports (
     UNIQUE(batch_id,source_hash)
 );
 
+CREATE TABLE IF NOT EXISTS supplier_line_notes (
+    batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    note_key TEXT NOT NULL,
+    note TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(batch_id,note_key)
+);
 CREATE TABLE IF NOT EXISTS supplier_plan_sources (
     batch_id INTEGER PRIMARY KEY REFERENCES batches(id) ON DELETE CASCADE,
     source_hash TEXT NOT NULL,
@@ -3630,6 +3637,11 @@ def purchase_order_payload(conn, batch_id: int, *, for_sending=False) -> dict:
             physical_total += physical_stock_used
             amount_total += row["amount"]
 
+    try:
+        from .supplier_notes import apply_notes
+    except ImportError:
+        from supplier_notes import apply_notes
+    apply_notes(conn, batch_id, rows)
     send_available = not source_issues and bool(rows) and (bool(plan_source) or all(item['confirmed'] for item in rows))
     source_message = ('Đang đọc sheet ' + plan_source['source_sheet'] + ' · ' + plan_source['source_name']) if plan_source else (
         'Đang đọc file đặt NCC đã xác nhận' if send_available else
@@ -3781,6 +3793,7 @@ def purchase_order_payload(conn, batch_id: int, *, for_sending=False) -> dict:
 
 def purchase_order_database_state_hash(conn, batch_id: int) -> str:
     return query_database_state_hash(conn, (
+        ("supplier_line_notes", "SELECT note_key,note FROM supplier_line_notes WHERE batch_id=? ORDER BY note_key", (batch_id,)),
         ("supplier_plan_sources", "SELECT source_hash,content_hash,revision FROM supplier_plan_sources WHERE batch_id=?", (batch_id,)),
         ("supplier_rules", "SELECT supplier_code,combine_kitchens FROM supplier_rules ORDER BY supplier_code", ()),
         (
@@ -7321,6 +7334,21 @@ def register_contract_routes(app, ctx):
             except ValueError as exc:
                 return jsonify({"ok": False, "error": str(exc)}), 404
             return jsonify({"ok": True, **payload})
+
+    @app.put('/api/supplier-needs/<int:batch_id>/notes')
+    def api_supplier_notes(batch_id):
+        try:
+            from .supplier_notes import save_notes
+        except ImportError:
+            from supplier_notes import save_notes
+        try:
+            with db_factory() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                return jsonify(save_notes(conn, batch_id, request.get_json(silent=True), now_iso))
+        except PurchaseOrderApplyError as error:
+            return jsonify(ok=False, error=str(error), code=error.code), 409
+        except ValueError as error:
+            return jsonify(ok=False, error=str(error)), 400
 
     @app.put("/api/supplier-rules/<supplier_code>")
     def api_supplier_rule(supplier_code):

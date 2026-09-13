@@ -1813,7 +1813,7 @@
         esc(group.supplier_key || supplier) + '" data-order-status="' + orderStatus + '"><div class="group-title supplier-order-title"><div class="supplier-order-summary"><strong>Nhà cung cấp ' + esc(supplier.toUpperCase()) + ' · ' + dateVN(needs.work_date) +
         "</strong><span>" + esc(group.kitchen) + " · " + rawLineCount + " dòng gốc · " + items.length +
         ' dòng gửi</span></div><div class="supplier-order-actions"><span class="tag ' + statusClass + '">' + statusText +
-        '</span><button class="btn btn-small btn-primary" data-action="copy-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' +
+        '</span><button class="btn btn-small btn-outline" data-action="edit-supplier-notes" data-supplier-key="' + esc(group.supplier_key) + '"' + batchAttr + '>Ghi chú NCC</button><button class="btn btn-small btn-primary" data-action="copy-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' +
         groupIndex + '"' + batchAttr + '>Sao chép ảnh</button><button class="btn btn-small btn-outline" data-action="download-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' + groupIndex + '"' + batchAttr + '>Tải ảnh</button>' + reopenControl + '</div></div><div class="group-total"><span>Tổng đặt nhà cung cấp</span><strong>' +
         esc(stockQuantitySummary(items, 'order_qty')) + (group.total_amount != null ? " · " + stockMoney(group.total_amount) : "") + '</strong></div>' +
         '<details class="supplier-lines"><summary>Xem ' + items.length + ' dòng đặt hàng</summary><div class="table-wrap round2-table"><table><thead><tr><th>Bếp</th><th>Hàng</th><th>SL đặt</th><th>ĐVT</th><th>Giá mua</th><th>Thành tiền</th><th>Ghi chú</th></tr></thead><tbody>' +
@@ -2554,7 +2554,7 @@
         return '<button type="button" class="btn ' + (section === key ? 'btn-primary' : 'btn-outline') +
           '" data-action="open-debt-section" data-section="' + key + '" aria-pressed="' + (section === key) + '">' +
           (key === 'receivable' ? 'Công nợ phải thu' : 'Công nợ phải trả') + '</button>';
-      }).join('') + '<button class="btn btn-outline debt-payment-link" data-action="open-payment-request">Đề nghị thanh toán từ hóa đơn</button></div>' + debtNotice;
+      }).join('') + '<button class="btn btn-outline debt-payment-link" data-action="open-payment-request">Đề nghị thanh toán từ hóa đơn</button></div><p class="muted">Xem công nợ ngay bên dưới hoặc mở toàn màn hình. Chỉ tải Excel khi cần lưu file.</p>' + debtNotice;
     var periodToolbarStart = '<div class="toolbar fade-in debt-period-toolbar"><form id="debtPeriodForm" class="debt-period-grid' + (section === "payable" ? ' debt-period-grid-payable' : '') + '">' +
       '<div class="form-field"><label for="payableFrom">Từ ngày</label><input id="payableFrom" name="from" type="date" value="' + esc(state.debtFrom) + '" required></div>' +
       '<div class="form-field"><label for="payableTo">Đến ngày</label><input id="payableTo" name="to" type="date" value="' + esc(state.debtTo) + '" required></div>';
@@ -4888,6 +4888,21 @@
     }
   }
 
+  async function applyReceivableFilters(form) {
+    var filters = Object.fromEntries(new FormData(form).entries());
+    var kitchen = (state.data.master.kitchens || []).find(function (item) { return item.code === filters.kitchen; });
+    state.receivableContractor = filters.contractor || '';
+    state.receivableKitchen = state.receivableContractor && kitchen && kitchen.contractor !== state.receivableContractor ? '' : (filters.kitchen || '');
+    state.receivableStatus = filters.status || 'active';
+    state.receivableOffset = 0;
+    persistReceivableFilters();
+    // Commit the selection before any response can redraw the workspace.
+    // Invalidating the request serial prevents an older kitchen from returning.
+    invalidateReceivableWorkspace(true);
+    renderDebts();
+    await fetchReceivableWorkspace();
+  }
+
   async function fetchReceivableWorkspace() {
     if (!state.debtFrom || !state.debtTo || state.receivableLoading) return;
     var requestSerial = ++state.receivableRequestSerial;
@@ -5745,20 +5760,7 @@
     }
     if (event.target.id === "receivableFilterForm") {
       event.preventDefault();
-      var receivableFilter = Object.fromEntries(new FormData(event.target).entries());
-      state.receivableOffset = 0;
-      var selectedKitchen = receivableFilter.kitchen || "";
-      var kitchenMeta = (state.data.master.kitchens || []).find(function (item) {
-        return item.code === selectedKitchen;
-      });
-      state.receivableContractor = receivableFilter.contractor || "";
-      state.receivableKitchen = state.receivableContractor && kitchenMeta &&
-        kitchenMeta.contractor !== state.receivableContractor ? "" : selectedKitchen;
-      state.receivableStatus = receivableFilter.status || "active";
-      persistReceivableFilters();
-      invalidateReceivableWorkspace(true);
-      renderDebts();
-      await fetchReceivableWorkspace();
+      await applyReceivableFilters(event.target);
     }
     if (event.target.id === "debtAdjustmentForm") {
       event.preventDefault();
@@ -6232,17 +6234,13 @@
       renderPrinting();
       return;
     }
-    if (event.target.id === "receivableContractor") {
-      // Stage the filters until “Lọc danh sách”. A background reload here
-      // used to erase a kitchen selection made while its response arrived.
-      var requestedContractor = event.target.value || "";
-      var kitchenSelect = document.getElementById("receivableKitchen");
-      if (kitchenSelect) kitchenSelect.innerHTML = '<option value="">Tất cả bếp</option>' +
-        (state.data.master.kitchens || []).filter(function (item) {
-          return !requestedContractor || item.contractor === requestedContractor;
-        }).map(function (item) {
-          return '<option value="' + esc(item.code) + '">' + esc(item.code) + ' · ' + esc(item.name || item.code) + '</option>';
-        }).join("");
+    if (["receivableContractor", "receivableKitchen", "receivableStatus"].includes(event.target.id)) {
+      if (event.target.id === 'receivableContractor') document.getElementById('receivableKitchen').value = '';
+      applyReceivableFilters(event.target.form);
+      return;
+    }
+    if (["payableSupplier", "payableStatus"].includes(event.target.id)) {
+      event.target.form.requestSubmit();
       return;
     }
     if (event.target.matches(".payable-line-select")) {
@@ -6958,6 +6956,11 @@
     if (action === "choose-payables-workbook") {
       state.payablesImportPreview = null;
       payablesWorkbookInput.click();
+    }
+    if (action === 'edit-supplier-notes') {
+      await window.TdpSupplierNotes({batchId:Number(button.dataset.batchId),supplierKey:button.dataset.supplierKey,
+        api:api,esc:esc,quantity:stockQty,dateText:dateVN,onSaved:fetchSupplierNeeds});
+      return;
     }
     if (action === "choose-purchase-order-file" || action === "choose-supplier-plan-file") {
       state.purchaseOrderBatchId = Number(button.dataset.batchId);
@@ -7867,7 +7870,7 @@
       var isOrders=Boolean(table.closest('#orderTable'));
       var isCatalog=Boolean(table.closest('#catalogProducts'));
       var isMapping=Boolean(table.closest('.invoice-lines-card'));
-      button.textContent=isCatalog?'Mở bảng Excel toàn màn hình · sửa toàn bộ danh mục':isMapping?(state.invoiceDirection === 'input' ? 'Ghép mã / Quy đổi' : 'Ghép mã') + ' · toàn màn hình':isOrders?'Mở bảng Excel · tự lưu':'Xem bảng Excel toàn màn hình · chỉ xem';
+      button.textContent=isCatalog?'Mở bảng Excel toàn màn hình · sửa toàn bộ danh mục':isMapping?(state.invoiceDirection === 'input' ? 'Ghép mã / Quy đổi' : 'Ghép mã') + ' · toàn màn hình':isOrders?'Mở bảng Excel · tự lưu':state.view==='debts'?'Xem toàn màn hình':'Xem bảng Excel toàn màn hình · chỉ xem';
       button.onclick=function(){if(isCatalog) openCatalogWorksheet(); else if(isOrders) openOrderWorksheet(); else openTableWorksheet(table);};
       var head = wrap.parentNode.querySelector(':scope > .card-head');
       if (isMapping && mappingSearch) mappingSearch.element.appendChild(button);

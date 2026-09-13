@@ -109,5 +109,74 @@ class BkDraftTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT tax FROM products WHERE code='BK-P1'").fetchone()[0],'8%')
 
+    def sale(self, day, price, unit='Kg', status='approved', returned=0):
+        with server.db() as conn:
+            bid=conn.execute('INSERT INTO batches(work_date,status,created_at) VALUES(?,?,?)', (day,status,fixture.NOW)).lastrowid
+            return conn.execute('''INSERT INTO orders(batch_id,work_date,contractor,kitchen,product_code,
+                unit,qty,actual_delivered,customer_return_qty,sell_price,updated_at)
+                VALUES(?,?,'C1','K1','BK-P1',?,2,2,?,?,?)''',
+                (bid,day,unit,returned,price,fixture.NOW)).lastrowid
+
+    def price(self, end='2026-08-31', code='BK-P1'):
+        r=self.client.get('/api/bk-import/suggested-price',query_string={'to':end,'product_code':code})
+        self.assertEqual(r.status_code,200,r.get_json())
+        return r.get_json()
+
+    def test_price_95_uses_latest_approved_same_unit_and_cutoff(self):
+        self.sale('2026-08-05',10000)
+        chosen=self.sale('2026-08-12',175001)
+        self.sale('2026-08-13',999999,unit='Gói')
+        self.sale('2026-08-14',999999,status='draft')
+        self.sale('2026-08-15',999999,returned=2)
+        self.sale('2026-09-01',999999)
+        before=self.counts()
+        p=self.price()
+        self.assertEqual(p['unit_cost'],166251)
+        self.assertEqual(p['reference_sell_price'],175001)
+        self.assertEqual(p['price_order_id'],chosen)
+        self.assertIn('12/08/2026',p['price_source'])
+        self.assertEqual(self.counts(),before)
+
+    def test_missing_price_stays_editable_and_manual_cost_is_preserved(self):
+        self.sale('2026-08-15',10000,unit='Gói')
+        self.assertEqual(self.price()['unit_cost'],'')
+        self.assertEqual(self.price(code='BK-P2')['unit_cost'],'')
+        self.sale('2026-08-16',10000)
+        body=self.body(True)
+        body['rows'][0]['unit_cost']=1234
+        response=self.client.post('/api/bk-import/draft/excel',json=body)
+        wb=load_workbook(io.BytesIO(response.data),data_only=True)
+        self.assertEqual(wb['BK_IMPORT']['I4'].value,1234)
+        self.assertEqual(wb['BK_IMPORT']['J4'].value,2468)
+        wb.close()
+        self.assertEqual(self.client.get('/api/bk-import/suggested-price?to=bad&product_code=BK-P1').status_code,400)
+        self.assertEqual(self.client.get('/api/bk-import/suggested-price?to=2026-08-31&product_code=UNKNOWN').status_code,400)
+
+    def test_older_shortage_can_use_signed_invoice_without_guessing_unit(self):
+        try:
+            with server.db() as conn:
+                for index,(day,unit,status,stock,price) in enumerate([
+                    ('2026-08-01','Kg','issued','posted',35000),
+                    ('2026-08-02','Gói','issued','posted',90000),
+                    ('2026-08-03','Kg','draft','blocked',90000),
+                    ('2026-08-04','Kg','issued','ready',90000),
+                    ('2026-09-01','Kg','issued','posted',90000)]):
+                    iid=conn.execute('''INSERT INTO outgoing_source_invoices(tenant,source,identity_key,
+                        invoice_number,invoice_date,source_status_class,stock_status,synced_at,created_at,updated_at)
+                        VALUES('test','bk-price-test',?,?,?,?,?,?,?,?)''',
+                        (str(index),str(index+700),day,status,stock,fixture.NOW,fixture.NOW,fixture.NOW)).lastrowid
+                    conn.execute('''INSERT INTO outgoing_source_invoice_items(invoice_id,line_index,product_code,
+                        source_unit,qty,unit_price,mapping_status,conversion_factor)
+                        VALUES(?,1,'BK-P1',?,1,?,'mapped',1)''',(iid,unit,price))
+            before=self.counts();p=self.price()
+            self.assertEqual(p['unit_cost'],33250)
+            self.assertIn('HĐ 700',p['price_source'])
+            self.assertEqual(p['price_date'],'2026-08-01')
+            self.assertEqual(self.counts(),before)
+            self.sale('2026-08-15',40000)
+            self.assertEqual(self.price()['unit_cost'],38000)
+        finally:
+            with server.db() as conn:conn.execute("DELETE FROM outgoing_source_invoices WHERE source='bk-price-test'")
+
 
 if __name__=='__main__': unittest.main()

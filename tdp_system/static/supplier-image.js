@@ -21,19 +21,20 @@
       {key:'order_qty',label:'SL',max:160}, {key:'unit',label:'ĐVT',max:88}];
     if (items.some(function(r) { return (r.work_date || options.date) !== options.date; })) columns.splice(1,0,{key:'work_date',label:'Ngày',max:156});
     if (items.some(function(r) { return r.supplier && r.supplier !== group.supplier; })) columns.push({key:'supplier',label:'NCC',max:135});
-    if (items.some(function(r) { return String(r.note || '').trim(); })) columns.push({key:'note',label:'Ghi chú',max:190});
+    columns.push({key:'note',label:'Ghi chú',max:190});
     var rows = items.map(function(r) { return Object.assign({},r,{
       order_qty:options.quantity(r.order_qty == null ? r.required_qty : r.order_qty),
       work_date:options.dateText(r.work_date || options.date)
     }); });
     columns.forEach(function(c) {
       c.width = Math.min(c.max,Math.max(measure(c.label),...rows.map(function(r) {return measure(String(r[c.key] || ''));}))+padding*2);
+      if(c.key==='note')c.width=Math.max(115,c.width);
     });
     var total = columns.reduce(function(s,c) {return s+c.width;},0);
     ['product_name','note','kitchen','supplier'].forEach(function(key) {
       var c=columns.find(function(c) {return c.key===key;});
       if (!c || total<=700) return;
-      var cut=Math.min(total-700,Math.max(0,c.width-(key==='product_name'?155:75)));
+      var cut=Math.min(total-700,Math.max(0,c.width-(key==='product_name'?155:key==='note'?115:75)));
       c.width-=cut; total-=cut;
     });
     var headerLines=wrap('NCC '+group.supplier+' · '+options.dateText(options.date),total,measure);

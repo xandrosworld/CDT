@@ -8,7 +8,8 @@ const group={supplier:'Hương',items:[
 ]};
 let plan=renderer.layout(group,options,measure);
 assert(plan.width<=716);assert.equal(plan.rows.length,2);
-assert.deepEqual(plan.columns.map(c=>c.key),['kitchen','product_name','order_qty','unit']);
+assert.deepEqual(plan.columns.map(c=>c.key),['kitchen','product_name','order_qty','unit','note']);
+assert(plan.columns.find(c=>c.key==='note').width>=90, 'Blank notes must retain writing space');
 const long={...group,items:[{...group.items[0],work_date:'2026-09-12',supplier:'NCC khác',note:'Giao đến cửa số 3, gọi trước khi giao. Không trộn với đơn buổi chiều.'}]};
 plan=renderer.layout(long,options,measure);
 for(const key of ['work_date','supplier','note'])assert(plan.columns.some(c=>c.key===key));
