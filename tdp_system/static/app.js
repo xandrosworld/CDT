@@ -1808,7 +1808,7 @@
           n(group.order_status_revision) + '">Mở lại</button>'
         : '';
       return '<div class="group-card supplier-order-card is-' + orderStatus + '" data-supplier-key="' +
-        esc(group.supplier_key || supplier) + '" data-order-status="' + orderStatus + '"><div class="group-title supplier-order-title"><div class="supplier-order-summary"><strong>Nhà cung cấp ' + esc(supplier.toUpperCase()) +
+        esc(group.supplier_key || supplier) + '" data-order-status="' + orderStatus + '"><div class="group-title supplier-order-title"><div class="supplier-order-summary"><strong>Nhà cung cấp ' + esc(supplier.toUpperCase()) + ' · ' + dateVN(needs.work_date) +
         "</strong><span>" + esc(group.kitchen) + " · " + rawLineCount + " dòng gốc · " + items.length +
         ' dòng gửi</span></div><div class="supplier-order-actions"><span class="tag ' + statusClass + '">' + statusText +
         '</span><button class="btn btn-small btn-primary" data-action="copy-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' +
