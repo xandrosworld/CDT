@@ -1,5 +1,6 @@
 """Inclusive report ranges and independent supplier plans/statuses across dates."""
 import io
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +80,26 @@ class DateRangeWorkflowsTests(unittest.TestCase):
         empty = self.get('/api/reports/summary?from=2028-02-29&to=2028-02-29')
         self.assertEqual(empty['rows'][-1][3:], [0,0,0,0])
         self.assertEqual(empty['draft_count'],0)
+
+    def test_print_report_keeps_exact_range_and_never_writes_accounts(self):
+        expected = self.seed_report_dates()
+        before = hashlib.sha256(server.DB_PATH.read_bytes()).hexdigest()
+        response = self.client.post('/api/documents/preview', json={
+            'kind': 'report', 'from': '2026-12-31', 'to': '2027-01-01'})
+        self.assertEqual(response.status_code, 200, response.json)
+        sheets = response.json['sheets']
+        self.assertEqual(len(sheets), 1)
+        self.assertIn('31/12/2026', sheets[0]['html'])
+        self.assertIn('01/01/2027', sheets[0]['html'])
+        from .document_preview import snapshot_files
+        _, files = snapshot_files(server.DATA_DIR / 'document_previews', response.json['token'])
+        book = load_workbook(files[0][1], data_only=True)
+        self.assertEqual([book.active.cell(book.active.max_row, c).value for c in range(4, 8)], expected)
+        book.close()
+        for start, end in [('2026-12-31', None), ('2027-01-01', '2026-12-31'), ('2026-02-29', '2026-03-01')]:
+            invalid = self.client.post('/api/documents/preview', json={'kind':'report', 'from':start, 'to':end})
+            self.assertEqual(invalid.status_code, 422, invalid.json)
+        self.assertEqual(before, hashlib.sha256(server.DB_PATH.read_bytes()).hexdigest())
 
     def test_invalid_ranges_rejected_for_json_and_download(self):
         for path in ('/api/reports/summary','/api/reports/summary/export','/api/supplier-needs'):

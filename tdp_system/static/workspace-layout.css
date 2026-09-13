@@ -10,7 +10,14 @@
   body[data-workspace-view="home"] .daily-range { justify-content:flex-end; }
   body[data-workspace-view="home"] .daily-action-card > .form-actions { grid-column:1/-1; justify-content:flex-start; margin:0; padding:0; border:0; }
   body[data-workspace-view="home"] .daily-action-card > small { grid-column:1/-1; color:#455e73; }
-  body:is([data-workspace-view="purchases"],[data-workspace-view="reports"]) #batchSelect { display:none; }
+  body:is([data-workspace-view="purchases"],[data-workspace-view="reports"],[data-workspace-view="debts"],[data-workspace-view="payment-request"],[data-workspace-view="printing"]) #batchSelect { display:none; }
+  body[data-workspace-view="debts"] .topbar > div:not(.top-actions) { display:none; }
+  body[data-workspace-view="debts"] .top-actions { margin-left:auto; }
+  .debt-section-tabs,.print-workspace-heading { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:8px 0; }
+  .debt-payment-link { margin-left:auto; }
+  #content .receivable-kitchen-summary { margin-top:12px; }
+  #content .debt-download-toolbar { margin:8px 0; }
+  #content .receivable-kitchen-table table { min-width:650px; }
   .supplier-day { display:block; margin:16px 0 28px; }
   .supplier-day + .supplier-day { border-top:2px solid #94a3b8; padding-top:16px; }
   .top-actions { gap:6px; }

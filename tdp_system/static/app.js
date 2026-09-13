@@ -104,7 +104,9 @@
     purchaseOrderBatchId: null,
     purchaseOrderPreview: null,
     deliveryDetailsOpen: false,
-    debtSection: "",
+    debtSection: "receivable",
+    receivableDetailsOpen: false,
+    paymentScopeSerial: 0,
     debtPeriod: null,
     debtLoading: false,
     debtFrom: storedPayableFilters.date_from || storedReceivableFilters.date_from || "",
@@ -172,7 +174,7 @@
     quotes: "Báo giá",
     reports: "Báo cáo tổng hợp",
     debts: "Công nợ",
-    documents: "Bảng kê, biên nhận và hóa đơn",
+    documents: "Bảng kê & hóa đơn",
     inventory: "Báo cáo vật tư hàng hóa",
     msmi: "Hóa đơn đầu vào + đầu ra",
     kitchen: "Suất ăn và đặt hàng bếp",
@@ -1138,16 +1140,16 @@
 
   function syncNavigationChrome(view) {
     document.querySelectorAll(".nav-item").forEach(function (button) {
-      button.classList.toggle("active", button.dataset.view === (view === "orders" ? "home" : view));
+      button.classList.toggle("active", button.dataset.view === ({orders:"home", printing:"home", "payment-request":"debts", "invoice-tools":"msmi"}[view] || view));
     });
-    pageTitle.textContent = view === "orders" ? "Duyệt đơn - sửa đơn" : titles[view] || "Vận hành";
+    pageTitle.textContent = {orders:"Duyệt đơn - sửa đơn", printing:"Đơn hàng - bảng kê", "payment-request":"Đề nghị thanh toán", "invoice-tools":"Dự thảo và xử lý hóa đơn"}[view] || titles[view] || "Vận hành";
     document.body.dataset.workspaceView = view;
   }
 
   function navigate(view) {
     // Legacy data stays in the database; retired modules have no daily screen.
     if (view === "kitchen" || view === "payroll") view = "home";
-    if (view === "debts" && state.view !== "debts") state.debtSection = "";
+    if (view !== state.view) state.paymentScopeSerial++;
     state.view = view;
     syncNavigationChrome(view);
     sidebar.classList.remove("open");
@@ -1790,7 +1792,7 @@
     var batchAttr = ' data-batch-id="' + needs.batch_id + '"';
     var sourceBanner = '<section class="supplier-day" data-batch-id="' + needs.batch_id + '" data-work-date="' + esc(needs.work_date) + '">' +
       '<div class="card supplier-plan-source"><div class="card-body"><h3>Ngày ' + dateVN(needs.work_date) + '</h3><strong>' +
-      esc(needs.source_message || '') + '</strong><div class="form-actions"><button class="btn btn-outline" data-action="choose-supplier-plan-file"' + batchAttr + '>Nạp sheet đặt hàng ngày này</button></div>' +
+      esc(needs.source_message || '') + '</strong><div class="form-actions"><button class="btn btn-outline" data-action="choose-supplier-plan-file"' + batchAttr + '>Nạp sheet đặt hàng ngày này</button><button class="btn btn-outline" data-action="preview-supplier-documents"' + batchAttr + '>Xem / In đơn đặt NCC</button></div>' +
       (preview && preview.plan_only ? purchaseOrderPreviewHtml() : '') + '</div></div>';
     var checklistCounts = needs.checklist_counts || { pending: 0, reopened: 0, ordered: 0 };
     var checklistOpen = n(checklistCounts.pending) + n(checklistCounts.reopened);
@@ -1834,7 +1836,7 @@
         needs.money_adjustments.map(function (item) { return '<tr><td>' + esc(item.supplier) + '</td><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td class="num-cell">' + money(item.amount) + '</td></tr>'; }).join('') +
         '</tbody><tfoot><tr><td colspan="3">Tổng khoản trừ</td><td class="num-cell">' + money(needs.money_adjustments.reduce(function (total, item) { return total + n(item.amount); }, 0)) + '</td></tr></tfoot></table></div></div></div>';
     }
-    return markup + '</section>';
+    return markup + '<div id="supplierPrintPreview-' + needs.batch_id + '"></div></section>';
   }
 
   function supplierPresentation(group, needs) {
@@ -2212,29 +2214,23 @@
         (expanded ? "Ẩn lịch sử" : "Xem lịch sử") + '</button></td></tr>' + receivableHistoryRows(item);
     }).join("");
     var pagination = ledger.pagination || {};
-    var truncated = ledgerPager("receivable", ledger.pagination);
-    var account = null;
-    if (state.receivableContractor && state.debtPeriod && state.debtPeriod.contractors) {
-      account = state.debtPeriod.contractors[state.receivableContractor] || {
-        opening: 0, period_charge: 0, period_adjustment: 0, period_paid: 0, closing: 0
-      };
-    }
-    var reconciliation = account
-      ? '<div class="code-note receivable-reconcile"><strong>Đối soát tài khoản ' +
-        esc(state.receivableContractor) + ':</strong> đầu kỳ ' + money(account.opening) +
-        ' + phát sinh ' + money(account.period_charge) + ' + điều chỉnh ' +
-        money(account.period_adjustment) + ' − đã thu ' + money(account.period_paid) +
-        ' = còn thu <strong>' + money(account.closing) + '</strong>.' +
-        (state.receivableKitchen ? ' Bộ lọc bếp chỉ thu hẹp bảng chi tiết; số dư tài khoản vẫn gồm toàn bộ bếp của nhà thầu.' : '') + '</div>'
-      : '<div class="code-note receivable-reconcile"><strong>Đối soát:</strong> chọn một nhà thầu để xem công thức đầu kỳ + phát sinh + điều chỉnh − đã thu = còn thu.</div>';
+    var kitchenRows = (ledger.kitchen_summary || []).map(function (item) {
+      return '<tr><td>' + esc(item.contractor_code) + '</td><td>' + esc(item.kitchen_code || 'Chưa có bếp') +
+        '</td><td class="num-cell">' + num(item.line_count) + '</td><td class="num-cell">' + stockMoney(item.subtotal) +
+        '</td><td class="num-cell">' + stockMoney(item.tax_amount) + '</td><td class="num-cell">' + stockMoney(item.amount) + '</td></tr>';
+    }).join('');
+    var overview = '<div class="card receivable-kitchen-summary"><div class="card-head"><div><h3>Phát sinh theo bếp</h3>' +
+      '<p>Chỉ tính dòng hiệu lực từ đơn đã duyệt, theo nhà thầu và bếp đang lọc. Khoản đã thu và số còn thu được theo dõi chung theo nhà thầu ở bảng trên.</p></div></div>' +
+      '<div class="table-wrap round3-table receivable-kitchen-table"><table><thead><tr><th>Nhà thầu</th><th>Bếp</th><th>Số dòng</th><th>Trước thuế</th><th>Thuế</th><th>Phát sinh</th></tr></thead><tbody>' +
+      (kitchenRows || '<tr><td colspan="6">Chưa có phát sinh từ đơn đã duyệt theo bộ lọc này.</td></tr>') +
+      '</tbody><tfoot><tr><td colspan="2">TỔNG THEO BỘ LỌC BẾP</td><td class="num-cell">' + num(summary.active_rows) +
+      '</td><td class="num-cell">' + stockMoney(summary.subtotal) + '</td><td class="num-cell">' + stockMoney(summary.tax_amount) +
+      '</td><td class="num-cell">' + stockMoney(summary.charge_amount) + '</td></tr></tfoot></table></div></div>' +
+      '<div class="secondary-action-row"><button class="btn btn-outline" data-action="toggle-receivable-details" aria-expanded="' + Boolean(state.receivableDetailsOpen) + '">' +
+      (state.receivableDetailsOpen ? 'Ẩn chi tiết mặt hàng' : 'Xem chi tiết mặt hàng / lịch sử sửa') + '</button></div>';
+    if (!state.receivableDetailsOpen) return '<div class="receivable-workspace">' + overview + '</div>';
     return html([
-      '<div class="receivable-workspace fade-in">',
-      '<div class="stats-grid receivable-stats">',
-      statCard("Tổng số lượng", esc(quantityGroups(summary.filtered_quantities_by_unit)), "Theo bộ lọc đang chọn", "∑"),
-      statCard("Tiền trước thuế", stockMoney(summary.filtered_subtotal), "Theo bộ lọc đang chọn", "↗"),
-      statCard("Thuế vận hành", stockMoney(summary.filtered_tax_amount), "Không đọc tổng hóa đơn đỏ", "%"),
-      statCard("Tổng tiền", stockMoney(summary.filtered_amount), "Dòng đã đảo chỉ để tra cứu", "₫"),
-      '</div>', reconciliation, truncated,
+      '<div class="receivable-workspace">', overview, ledgerPager("receivable", ledger.pagination),
       '<div class="card"><div class="card-head"><div><h3>Sổ phải thu vận hành chi tiết</h3>',
       '<p>Nguồn duy nhất: lượng thực giao ròng đã duyệt × giá bán giao dịch + thuế; không phải đề nghị thanh toán/hóa đơn đỏ</p></div><span class="tag">',
       num(pagination.returned || 0), ' dòng đang hiển thị</span></div>',
@@ -2434,19 +2430,13 @@
     }).join("") : "";
     content.innerHTML = '<div class="toolbar"><label>Từ ngày <input id="reportFrom" type="date" value="' + esc(state.reportFrom) + '"></label>' +
       '<label>Đến ngày <input id="reportTo" type="date" value="' + esc(state.reportTo) + '"></label><button class="btn btn-outline" data-action="refresh-monthly-report">Tải lại</button>' +
-      (data ? '<a class="btn btn-primary" href="/api/reports/summary/export?from=' + encodeURIComponent(data.date_from) + '&to=' + encodeURIComponent(data.date_to) + '">Tải báo cáo tổng hợp</a>' : '') +
+      (data ? '<a class="btn btn-primary" href="/api/reports/summary/export?from=' + encodeURIComponent(data.date_from) + '&to=' + encodeURIComponent(data.date_to) + '">Tải báo cáo tổng hợp</a><button class="btn btn-outline" data-action="preview-report-documents">Xem / In báo cáo</button>' : '') +
       '</div><div class="code-note">Báo cáo tổng hợp theo nhà thầu và từng bếp từ ngày đến ngày, chỉ cộng đơn đã duyệt. Bếp chưa phát sinh vẫn hiện; không lấy khoản thu/chi hay hóa đơn đỏ.' +
       (data && data.draft_count ? ' Còn ' + data.draft_count + ' phiên chưa duyệt, chưa cộng vào báo cáo.' : '') + '</div>' +
       (state.reportError ? '<div class="error-summary">' + esc(state.reportError) + '</div>' : '') +
       (state.reportLoading ? '<div class="loading-inline">Đang nạp báo cáo…</div>' : '') +
       (data ? '<div class="card"><div class="table-wrap round3-table" id="monthlyReportTable"><table><thead><tr>' +
-        data.headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>' : '');
-  }
-
-  function debtMenuCard(section, title, description, icon) {
-    return '<button type="button" class="debt-menu-card" data-action="open-debt-section" data-section="' +
-      esc(section) + '"><span class="debt-menu-icon">' + esc(icon) + '</span><span><strong>' +
-      esc(title) + '</strong><small>' + esc(description) + '</small></span><b>›</b></button>';
+        data.headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>' : '') + '<div id="reportDocumentPreview"></div>';
   }
 
   function renderDebts() {
@@ -2458,32 +2448,16 @@
       persistPayableFilters();
       persistReceivableFilters();
     }
-    var sectionTitles = {
-      "receivable-kitchen": "Công nợ phải thu theo bếp",
-      "receivable-total": "Công nợ phải thu tổng hợp",
-      payable: "Công nợ phải trả nhà cung cấp"
-    };
-    var section = state.debtSection;
-    pageTitle.textContent = sectionTitles[section] || titles.debts;
-    if (!sectionTitles[section]) {
-      content.innerHTML = html([
-        '<div class="card debt-menu-shell fade-in"><div class="card-head"><div><h3>Chọn nội dung cần xem</h3>',
-        '<p>Chỉ hiện phần tổng quan. Bấm vào từng mục để xem số liệu và thao tác chi tiết.</p></div></div>',
-        '<div class="card-body"><div class="debt-menu-grid">',
-        debtMenuCard("receivable-kitchen", "Công nợ phải thu (bếp)", "Xem chi tiết từng bếp, từng mặt hàng", "▦"),
-        debtMenuCard("receivable-total", "Công nợ phải thu (tổng)", "Xem tổng theo nhà thầu và ghi nhận đã thu", "₫"),
-        debtMenuCard("payable", "Công nợ phải trả", "Xem và thanh toán cho nhà cung cấp", "⇄"),
-        '</div></div></div>'
-      ]);
-      return;
-    }
+    var section = state.debtSection === "payable" ? "payable" : "receivable";
+    state.debtSection = section;
+    pageTitle.textContent = titles.debts;
     if (state.debtPeriod === null && !state.debtLoading && !state.debtError) setTimeout(fetchDebtPeriod, 0);
     // A failed request deliberately leaves the workspace empty so its error
     // panel and explicit retry button remain visible.  Do not immediately
     // schedule the same request from renderDebts(), otherwise a missing or
     // temporarily unavailable backend route creates an endless render/fetch
     // loop that makes the whole report screen flicker.
-    if (section === "receivable-kitchen" && state.receivableLedger === null && !state.receivableLoading && !state.receivableError) {
+    if (section === "receivable" && state.receivableLedger === null && !state.receivableLoading && !state.receivableError) {
       setTimeout(fetchReceivableWorkspace, 0);
     }
     if (section === "payable" && state.payableLedger === null && !state.payableLoading && !state.payableError) {
@@ -2491,6 +2465,11 @@
     }
     var s = d.summary;
     var contractorDebt = state.debtPeriod ? state.debtPeriod.contractors : {};
+    if (state.receivableContractor) {
+      contractorDebt = Object.fromEntries(Object.entries(contractorDebt).filter(function (entry) {
+        return entry[0] === state.receivableContractor;
+      }));
+    }
     var supplierDebt = state.debtPeriod ? state.debtPeriod.suppliers : {};
     if (state.payableSupplier) {
       var accountSupplier = state.payableLedger && state.payableLedger.supplier || state.payableSupplier;
@@ -2553,7 +2532,9 @@
         '</td><td class="num-cell">' + money(item.period_paid == null ? item.paid : item.period_paid) +
         '</td><td class="num-cell"><strong>' + money(item.closing == null ? item.balance : item.closing) + "</strong></td></tr>";
     }).join("");
-    var paymentRows = (state.receiptHistory || []).map(function (item) {
+    var paymentRows = (state.receiptHistory || []).filter(function (item) {
+      return !state.receivableContractor || item.party_code === state.receivableContractor;
+    }).map(function (item) {
       return '<tr><td>' + dateVN(item.payment_date) + '</td><td>' + (item.status === "reversed" ? "Đã hoàn tác" : "Đã thu") +
         '</td><td>' + esc(item.party_code) + '</td><td class="num-cell">' + stockMoney(item.amount) + '</td><td>' +
         esc(item.note || "") + '<div class="muted">' + esc(item.created_by || "Bản cũ chưa ghi người thao tác") +
@@ -2561,14 +2542,19 @@
         '<button class="btn btn-small btn-danger" data-action="reverse-receipt" data-id="' + item.id + '" data-revision="' + item.revision + '">Hoàn tác</button>') + '</td></tr>';
     }).join("");
     function accountTotalRows(accounts) {
+      if (!state.debtPeriod) return '';
       return '<tfoot><tr class="table-total-row"><td>TỔNG</td>' + ["opening", "period_charge", "period_adjustment", "period_paid", "closing"].map(function (field) {
         return '<td class="num-cell">' + stockMoney(Object.values(accounts).reduce(function (sum, item) { return sum + n(item[field]); }, 0)) + '</td>';
       }).join("") + '</tr></tfoot>';
     }
     var debtNotice = state.debtError ? '<div class="error-summary">' + esc(state.debtError) + '<button class="btn btn-outline" data-action="refresh-debt-period">Tải lại tổng công nợ</button></div>' :
       (!state.debtPeriod ? '<div class="loading-inline">Đang nạp tổng công nợ đúng kỳ…</div>' : '');
-    var detailHeader = debtNotice + '<div class="debt-detail-head fade-in"><button type="button" class="btn btn-outline" data-action="back-debt-overview">← Danh mục công nợ</button>' +
-      '<div><strong>' + esc(sectionTitles[section]) + '</strong><span>Chi tiết chỉ hiện trong mục đang chọn</span></div></div>';
+    var detailHeader = '<div class="debt-section-tabs" aria-label="Loại công nợ">' +
+      ['receivable', 'payable'].map(function (key) {
+        return '<button type="button" class="btn ' + (section === key ? 'btn-primary' : 'btn-outline') +
+          '" data-action="open-debt-section" data-section="' + key + '" aria-pressed="' + (section === key) + '">' +
+          (key === 'receivable' ? 'Công nợ phải thu' : 'Công nợ phải trả') + '</button>';
+      }).join('') + '<button class="btn btn-outline debt-payment-link" data-action="open-payment-request">Đề nghị thanh toán từ hóa đơn</button></div>' + debtNotice;
     var periodToolbarStart = '<div class="toolbar fade-in debt-period-toolbar"><form id="debtPeriodForm" class="debt-period-grid' + (section === "payable" ? ' debt-period-grid-payable' : '') + '">' +
       '<div class="form-field"><label for="payableFrom">Từ ngày</label><input id="payableFrom" name="from" type="date" value="' + esc(state.debtFrom) + '" required></div>' +
       '<div class="form-field"><label for="payableTo">Đến ngày</label><input id="payableTo" name="to" type="date" value="' + esc(state.debtTo) + '" required></div>';
@@ -2604,27 +2590,24 @@
       '<div class="form-field span-2"><label>Lý do</label><input name="note" required></div>' +
       '<button class="btn btn-outline" type="submit">Lưu điều chỉnh</button></form></div></div></div></details>';
 
-    if (section === "receivable-kitchen") {
+    if (section === "receivable") {
+      // A ledger response or detail toggle must not erase an unfinished receipt,
+      // including its idempotency key and disabled submit during a save.
+      var pendingReceipt = document.getElementById('receiptForm');
+      if (pendingReceipt && !pendingReceipt.dataset.requestId &&
+          !['actor', 'amount', 'note'].some(function (key) { return pendingReceipt.elements[key].value; })) pendingReceipt = null;
       content.innerHTML = html([
         detailHeader, periodToolbar, receivableFilter,
-        '<div class="code-note operational-receivable-note"><strong>Cách tính:</strong> số thực giao sau điều chỉnh × giá bán tại thời điểm giao; không phải đề nghị thanh toán hay hóa đơn đỏ.</div>',
-        receivableWorkspaceHtml()
-      ]);
-      return;
-    }
-
-    if (section === "receivable-total") {
-      content.innerHTML = html([
-        detailHeader, periodToolbar,
-        '<div class="toolbar fade-in debt-download-toolbar"><div class="compact-controls"><a class="btn btn-outline" href="/api/export/debts?from=', encodeURIComponent(state.debtFrom), '&to=', encodeURIComponent(state.debtTo), '">Tải Excel thu/chi</a><a class="btn btn-primary" href="/api/debts/receivables/export?from=', encodeURIComponent(state.debtFrom), '&to=', encodeURIComponent(state.debtTo), '">Tải công nợ phải thu (ZIP)</a></div></div>',
-        '<div class="card"><div class="card-head"><div><h3>Tổng công nợ phải thu</h3><p>Đầu kỳ + phát sinh từ đơn đã duyệt + điều chỉnh − đã thu. Số phát sinh gồm thuế và đã trừ hàng khách trả.</p></div></div>',
-        '<div class="table-wrap round3-table"><table><thead><tr><th>Nhà thầu</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Điều chỉnh</th><th>Đã thu</th><th>Còn thu</th></tr></thead><tbody>',
-        contractorRows || '<tr><td colspan="6"><div class="empty">Chưa có công nợ phải thu trong kỳ.</div></td></tr>', '</tbody>', accountTotalRows(contractorDebt), '</table></div></div>',
+        '<div class="debt-download-toolbar compact-controls"><a class="btn btn-outline" href="/api/export/debts?from=', encodeURIComponent(state.debtFrom), '&to=', encodeURIComponent(state.debtTo), '">Tải đối chiếu tổng công nợ · tất cả đối tượng</a></div>',
+        '<div class="card"><div class="card-head"><div><h3>Tổng công nợ phải thu</h3><p>Đầu kỳ + phát sinh từ đơn đã duyệt + điều chỉnh − đã thu. Gồm thuế, đã trừ hàng khách trả và gồm mọi bếp của nhà thầu; không thu hẹp theo trạng thái dòng.</p></div></div>',
+        '<div class="table-wrap round3-table receivable-account-table" aria-busy="', !state.debtPeriod, '"><table><thead><tr><th>Nhà thầu</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Điều chỉnh</th><th>Đã thu</th><th>Còn thu</th></tr></thead><tbody>',
+        contractorRows || '<tr><td colspan="6"><div class="empty">' + (state.debtPeriod ? 'Chưa có công nợ phải thu trong kỳ.' : state.debtError ? 'Chưa tải được tổng công nợ.' : 'Đang nạp tổng công nợ…') + '</div></td></tr>', '</tbody>', accountTotalRows(contractorDebt), '</table></div></div>',
+        receivableWorkspaceHtml(),
         '<div class="card"><div class="card-head"><div><h3>Ghi nhận khách hàng đã thanh toán</h3><p>Lưu số tiền đã nhận từ nhà thầu</p></div></div><div class="card-body"><form id="receiptForm" class="payment-grid">',
         '<div class="form-field"><label>Người ghi nhận</label><input name="actor" maxlength="120" required></div>',
         '<div class="form-field"><label>Ngày nhận tiền</label><input name="payment_date" type="date" value="', currentWorkDate(), '" required></div>',
         '<input name="kind" type="hidden" value="receipt"><div class="form-field"><label>Nhà thầu thanh toán</label><select name="party_code" required><option value="">Chọn nhà thầu đã thanh toán</option>',
-        (d.master.contractors || []).map(function(item) { return '<option value="' + esc(item.code) + '">' + esc(item.code + ' · ' + item.name) + '</option>'; }).join(''), '</select></div>',
+        (d.master.contractors || []).map(function(item) { return '<option value="' + esc(item.code) + '"' + (item.code === state.receivableContractor ? ' selected' : '') + '>' + esc(item.code + ' · ' + item.name) + '</option>'; }).join(''), '</select></div>',
         '<div class="form-field"><label>Số tiền</label><input name="amount" type="number" min="1" step="1" required></div>',
         '<div class="form-field"><label>Nội dung</label><input name="note" placeholder="Ví dụ: Chuyển khoản"></div>',
         '<button class="btn btn-primary" type="submit">Lưu khoản đã thu</button></form></div></div>',
@@ -2633,6 +2616,7 @@
         paymentRows || '<tr><td colspan="6"><div class="empty">Chưa ghi nhận khoản thu</div></td></tr>', '</tbody></table></div></div>',
         adminTools
       ]);
+      if (pendingReceipt) document.getElementById('receiptForm').replaceWith(pendingReceipt);
       return;
     }
 
@@ -2991,6 +2975,10 @@
     var contractor = state.paymentFilters && state.paymentFilters.contractor;
     if (!contractor) return '<p class="muted">Chọn nhà thầu để kiểm tra hồ sơ người mua và mã số thuế liên kết hóa đơn VAT.</p>';
     var draft = (state.buyerEdits || {})[contractor];
+    if (!draft && state.outgoingInvoices === null) {
+      return '<p role="status">' + (state.outgoingInvoicesError ? esc(state.outgoingInvoicesError) : 'Đang nạp hồ sơ người mua…') +
+        '</p><button class="btn btn-outline" data-action="refresh-invoice-buyers">Tải lại hồ sơ người mua</button>';
+    }
     var buyer = draft || (state.buyerProfiles || {})[contractor] || {};
     return '<details' + (draft ? ' open' : '') + '><summary>Hồ sơ người mua · ' + esc(contractor) + '</summary>' +
       '<form id="buyerProfileForm" class="document-contractor-form" data-contractor="' + esc(contractor) + '">' +
@@ -3001,12 +2989,53 @@
       }).join('') + '<button type="submit" class="btn btn-outline">Lưu hồ sơ người mua</button></form></details>';
   }
 
+  function renderPaymentRequest() {
+    if (state.outgoingInvoices === null && !state.outgoingInvoicesLoading) setTimeout(fetchOutgoingInvoices, 0);
+    content.innerHTML = '<div class="secondary-action-row"><button class="btn btn-outline" data-view="debts">← Công nợ phải thu</button></div>' +
+      '<section class="card" id="invoicePaymentRequest"><div class="card-head"><div><h3>Đề nghị thanh toán từ hóa đơn đã phát hành</h3>' +
+      '<p>Chọn nhà thầu và kỳ hóa đơn để xem, in hoặc tải hồ sơ thanh toán.</p></div></div><div class="card-body">' +
+      paymentRequestFormHtml() + '</div></section>' + invoicePaymentScopeHtml() + '<div id="paymentDocumentPreview"></div>';
+  }
+
   function renderDocuments() {
+    // Async invoice callbacks must not replace a different workspace after navigation.
+    if (state.view === 'payment-request') { renderPaymentRequest(); return; }
+    if (state.view === 'invoice-tools') { renderInvoiceTools(); return; }
+    if (state.view !== 'documents') return;
+    content.innerHTML = orderInvoiceExportHtml() + unissuedHtml() +
+      '<section class="card" id="invoiceZipCard"><div class="card-head"><div><h3>ZIP hóa đơn</h3>' +
+      '<p>Tải theo ngày lập dự thảo. Đơn đang chọn có thể được gộp vào dự thảo của ngày sau; mỗi ZIP gồm các dự thảo chưa phát hành của ngày ghi trên nút.</p></div></div><div class="card-body compact-controls">' +
+      invoiceFileActionHtml() + '</div>' +
+      (state.outgoingActionError && state.outgoingActionError.batchId === state.batchId ? '<div class="error-summary" role="alert">' + esc(state.outgoingActionError.message) + '<button class="btn btn-outline" data-view="invoice-tools">Xem nguyên nhân / xử lý</button></div>' : '') + '</section>';
+  }
+
+  function invoiceFileActionHtml() {
+    var d = state.data;
+    if (!d.batch) return '<button class="btn btn-outline" data-view="home">Chọn đơn hàng</button>';
+    if (state.outgoingInvoices === null) setTimeout(fetchOutgoingInvoices, 0);
+    var drafts = (state.outgoingInvoices || []).filter(function (item) {
+      return (item.batch_id === state.batchId || (item.source_batch_ids || []).includes(state.batchId)) &&
+        item.status === 'draft' && !['saved','saving','unknown'].includes(item.minvoice_status);
+    });
+    return invoiceZipButtons(drafts) +
+      '<button class="btn btn-outline" data-view="invoice-tools">Xem / tạo dự thảo của đơn đang chọn</button>';
+  }
+
+  function invoiceZipButtons(drafts) {
+    // The invoice list includes consolidated drafts containing this order as a
+    // source. The ZIP endpoint is scoped to the draft's owning batch instead.
+    return Array.from(new Set(drafts.map(function (item) { return item.batch_id; }))).map(function (id) {
+      var batch = (state.data.batches || []).find(function (item) { return item.id === id; });
+      var label = batch ? dateVN(batch.work_date) : 'mã đơn ' + id;
+      return '<button class="btn btn-primary" data-action="download-document" data-url="/api/export/invoices/' + encodeURIComponent(id) + '">Tải ZIP dự thảo · ' + esc(label) + '</button>';
+    }).join('');
+  }
+
+  function renderInvoiceTools() {
     var d = state.data;
     if (state.outgoingInvoices === null) setTimeout(fetchOutgoingInvoices, 0);
     if (!d.batch) {
-      content.innerHTML = '<section class="card"><div class="card-body"><h3>File đưa lên M-Invoice</h3><p>Chọn đơn hàng ở thanh trên để tạo file Excel. Nếu chưa có đơn, vào Đơn hàng - bảng kê để nạp và duyệt trước.</p><button class="btn btn-outline" data-view="orders">Mở Đơn hàng - bảng kê</button></div></section><section class="card"><div class="card-body"><h3>Hồ sơ thanh toán từ hóa đơn VAT</h3>' +
-        paymentRequestFormHtml() + '</div></section>' + invoicePaymentScopeHtml() + '<div id="paymentDocumentPreview"></div>';
+      content.innerHTML = '<section class="card"><div class="card-body"><p>Chọn đơn hàng để xem dự thảo hóa đơn.</p><button class="btn btn-outline" data-view="home">Mở Đơn hàng - bảng kê</button></div></section>';
       return;
     }
     if (state.outgoingReadiness === null && !state.outgoingReadinessLoading) setTimeout(fetchOutgoingReadiness, 0);
@@ -3081,7 +3110,7 @@
       : d.batch.status !== "approved"
         ? '<button class="btn btn-primary" disabled>Cần duyệt đơn trước</button><button class="btn btn-outline" data-view="orders">Mở đơn để sửa / duyệt</button>'
         : activeDrafts.length
-          ? '<button class="btn btn-primary" data-action="download-document" data-url="' + exportUrl("invoices") + '">Tải ZIP hóa đơn</button><button class="btn btn-outline" data-action="create-outgoing-drafts">Tính lại dự thảo</button>'
+          ? invoiceZipButtons(activeDrafts) + '<button class="btn btn-outline" data-action="create-outgoing-drafts">Tính lại dự thảo</button>'
           : '<button class="btn btn-primary" data-action="create-outgoing-drafts"' + (creationBlocked ? ' disabled' : '') + '>Tạo file tải hóa đơn</button>';
     var invalidOrderCount = d.orders.filter(function(row) { return row.errors && row.errors.length; }).length;
     if (invalidOrderCount) invoiceFileAction += '<p class="invoice-issue-error">Còn ' + invalidOrderCount + ' dòng đơn cần sửa trước khi duyệt.</p>';
@@ -3099,22 +3128,13 @@
       '</div>'
     ]) : '';
     content.innerHTML = html([
-      orderInvoiceExportHtml(),
-      unissuedHtml(),
+      '<div class="secondary-action-row"><button class="btn btn-outline" data-view="documents">← Bảng kê & hóa đơn</button><button class="btn btn-outline" data-view="msmi">Hóa đơn đầu vào + đầu ra</button></div>',
       outgoingReadinessHtml(),
-      state.outgoingActionError && state.outgoingActionError.batchId === state.batchId ? '<div class="error-summary" role="alert">' + esc(state.outgoingActionError.message) + '<div class="form-actions"><button class="btn btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button><button class="btn btn-outline" data-view="orders">Mở đơn để kiểm tra</button></div></div>' : '',
-      '<div class="document-primary-grid fade-in"><section class="document-primary-card"><div class="document-primary-icon">13</div>',
-      '<div><h3>File đưa lên M-Invoice</h3><p>Tải ZIP về máy, giải nén rồi nhập file Excel vào M-Invoice để kiểm tra, ký và phát hành.</p></div><div class="document-primary-action">',
-      invoiceFileAction, '</div></section>',
-      '<section class="document-primary-card" id="invoicePaymentRequest"><div class="document-primary-icon">TT</div><div><h3>Đề nghị thanh toán từ hóa đơn đã phát hành</h3>',
-      '<p>Chọn nhà thầu để lấy đúng các hóa đơn Thành Đạt Phát đã phát hành.</p>',
-      paymentRequestFormHtml(), '</div></section></div>',
-      outgoingTable, invoicePaymentScopeHtml(),
-      '<div id="paymentDocumentPreview"></div>',
-      '<div class="card"><div class="card-head"><div><h3>Bảng kê mua hàng và biên nhận</h3><p>Xem đúng hồ sơ người bán; thiếu hoặc trùng CCCD vẫn bị chặn.</p></div><button class="btn btn-outline" data-action="preview-purchase-documents">Xem bảng kê / biên nhận</button></div><div id="purchaseDocumentPreview"></div></div>',
+      state.outgoingActionError && state.outgoingActionError.batchId === state.batchId ? '<div class="error-summary" role="alert">' + esc(state.outgoingActionError.message) + '<button class="btn btn-outline" data-action="refresh-outgoing-readiness">Kiểm tra lại</button></div>' : '',
+      '<section class="card"><div class="card-head"><div><h3>File dự thảo hóa đơn của đơn đang chọn</h3><p>Tải file chưa tính là đã phát hành.</p></div></div><div class="card-body compact-controls">',
+      invoiceFileAction, '</div></section>', outgoingTable,
       '<div class="secondary-action-row"><button class="btn btn-outline" data-action="toggle-document-details">',
-      state.documentDetailsOpen ? 'Ẩn xử lý chi tiết' : 'Xử lý chi tiết hóa đơn', '</button></div>',
-      detailsHtml
+      state.documentDetailsOpen ? 'Ẩn xử lý chi tiết' : 'Xử lý chi tiết hóa đơn', '</button></div>', detailsHtml
     ]);
   }
 
@@ -3354,7 +3374,7 @@
   function renderMsmi() {
     if (!state.invoiceWorkbench || !state.invoiceListing) { loadInvoiceWorkbench(); return; }
     invoiceVirtual?.dispose();
-    content.innerHTML = (state.stockResolutionReturn ? '<div class="warning-summary">Đang đối chiếu nguồn tồn cho phiên đơn. <button class="btn btn-primary" data-action="return-stock-resolution">Quay lại bảng kê · Kiểm tra lại</button></div>' : '') + window.TdpInvoiceWorkbench(state, {esc:esc, num:stockQty, money:stockMoney, dateVN:dateVN});
+    content.innerHTML = (state.stockResolutionReturn ? '<div class="warning-summary">Đang đối chiếu nguồn tồn cho phiên đơn. <button class="btn btn-primary" data-action="return-stock-resolution">Quay lại bảng kê · Kiểm tra lại</button></div>' : '') + '<div class="secondary-action-row"><button class="btn btn-outline" data-view="invoice-tools">Dự thảo hóa đơn từ đơn hàng</button></div>' + window.TdpInvoiceWorkbench(state, {esc:esc, num:stockQty, money:stockMoney, dateVN:dateVN});
     invoiceVirtual = window.TdpInvoiceVirtualTable(content.querySelector('.invoice-lines-card .invoice-lines-scroll'), state.invoiceListing.lines || [], window.TdpInvoiceRenderRow);
   }
 
@@ -3614,17 +3634,6 @@
     var selectedCount = selectionRows.filter(function (item) {
       return Boolean(state.printingSelected[item.key]);
     }).length;
-    var documentChoices = [
-      ["deliveries", "Đơn hàng đi giao", "Chọn tất cả hoặc từng bếp", "GIAO"],
-      ["suppliers", "Đơn đặt nhà cung cấp", "File Excel đặt hàng", "ĐẶT"],
-      ["purchases", "Bảng kê và biên nhận", "File Excel có thể sửa thêm", "KÊ"],
-      ["report", "Báo cáo tổng hợp", "Đúng mẫu tổng hợp theo tháng", "BC"]
-    ].map(function (choice) {
-      return '<label class="print-type-card ' + (state.printingDocument === choice[0] ? 'is-selected' : '') + '">' +
-        '<input type="radio" name="printDocument" class="print-document-choice" value="' + choice[0] + '" ' +
-        (state.printingDocument === choice[0] ? 'checked' : '') + '><span class="print-type-icon">' + choice[3] +
-        '</span><span><strong>' + choice[1] + '</strong><small>' + choice[2] + '</small></span></label>';
-    }).join("");
     var batchRows = selectionRows.map(function (item) {
       var batch = item.batch;
       var status = batch.status === "approved"
@@ -3675,7 +3684,8 @@
       return ["prepared", "approved", "error"].indexOf(item.status) >= 0;
     });
     content.innerHTML = html([
-      '<div class="print-type-grid fade-in">', documentChoices, '</div>',
+      '<div class="print-workspace-heading"><button class="btn btn-outline" data-view="home">← Đơn hàng - bảng kê</button><h3>',
+      {deliveries:'In đơn hàng đi giao', purchases:'In bảng kê và biên nhận', suppliers:'In đơn đặt nhà cung cấp', report:'In báo cáo tổng hợp'}[state.printingDocument], '</h3></div>',
       '<div class="card print-selection-card fade-in"><div class="card-head"><div><h3>',
       state.printingDocument === "deliveries" ? 'Chọn bếp cần in phiếu giao' : 'Chọn ngày cần lấy giấy tờ', '</h3>',
       '<p>Chọn phiếu, xem ngay tại đây hoặc in phần đã chọn. Bảng kê/biên nhận có thể chọn tiếp từng sheet trong bản xem.</p></div>',
@@ -3690,7 +3700,7 @@
       '<button class="btn btn-outline" data-action="download-selected-documents" ', selectedCount ? '' : 'disabled', '>Tải file đã chọn</button>',
       state.printingDocument === "purchases" ? '<button class="btn btn-outline" data-action="open-bk-draft">Lập bảng kê bổ sung từ tồn âm</button><button class="btn btn-outline" data-action="choose-bk-workbook">Nhập bảng kê bổ sung</button>' : '',
       '</div>',
-      state.printingDocument === "purchases" ? '<p class="muted">Tải bảng kê đầu vào: gộp các ngày đã chọn vào một file Excel, theo lượng và giá đã ghi nhập kho khi duyệt đơn.</p>' : '',
+      state.printingDocument === "purchases" ? '<p class="muted">Để tải bảng kê đầu vào đã ghi kho, quay lại Đơn hàng - bảng kê và chọn Tải bảng kê đầu vào.</p>' : '',
       state.printingDocument === 'deliveries' ? '<label class="print-customer-filter">Khách hàng / bếp <select id="printingCustomer"><option value="">Tất cả bếp</option>' + state.data.master.kitchens.map(function(k) { return '<option value="' + esc(k.code) + '" ' + (state.printingCustomer === k.code ? 'selected' : '') + '>' + esc(k.name || k.code) + '</option>'; }).join('') + '</select></label>' : '', '</div>',
       '<div class="table-wrap print-batch-table"><table><thead><tr><th>Chọn</th><th>',
       state.printingDocument === "deliveries" ? 'Bếp / ngày giao' : 'Ngày / file đơn',
@@ -3915,6 +3925,8 @@
       reports: renderReports,
       debts: renderDebts,
       documents: renderDocuments,
+      "invoice-tools": renderDocuments,
+      "payment-request": renderPaymentRequest,
       inventory: renderInventory,
       msmi: renderMsmi,
       printing: renderPrinting,
@@ -4952,6 +4964,7 @@
   async function fetchOutgoingInvoices() {
     if (state.outgoingInvoicesLoading) return;
     state.outgoingInvoicesLoading = true;
+    state.outgoingInvoicesError = '';
     var outgoingBatchId = state.batchId;
     var serial = state.outgoingInvoicesSerial = (state.outgoingInvoicesSerial || 0) + 1;
     try {
@@ -4959,12 +4972,17 @@
       if (outgoingBatchId !== state.batchId || serial !== state.outgoingInvoicesSerial) return;
       state.outgoingInvoices = payload.items || [];
       state.buyerProfiles = payload.buyer_profiles || {};
-      if (state.view === "documents") renderDocuments();
-    } catch (error) { showToast(error.message, true); }
+      if (["documents", "invoice-tools", "payment-request"].includes(state.view)) renderDocuments();
+    } catch (error) {
+      if (outgoingBatchId !== state.batchId || serial !== state.outgoingInvoicesSerial) return;
+      state.outgoingInvoicesError = error.message;
+      if (state.view === 'payment-request') renderPaymentRequest();
+      showToast(error.message, true);
+    }
     finally {
       if (serial === state.outgoingInvoicesSerial) {
         state.outgoingInvoicesLoading = false;
-        if (outgoingBatchId !== state.batchId && state.view === 'documents') setTimeout(fetchOutgoingInvoices, 0);
+        if (outgoingBatchId !== state.batchId && ['documents', 'invoice-tools', 'payment-request'].includes(state.view)) setTimeout(fetchOutgoingInvoices, 0);
       }
     }
   }
@@ -4987,7 +5005,7 @@
       if (serial === state.outgoingReadinessSerial) {
         state.outgoingReadinessLoading = false;
         if (batchId !== state.batchId) state.outgoingReadiness = null;
-        if (state.view === "documents") renderDocuments();
+        if (["documents", "invoice-tools"].includes(state.view)) renderDocuments();
       }
     }
   }
@@ -5003,7 +5021,7 @@
       showToast(error.message, true);
     } finally {
       state.outgoingSubstitutionLoading = false;
-      if (state.view === "documents") renderDocuments();
+      if (["documents", "invoice-tools"].includes(state.view)) renderDocuments();
     }
   }
 
@@ -5042,7 +5060,7 @@
       showToast(error.message, true);
     } finally {
       state.outgoingShortageLoading = false;
-      if (state.view === "documents") renderDocuments();
+      if (["documents", "invoice-tools"].includes(state.view)) renderDocuments();
     }
   }
 
@@ -5719,8 +5737,9 @@
       invalidateDebtPeriod();
       invalidateReceivableWorkspace(true);
       invalidatePayableWorkspace(true);
+      renderDebts();
       var debtLoaders = [fetchDebtPeriod()];
-      if (state.debtSection === "receivable-kitchen") debtLoaders.push(fetchReceivableWorkspace());
+      if (state.debtSection === "receivable") debtLoaders.push(fetchReceivableWorkspace());
       if (state.debtSection === "payable") debtLoaders.push(fetchPayableWorkspace());
       await Promise.all(debtLoaders);
     }
@@ -5738,6 +5757,7 @@
       state.receivableStatus = receivableFilter.status || "active";
       persistReceivableFilters();
       invalidateReceivableWorkspace(true);
+      renderDebts();
       await fetchReceivableWorkspace();
     }
     if (event.target.id === "debtAdjustmentForm") {
@@ -6022,6 +6042,10 @@
       event.preventDefault();
       var paymentRequest = Object.fromEntries(new FormData(event.target).entries());
       state.paymentFilters = paymentRequest;
+      var paymentScopeSerial = ++state.paymentScopeSerial;
+      function paymentScopeCurrent() {
+        return state.view === 'payment-request' && paymentScopeSerial === state.paymentScopeSerial;
+      }
       var from = paymentRequest.from;
       var paymentButton = event.submitter || event.target.querySelector('button[type="submit"]');
       var paymentLabel = paymentButton ? paymentButton.textContent : "";
@@ -6031,10 +6055,12 @@
           paymentButton.disabled = true;
           paymentButton.textContent = "Đang đối chiếu hóa đơn…";
         }
-        state.invoicePaymentScope = await api(
+        var paymentScope = await api(
           "/api/outgoing-invoices/payment-scope/" + encodeURIComponent(paymentRequest.contractor) +
           "?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(paymentRequest.to)
         );
+        if (!paymentScopeCurrent()) return;
+        state.invoicePaymentScope = paymentScope;
         renderDocuments();
         showToast("Đã đối chiếu phạm vi hóa đơn đỏ · sẵn sàng tải hồ sơ chính thức");
         var scope = state.invoicePaymentScope;
@@ -6044,6 +6070,7 @@
           document.getElementById('paymentDocumentPreview')?.scrollIntoView({block:'start'});
         }
       } catch (error) {
+        if (!paymentScopeCurrent()) return;
         state.invoicePaymentScope = { error: error.message };
         renderDocuments();
         showToast(error.message, true);
@@ -6105,6 +6132,7 @@
     }
     if (event.target.form && event.target.form.id === 'paymentRequestForm') {
       state.paymentFilters = Object.fromEntries(new FormData(event.target.form).entries());
+      state.paymentScopeSerial++;
     }
     if (event.target.closest && event.target.closest("#outgoingSubstitutionForm")) {
       state.outgoingSubstitutionDraft = outgoingSubstitutionFormBody(event.target.form);
@@ -6161,6 +6189,7 @@
     if (event.target.form && event.target.form.id === 'paymentRequestForm') {
       state.paymentFilters = Object.fromEntries(new FormData(event.target.form).entries());
       state.invoicePaymentScope = null;
+      state.paymentScopeSerial++;
       renderDocuments();
       return;
     }
@@ -6590,6 +6619,14 @@
       navigate("printing");
       return;
     }
+    if (action === 'preview-supplier-documents') {
+      await window.TDPDocuments.open({kind:'suppliers', selections:[{batch_id:Number(button.dataset.batchId)}]}, 'supplierPrintPreview-' + button.dataset.batchId);
+      return;
+    }
+    if (action === 'preview-report-documents' && state.reportData) {
+      await window.TDPDocuments.open({kind:'report', from:state.reportData.date_from, to:state.reportData.date_to}, 'reportDocumentPreview');
+      return;
+    }
     if (action === "quick-add-order") {
       openQuickAddModal(button.dataset.id);
       return;
@@ -6674,6 +6711,19 @@
       }
       return;
     }
+    if (action === "toggle-receivable-details") {
+      state.receivableDetailsOpen = !state.receivableDetailsOpen;
+      renderDebts();
+      return;
+    }
+    if (action === "open-payment-request") {
+      state.paymentFilters = {contractor:state.receivableContractor, from:state.debtFrom, to:state.debtTo};
+      state.invoicePaymentScope = null;
+      state.debtSection = 'receivable';
+      navigate('payment-request');
+      return;
+    }
+    if (action === "refresh-invoice-buyers") { await fetchOutgoingInvoices(); return; }
     if (action === "open-debt-section") {
       state.debtSection = button.dataset.section || "";
       renderDebts();
@@ -6681,7 +6731,7 @@
       return;
     }
     if (action === "back-debt-overview") {
-      state.debtSection = "";
+      state.debtSection = "receivable";
       pageTitle.textContent = titles.debts;
       renderDebts();
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -6734,8 +6784,11 @@
     }
     if (action === 'show-stock-cause') { await showStockCause(button); return; }
     if (action === 'edit-invoice-buyer') {
+      paymentRequestFormHtml();
       state.paymentFilters = Object.assign({}, state.paymentFilters, {contractor:button.dataset.contractor});
-      renderDocuments();
+      state.invoicePaymentScope = null;
+      state.debtSection = 'receivable';
+      navigate('payment-request');
       var buyerForm = document.getElementById('buyerProfileForm');
       if (buyerForm) { buyerForm.closest('details').open = true; buyerForm.scrollIntoView({block:'center'}); buyerForm.querySelector('input').focus({preventScroll:true}); }
       return;
@@ -7476,7 +7529,7 @@
         await downloadFile(button.dataset.url);
         showToast("Đã tải file về máy");
       } catch (error) {
-        if (state.view === 'documents' && (button.dataset.url || '').indexOf('/api/export/invoices/') === 0) {
+        if (['documents', 'invoice-tools'].includes(state.view) && (button.dataset.url || '').indexOf('/api/export/invoices/') === 0) {
           state.outgoingActionError = {batchId:state.batchId, message:error.message};
           await fetchOutgoingReadiness();
         }
@@ -7695,7 +7748,7 @@
     if (state.view === 'debts') {
       // Capture existing export URLs with their applied filters before opening.
       // The fullscreen table is a view; exports still include the complete filtered ledger.
-      var links = table.closest('.receivable-ledger-table') ? content.querySelectorAll('#receivableFilteredExport, #receivableExportSelected') :
+      var links = table.closest('.receivable-ledger-table, .receivable-kitchen-table') ? content.querySelectorAll('#receivableFilteredExport, #receivableExportSelected') :
         content.querySelectorAll('.debt-download-toolbar a[href]');
       downloads = Array.from(links).map(function(link) {
         var url = link.getAttribute('href');

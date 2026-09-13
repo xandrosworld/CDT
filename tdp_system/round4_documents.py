@@ -82,6 +82,17 @@ def selected_workbooks(conn, body, ctx):
                 issue_date=body.get('issue_date') or scope['date_to'],
                 request_number=body.get('request_number') or '……/CV/ĐNTT',
                 contract_no=body.get('contract_no') or '', contract_date=body.get('contract_date') or '')))
+        elif kind == 'report' and ('from' in body or 'to' in body):
+            start, end = body.get('from'), body.get('to')
+            for value in (start, end):
+                if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+                    raise ValueError('Hãy chọn đủ từ ngày và đến ngày')
+                datetime.strptime(value, '%Y-%m-%d')
+            if start > end:
+                raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng đến ngày')
+            workbook = ctx['export_report'](conn,
+                {'id': -1, 'status': 'approved', 'work_date': start}, [], date_from=start, date_to=end)
+            result.append((f'Bao_cao_{start}_{end}.xlsx', workbook))
         else:
             builders = {'deliveries': 'export_deliveries', 'suppliers': 'export_supplier_orders',
                         'purchases': 'export_purchase_documents', 'report': 'export_report',
