@@ -29,7 +29,7 @@ def unissued_template_zip(payload, template_dir, tax_percent):
         key = (row['product_code'], row['unit'].strip().casefold(), price, nature)
         lines = groups[(row['contractor'], vat)]
         item = lines.setdefault(key, {'contractor':row['contractor'], 'product_code':row['product_code'],
-            'product_name':row['product_name'], 'unit':row['unit'], 'unit_price':price,
+            'product_name':row.get('invoice_name') or row['product_name'], 'unit':row['unit'], 'unit_price':price,
             'invoice_nature':nature, 'qty':Decimal(0)})
         item['qty'] += qty
     if not groups:

@@ -59,6 +59,7 @@
     mappingImportType: "",
     mappingPreview: null,
     catalogImportPreview: null,
+    catalogImportMode: 'full',
     catalogQuery: '',
     catalogOffset: 0,
     catalogItems: [],
@@ -1207,7 +1208,7 @@
     var preview = state.catalogImportPreview;
     if (!preview) return "";
     var statusNames = { "new": "Thêm mới", "update": "Cập nhật", "unchanged": "Không đổi", "duplicate": "Dòng trùng", "error": "Lỗi" };
-    var visibleRows = preview.rows.slice(0, 200).map(function (item) {
+    var visibleRows = preview.rows.slice().sort(function(a,b){return Number(Boolean(b.errors.length))-Number(Boolean(a.errors.length)) || Number(b.invoice_status==='update')-Number(a.invoice_status==='update');}).slice(0, 200).map(function (item) {
       var messages = item.errors.concat(item.warnings);
       var status = item.errors.length ? "error" : item.product_status;
       var tagClass = status === "error" ? "tag-red" : status === "new" ? "tag-ok" : "tag-warn";
@@ -1223,6 +1224,8 @@
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước danh mục ', esc(preview.filename),
       '</h3><p>Trang Excel ', esc(preview.sheet), ' · dòng tiêu đề ', preview.header_row,
       ' · chỉ ghi sau khi người dùng xác nhận</p></div><button class="btn btn-small btn-outline" data-action="cancel-catalog-import">Bỏ file</button></div>',
+      '<div class="card-body code-note">Phạm vi: ',preview.mode==='names_and_new'?'Chỉ thêm mã mới và cập nhật tên xuất hóa đơn; giữ thông tin khác của mã đã có.':'Cập nhật toàn bộ danh mục theo file.',
+      (preview.ignored_non_product_rows || []).length?' Bỏ qua dòng không có thông tin hàng: '+preview.ignored_non_product_rows.join(', '):'', '</div>',
       '<div class="card-body"><div class="status-bar">', count.unique_products, ' mã · ', count.new_products,
       ' mã mới · ', count.update_products, ' cập nhật · ', count.retained_products,
       ' mã cũ được giữ · ', count.new_names, ' tên hóa đơn mới · ', count.error, ' lỗi</div></div>',
@@ -3917,7 +3920,7 @@
       statCard("Nhóm nhà thầu", num(d.master.contractors.length), "Giá nhóm / giá theo ngày", "₫"),
       "</div>",
       '<div class="card"><div class="card-head"><div><h3>Danh mục hàng hóa</h3><p>Thêm từng mã hoặc nạp nhiều mã từ Excel. Tên trên hóa đơn để trống sẽ dùng tên hàng.</p></div></div><div class="card-body">',
-      '<div class="form-actions"><button class="btn btn-primary" data-action="add-catalog-product">Thêm mã hàng</button><button class="btn btn-outline" data-action="choose-catalog-workbook">Nạp từ Excel</button></div>',
+      '<div class="form-actions"><button class="btn btn-primary" data-action="add-catalog-product">Thêm mã hàng</button><label>Phạm vi nạp <select id="catalogImportMode"><option value="full"',state.catalogImportMode==='full'?' selected':'','>Cập nhật toàn bộ danh mục</option><option value="names_and_new"',state.catalogImportMode==='names_and_new'?' selected':'','>Chỉ thêm mã mới và cập nhật tên hóa đơn</option></select></label><button class="btn btn-outline" data-action="choose-catalog-workbook">Nạp từ Excel</button></div>',
       '<p class="code-note">Chọn file Em Thành.xlsx hoặc danh mục có các cột Mã hàng, Tên hàng, ĐVT, Thuế. Xem trước các thay đổi rồi xác nhận.</p>',
       '<form id="catalogSearchForm" class="catalog-search"><input class="input-date" name="q" aria-label="Tìm mã hoặc tên hàng" placeholder="Tìm toàn bộ mã hoặc tên hàng (có / không dấu)" value="',esc(state.catalogQuery),'"><button class="btn btn-outline" type="submit">Tìm</button></form><div id="catalogProducts"></div>',
       '<details class="code-note"><summary>Nạp dữ liệu khác</summary><div class="form-actions"><button class="btn btn-outline" data-action="choose-mapping-file" data-mapping-type="invoice_names">Nạp riêng tên hóa đơn từ Excel</button><button class="btn btn-outline" data-action="sync-master">Đọc lại bản Em Thành trên hệ thống</button></div><p>Bản Em Thành trên hệ thống được nạp lần cuối: ',esc(synced),'. Muốn dùng file vừa sửa trên máy, chọn Nạp từ Excel phía trên.</p></details></div></div>',
@@ -5239,6 +5242,7 @@
     try {
       var form = new FormData();
       form.append("file", file);
+      form.append('mode',state.catalogImportMode);
       state.catalogImportPreview = await api("/api/catalog/import/preview", { method: "POST", body: form });
       renderSettings();
       showToast("Đã kiểm tra danh mục · xem kỹ rồi xác nhận cập nhật");
@@ -6908,6 +6912,7 @@
     if (action === "catalog-previous" || action === "catalog-next") { state.catalogOffset = Math.max(0, state.catalogOffset + (action === 'catalog-next' ? 50 : -50)); await loadCatalogProducts(); return; }
     if (action === "add-catalog-product") { openCatalogProductDialog(); return; }
     if (action === "choose-catalog-workbook") {
+      state.catalogImportMode = document.getElementById('catalogImportMode').value;
       state.catalogImportPreview = null;
       catalogWorkbookInput.click();
     }

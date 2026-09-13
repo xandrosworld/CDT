@@ -1375,7 +1375,9 @@ def payables_database_state_hash(conn) -> str:
     ))
 
 
-def parse_catalog_workbook(conn, workbook) -> dict:
+def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
+    if mode not in ('full','names_and_new'):
+        raise ValueError('Chọn đúng phạm vi nhập danh mục.')
     found = find_catalog_sheet(workbook)
     if not found:
         raise ValueError("Không tìm thấy bảng có Mã hàng, Tên Thành Đạt Phát, ĐVT và Thuế")
@@ -1392,7 +1394,9 @@ def parse_catalog_workbook(conn, workbook) -> dict:
     }
     rows = []
     unique_items = {}
+    source_signatures = {}
     scanned = 0
+    ignored_rows=[]
     max_column = max(fields.values())
     for row_index, row in enumerate(
         worksheet.iter_rows(
@@ -1410,6 +1414,9 @@ def parse_catalog_workbook(conn, workbook) -> dict:
         group = mapping_cell_text(row[fields["product_group"] - 1]).upper() if "product_group" in fields else ""
         invoice_name = mapping_cell_text(row[fields["invoice_name"] - 1]) if "invoice_name" in fields else ""
         if not any((code, name, unit, tax, group, invoice_name)):
+            continue
+        if not any((code,name,unit,group,invoice_name)):
+            ignored_rows.append(row_index)
             continue
         scanned += 1
         item = {
@@ -1438,12 +1445,9 @@ def parse_catalog_workbook(conn, workbook) -> dict:
             item["errors"].append("Thiếu tên xuất hóa đơn")
 
         previous = unique_items.get(code) if code else None
+        signature = (mapping_key(name), mapping_key(invoice_name), mapping_key(unit), tax, group)
         if previous:
-            signature = (mapping_key(name), mapping_key(invoice_name), mapping_key(unit), tax, group)
-            previous_signature = (
-                mapping_key(previous["product_name"]), mapping_key(previous["invoice_name"]),
-                mapping_key(previous["unit"]), previous["tax"], previous["product_group"],
-            )
+            previous_signature = source_signatures[code]
             if signature == previous_signature:
                 item["product_status"] = "duplicate"
                 item["invoice_status"] = "duplicate"
@@ -1463,18 +1467,30 @@ def parse_catalog_workbook(conn, workbook) -> dict:
 
         if code:
             unique_items[code] = item
+            source_signatures[code] = signature
         if item["errors"]:
             rows.append(item)
             continue
 
         current = existing_products.get(code)
+        if current and mode=='names_and_new':
+            if any((mapping_key(current['name'])!=mapping_key(name),mapping_key(current['unit'])!=mapping_key(unit),catalog_tax(current['tax'])!=tax)):
+                item['warnings'].append('Giữ tên nội bộ, ĐVT và thuế đang dùng; chỉ cập nhật tên xuất hóa đơn')
+            name=current['name'];unit=current['unit'];tax=current['tax'];group=current['product_group']
+            item.update(product_name=name,unit=unit,tax=tax,product_group=group)
+        if current and catalog_unit(current['unit'])!=catalog_unit(unit):
+            from tdp_system.invoice_repairs import product_unit_usage
+            if product_unit_usage(conn,code):
+                item['errors'].append('Mã đã có đơn/kho: không đổi '+current['unit']+' sang '+unit+' khi chưa đối chiếu lượng. Chọn phạm vi chỉ thêm mã mới và cập nhật tên hóa đơn để nhập phần tên trước.')
+                rows.append(item)
+                continue
         if not current:
             item["product_status"] = "new"
         else:
             base_changed = any((
                 mapping_key(current.get("name")) != mapping_key(name),
                 mapping_key(current.get("unit")) != mapping_key(unit),
-                catalog_tax(current.get("tax")) != tax,
+                catalog_tax(current.get("tax")) != catalog_tax(tax),
                 mapping_key(current.get("product_group")) != mapping_key(group),
             ))
             item["product_status"] = "update" if base_changed else "unchanged"
@@ -1513,6 +1529,8 @@ def parse_catalog_workbook(conn, workbook) -> dict:
         "error": sum(bool(item["errors"]) for item in rows),
     }
     return {
+        "mode": mode,
+        "ignored_non_product_rows": ignored_rows,
         "sheet": worksheet.title,
         "header_row": header_row,
         "rows": rows,
@@ -6297,7 +6315,7 @@ def register_contract_routes(app, ctx):
                 io.BytesIO(payload), read_only=True, data_only=True, keep_links=False,
             )
             with db_factory() as conn:
-                preview = parse_catalog_workbook(conn, workbook)
+                preview = parse_catalog_workbook(conn, workbook,request.form.get('mode','full'))
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception:
@@ -6314,6 +6332,7 @@ def register_contract_routes(app, ctx):
             "source_hash": source_hash,
             "sheet": preview["sheet"],
             "header_row": preview["header_row"],
+            "mode": preview['mode'],
             "items": preview.pop("items"),
             "counts": preview["counts"],
             "retained_codes": preview["retained_codes"],
@@ -6357,8 +6376,12 @@ def register_contract_routes(app, ctx):
                 for item in pending["items"]:
                     code = item["product_code"]
                     current_product = conn.execute(
-                        "SELECT code FROM products WHERE code=?", (code,),
+                        "SELECT code,name,unit FROM products WHERE code=?", (code,),
                     ).fetchone()
+                    if current_product and catalog_unit(current_product['unit'])!=catalog_unit(item['unit']):
+                        from tdp_system.invoice_repairs import correct_unused_product_unit
+                        correct_unused_product_unit(conn,code=code,expected_name=current_product['name'],
+                            expected_unit=current_product['unit'],unit=item['unit'],now=timestamp)
                     if current_product:
                         if item["product_status"] == "update":
                             updated_products += 1
@@ -6411,11 +6434,14 @@ def register_contract_routes(app, ctx):
                     "unchanged_names": unchanged_names,
                     "processed": len(pending["items"]),
                 }
+                from tdp_system.outgoing_names import refresh_editable_names
+                result_counts['updated_draft_names']=refresh_editable_names(conn,timestamp,[r['product_code'] for r in pending['items']])
                 audit(
                     conn, now_iso, "catalog.bulk_import", "ok",
                     entity_type="catalog", entity_id=pending["source_hash"][:16],
                     metadata={
                         "filename": pending["filename"], "sheet": pending["sheet"],
+                        "mode": pending['mode'],
                         "header_row": pending["header_row"], "source_hash": pending["source_hash"],
                         **result_counts,
                     },
@@ -6544,6 +6570,9 @@ def register_contract_routes(app, ctx):
                     "unchanged": unchanged,
                     "processed": len(pending["items"]),
                 }
+                if is_invoice:
+                    from tdp_system.outgoing_names import refresh_editable_names
+                    result_counts['updated_draft_names']=refresh_editable_names(conn,now_iso(),[r['code'] for r in pending['items']])
                 audit(
                     conn,
                     now_iso,
@@ -8306,6 +8335,8 @@ def register_contract_routes(app, ctx):
                 (code, invoice_name, now_iso()),
             )
             audit(conn, now_iso, "outgoing.name_mapping", "ok", entity_type="product", entity_id=code)
+            from tdp_system.outgoing_names import refresh_editable_names
+            refresh_editable_names(conn,now_iso(),[code])
             return jsonify({"ok": True, "product_code": code, "invoice_name": invoice_name})
 
     @app.post("/api/outgoing-invoices/<int:draft_id>/confirm-issued")

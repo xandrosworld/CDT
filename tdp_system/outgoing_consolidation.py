@@ -7,9 +7,11 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 try:
     from .invoice_tax_export import InvoiceTaxExportError
     from .outgoing_readiness import validate_draft_export_stock
+    from .outgoing_names import invoice_name
 except ImportError:
     from invoice_tax_export import InvoiceTaxExportError
     from outgoing_readiness import validate_draft_export_stock
+    from outgoing_names import invoice_name
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS outgoing_waiting_settlements (
@@ -103,7 +105,7 @@ def _write_draft(conn,party,rows,days,tax_percent,timestamp,*,floor_kg=True,kind
     for code,unit,nature,price,qty,items in groups:
         first=items[0];amount=money(qty*price)
         lid=conn.execute('''INSERT INTO outgoing_invoice_lines(draft_id,order_id,product_code,product_name,qty,unit,unit_price,tax,invoice_nature,amount)
-            VALUES(?,?,?,?,?,?,?,?,?,?)''',(did,first['order_id'],code,first['product_name'],float(qty),first['unit'],float(price),first['tax'],nature,float(amount))).lastrowid
+            VALUES(?,?,?,?,?,?,?,?,?,?)''',(did,first['order_id'],code,invoice_name(conn,code,first['product_name']),float(qty),first['unit'],float(price),first['tax'],nature,float(amount))).lastrowid
         remaining=qty;allocations=defaultdict(lambda:Decimal(0));cost=Decimal(0)
         for row in items:
             part=min(decimal(row['qty']),remaining)

@@ -71,6 +71,11 @@ def save_product(conn, body, *, editing, ctx):
     if invoice_name:
         conn.execute('INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES(?,?,?) ON CONFLICT(product_code) DO UPDATE SET invoice_name=excluded.invoice_name,updated_at=excluded.updated_at',(code,invoice_name,ctx['now_iso']()))
     elif editing:conn.execute('DELETE FROM outgoing_product_names WHERE product_code=?',(code,))
+    try:
+        from .outgoing_names import refresh_editable_names
+    except ImportError:
+        from outgoing_names import refresh_editable_names
+    refresh_editable_names(conn,ctx['now_iso'](),[code])
     ctx['audit'](conn,ctx['now_iso'],'catalog.product_update' if editing else 'catalog.product_create','ok',entity_type='product',entity_id=code,
                  metadata={'name':name,'unit':unit,'tax':tax,'invoice_name':invoice_name,'before':expected})
     return {'code':code,'name':name,'unit':unit,'tax':tax}

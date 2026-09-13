@@ -146,6 +146,7 @@ def unissued_payload(conn,asof,contractor=''):
         from outgoing_readiness import canonical_available_stock
         from outgoing_pending import explain_pending
     stock=canonical_available_stock(conn)
+    invoice_names={r['product_code']:r['invoice_name'] for r in conn.execute("SELECT product_code,invoice_name FROM outgoing_product_names WHERE TRIM(invoice_name)!=''")}
     ready,stock_warnings=waiting_readiness(conn,orders,issued,stock=stock)
     units=unit_issues(conn,orders)
     warnings.extend(stock_warnings)
@@ -156,7 +157,7 @@ def unissued_payload(conn,asof,contractor=''):
         if q<=1e-8:continue
         done=issued.get(o['id'],0);left=max(q-done,0)
         r={'order_id':o['id'],'work_date':o['work_date'],'contractor':o['contractor'],'product_code':o['product_code'],
-           'product_name':o['product_name'],'unit':o['unit'],'approved_qty':q,'issued_qty':done,'drafted_qty':drafted.get(o['id'],0),'unissued_qty':left,'unit_price':o['sell_price'],
+           'product_name':o['product_name'],'invoice_name':invoice_names.get(o['product_code'],o['product_name']),'unit':o['unit'],'approved_qty':q,'issued_qty':done,'drafted_qty':drafted.get(o['id'],0),'unissued_qty':left,'unit_price':o['sell_price'],
            'ready_qty':min(ready.get(o['id'],0),left) if not any(not w['contractor'] or w['contractor']==o['contractor'] for w in warnings) else 0,
            'tax':o['tax'],'invoice_nature':str(o.get('invoice_nature') or '1')}
         r['waiting_qty']=max(left-r['ready_qty'],0)

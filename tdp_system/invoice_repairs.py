@@ -11,11 +11,8 @@ except ImportError:
     from invoice_line_groups import source_fingerprint
 
 
-def correct_unused_product_unit(conn, *, code, expected_name, expected_unit, unit, now):
-    product = conn.execute('SELECT code,name,unit FROM products WHERE code=?',(code,)).fetchone()
-    if not product or (product['name'],product['unit']) != (expected_name,expected_unit) or not unit.strip():
-        raise ValueError('Danh mục đã thay đổi; dừng sửa đơn vị.')
-    # References in stock, orders, opening balances, and saved mappings must all be absent.
+def product_unit_usage(conn, code):
+    """Read-only check shared by manual and Excel catalog edits."""
     for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
         table = row[0]
         if table in ('products','product_prices','outgoing_product_names'):
@@ -23,7 +20,16 @@ def correct_unused_product_unit(conn, *, code, expected_name, expected_unit, uni
         quoted = '"' + table.replace('"','""') + '"'
         columns = {r['name'] for r in conn.execute('PRAGMA table_info('+quoted+')')}
         if 'product_code' in columns and conn.execute('SELECT 1 FROM '+quoted+' WHERE product_code=? LIMIT 1',(code,)).fetchone():
-            raise ValueError('Mã đã được sử dụng trong '+table+'; cần đối chiếu trước khi đổi đơn vị.')
+            return table
+    return None
+
+
+def correct_unused_product_unit(conn, *, code, expected_name, expected_unit, unit, now):
+    product = conn.execute('SELECT code,name,unit FROM products WHERE code=?',(code,)).fetchone()
+    if not product or (product['name'],product['unit']) != (expected_name,expected_unit) or not unit.strip():
+        raise ValueError('Danh mục đã thay đổi; dừng sửa đơn vị.')
+    usage=product_unit_usage(conn,code)
+    if usage:raise ValueError('Mã đã được sử dụng trong '+usage+'; cần đối chiếu trước khi đổi đơn vị.')
     conn.execute('UPDATE products SET unit=? WHERE code=?',(unit,code))
     if 'catalog_updated_at' in {r['name'] for r in conn.execute('PRAGMA table_info(products)')}:
         conn.execute('UPDATE products SET catalog_updated_at=? WHERE code=?',(now,code))
