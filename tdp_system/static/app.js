@@ -2351,13 +2351,14 @@
     var truncated = ledgerPager("payable", ledger.pagination);
     return html([
       '<div class="payable-workspace fade-in">',
+      '<div id="supplierPaymentHost"></div>',
       '<div class="stats-grid payable-stats">',
       statCard("Tổng số lượng", esc(quantityGroups(summary.filtered_quantities_by_unit)), "Theo bộ lọc đang chọn", "∑"),
       statCard("Tổng tiền", stockMoney(summary.filtered_amount), "Theo bộ lọc; dòng đã đảo chỉ tra cứu", "₫"),
       statCard("Đã phân bổ", stockMoney(summary.filtered_paid_amount), "Theo các dòng đang lọc", "✓"),
       statCard("Còn phải trả", stockMoney(summary.filtered_remaining_amount), "Theo các dòng đang lọc", "₫"),
       '</div>', truncated,
-      '<div class="card"><div class="card-head"><div><h3>Sổ phải trả chi tiết</h3><p>Chọn rõ dòng nợ; hệ thống không tự chọn dòng cũ nhất và không tự chia tiền</p></div><span class="tag">',
+      '<div class="card"><div class="card-head"><div><h3>Sổ phải trả chi tiết</h3><p>Đã trả và Còn trả tự cập nhật sau khi ghi nhận. Có thể chọn riêng dòng cần thanh toán.</p></div><span class="tag">',
       num((ledger.pagination || {}).returned || 0), ' dòng đang hiển thị</span></div>',
       '<div class="table-wrap round3-table payable-ledger-table"><table><thead><tr><th>Chọn</th><th>Ngày</th><th>Nhà cung cấp</th><th>Bếp</th><th>Hàng</th><th>Số thực tế</th><th>Giá mua</th><th>Thành tiền</th><th>Đã trả</th><th>Còn trả</th><th>Trạng thái</th><th>Phân bổ lần này</th></tr></thead><tbody>',
       lineRows || '<tr><td colspan="12"><div class="empty">Không có dòng nợ theo bộ lọc này.</div></td></tr>',
@@ -2365,7 +2366,7 @@
       esc(quantityGroups(summary.filtered_quantities_by_unit)), '</td><td></td><td class="num-cell">', money(summary.filtered_amount),
       '</td><td class="num-cell">', money(summary.filtered_paid_amount), '</td><td class="num-cell">',
       money(summary.filtered_remaining_amount), '</td><td colspan="2"></td></tr></tfoot></table></div></div>',
-      '<div class="card payable-payment-card"><div class="card-head"><div><h3>Ghi nhận đã trả</h3><p>Một giao dịch chỉ gồm các dòng cùng nhà cung cấp; tổng tiền bằng đúng tổng phân bổ</p></div><span id="payableSelectedCount" class="tag">',
+      '<details class="payable-manual-payment" ', selection.entries.length ? 'open' : '', '><summary>Thanh toán theo từng dòng (tùy chọn)</summary><div class="card payable-payment-card"><div class="card-head"><div><h3>Ghi nhận đã trả theo dòng đã chọn</h3><p>Một giao dịch chỉ gồm các dòng cùng nhà cung cấp; tổng tiền bằng đúng tổng phân bổ</p></div><span id="payableSelectedCount" class="tag">',
       selection.entries.length, ' dòng</span></div><div class="card-body">',
       '<div id="payableSelectionHint" class="code-note ', selection.entries.length && !selection.ready ? 'danger-text' : '', '">',
       !selection.entries.length ? 'Chọn dòng rồi tự nhập số tiền phân bổ cho từng dòng.' :
@@ -2380,7 +2381,7 @@
       '<div class="form-field"><label>Phương thức</label><select name="method"><option>Chuyển khoản</option><option>Tiền mặt</option><option>Bù trừ</option><option value="Khác">Khác</option></select></div>',
       '<div class="form-field"><label>Mã tham chiếu</label><input name="reference_code" placeholder="UNC / mã ngân hàng"></div>',
       '<div class="form-field span-2"><label>Nội dung</label><input name="note" placeholder="Nội dung thanh toán"></div>',
-      '<button id="payablePaymentSubmit" class="btn btn-primary" type="submit" ', selection.ready ? '' : 'disabled', '>Ghi nhận thanh toán</button></form></div></div>',
+      '<button id="payablePaymentSubmit" class="btn btn-primary" type="submit" ', selection.ready ? '' : 'disabled', '>Ghi nhận thanh toán</button></form></div></div></details>',
       '<div class="card payable-history-card"><div class="card-head"><div><h3>Lịch sử trả nhà cung cấp</h3><p>Giữ cả giao dịch và phân bổ đã hoàn tác; không dùng xóa</p></div></div>',
       ledgerPager("payable-history", history.pagination),
       '<div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Giao dịch / nhà cung cấp</th><th>Số tiền</th><th>Phương thức / tham chiếu</th><th>Nội dung</th><th>Trạng thái</th><th>Phân bổ</th><th>Thao tác</th></tr></thead><tbody>',
@@ -2473,7 +2474,7 @@
     var supplierDebt = state.debtPeriod ? state.debtPeriod.suppliers : {};
     if (state.payableSupplier) {
       var accountSupplier = state.payableLedger && state.payableLedger.supplier || state.payableSupplier;
-      supplierDebt = Object.fromEntries(Object.entries(supplierDebt).filter(function (entry) { return entry[0] === accountSupplier; }));
+      supplierDebt = Object.fromEntries(Object.entries(supplierDebt).filter(function (entry) { return entry[0].toLocaleLowerCase() === accountSupplier.toLocaleLowerCase(); }));
     }
     var knownSupplier = false;
     var supplierOptions = '<option value="">Tất cả nhà cung cấp</option>' + (d.master.suppliers || []).map(function (item) {
@@ -2629,6 +2630,10 @@
       supplierRows || '<tr><td colspan="6"><div class="empty">Chưa có công nợ phải trả trong kỳ.</div></td></tr>', '</tbody>', accountTotalRows(supplierDebt), '</table></div></div>',
       adminTools
     ]);
+    window.TdpSupplierPayment?.mount(document.getElementById('supplierPaymentHost'), {
+      supplier:state.payableSupplier, dateFrom:state.debtFrom, dateTo:state.debtTo,
+      api:api, esc:esc, money:money, onSaved:refreshPayablesAfterMutation, dataVersion:state.payableLedger
+    });
   }
 
   function documentCard(icon, title, text, href, button) {

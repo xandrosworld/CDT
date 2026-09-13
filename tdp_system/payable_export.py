@@ -215,18 +215,15 @@ def payable_export_data(
     )
     if not selected_statuses or not selected_statuses <= allowed:
         raise PayableExportError("Trạng thái phải trả không hợp lệ", code="invalid_status", status=400)
-    supplier_clause = " AND l.supplier_code=?" if supplier_code else ""
     params: list[Any] = [safe_from, safe_to]
-    if supplier_code:
-        params.append(supplier_code)
     lines = [dict(row) for row in conn.execute(
-        f"""SELECT l.*,COALESCE(s.name,'') supplier_name
+        """SELECT l.*,COALESCE(s.name,'') supplier_name
               FROM payable_ledger_lines l
               LEFT JOIN suppliers s ON s.code=l.supplier_code
-             WHERE l.work_date>=? AND l.work_date<=?{supplier_clause}
+             WHERE l.work_date>=? AND l.work_date<=?
              ORDER BY l.supplier_code,l.work_date,l.kitchen,l.product_name,l.id""",
         params,
-    )]
+    ) if not supplier_code or _clean(row["supplier_code"]).casefold() == supplier_code.casefold()]
     details = _source_details(conn, lines)
     for line in lines:
         source_detail = details.get((line["source_table"], int(line["source_id"])), {})
@@ -254,12 +251,9 @@ def payable_export_data(
                 status=409,
             )
 
-    payment_supplier_clause = " AND p.party_code=?" if supplier_code else ""
     payment_params: list[Any] = [safe_from, safe_to]
-    if supplier_code:
-        payment_params.append(supplier_code)
     payments = [dict(row) for row in conn.execute(
-        f"""SELECT p.*,COALESCE(s.name,'') supplier_name,
+        """SELECT p.*,COALESCE(s.name,'') supplier_name,
                     COUNT(a.id) allocation_count,
                     COALESCE(SUM(CASE WHEN a.status='posted' THEN a.amount ELSE 0 END),0)
                         posted_allocation_amount
@@ -267,31 +261,28 @@ def payable_export_data(
               LEFT JOIN suppliers s ON s.code=p.party_code
               LEFT JOIN payable_payment_allocations a ON a.payment_id=p.id
              WHERE p.kind='payment' AND p.party_type='supplier'
-               AND p.payment_date>=? AND p.payment_date<=?{payment_supplier_clause}
+               AND p.payment_date>=? AND p.payment_date<=?
              GROUP BY p.id
              ORDER BY p.payment_date,p.id""",
         payment_params,
-    )]
+    ) if not supplier_code or _clean(row["party_code"]).casefold() == supplier_code.casefold()]
     for payment in payments:
         payment["amount"] = _vnd(payment["amount"])
         payment["posted_allocation_amount"] = _vnd(payment["posted_allocation_amount"])
 
     allocation_params: list[Any] = [safe_from, safe_to]
-    allocation_supplier_clause = " AND l.supplier_code=?" if supplier_code else ""
-    if supplier_code:
-        allocation_params.append(supplier_code)
     allocations = [dict(row) for row in conn.execute(
-        f"""SELECT a.*,p.payment_date,p.party_code supplier_code,
+        """SELECT a.*,p.payment_date,p.party_code supplier_code,
                     p.method,p.reference_code,p.note payment_note,
                     p.status payment_status,l.work_date,l.kitchen,l.product_name,
                     l.amount line_amount,l.status line_status
               FROM payable_payment_allocations a
               JOIN payments p ON p.id=a.payment_id
               JOIN payable_ledger_lines l ON l.id=a.ledger_line_id
-             WHERE l.work_date>=? AND l.work_date<=?{allocation_supplier_clause}
+             WHERE l.work_date>=? AND l.work_date<=?
              ORDER BY l.supplier_code,p.payment_date,p.id,a.id""",
         allocation_params,
-    )]
+    ) if not supplier_code or _clean(row["supplier_code"]).casefold() == supplier_code.casefold()]
     for allocation in allocations:
         allocation["amount"] = _vnd(allocation["amount"])
         allocation["line_amount"] = _vnd(allocation["line_amount"])
@@ -309,6 +300,16 @@ def payable_export_data(
                 status=409,
             )
 
+    # Match the case-only account grouping used by the debt summary without
+    # rewriting historical source codes or folding Vietnamese accents.
+    account_codes = {}
+    for row in conn.execute("SELECT code FROM suppliers ORDER BY code"):
+        code = _clean(row["code"])
+        account_codes.setdefault(code.casefold(), code)
+    for line in lines:
+        line["supplier_code"] = account_codes.get(_clean(line["supplier_code"]).casefold(), line["supplier_code"])
+    for payment in payments:
+        payment["party_code"] = account_codes.get(_clean(payment["party_code"]).casefold(), payment["party_code"])
     supplier_info: dict[str, dict[str, Any]] = {}
     for line in lines:
         code = _clean(line["supplier_code"])

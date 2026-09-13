@@ -197,8 +197,9 @@ def _normalize_create_request(
             code="payable_allocations_required",
             status=400,
         )
-    if len(raw_allocations) > 500:
-        raise PayablePaymentError("Một giao dịch chỉ được phân bổ tối đa 500 dòng", status=400)
+    allocation_limit = 20000 if payload.get("settlement") else 500
+    if len(raw_allocations) > allocation_limit:
+        raise PayablePaymentError(f"Một giao dịch chỉ được phân bổ tối đa {allocation_limit} dòng", status=400)
     allocations = []
     seen: set[int] = set()
     for index, raw in enumerate(raw_allocations, 1):
@@ -244,6 +245,15 @@ def _normalize_create_request(
         "note": note,
         "allocations": allocations,
     }
+    if payload.get("settlement") is not None:
+        scope = payload["settlement"]
+        if not isinstance(scope, dict):
+            raise PayablePaymentError("Phạm vi thanh toán không hợp lệ", status=400)
+        normalized["settlement"] = {
+            "from": _strict_date(scope.get("from"), "Từ ngày"),
+            "to": _strict_date(scope.get("to"), "Đến ngày"),
+            "snapshot_hash": _bounded(scope.get("snapshot_hash"), "Mã đối chiếu công nợ", 64, required=True),
+        }
     normalized["request_hash"] = hashlib.sha256(
         json.dumps(
             normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
@@ -351,6 +361,68 @@ def _append_revision(
     )
 
 
+def settlement_snapshot(conn, payload, canonical_party_code):
+    """All outstanding lines in the explicit period; independent of UI pagination/status."""
+    start = _strict_date(payload.get("from"), "Từ ngày")
+    end = _strict_date(payload.get("to"), "Đến ngày")
+    if start > end:
+        raise PayablePaymentError("Từ ngày không được lớn hơn Đến ngày", status=400)
+    supplier = _clean(payload.get("supplier") or payload.get("party_code"))
+    if not supplier:
+        raise PayablePaymentError("Chọn nhà cung cấp cần thanh toán", status=400)
+    try:
+        supplier = canonical_party_code(conn, "supplier", supplier)
+    except ValueError as error:
+        raise PayablePaymentError(str(error), status=400) from None
+    rows = [dict(row) for row in conn.execute(
+        """SELECT id,work_date,product_name,amount,paid_amount,revision,supplier_code
+           FROM payable_ledger_lines WHERE work_date>=? AND work_date<=?
+           AND status IN ('open','partially_paid') AND amount>paid_amount ORDER BY work_date,id""",
+        (start, end)) if _clean(row["supplier_code"]).casefold() == supplier.casefold()]
+    for row in rows:
+        row["remaining"] = _vnd(_decimal(row["amount"], "Thành tiền") -
+                                _decimal(row["paid_amount"], "Đã trả"), "Còn phải trả")
+    snapshot = {"supplier": supplier, "from": start, "to": end,
+                "line_count": len(rows), "remaining_amount": sum(r["remaining"] for r in rows)}
+    fingerprint = [supplier, start, end, [(r["id"], r["revision"], r["remaining"]) for r in rows]]
+    snapshot["snapshot_hash"] = hashlib.sha256(json.dumps(fingerprint, ensure_ascii=False).encode()).hexdigest()
+    return snapshot, rows
+
+
+def settlement_plan(conn, payload, canonical_party_code):
+    snapshot, rows = settlement_snapshot(conn, payload, canonical_party_code)
+    if payload.get("snapshot_hash") != snapshot["snapshot_hash"]:
+        raise PayablePaymentError("Công nợ đã thay đổi. Bấm Cập nhật số còn nợ rồi kiểm tra lại số tiền.",
+                                  code="stale_settlement")
+    amount = _vnd(payload.get("amount"), "Số tiền trả lần này")
+    if amount <= 0 or amount > snapshot["remaining_amount"]:
+        raise PayablePaymentError("Số tiền trả lần này phải lớn hơn 0 và không vượt số còn phải trả trong kỳ.",
+                                  code="payable_overpayment", status=400)
+    payment_date = _strict_date(payload.get("payment_date"), "Ngày thanh toán")
+    remaining = amount
+    allocations = []
+    for row in rows:
+        if not remaining:
+            break
+        if row["work_date"] > payment_date:
+            raise PayablePaymentError("Ngày thanh toán không được trước ngày của dòng nợ được trả.", status=400)
+        allocated = min(row["remaining"], remaining)
+        allocations.append({"ledger_line_id": row["id"], "amount": allocated,
+                            "expected_revision": row["revision"]})
+        remaining -= allocated
+    if len(allocations) > 20000:
+        raise PayablePaymentError("Có hơn 20.000 dòng cần trả. Chọn khoảng ngày ngắn hơn để ghi nhận.", status=400)
+    payment = {key: payload.get(key, "") for key in
+               ("request_id", "actor", "payment_date", "method", "reference_code", "note")}
+    payment.update(party_code=snapshot["supplier"], amount=amount, allocations=allocations,
+                   settlement={key: snapshot[key] for key in ("from", "to", "snapshot_hash")})
+    _bounded(payment["actor"], "Người ghi nhận", 120, required=True)
+    _normalize_create_request(conn, payment, canonical_party_code)
+    return {"payment": payment, "before_amount": snapshot["remaining_amount"],
+            "amount": amount, "after_amount": snapshot["remaining_amount"] - amount,
+            "line_count": len(allocations)}
+
+
 def create_payable_payment(
     conn, payload: dict[str, Any], *, timestamp: str,
     canonical_party_code: Callable, audit_event: Callable,
@@ -368,15 +440,20 @@ def create_payable_payment(
             )
         return {**payable_payment_payload(conn, int(prior["id"])), "idempotent": True}
 
+    if "settlement" in normalized:
+        plan = settlement_plan(conn, {**payload, **normalized["settlement"]}, canonical_party_code)
+        expected = sorted(plan["payment"]["allocations"], key=lambda item: item["ledger_line_id"])
+        if normalized["allocations"] != expected:
+            raise PayablePaymentError("Danh sách trừ nợ đã thay đổi. Xem lại khoản thanh toán trước khi lưu.",
+                                      code="settlement_allocation_mismatch")
     line_ids = [item["ledger_line_id"] for item in normalized["allocations"]]
-    placeholders = ",".join("?" for _ in line_ids)
-    lines = {
-        int(row["id"]): dict(row)
-        for row in conn.execute(
+    lines = {}
+    for offset in range(0, len(line_ids), 800):
+        chunk = line_ids[offset:offset + 800]
+        placeholders = ",".join("?" for _ in chunk)
+        lines.update({int(row["id"]): dict(row) for row in conn.execute(
             f"SELECT * FROM payable_ledger_lines WHERE id IN ({placeholders}) ORDER BY id",
-            line_ids,
-        )
-    }
+            chunk)})
     if len(lines) != len(line_ids):
         missing = [line_id for line_id in line_ids if line_id not in lines]
         raise PayablePaymentError(
@@ -384,7 +461,7 @@ def create_payable_payment(
         )
     for allocation in normalized["allocations"]:
         line = lines[allocation["ledger_line_id"]]
-        if line["supplier_code"] != normalized["supplier_code"]:
+        if _clean(line["supplier_code"]).casefold() != normalized["supplier_code"].casefold():
             raise PayablePaymentError(
                 f"Dòng {line['id']} không thuộc NCC {normalized['supplier_code']}",
                 code="payment_supplier_mismatch",
@@ -577,13 +654,10 @@ def payable_payment_history_payload(
         "kind='payment'", "party_type='supplier'", "payment_date>=?", "payment_date<=?",
     ]
     params: list[Any] = [safe_from, safe_to]
-    if supplier_code:
-        clauses.append("party_code=?")
-        params.append(supplier_code)
     where = " AND ".join(clauses)
     base = [dict(row) for row in conn.execute(
         f"SELECT * FROM payments WHERE {where} ORDER BY payment_date,id", params,
-    )]
+    ) if not supplier_code or _clean(row["party_code"]).casefold() == supplier_code.casefold()]
     status_counts = Counter(item["status"] for item in base)
     selected = base if selected_status == "all" else [
         item for item in base if item["status"] == selected_status
@@ -657,6 +731,29 @@ def register_payable_payment_routes(app, ctx: dict[str, Any]) -> None:
     now_iso: Callable = ctx["now_iso"]
     canonical_party_code: Callable = ctx["canonical_party_code"]
     audit_event: Callable = ctx["audit_event"]
+
+    @app.get("/api/debts/payables/settlement")
+    def api_payable_settlement():
+        try:
+            with db_factory() as conn:
+                conn.execute("BEGIN")
+                snapshot, _ = settlement_snapshot(conn, request.args, canonical_party_code)
+            return jsonify(ok=True, **snapshot)
+        except PayablePaymentError as error:
+            return jsonify(ok=False, error=str(error), code=error.code), error.status
+
+    @app.post("/api/debts/payables/payments/preview")
+    def api_preview_payable_settlement():
+        try:
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                raise PayablePaymentError("Thông tin thanh toán không hợp lệ", status=400)
+            with db_factory() as conn:
+                conn.execute("BEGIN")
+                plan = settlement_plan(conn, payload, canonical_party_code)
+            return jsonify(ok=True, **plan)
+        except PayablePaymentError as error:
+            return jsonify(ok=False, error=str(error), code=error.code), error.status
 
     @app.post("/api/debts/payables/payments")
     def api_create_payable_payment():

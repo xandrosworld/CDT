@@ -1,0 +1,18 @@
+.supplier-payment-card fieldset {border:0;padding:0;margin:0;min-width:0;}
+.supplier-payment-amounts {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin-bottom:18px;}
+.supplier-payment-amounts label,.supplier-payment-amounts small {display:block;margin-bottom:6px;color:#526775;}
+.supplier-payment-amounts strong {display:block;font-size:24px;margin:8px 0;}
+.supplier-payment-amounts input {width:100%;font-size:20px;padding:10px;}
+.supplier-payment-amounts button {margin-top:8px;}
+.supplier-payment-card .payment-grid {margin-bottom:16px;}
+.supplier-payment-status {margin:12px 0 0;}
+.supplier-payment-card [hidden] {display:none !important;}
+.payable-manual-payment {margin:14px 0;}
+.payable-manual-payment>summary {cursor:pointer;padding:12px;font-weight:600;}
+.supplier-payment-confirm {width:min(560px,calc(100vw - 32px));padding:24px;border:1px solid #c4d3da;border-radius:10px;color:#17324d;}
+.supplier-payment-confirm::backdrop {background:rgba(15,35,50,.45);}
+.supplier-payment-confirm h2 {margin:0 0 16px;font-size:22px;}
+.supplier-payment-confirm dl>div {display:flex;justify-content:space-between;gap:20px;padding:12px 0;border-bottom:1px solid #d7e2e7;}
+.supplier-payment-confirm dd {margin:0;font-weight:600;}
+.supplier-payment-confirm p {line-height:1.5;}
+@media(max-width:700px){.supplier-payment-amounts{grid-template-columns:1fr;gap:10px;}}

@@ -713,7 +713,7 @@ def payable_ledger_payload(
         # supplier_filter has already been resolved through the catalog.  Do
         # not compare accent-insensitively here: distinct valid codes such as
         # DUNG and dũng must remain separate payable accounts.
-        if not supplier_filter or _clean(row["supplier_code"]) == supplier_filter
+        if not supplier_filter or _clean(row["supplier_code"]).casefold() == supplier_filter.casefold()
     ]
     status_counts = Counter(row["status"] for row in base_rows)
     selected = [row for row in base_rows if row["status"] in selected_statuses]
