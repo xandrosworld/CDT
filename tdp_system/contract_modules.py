@@ -1161,6 +1161,8 @@ def mapping_cell_text(value) -> str:
 
 def catalog_unit(value) -> str:
     text = mapping_cell_text(value)
+    # "Bó" and "Bộ" are different units despite sharing the accent-free key.
+    if unicodedata.normalize('NFKC',text).casefold()=='bó':return 'Bó'
     return CATALOG_CANONICAL_UNITS.get(mapping_key(text), text)
 
 

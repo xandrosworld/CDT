@@ -53,6 +53,13 @@ class InvoiceUnitCatalogTests(unittest.TestCase):
         self.assertEqual(400,self.save(self.row(),'x'*51).status_code)
         self.assertEqual('Gói',self.row()['invoice_unit'])
 
+    def test_bundle_unit_is_not_silently_changed_to_set_unit(self):
+        from .contract_modules import catalog_unit
+        self.assertEqual('Bó',catalog_unit('Bo\u0301'))
+        self.assertEqual('Bộ',catalog_unit('Bộ'))
+        self.assertEqual(200,self.save(self.row(),'Bó').status_code)
+        self.assertEqual('Bó',self.row()['invoice_unit'])
+
     def test_zero_opening_allows_unused_catalog_correction_without_rewriting_history(self):
         from .invoice_repairs import correct_unused_product_unit
         with server.db() as conn:
