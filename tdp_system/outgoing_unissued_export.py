@@ -17,9 +17,10 @@ except ImportError:
 
 
 def unissued_template_zip(payload, template_dir, tax_percent):
+    waiting=payload.get('portion')=='waiting'
     groups = defaultdict(dict)
     for row in payload['details']:
-        qty = Decimal(str(row['unissued_qty'])).quantize(Decimal('.000001'), rounding=ROUND_HALF_UP)
+        qty = Decimal(str(row['waiting_qty'] if waiting else row['unissued_qty'])).quantize(Decimal('.000001'), rounding=ROUND_HALF_UP)
         if qty <= 0:
             continue
         vat = tax_percent(row['tax'])
@@ -32,7 +33,7 @@ def unissued_template_zip(payload, template_dir, tax_percent):
             'invoice_nature':nature, 'qty':Decimal(0)})
         item['qty'] += qty
     if not groups:
-        raise ValueError('Không còn hàng chưa xuất hóa đơn trong phạm vi đã chọn.')
+        raise ValueError('Không còn hàng chờ trong phạm vi đã chọn.' if waiting else 'Không còn hàng chưa xuất hóa đơn trong phạm vi đã chọn.')
     output = io.BytesIO()
     count = 0
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
@@ -44,7 +45,8 @@ def unissued_template_zip(payload, template_dir, tax_percent):
                 lines.append({**row, 'qty':float(row['qty']), 'unit_price':float(row['unit_price']), 'amount':float(amount)})
             book, _ = build_invoice_workbook(lines, vat_percent=vat, template_dir=template_dir)
             label = 'KKKNT' if vat == -2 else 'KCT' if vat == -1 else f'VAT{vat:g}'
-            name = f"CHUA_XUAT_{_safe_name(party)}_{label}_DEN_{payload['asof']}.xlsx"
+            prefix='CON_CHO' if waiting else 'CHUA_XUAT'
+            name = f"{prefix}_{_safe_name(party)}_{label}_DEN_{payload['asof']}.xlsx"
             if name.casefold() in filenames:
                 raise ValueError('Tên file nhà thầu bị trùng; cần kiểm tra lại mã nhà thầu.')
             filenames.add(name.casefold()); archive.writestr(name, book); count += 1
@@ -53,12 +55,15 @@ def unissued_template_zip(payload, template_dir, tax_percent):
             'BẢNG HÀNG CHƯA XUẤT HÓA ĐƠN – CÙNG MẪU 13 CỘT',
             f"Đơn đã duyệt đến hết {payload['asof']}. Nhà thầu: {payload['contractor'] or 'Tất cả'}.",
             'Các file CHUA_XUAT dùng để đối chiếu; gồm cả hàng thiếu đầu vào và phần lẻ chưa đủ xuất. Không dùng bộ đối chiếu này để nhập M-Invoice.',
-            'Muốn xuất bù: bấm “Tải file xuất bù đủ điều kiện”. Web kiểm tra lại hóa đơn đã ký, đơn cũ và tồn kho rồi tạo bộ file đưa lên M-Invoice.',
+            'Muốn xuất hóa đơn, kể cả xuất bù: bấm “Tải bảng kê để up M-Invoice” ở đầu trang. Web kiểm tra lại hóa đơn đã ký, đơn cũ và tồn kho rồi tạo bộ file đưa lên M-Invoice.',
             'Lượng chưa xuất = lượng thực giao của đơn đã duyệt sau trả hàng − lượng hóa đơn đã phát hành đã đối chiếu. Giữ nguyên phần lẻ trong bản đối chiếu.',
             'Cùng mã, đơn vị, giá bán, thuế và tính chất được cộng lượng. Khác giá giữ dòng riêng; không đổi giá bán trên đơn.',
             'Tải bảng hoặc xuất bù không duyệt lại đơn, không ghi thêm doanh thu hay công nợ. Tải file chưa tính là đã phát hành hóa đơn.',
             'Ngày chọn ở web là mốc đơn hàng. Ngày hóa đơn thực tế chọn khi phát hành trên M-Invoice.',
         ]
+        if waiting:
+            guide[:1]=['PHẦN CÒN CHỜ – CHƯA DÙNG ĐƯA LÊN M-INVOICE',
+                       'File CON_CHO chỉ lấy lượng còn chờ, không lấy phần đủ điều kiện đang giữ để xuất. Xem lý do từng mặt hàng trong DOI_CHIEU_CHI_TIET.xlsx.']
         if payload['warnings']:
             guide += ['CÒN HÓA ĐƠN CẦN ĐỐI CHIẾU – số chưa xuất có thể thay đổi sau khi xử lý:']
             guide += [w['message'] for w in payload['warnings']]

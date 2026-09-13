@@ -4335,6 +4335,8 @@ def api_outgoing_unissued():
     try:
         cutoff=valid_iso_date(request.args.get('to') or date.today().isoformat(),'Cộng dồn đến ngày')
         party=clean_text(request.args.get('contractor')).upper()
+        portion=request.args.get('portion','all')
+        if portion not in ('all','waiting'):raise ValueError('Phạm vi hàng chưa xuất không hợp lệ.')
         with db() as conn:
             if request.method=='POST':conn.execute('BEGIN IMMEDIATE')
             else:
@@ -4354,6 +4356,12 @@ def api_outgoing_unissued():
                     if (not party or not warning['contractor'] or warning['contractor']==party) and warning not in payload['warnings']:
                         payload['warnings'].append(warning)
                 payload['reconciliation_complete']=not payload['warnings']
+        if portion=='waiting':
+            try:
+                from .outgoing_pending import pending_payload
+            except ImportError:
+                from outgoing_pending import pending_payload
+            payload=pending_payload(payload)
         if request.path.endswith('unissued-template.zip'):
             try:
                 from .outgoing_unissued_export import unissued_template_zip
@@ -4362,11 +4370,13 @@ def api_outgoing_unissued():
                 from outgoing_unissued_export import unissued_template_zip
                 from contract_modules import invoice_tax_percent
             output, count = unissued_template_zip(payload, TAX_TEMPLATE_DIR, invoice_tax_percent)
-            response = send_file(output,as_attachment=True,download_name=f'CHUA_XUAT_THEO_MAU_{party or "TAT_CA"}_DEN_{cutoff}.zip',mimetype='application/zip')
+            prefix='CON_CHO_THEO_MAU' if portion=='waiting' else 'CHUA_XUAT_THEO_MAU'
+            response = send_file(output,as_attachment=True,download_name=f'{prefix}_{party or "TAT_CA"}_DEN_{cutoff}.zip',mimetype='application/zip')
             response.headers['X-Unissued-Files']=str(count)
             return response
         if request.path.endswith('.xlsx'):
-            return send_file(unissued_workbook(payload),as_attachment=True,download_name=f'CHUA_XUAT_HOA_DON_{party or "TAT_CA"}_DEN_{cutoff}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            prefix='HANG_CON_CHO_VA_LY_DO' if portion=='waiting' else 'CHUA_XUAT_HOA_DON'
+            return send_file(unissued_workbook(payload),as_attachment=True,download_name=f'{prefix}_{party or "TAT_CA"}_DEN_{cutoff}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         return jsonify(ok=True,**payload)
     except ValueError as exc:
         return jsonify(ok=False,error=str(exc)),400

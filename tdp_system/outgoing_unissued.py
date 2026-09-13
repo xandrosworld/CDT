@@ -89,9 +89,14 @@ def unissued_payload(conn,asof,contractor=''):
         WHERE b.status='approved' AND o.work_date<=? AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(asof,contractor,contractor))]
     try:
         from .outgoing_waiting import waiting_readiness
+        from .outgoing_readiness import canonical_available_stock
+        from .outgoing_pending import explain_pending
     except ImportError:
         from outgoing_waiting import waiting_readiness
-    ready,stock_warnings=waiting_readiness(conn,orders,issued)
+        from outgoing_readiness import canonical_available_stock
+        from outgoing_pending import explain_pending
+    stock=canonical_available_stock(conn)
+    ready,stock_warnings=waiting_readiness(conn,orders,issued,stock=stock)
     units=unit_issues(conn,orders)
     warnings.extend(stock_warnings)
     drafted={r['order_id']:r['qty'] for r in conn.execute("SELECT l.order_id,SUM(l.qty) qty FROM outgoing_order_allocations l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id WHERE d.status='draft' GROUP BY l.order_id")}
@@ -111,6 +116,12 @@ def unissued_payload(conn,asof,contractor=''):
         g=grouped.setdefault(key,{**r,'approved_qty':0,'issued_qty':0,'drafted_qty':0,'unissued_qty':0,'ready_qty':0,'waiting_qty':0,'first_date':o['work_date'],'last_date':o['work_date']})
         for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty'):g[field]+=r[field]
         g['last_date']=o['work_date']
+    pending=explain_pending(conn,orders,details,units,warnings,stock)
+    reasons=defaultdict(list)
+    for r in details:
+        if r['pending_reason']:
+            reasons[(r['contractor'],r['product_code'],r['unit'].strip().casefold())].append(r['pending_reason'])
+    for key,r in grouped.items():r['pending_reason']=' · '.join(dict.fromkeys(reasons[key]))
     rows=[r for r in grouped.values() if r['unissued_qty']>1e-8]
     rows.sort(key=lambda r:(r['contractor'],r['product_name'],r['product_code']))
     totals=defaultdict(lambda:defaultdict(float))
@@ -122,6 +133,7 @@ def unissued_payload(conn,asof,contractor=''):
     except ImportError:
         from outgoing_signed_stock_review import signed_stock_issues
     return {'asof':asof,'contractor':contractor,'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
+            'pending_rows':pending,'pending_order_rows':sum(r['waiting_qty']>1e-8 for r in details),
             'signed_stock_issues':signed_stock_issues(conn,contractor),
             'held_line_issues':[{**units[o['id']],'contractor':o['contractor'],'work_date':o['work_date']} for o in orders if o['id'] in units and o['actual_delivered']-o['customer_return_qty']-issued.get(o['id'],0)>1e-8],
             'totals_by_unit':dict(totals),'source_order_rows':len(details),'unissued_order_rows':sum(r['unissued_qty']>1e-8 for r in details),
@@ -131,11 +143,18 @@ def unissued_payload(conn,asof,contractor=''):
 
 def unissued_workbook(payload):
     w=Workbook();s=w.active;s.title='Chua xuat cong don'
+    if payload.get('portion')=='waiting':
+        s.title='Hang con cho'
+        s.append(['Nhà thầu','Mã hàng','Tên hàng','ĐVT','Ngày đơn đầu','Ngày đơn cuối','Lượng còn chờ','Lý do còn chờ'])
+        for r in payload['pending_rows']:
+            s.append([r[k] for k in ('contractor','product_code','product_name','unit','first_date','last_date','waiting_qty','pending_reason')])
+        s=w.create_sheet('Doi chieu dong con cho')
     headers=['Nhà thầu','Mã hàng','Tên hàng','ĐVT','Ngày đơn đầu','Ngày đơn cuối','Lượng đã duyệt','Đã phát hành','Tổng lượng đang giữ','Chưa xuất hóa đơn','Đã đủ điều kiện, giữ chờ xuất','Chưa đủ điều kiện / chờ cộng lẻ']
-    s.append(headers)
-    for r in payload['rows']:s.append([r[k] for k in ('contractor','product_code','product_name','unit','first_date','last_date','approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty')])
+    s.append(headers+['Lý do còn chờ'])
+    for r in payload['rows']:s.append([r[k] for k in ('contractor','product_code','product_name','unit','first_date','last_date','approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty')]+[r.get('pending_reason','')])
     s=w.create_sheet('Chi tiet theo ngay');s.append(['Dòng đơn','Ngày đơn','Nhà thầu','Mã','Tên','ĐVT','Đã duyệt','Đã phát hành','Tổng lượng đang giữ','Chưa xuất','Giá trên đơn','Đủ điều kiện, giữ chờ xuất','Chưa đủ điều kiện / chờ cộng lẻ'])
-    for r in payload['details']:s.append([r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price','ready_qty','waiting_qty')])
+    s.cell(1,14,'Lý do còn chờ')
+    for r in payload['details']:s.append([r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price','ready_qty','waiting_qty')]+[r.get('pending_reason','')])
     note=w.create_sheet('Ghi chu');note.append(['Cộng dồn đến ngày',payload['asof']]);note.append(['Cách tính',payload['policy']])
     note.append(['Đối chiếu M-Invoice','Nếu đã ký bên ngoài, đồng bộ hóa đơn hoặc xác nhận đúng số hóa đơn đã phát hành trước khi lập tiếp.'])
     for warning in payload['warnings']:note.append(['Cần đối chiếu',warning['message']])

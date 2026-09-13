@@ -114,8 +114,9 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
     const batchId=url.split('/').pop();report.invoice_zips.push({url,label:await button.textContent(),filename:await download(button,'13_ZIP_DU_THAO_NGAY_'+batchId+'.zip')});
   }
   assert(report.invoice_zips.length>0);
-  const uf=page.locator('#unissuedForm');await uf.locator('[name=contractor]').selectOption('ATV');await uf.locator('[name=to]').fill('2026-09-13');
-  report.unissued_template=await download(uf.locator('button[value=template]'),'13_CHUA_XUAT_DUNG_MAU.zip');
+  const invoiceScope=page.locator('#orderInvoiceExportForm');await invoiceScope.locator('[name=contractor]').selectOption('ATV');await page.waitForLoadState('networkidle');await invoiceScope.locator('[name=to]').fill('2026-09-13');await page.waitForLoadState('networkidle');
+  await page.locator('#unissuedReconciliation > summary').click();
+  report.unissued_template=await download(page.locator('[form=unissuedForm][value=all-template]'),'13_CHUA_XUAT_DUNG_MAU.zip');
   await page.locator('#invoiceZipCard [data-view=invoice-tools]').click();await page.waitForLoadState('networkidle');
   assert.equal(await page.locator('#nav .nav-item.active').getAttribute('data-view'),'msmi');
   assert(await page.locator('[data-action=toggle-document-details]').isVisible());

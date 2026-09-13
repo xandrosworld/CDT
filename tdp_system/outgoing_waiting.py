@@ -133,10 +133,10 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
     return {'created':created,'replaced':old,'warnings':warnings}
 
 
-def waiting_readiness(conn,orders,issued):
+def waiting_readiness(conn,orders,issued,*,stock=None):
     """Read only; a broken reservation or changed stock is never labelled safe."""
     held=defaultdict(float);valid=defaultdict(float);warnings=[]
-    stock=canonical_available_stock(conn)
+    if stock is None:stock=canonical_available_stock(conn)
     by_order={r['id']:r for r in orders}
     units=unit_issues(conn,orders)
     for d in conn.execute("SELECT id,contractor FROM outgoing_invoice_drafts WHERE status='draft'"):
