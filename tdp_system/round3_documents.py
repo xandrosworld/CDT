@@ -13,11 +13,15 @@ try:
     from report_export import ReportExportError
     from receivable_ledger import receivable_ledger_payload, ReceivableLedgerError
     from payable_export import _style_sheet
+    from inventory_preview import workbook_preview
+    from document_preview import white_print_style
 except ImportError:
     from .document_totals import quantity_totals, quantity_text
     from .report_export import ReportExportError
     from .receivable_ledger import receivable_ledger_payload, ReceivableLedgerError
     from .payable_export import _style_sheet
+    from .inventory_preview import workbook_preview
+    from .document_preview import white_print_style
 
 
 def customer_receipt(conn, body, ctx):
@@ -107,6 +111,7 @@ def register_round3_routes(app, ctx):
             return jsonify(ok=False, error=str(error)), 400
 
     @app.get("/api/debts/receivables/lines/export")
+    @app.get("/api/debts/receivables/lines/preview")
     def filtered_receivable_export():
         try:
             with db() as conn:
@@ -142,11 +147,19 @@ def register_round3_routes(app, ctx):
                         cell.number_format = "#,##0.######"
                 ws.auto_filter.ref = f"A3:O{max(3, ws.max_row - 1)}"
             try:
+                if request.path.endswith("/preview"):
+                    return jsonify(ok=True, read_only=True, date_from=payload["date_from"],
+                                   date_to=payload["date_to"], contractor=payload["contractor"],
+                                   kitchen=payload["kitchen"], statuses=payload["statuses"],
+                                   line_count=len(rows), summary=summary,
+                                   workbook=workbook_preview(white_print_style(book), "Sổ chi tiết phải thu"))
                 return ctx["send_xlsx"](book, f"Chi_tiet_phai_thu_{payload['date_from']}_{payload['date_to']}.xlsx")
             finally:
                 book.close()
         except ReceivableLedgerError as error:
             return jsonify(ok=False, error=str(error)), error.status
+        except ValueError as error:
+            return jsonify(ok=False, error=str(error)), 422
 
     @app.get("/api/debts/receipts")
     def receipt_history():

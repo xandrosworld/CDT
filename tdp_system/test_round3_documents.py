@@ -2,6 +2,7 @@ import io
 import json
 import tempfile
 import unittest
+from datetime import date, datetime
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -95,6 +96,68 @@ class Round3DocumentsTests(unittest.TestCase):
         self.assertIn('cái',str(total_sheet.cell(total_sheet.max_row,7).value))
         book.close()
 
+    def assert_preview_matches_export(self, root, query):
+        response = self.client.get(root + '/preview' + query)
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertNotIn('Content-Disposition', response.headers)
+        preview = response.json
+        self.assertTrue(preview['read_only'])
+        book = self.export(root + '/export' + query)
+        try:
+            sheets = preview['workbook']['sheets']
+            self.assertEqual([sheets[key]['name'] for key in preview['workbook']['sheetOrder']], book.sheetnames)
+            for key, expected in zip(preview['workbook']['sheetOrder'], book):
+                sheet = sheets[key]
+                self.assertEqual(sheet['rowCount'], expected.max_row)
+                self.assertEqual(sheet['columnCount'], expected.max_column)
+                for row in expected:
+                    for cell in row:
+                        value = cell.value
+                        if isinstance(value, (date, datetime)):
+                            value = value.strftime('%d/%m/%Y')
+                        actual = sheet['cellData'].get(str(cell.row-1), {}).get(str(cell.column-1), {}).get('v', '')
+                        self.assertEqual(actual, value if value is not None else '', (expected.title, cell.coordinate))
+            self.assertEqual(preview['line_count'], book.active.max_row - 4)
+            self.assertEqual(sheets[preview['workbook']['sheetOrder'][0]]['freeze']['ySplit'], 3)
+        finally:
+            book.close()
+        return preview
+
+    def test_debt_previews_match_excel_filters_empty_periods_and_are_read_only(self):
+        with server.db() as conn:
+            before = '\n'.join(conn.iterdump())
+        period = '?from=2026-09-01&to=2026-09-30'
+        for query in ('', '&contractor=C1&kitchen=K1', '&contractor=C2',
+                      '&contractor=C1&kitchen=K2', '&status=reversed', '&status=all',
+                      '&limit=1&offset=1'):
+            with self.subTest(receivable=query):
+                self.assert_preview_matches_export('/api/debts/receivables/lines', period + query)
+        for query in ('', '&supplier=S1', '&supplier=S2', '&status=paid', '&status=all',
+                      '&limit=1&offset=1'):
+            with self.subTest(payable=query):
+                self.assert_preview_matches_export('/api/debts/payables', period + query)
+        for root in ('/api/debts/receivables/lines', '/api/debts/payables'):
+            empty = self.assert_preview_matches_export(root, '?from=2026-09-01&to=2026-09-04')
+            self.assertEqual(empty['line_count'], 0)
+        with server.db() as conn:
+            self.assertEqual('\n'.join(conn.iterdump()), before)
+
+    def test_debt_preview_errors_are_visible_and_do_not_return_a_partial_sheet(self):
+        from unittest.mock import patch
+        for root, module in (('/api/debts/receivables/lines', 'tdp_system.round3_documents'),
+                             ('/api/debts/payables', 'tdp_system.payable_export')):
+            for query in ('?from=bad&to=2026-09-30', '?from=2026-09-30&to=2026-09-01',
+                          '?from=2026-09-01&to=2026-09-30&status=invalid'):
+                response = self.client.get(root + '/preview' + query)
+                self.assertEqual(response.status_code, 400, response.json)
+                self.assertFalse(response.json['ok'])
+                self.assertNotIn('workbook', response.json)
+            with patch(module + '.workbook_preview', side_effect=ValueError('Thu hẹp khoảng ngày')):
+                response = self.client.get(root + '/preview?from=2026-09-01&to=2026-09-30')
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.json['error'], 'Thu hẹp khoảng ngày')
+                self.assertNotIn('workbook', response.json)
+
     def test_payable_paid_filter_and_all_supplier_sheets(self):
         url = '/api/debts/payables/ledger?from=2026-09-01&to=2026-09-30'
         row = self.client.get(url).json['rows'][0]
@@ -105,6 +168,7 @@ class Round3DocumentsTests(unittest.TestCase):
         self.assertEqual(paid.status_code,201,paid.json)
         self.assertEqual(self.client.get(url).json['pagination']['total'],1)
         for status in ('open,partially_paid', 'paid', 'all'):
+            self.assert_preview_matches_export('/api/debts/payables', '?from=2026-09-01&to=2026-09-30&status='+status)
             view = self.client.get(url+'&status='+status).json
             book = self.export('/api/debts/payables/export?from=2026-09-01&to=2026-09-30&status='+status)
             ws = book.active

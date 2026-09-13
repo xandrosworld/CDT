@@ -12,8 +12,10 @@ from __future__ import annotations
 
 try:
     from .document_preview import white_print_style
+    from .inventory_preview import workbook_preview
 except ImportError:
     from document_preview import white_print_style
+    from inventory_preview import workbook_preview
 
 try:
     from document_totals import quantity_totals, quantity_text, quantity_cell
@@ -547,6 +549,7 @@ def register_payable_export_routes(app, ctx: dict[str, Any]) -> None:
     canonical_party_code: Callable = ctx["canonical_party_code"]
 
     @app.get("/api/debts/payables/export")
+    @app.get("/api/debts/payables/preview")
     def api_export_payables():
         today = date.today()
         try:
@@ -561,6 +564,14 @@ def register_payable_export_routes(app, ctx: dict[str, Any]) -> None:
                     canonical_party_code=canonical_party_code,
                 )
                 workbook = payable_workbook(data)
+            if request.path.endswith("/preview"):
+                try:
+                    return jsonify(ok=True, read_only=True, date_from=data["date_from"],
+                                   date_to=data["date_to"], supplier=data["supplier"],
+                                   statuses=data["statuses"], line_count=workbook.active.max_row - 4,
+                                   workbook=workbook_preview(white_print_style(workbook), "Sổ chi tiết phải trả"))
+                finally:
+                    workbook.close()
             stream = io.BytesIO()
             white_print_style(workbook).save(stream)
             workbook.close()
@@ -576,3 +587,5 @@ def register_payable_export_routes(app, ctx: dict[str, Any]) -> None:
             )
         except PayableExportError as error:
             return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
+        except ValueError as error:
+            return jsonify(ok=False, error=str(error)), 422

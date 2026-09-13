@@ -2554,7 +2554,7 @@
         return '<button type="button" class="btn ' + (section === key ? 'btn-primary' : 'btn-outline') +
           '" data-action="open-debt-section" data-section="' + key + '" aria-pressed="' + (section === key) + '">' +
           (key === 'receivable' ? 'Công nợ phải thu' : 'Công nợ phải trả') + '</button>';
-      }).join('') + '<button class="btn btn-outline debt-payment-link" data-action="open-payment-request">Đề nghị thanh toán từ hóa đơn</button></div><p class="muted">Xem công nợ ngay bên dưới hoặc mở toàn màn hình. Chỉ tải Excel khi cần lưu file.</p>' + debtNotice;
+      }).join('') + '<button class="btn btn-outline debt-payment-link" data-action="open-payment-request">Đề nghị thanh toán từ hóa đơn</button></div><p class="muted">Chọn ngày và đối tượng, bấm <strong>Xem sổ chi tiết trên web</strong> để xem từng mặt hàng, số lượng và đơn giá theo mẫu Excel. Các bảng tổng bên dưới dùng để đối chiếu số dư.</p>' + debtNotice;
     var periodToolbarStart = '<div class="toolbar fade-in debt-period-toolbar"><form id="debtPeriodForm" class="debt-period-grid' + (section === "payable" ? ' debt-period-grid-payable' : '') + '">' +
       '<div class="form-field"><label for="payableFrom">Từ ngày</label><input id="payableFrom" name="from" type="date" value="' + esc(state.debtFrom) + '" required></div>' +
       '<div class="form-field"><label for="payableTo">Đến ngày</label><input id="payableTo" name="to" type="date" value="' + esc(state.debtTo) + '" required></div>';
@@ -2566,10 +2566,10 @@
       '<div class="form-field"><label for="receivableContractor">Nhà thầu</label><select id="receivableContractor" name="contractor">' + contractorOptions + '</select></div>' +
       '<div class="form-field"><label for="receivableKitchen">Bếp</label><select id="receivableKitchen" name="kitchen">' + kitchenOptions + '</select></div>' +
       '<div class="form-field"><label for="receivableStatus">Trạng thái</label><select id="receivableStatus" name="status">' + receivableStatuses + '</select></div>' +
-      '<button class="btn btn-outline" type="submit">Lọc danh sách</button></form><div class="compact-controls">' +
+      '<button class="btn btn-outline" type="submit">Lọc danh sách</button></form><div class="compact-controls"><button type="button" class="btn btn-primary" data-action="preview-debt-ledger">Xem sổ chi tiết trên web</button>' +
       (state.receivableContractor
-        ? '<a id="receivableExportSelected" class="btn btn-primary" href="' + esc(receivableExportUrl()) + '">Excel toàn bộ bếp · ' + esc(state.receivableContractor) + '</a><a class="btn btn-outline" href="/api/debts/receivables/export?from=' + encodeURIComponent(state.debtFrom) + '&to=' + encodeURIComponent(state.debtTo) + '">ZIP mọi nhà thầu</a>'
-        : '<a id="receivableExportSelected" class="btn btn-primary" href="' + esc(receivableExportUrl()) + '">ZIP phải thu mọi nhà thầu</a>') +
+        ? '<a id="receivableExportSelected" class="btn btn-outline" href="' + esc(receivableExportUrl()) + '">Excel toàn bộ bếp · ' + esc(state.receivableContractor) + '</a><a class="btn btn-outline" href="/api/debts/receivables/export?from=' + encodeURIComponent(state.debtFrom) + '&to=' + encodeURIComponent(state.debtTo) + '">ZIP mọi nhà thầu</a>'
+        : '<a id="receivableExportSelected" class="btn btn-outline" href="' + esc(receivableExportUrl()) + '">ZIP phải thu mọi nhà thầu</a>') +
       '<a class="btn btn-outline" id="receivableFilteredExport" href="/api/debts/receivables/lines/export?from=' + encodeURIComponent(state.debtFrom) +
       '&to=' + encodeURIComponent(state.debtTo) + '&contractor=' + encodeURIComponent(state.receivableContractor) + '&kitchen=' + encodeURIComponent(state.receivableKitchen) +
       '&status=' + encodeURIComponent(state.receivableStatus) + '">Excel theo bộ lọc</a></div></div>';
@@ -2622,10 +2622,10 @@
 
     content.innerHTML = html([
       detailHeader, periodToolbar,
-      '<div class="toolbar fade-in debt-download-toolbar"><div class="compact-controls"><button class="btn btn-outline" data-action="choose-payables-workbook">Nạp file công nợ cũ</button><a class="btn btn-primary" href="', esc(payableExportUrl()), '">Excel phải trả nhà cung cấp</a></div></div>',
+      '<div class="toolbar fade-in debt-download-toolbar"><div class="compact-controls"><button type="button" class="btn btn-primary" data-action="preview-debt-ledger">Xem sổ chi tiết trên web</button><a class="btn btn-outline" href="', esc(payableExportUrl()), '">Excel phải trả nhà cung cấp</a><button class="btn btn-outline" data-action="choose-payables-workbook">Nạp file công nợ cũ</button></div></div>',
       payablesImportPreviewHtml(), payableWorkspaceHtml(),
       '<div class="card"><div class="card-head"><div><h3>Tổng công nợ phải trả</h3><p>Toàn bộ tài khoản trong kỳ (không theo bộ lọc trạng thái dòng): đầu kỳ + thực nhận + điều chỉnh − đã trả</p></div></div>',
-      '<div class="table-wrap round3-table"><table><thead><tr><th>Nhà cung cấp</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Điều chỉnh</th><th>Đã trả</th><th>Còn trả</th></tr></thead><tbody>',
+      '<div class="table-wrap round3-table payable-account-table"><table><thead><tr><th>Nhà cung cấp</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Điều chỉnh</th><th>Đã trả</th><th>Còn trả</th></tr></thead><tbody>',
       supplierRows || '<tr><td colspan="6"><div class="empty">Chưa có công nợ phải trả trong kỳ.</div></td></tr>', '</tbody>', accountTotalRows(supplierDebt), '</table></div></div>',
       adminTools
     ]);
@@ -7710,6 +7710,49 @@
     });
   }
 
+  var debtPreviewSerial = 0;
+  function debtPreviewScope() {
+    var section = state.debtSection === 'payable' ? 'payable' : 'receivable';
+    var form = document.getElementById('debtPeriodForm');
+    var query = new URLSearchParams({from:form?.elements.from.value || '', to:form?.elements.to.value || ''});
+    if (section === 'payable') {
+      query.set('supplier', document.getElementById('payableSupplier')?.value || '');
+      var status = document.getElementById('payableStatus')?.value || 'outstanding';
+      query.set('status', status === 'outstanding' ? 'open,partially_paid' : status);
+    } else {
+      query.set('contractor', document.getElementById('receivableContractor')?.value || '');
+      query.set('kitchen', document.getElementById('receivableKitchen')?.value || '');
+      query.set('status', document.getElementById('receivableStatus')?.value || 'active');
+    }
+    return {section:section, query:query, key:section + '?' + query.toString()};
+  }
+  async function previewDebtLedger(button) {
+    if (!window.TDPWorksheet || window.TDPWorksheet.isOpen()) return;
+    var scope = debtPreviewScope(), query = scope.query, serial = ++debtPreviewSerial;
+    if (!query.get('from') || !query.get('to') || query.get('from') > query.get('to')) {
+      showToast('Chọn khoảng ngày hợp lệ để xem công nợ.', true); return;
+    }
+    var label = button.textContent;
+    var base = scope.section === 'payable' ? '/api/debts/payables/' : '/api/debts/receivables/lines/';
+    var downloadUrl = base + 'export?' + query.toString();
+    var current = function() { return serial === debtPreviewSerial && state.view === 'debts' && debtPreviewScope().key === scope.key; };
+    button.disabled = true; button.textContent = 'Đang mở sổ chi tiết…';
+    try {
+      var result = await api(base + 'preview?' + query.toString());
+      if (!current()) return;
+      var party = scope.section === 'payable' ? query.get('supplier') || 'Tất cả NCC' :
+        (query.get('contractor') || 'Tất cả nhà thầu') + (query.get('kitchen') ? ' / ' + query.get('kitchen') : ' / Tất cả bếp');
+      var title = 'Sổ chi tiết ' + (scope.section === 'payable' ? 'phải trả' : 'phải thu') + ' · ' + party + ' · ' +
+        dateVN(query.get('from')) + ' → ' + dateVN(query.get('to')) + ' · ' + result.line_count + ' dòng';
+      await window.TDPWorksheet.open({title:title, editable:false, workbookData:result.workbook,
+        downloads:[{label:'Tải Excel sổ đang xem', run:function() { return downloadFile(downloadUrl); }}]});
+    } catch (error) {
+      if (current()) showToast(error.message || 'Chưa mở được sổ chi tiết. Bấm xem lại.', true);
+    } finally {
+      button.disabled = false; button.textContent = label;
+    }
+  }
+
   function openTableWorksheet(table) {
     if (table.closest('.invoice-lines-card')) { openInvoiceMappingFullscreen(); return; }
     if (!window.TDPWorksheet) return;
@@ -7746,7 +7789,7 @@
     });
     if(!matrix.length) return;
     var headings=matrix.shift(); issueRows.shift();
-    var title=document.getElementById('pageTitle');
+    var title=table.closest('.card')?.querySelector('.card-head h3') || document.getElementById('pageTitle');
     var downloads = [];
     if (state.view === 'debts') {
       // Capture existing export URLs with their applied filters before opening.
@@ -7870,8 +7913,14 @@
       var isOrders=Boolean(table.closest('#orderTable'));
       var isCatalog=Boolean(table.closest('#catalogProducts'));
       var isMapping=Boolean(table.closest('.invoice-lines-card'));
+      var isDebtLedger=state.view==='debts' && Boolean(table.closest('.receivable-ledger-table, .payable-ledger-table'));
+      var isDebtAccount=state.view==='debts' && Boolean(table.closest('.receivable-account-table, .payable-account-table'));
+      var isDebtKitchen=state.view==='debts' && Boolean(table.closest('.receivable-kitchen-table'));
       button.textContent=isCatalog?'Mở bảng Excel toàn màn hình · sửa toàn bộ danh mục':isMapping?(state.invoiceDirection === 'input' ? 'Ghép mã / Quy đổi' : 'Ghép mã') + ' · toàn màn hình':isOrders?'Mở bảng Excel · tự lưu':state.view==='debts'?'Xem toàn màn hình':'Xem bảng Excel toàn màn hình · chỉ xem';
-      button.onclick=function(){if(isCatalog) openCatalogWorksheet(); else if(isOrders) openOrderWorksheet(); else openTableWorksheet(table);};
+      if (isDebtLedger) button.textContent='Xem sổ chi tiết trên web';
+      else if (isDebtAccount) button.textContent='Phóng to bảng tổng';
+      else if (isDebtKitchen) button.textContent='Phóng to tổng theo bếp';
+      button.onclick=function(){if(isDebtLedger) previewDebtLedger(button); else if(isCatalog) openCatalogWorksheet(); else if(isOrders) openOrderWorksheet(); else openTableWorksheet(table);};
       var head = wrap.parentNode.querySelector(':scope > .card-head');
       if (isMapping && mappingSearch) mappingSearch.element.appendChild(button);
       else if (head) head.appendChild(button);
@@ -7881,6 +7930,8 @@
   new MutationObserver(function(records) { if(records.every(function(r) { return r.target.closest?.('.invoice-mapping-cell, #msmiProductOptions, .invoice-lines-card tbody'); })) return; clearTimeout(sheetEnhanceTimer); sheetEnhanceTimer=setTimeout(addWorksheetButtons,50); })
     .observe(content,{childList:true,subtree:true});
   content.addEventListener('click',function(event) {
+    var debtButton=event.target.closest('[data-action="preview-debt-ledger"]');
+    if(debtButton) { previewDebtLedger(debtButton); return; }
     if(event.target.closest('[data-action="view-invoice-unit-totals"]')) { showInvoiceUnitTotals(); return; }
     if(event.target.closest('[data-action="view-inventory-unit-totals"]')) { showInventoryUnitTotals(); return; }
     if(event.target.closest('[data-action="view-inventory-worksheet"]')) { openTableWorksheet(content.querySelector('.inventory-nxt-scroll table')); return; }
