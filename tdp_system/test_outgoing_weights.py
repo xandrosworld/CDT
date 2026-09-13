@@ -170,8 +170,8 @@ class ActualWeightTests(unittest.TestCase):
             if original is None:server.app.config.pop('MINVOICE_CLIENT_FACTORY',None)
             else:server.app.config['MINVOICE_CLIENT_FACTORY']=original
 
-    def signed(self):
-        self.save();did=self.draft()
+    def signed(self,kg=2.8):
+        self.save(kg);did=self.draft()
         with server.db() as conn:
             invoice_rows(conn,conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=?',(did,)),freeze=True,timestamp=server.now_iso())
             conn.execute("UPDATE outgoing_invoice_drafts SET status='issued',issued_invoice_series='1C26TDP',issued_invoice_number='001',issued_invoice_date='2026-09-13',buyer_tax_code_snapshot='MST-A' WHERE id=?",(did,))
@@ -181,8 +181,16 @@ class ActualWeightTests(unittest.TestCase):
                 VALUES('default','minvoice','weight-test','001','1C26TDP','2026-09-13','MST-A','issued','synced','ready','now','now','now')""").lastrowid
             item=conn.execute("""INSERT INTO outgoing_source_invoice_items(invoice_id,line_index,source_item_code,source_item_name,source_unit,qty,unit_price,
                 amount,tax_rate,product_code,mapping_status,stock_qty,stock_unit_price,conversion_factor,inventory_eligible)
-                VALUES(?,1,'HH-01','Nấm kim châm','Kg',2.8,40000,112000,'KKKNT','HH-01','mapped',2.8,40000,1,1)""",(sid,)).lastrowid
+                VALUES(?,1,'HH-01','Nấm kim châm','Kg',?,?,112000,'KKKNT','HH-01','mapped',?,?,1,1)""",(sid,kg,112000/kg,kg,112000/kg)).lastrowid
         return sid,item,did
+
+    def test_measured_one_to_one_does_not_teach_other_buyers_package_weight(self):
+        from .invoice_output_mapping import _confirmed_names
+        sid,item,did=self.signed(14)
+        with server.db() as conn:
+            post_output_invoice(conn,sid,confirmed=True,now_iso=server.now_iso)
+            evidence=_confirmed_names(conn,'default',{('nấm kim châm','kg')})
+            self.assertEqual([None],evidence[('nấm kim châm','kg')])
 
     def test_signed_invoice_posts_original_packages_once(self):
         sid,item,did=self.signed()

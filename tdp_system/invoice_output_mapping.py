@@ -59,7 +59,7 @@ def _confirmed_names(conn, tenant, keys):
         try:
             snapshot = validated_output_stock_snapshot(conn, row['id'])
             product = _product(conn, snapshot['product_code'])
-            if snapshot['conversion_factor'] != 1:
+            if snapshot.get('actual_weight') or snapshot['conversion_factor'] != 1:
                 choices.append(None)
                 continue
             rule = conn.execute('SELECT effective_from,effective_to FROM invoice_line_mappings WHERE id=?',

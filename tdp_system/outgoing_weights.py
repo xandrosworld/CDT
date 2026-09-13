@@ -277,6 +277,8 @@ def signed_stock_snapshot(conn, item_id):
             answer = {'item_id': item_id, 'line_index': remote['line_index'], 'product_code': code,
                 'conversion_factor': stock['qty']/exported['qty'], 'stock_qty': stock['qty'],
                 'stock_unit_price': stock['amount']/stock['qty'], 'amount': stock['amount'],
+                'mapping_id': conn.execute('SELECT mapping_id FROM invoice_mapping_revisions WHERE id=?',
+                                           (saved['mapping_revision_id'],)).fetchone()[0],
                 'mapping_revision_id': saved['mapping_revision_id'], 'actual_weight': True}
     if not answer:
         raise blocked()
