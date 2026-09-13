@@ -1231,6 +1231,8 @@ def find_catalog_sheet(workbook):
 
 def catalog_database_state_hash(conn) -> str:
     digest = hashlib.sha256()
+    for row in conn.execute('SELECT product_code,invoice_unit FROM outgoing_product_units ORDER BY product_code'):
+        digest.update(json.dumps(list(row),ensure_ascii=False).encode('utf8'))
     for row in conn.execute(
         "SELECT code,name,unit,tax,COALESCE(product_group,'') product_group FROM products ORDER BY code"
     ):
@@ -1429,6 +1431,7 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
             "product_name": name,
             "invoice_name": invoice_name,
             "invoice_unit": invoice_unit,
+            "has_invoice_unit": 'invoice_unit' in fields,
             "unit": unit,
             "tax": tax,
             "product_status": "error",
@@ -1451,8 +1454,7 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
             item['errors'].append('Thiếu ĐVT xuất hóa đơn')
         if invoice_unit and invoice_unit != unit:
             message='ĐVT xuất hóa đơn '+invoice_unit+' khác ĐVT đơn hàng '+unit+'; cần xác nhận số lượng và tỷ lệ quy đổi trước khi áp dụng.'
-            if mode=='full':item['errors'].append(message)
-            else:item['warnings'].append(message+' Lần nhập tên này chưa áp dụng ĐVT xuất hóa đơn.')
+            item['warnings'].append(message+' Lưu ĐVT yêu cầu và giữ phần xuất chờ quy đổi.')
 
         previous = unique_items.get(code) if code else None
         signature = (mapping_key(name), mapping_key(invoice_name), mapping_key(unit), tax, group, invoice_unit)
@@ -1485,9 +1487,11 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
         current = existing_products.get(code)
         if current and mode=='names_and_new':
             if any((mapping_key(current['name'])!=mapping_key(name),mapping_key(current['unit'])!=mapping_key(unit),catalog_tax(current['tax'])!=tax)):
-                item['warnings'].append('Giữ tên nội bộ, ĐVT và thuế đang dùng; chỉ cập nhật tên xuất hóa đơn')
+                item['warnings'].append('Giữ tên nội bộ, ĐVT kho và thuế đang dùng; cập nhật tên và ĐVT xuất hóa đơn theo file')
             name=current['name'];unit=current['unit'];tax=current['tax'];group=current['product_group']
             item.update(product_name=name,unit=unit,tax=tax,product_group=group)
+            if invoice_unit and invoice_unit!=catalog_unit(unit) and not any('chờ quy đổi' in w for w in item['warnings']):
+                item['warnings'].append('ĐVT hóa đơn '+invoice_unit+' khác ĐVT kho '+unit+'; lưu yêu cầu và giữ phần xuất chờ quy đổi.')
         if current and catalog_unit(current['unit'])!=catalog_unit(unit):
             from tdp_system.invoice_repairs import product_unit_usage
             if product_unit_usage(conn,code):
@@ -6266,11 +6270,11 @@ def register_contract_routes(app, ctx):
     def api_catalog_products():
         term = request.args.get('q', '').strip()[:255]
         offset = max(0, request.args.get('offset', 0, type=int))
-        join = 'FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code '
+        join = 'FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code LEFT JOIN outgoing_product_units u ON u.product_code=p.code '
         with db_factory() as conn:
             conn.execute('BEGIN')
             items = [dict(row) for row in conn.execute(
-                "SELECT p.code,p.name,p.unit,p.tax,p.catalog_updated_at,COALESCE(n.invoice_name,'') invoice_name " + join + ' ORDER BY p.code')]
+                "SELECT p.code,p.name,p.unit,p.tax,p.catalog_updated_at,COALESCE(n.invoice_name,'') invoice_name,COALESCE(u.invoice_unit,'') invoice_unit " + join + ' ORDER BY p.code')]
         catalog_total = len(items)
         def folded(value):
             text = unicodedata.normalize('NFD', str(value or '').casefold().replace('đ', 'd'))
@@ -6416,6 +6420,8 @@ def register_contract_routes(app, ctx):
                         ),
                     )
 
+                    if item.get('has_invoice_unit'):
+                        conn.execute('INSERT INTO outgoing_product_units VALUES(?,?,?) ON CONFLICT(product_code) DO UPDATE SET invoice_unit=excluded.invoice_unit,updated_at=excluded.updated_at',(code,item['invoice_unit'],timestamp))
                     invoice_name = item["invoice_name"]
                     if invoice_name:
                         current_name = conn.execute(

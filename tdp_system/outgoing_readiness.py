@@ -361,7 +361,9 @@ def invoice_order_issues(orders):
 def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     """Read-only recheck before handing off a file or saving a remote draft."""
     required = defaultdict(float)
-    lines = conn.execute("SELECT product_code,product_name,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    lines = conn.execute("SELECT id,product_code,product_name,unit,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    line_units=unit_issues(conn,lines)
+    if line_units:raise OutgoingReadinessError(next(iter(line_units.values()))['message'],code='order_unit_mismatch')
     policy_rows=draft_policy_rows(conn,draft_id)
     # A legacy download or remote-draft action must not bypass reconciliation.
     try:

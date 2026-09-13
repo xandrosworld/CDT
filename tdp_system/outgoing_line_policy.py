@@ -8,14 +8,20 @@ def unit_key(value):
 
 def unit_issues(conn, rows):
     catalog={r['code']:r['unit'] for r in conn.execute('SELECT code,unit FROM products')}
+    invoice_units={r['product_code']:r['invoice_unit'] for r in conn.execute('SELECT product_code,invoice_unit FROM outgoing_product_units')}
     issues={}
     for row in rows:
         code=row['product_code'];unit=row['unit'];expected=catalog.get(code,'')
         order_unit=row['order_unit'] if 'order_unit' in row.keys() else unit
+        invoice_unit=invoice_units.get(code) or expected
         if not unit_key(unit) or unit_key(unit)!=unit_key(expected) or unit_key(order_unit)!=unit_key(unit):
             oid=row['order_id'] if 'order_id' in row.keys() else row['id']
             issues[oid]={'order_id':oid,'product_code':code,'unit':order_unit,'catalog_unit':expected,
                          'message':f'{code}: đơn ghi {order_unit or "(trống)"}, kho dùng {expected or "(trống)"}; giữ dòng này chờ xác nhận đơn vị/quy đổi.'}
+        elif unit_key(invoice_unit)!=unit_key(expected):
+            oid=row['order_id'] if 'order_id' in row.keys() else row['id']
+            issues[oid]={'order_id':oid,'product_code':code,'unit':order_unit,'catalog_unit':expected,'invoice_unit':invoice_unit,
+                         'message':f'{code}: ĐVT hóa đơn {invoice_unit}, đơn/kho {expected}; chưa có quy đổi được xác nhận. Giữ phần này chờ, không tự đổi số lượng hoặc đơn giá.'}
     return issues
 
 

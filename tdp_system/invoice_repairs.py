@@ -15,11 +15,12 @@ def product_unit_usage(conn, code):
     """Read-only check shared by manual and Excel catalog edits."""
     for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
         table = row[0]
-        if table in ('products','product_prices','outgoing_product_names'):
+        if table in ('products','product_prices','outgoing_product_names','outgoing_product_units'):
             continue
         quoted = '"' + table.replace('"','""') + '"'
         columns = {r['name'] for r in conn.execute('PRAGMA table_info('+quoted+')')}
-        if 'product_code' in columns and conn.execute('SELECT 1 FROM '+quoted+' WHERE product_code=? LIMIT 1',(code,)).fetchone():
+        zero_opening = " AND NOT (source_type='OPENING' AND qty_in=0 AND qty_out=0 AND unit_cost=0)" if table=='inventory_transactions' else ''
+        if 'product_code' in columns and conn.execute('SELECT 1 FROM '+quoted+' WHERE product_code=?'+zero_opening+' LIMIT 1',(code,)).fetchone():
             return table
     return None
 

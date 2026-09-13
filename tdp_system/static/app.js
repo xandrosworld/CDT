@@ -1224,7 +1224,7 @@
       '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước danh mục ', esc(preview.filename),
       '</h3><p>Trang Excel ', esc(preview.sheet), ' · dòng tiêu đề ', preview.header_row,
       ' · chỉ ghi sau khi người dùng xác nhận</p></div><button class="btn btn-small btn-outline" data-action="cancel-catalog-import">Bỏ file</button></div>',
-      '<div class="card-body code-note">Phạm vi: ',preview.mode==='names_and_new'?'Chỉ thêm mã mới và cập nhật tên xuất hóa đơn; giữ thông tin khác của mã đã có.':'Cập nhật toàn bộ danh mục theo file.',
+      '<div class="card-body code-note">Phạm vi: ',preview.mode==='names_and_new'?'Thêm mã mới, cập nhật tên và ĐVT xuất hóa đơn; giữ thông tin kho của mã đã có.':'Cập nhật toàn bộ danh mục theo file.',
       (preview.ignored_non_product_rows || []).length?' Bỏ qua dòng không có thông tin hàng: '+preview.ignored_non_product_rows.join(', '):'', '</div>',
       '<div class="card-body"><div class="status-bar">', count.unique_products, ' mã · ', count.new_products,
       ' mã mới · ', count.update_products, ' cập nhật · ', count.retained_products,
@@ -3794,8 +3794,8 @@
       if (serial !== state.catalogRequest || table !== document.getElementById('catalogProducts')) return;
       state.catalogItems = data.items;
       state.catalogOffset = data.offset;
-      table.innerHTML = '<p class="catalog-count">Tìm trên toàn bộ ' + stockQty(data.catalog_total) + ' mã · ' + data.total + ' kết quả · cuộn trong bảng để xem tiếp</p><div class="table-wrap catalog-products-scroll"><table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>ĐVT</th><th>Thuế</th><th>Tên trên hóa đơn</th><th></th></tr></thead><tbody>' + data.items.map(function(item) {
-        return '<tr><td>' + esc(item.code) + '</td><td>' + esc(item.name) + '</td><td>' + esc(item.unit) + '</td><td>' + esc(taxText(item.tax)) + '</td><td>' + esc(item.invoice_name || item.name) + '</td><td><button class="btn btn-small btn-outline" data-action="edit-catalog-product" data-code="' + esc(item.code) + '">Sửa</button></td></tr>';
+      table.innerHTML = '<p class="catalog-count">Tìm trên toàn bộ ' + stockQty(data.catalog_total) + ' mã · ' + data.total + ' kết quả · cuộn trong bảng để xem tiếp</p><div class="table-wrap catalog-products-scroll"><table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>ĐVT kho</th><th>Thuế</th><th>Tên trên hóa đơn</th><th>ĐVT xuất hóa đơn</th><th></th></tr></thead><tbody>' + data.items.map(function(item) {
+        return '<tr><td>' + esc(item.code) + '</td><td>' + esc(item.name) + '</td><td>' + esc(item.unit) + '</td><td>' + esc(taxText(item.tax)) + '</td><td>' + esc(item.invoice_name || item.name) + '</td><td>' + esc(item.invoice_unit || item.unit) + (item.invoice_unit && item.invoice_unit.normalize('NFKC').toLowerCase() !== item.unit.normalize('NFKC').toLowerCase() ? '<div class="muted">Chờ xác nhận quy đổi</div>' : '') + '</td><td><button class="btn btn-small btn-outline" data-action="edit-catalog-product" data-code="' + esc(item.code) + '">Sửa</button></td></tr>';
       }).join('') + (!data.items.length ? '<tr><td colspan="6">Không tìm thấy mã hàng.</td></tr>' : '') + '</tbody></table></div>';
     } catch (error) { if (serial === state.catalogRequest) table.textContent = error.message; }
   }
@@ -3811,7 +3811,8 @@
           {key:'name',title:'Tên hàng',width:360,editable:true},
           {key:'unit',title:'ĐVT',width:90,editable:true},
           {key:'tax',title:'Thuế',width:110,editable:true},
-          {key:'invoice_name',title:'Tên trên hóa đơn (trống = dùng tên hàng)',width:360,editable:true}
+          {key:'invoice_name',title:'Tên trên hóa đơn (trống = dùng tên hàng)',width:360,editable:true},
+          {key:'invoice_unit',title:'ĐVT xuất hóa đơn (trống = ĐVT kho)',width:230,editable:true}
         ],
         onSaved:function(){ saved = true; },
         onClose:async function(){
@@ -3838,10 +3839,11 @@
       '<div class="form-field"><label for="newProductUnit">Đơn vị tính</label><input id="newProductUnit" name="unit" maxlength="50" required list="newProductUnits" placeholder="Ví dụ: Cái"><datalist id="newProductUnits"><option value="Cái"><option value="Kg"><option value="Can"><option value="Gói"><option value="Hộp"><option value="Thùng"><option value="Chai"><option value="Lít"><option value="Ream"></datalist></div>' +
       '<div class="form-field"><label for="newProductTax">Thuế</label><select id="newProductTax" name="tax" required><option value="">Chọn thuế</option><option value="KKKNT">KKKNT · Không kê khai</option><option value="KCT">KCT · Không chịu thuế</option><option value="0">0%</option><option value="0.05">5%</option><option value="0.08">8%</option><option value="0.1">10%</option></select></div>' +
       '<div class="form-field catalog-invoice-name"><label for="newProductInvoiceName">Tên trên hóa đơn (không bắt buộc)</label><input id="newProductInvoiceName" name="invoice_name" maxlength="255" placeholder="Bỏ trống để dùng tên hàng"></div>' +
+      '<div class="form-field"><label for="newProductInvoiceUnit">ĐVT xuất hóa đơn</label><input id="newProductInvoiceUnit" name="invoice_unit" maxlength="50" list="newProductUnits" placeholder="Bỏ trống để dùng ĐVT kho"><p>Khác ĐVT kho: lưu yêu cầu và giữ phần xuất chờ xác nhận quy đổi. Không tự đổi số lượng hoặc đơn giá.</p></div>' +
       '<p class="catalog-product-error" role="alert"></p></div><div class="catalog-product-footer"><button type="button" class="btn btn-outline catalog-product-cancel">Hủy</button><button type="submit" class="btn btn-primary">Lưu mã hàng</button></div></form>';
     if (product) {
       dialog.querySelector('h3').textContent = 'Sửa mã hàng';
-      ['code','name','unit','invoice_name'].forEach(function(key) { dialog.querySelector('[name="' + key + '"]').value = product[key] || ''; });
+      ['code','name','unit','invoice_name','invoice_unit'].forEach(function(key) { dialog.querySelector('[name="' + key + '"]').value = product[key] || ''; });
       dialog.querySelector('[name="tax"]').value = product.tax == null || product.tax === '' ? '' : ['KKKNT','KCT'].includes(product.tax) ? product.tax : String(Number(product.tax));
       dialog.querySelector('[name="code"]').readOnly = true;
     }
@@ -3861,7 +3863,7 @@
       var payload = Object.fromEntries(new FormData(event.target).entries());
       if (product) {
         payload.expected = {};
-        ['name','unit','tax','invoice_name','catalog_updated_at'].forEach(function(key) { payload.expected[key] = product[key]; });
+        ['name','unit','tax','invoice_name','catalog_updated_at','invoice_unit'].forEach(function(key) { payload.expected[key] = product[key]; });
       }
       busy = true;
       var submit = dialog.querySelector('[type="submit"]');
@@ -3919,8 +3921,8 @@
       statCard("Nhà cung cấp", num(d.master.suppliers.length), "Danh mục đặt hàng", "⇄"),
       statCard("Nhóm nhà thầu", num(d.master.contractors.length), "Giá nhóm / giá theo ngày", "₫"),
       "</div>",
-      '<div class="card"><div class="card-head"><div><h3>Danh mục hàng hóa</h3><p>Thêm từng mã hoặc nạp nhiều mã từ Excel. Tên trên hóa đơn để trống sẽ dùng tên hàng.</p></div></div><div class="card-body">',
-      '<div class="form-actions"><button class="btn btn-primary" data-action="add-catalog-product">Thêm mã hàng</button><label>Phạm vi nạp <select id="catalogImportMode"><option value="full"',state.catalogImportMode==='full'?' selected':'','>Cập nhật toàn bộ danh mục</option><option value="names_and_new"',state.catalogImportMode==='names_and_new'?' selected':'','>Chỉ thêm mã mới và cập nhật tên hóa đơn</option></select></label><button class="btn btn-outline" data-action="choose-catalog-workbook">Nạp từ Excel</button></div>',
+      '<div class="card"><div class="card-head"><div><h3>Danh mục hàng hóa</h3><p>Thêm từng mã hoặc nạp nhiều mã từ Excel. Tên và ĐVT hóa đơn để trống sẽ dùng tên hàng và ĐVT kho. ĐVT khác kho được giữ chờ quy đổi trước khi xuất.</p></div></div><div class="card-body">',
+      '<div class="form-actions"><button class="btn btn-primary" data-action="add-catalog-product">Thêm mã hàng</button><label>Phạm vi nạp <select id="catalogImportMode"><option value="full"',state.catalogImportMode==='full'?' selected':'','>Cập nhật toàn bộ danh mục</option><option value="names_and_new"',state.catalogImportMode==='names_and_new'?' selected':'','>Thêm mã mới, cập nhật tên và ĐVT hóa đơn</option></select></label><button class="btn btn-outline" data-action="choose-catalog-workbook">Nạp từ Excel</button></div>',
       '<p class="code-note">Chọn file Em Thành.xlsx hoặc danh mục có các cột Mã hàng, Tên hàng, ĐVT, Thuế. Xem trước các thay đổi rồi xác nhận.</p>',
       '<form id="catalogSearchForm" class="catalog-search"><input class="input-date" name="q" aria-label="Tìm mã hoặc tên hàng" placeholder="Tìm toàn bộ mã hoặc tên hàng (có / không dấu)" value="',esc(state.catalogQuery),'"><button class="btn btn-outline" type="submit">Tìm</button></form><div id="catalogProducts"></div>',
       '<details class="code-note"><summary>Nạp dữ liệu khác</summary><div class="form-actions"><button class="btn btn-outline" data-action="choose-mapping-file" data-mapping-type="invoice_names">Nạp riêng tên hóa đơn từ Excel</button><button class="btn btn-outline" data-action="sync-master">Đọc lại bản Em Thành trên hệ thống</button></div><p>Bản Em Thành trên hệ thống được nạp lần cuối: ',esc(synced),'. Muốn dùng file vừa sửa trên máy, chọn Nạp từ Excel phía trên.</p></details></div></div>',

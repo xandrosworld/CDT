@@ -5,11 +5,15 @@ import re
 
 from flask import jsonify, request
 
-SCHEMA = '''CREATE TABLE IF NOT EXISTS catalog_worksheet_requests (
+SCHEMA = '''CREATE TABLE IF NOT EXISTS outgoing_product_units (
+ product_code TEXT PRIMARY KEY REFERENCES products(code),
+ invoice_unit TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS catalog_worksheet_requests (
  request_id TEXT PRIMARY KEY, payload_hash TEXT NOT NULL, response_json TEXT NOT NULL,
  created_at TEXT NOT NULL
 );'''
-FIELDS = ('name', 'unit', 'tax', 'invoice_name', 'catalog_updated_at')
+FIELDS = ('name', 'unit', 'tax', 'invoice_name', 'catalog_updated_at', 'invoice_unit')
 
 
 class CatalogError(ValueError):
@@ -19,7 +23,7 @@ class CatalogError(ValueError):
 
 
 def catalog_rows(conn):
-    return [dict(r) for r in conn.execute("SELECT p.code,p.name,p.unit,p.tax,p.catalog_updated_at,COALESCE(n.invoice_name,'') invoice_name FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code ORDER BY p.code")]
+    return [dict(r) for r in conn.execute("SELECT p.code,p.name,p.unit,p.tax,p.catalog_updated_at,COALESCE(n.invoice_name,'') invoice_name,COALESCE(u.invoice_unit,'') invoice_unit FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code LEFT JOIN outgoing_product_units u ON u.product_code=p.code ORDER BY p.code")]
 
 
 def revision(row):
@@ -47,13 +51,19 @@ def save_product(conn, body, *, editing, ctx):
     invoice_name=invoice_name.strip()
     if not name or not unit or tax not in {'KKKNT','KCT','0','0.05','0.08','0.1'}:
         raise CatalogError('Tên hàng, đơn vị hoặc lựa chọn thuế không hợp lệ.')
-    current=conn.execute("SELECT p.*,COALESCE(n.invoice_name,'') invoice_name FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code WHERE UPPER(p.code)=?",(code,)).fetchone()
+    current=conn.execute("SELECT p.*,COALESCE(n.invoice_name,'') invoice_name,COALESCE(u.invoice_unit,'') invoice_unit FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code LEFT JOIN outgoing_product_units u ON u.product_code=p.code WHERE UPPER(p.code)=?",(code,)).fetchone()
+    invoice_unit=body.get('invoice_unit',current['invoice_unit'] if current else '')
+    if not isinstance(invoice_unit,str) or len(invoice_unit.strip())>50:
+        raise CatalogError('ĐVT xuất hóa đơn tối đa 50 ký tự.')
+    invoice_unit=ctx['catalog_unit'](invoice_unit)
     if current and not editing:raise CatalogError('Mã '+code+' đã có trong danh mục. Hãy dùng mã khác; mã cũ được giữ nguyên.',409)
     expected=None
     if editing:
         if not current:raise CatalogError('Không tìm thấy mã hàng.',404)
         expected={k:current[k] for k in FIELDS}
-        if body.get('expected')!=expected:raise CatalogError('Mã hàng đã thay đổi. Đóng và mở lại cửa sổ sửa để xem dữ liệu mới.',409)
+        supplied=dict(body.get('expected') or {})
+        supplied.setdefault('invoice_unit','')
+        if supplied!=expected:raise CatalogError('Mã hàng đã thay đổi. Đóng và mở lại cửa sổ sửa để xem dữ liệu mới.',409)
         if ctx['catalog_unit'](current['unit'])!=unit:
             try:
                 from .invoice_repairs import correct_unused_product_unit
@@ -63,7 +73,7 @@ def save_product(conn, body, *, editing, ctx):
             except ValueError:raise CatalogError('Mã đã được sử dụng; cần đối chiếu các đơn và kho trước khi đổi đơn vị. Có thể sửa tên hàng hoặc tên trên hóa đơn với đơn vị hiện tại.',409) from None
         else:unit=current['unit']
         code=current['code']
-        if (name,unit,tax,invoice_name)==(current['name'],current['unit'],current['tax'],current['invoice_name']):
+        if (name,unit,tax,invoice_name,invoice_unit)==(current['name'],current['unit'],current['tax'],current['invoice_name'],current['invoice_unit']):
             return {'code':code,'name':name,'unit':unit,'tax':tax}
         conn.execute('UPDATE products SET name=?,unit=?,tax=?,catalog_updated_at=? WHERE code=?',(name,unit,tax,ctx['now_iso'](),code))
     else:
@@ -71,13 +81,14 @@ def save_product(conn, body, *, editing, ctx):
     if invoice_name:
         conn.execute('INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES(?,?,?) ON CONFLICT(product_code) DO UPDATE SET invoice_name=excluded.invoice_name,updated_at=excluded.updated_at',(code,invoice_name,ctx['now_iso']()))
     elif editing:conn.execute('DELETE FROM outgoing_product_names WHERE product_code=?',(code,))
+    conn.execute('INSERT INTO outgoing_product_units VALUES(?,?,?) ON CONFLICT(product_code) DO UPDATE SET invoice_unit=excluded.invoice_unit,updated_at=excluded.updated_at',(code,invoice_unit,ctx['now_iso']()))
     try:
         from .outgoing_names import refresh_editable_names
     except ImportError:
         from outgoing_names import refresh_editable_names
     refresh_editable_names(conn,ctx['now_iso'](),[code])
     ctx['audit'](conn,ctx['now_iso'],'catalog.product_update' if editing else 'catalog.product_create','ok',entity_type='product',entity_id=code,
-                 metadata={'name':name,'unit':unit,'tax':tax,'invoice_name':invoice_name,'before':expected})
+                 metadata={'name':name,'unit':unit,'tax':tax,'invoice_name':invoice_name,'invoice_unit':invoice_unit,'before':expected})
     return {'code':code,'name':name,'unit':unit,'tax':tax}
 
 
@@ -111,8 +122,8 @@ def register_worksheet_routes(app,ctx):
                     code=change.get('id') if isinstance(change,dict) else None
                     if not isinstance(code,str) or code not in rows or code in seen:raise CatalogError('Mã hàng không tồn tại hoặc bị lặp trong lần lưu.',409)
                     seen.add(code);row=rows[code]; values=change.get('values')
-                    if not isinstance(values,dict) or not values or set(values)-{'name','unit','tax','invoice_name'}:
-                        raise CatalogError(code+': chỉ sửa Tên hàng, ĐVT, Thuế và Tên trên hóa đơn.')
+                    if not isinstance(values,dict) or not values or set(values)-{'name','unit','tax','invoice_name','invoice_unit'}:
+                        raise CatalogError(code+': chỉ sửa Tên hàng, ĐVT kho, Thuế, Tên và ĐVT xuất hóa đơn.')
                     if change.get('revision')!=revision(row):raise CatalogError(code+': dữ liệu đã được người khác sửa. Đọc lại / đối chiếu; phần đang nhập vẫn được giữ.',409)
                     payload={**row,**values,'expected':{k:row[k] for k in FIELDS}}
                     payload['tax']=str(payload['tax'] or '')

@@ -119,10 +119,10 @@ class CatalogInvoiceLabelsTests(unittest.TestCase):
         price=book.create_sheet('BÁO GIÁ');price.append(['Mã hàng','Tên hàng','ĐVT','Thuế']);price.append(['BAD','Wrong sheet','Kg','8%'])
         with server.db() as conn:
             full=parse_catalog_workbook(conn,book)
-            self.assertEqual('danh mục hh',full['sheet']);self.assertFalse(full['can_confirm'])
+            self.assertEqual('danh mục hh',full['sheet']);self.assertTrue(full['can_confirm'])
             self.assertEqual('Kg',full['rows'][0]['invoice_unit'])
             names=parse_catalog_workbook(conn,book,'names_and_new');self.assertTrue(names['can_confirm'])
-            self.assertTrue(any('chưa áp dụng ĐVT' in w for w in names['rows'][0]['warnings']))
+            self.assertTrue(any('chờ quy đổi' in w for w in names['rows'][0]['warnings']))
         book.close()
 
     def test_malformed_explicit_catalog_does_not_fall_back_to_price_sheet(self):
