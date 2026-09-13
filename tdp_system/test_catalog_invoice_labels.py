@@ -113,6 +113,25 @@ class CatalogInvoiceLabelsTests(unittest.TestCase):
         p=self.preview([row,row],mode='names_and_new')
         self.assertTrue(p['can_confirm']);self.assertEqual(1,p['counts']['duplicate'])
 
+    def test_new_unit_headers_select_catalog_and_never_price_sheet(self):
+        book=self.book([['HH-01','Tên nội bộ','Tên hóa đơn','Gói','KKKNT']])
+        sheet=book.active;sheet['D1']='ĐVT \nthành đạt phát';sheet['F1']='ĐVT Xuất HĐ';sheet['F2']='Kg'
+        price=book.create_sheet('BÁO GIÁ');price.append(['Mã hàng','Tên hàng','ĐVT','Thuế']);price.append(['BAD','Wrong sheet','Kg','8%'])
+        with server.db() as conn:
+            full=parse_catalog_workbook(conn,book)
+            self.assertEqual('danh mục hh',full['sheet']);self.assertFalse(full['can_confirm'])
+            self.assertEqual('Kg',full['rows'][0]['invoice_unit'])
+            names=parse_catalog_workbook(conn,book,'names_and_new');self.assertTrue(names['can_confirm'])
+            self.assertTrue(any('chưa áp dụng ĐVT' in w for w in names['rows'][0]['warnings']))
+        book.close()
+
+    def test_malformed_explicit_catalog_does_not_fall_back_to_price_sheet(self):
+        book=self.book([]);book.active['D1']='Unknown unit header'
+        sheet=book.create_sheet('BÁO GIÁ');sheet.append(['Mã hàng','Tên hàng','ĐVT','Thuế']);sheet.append(['BAD','Wrong sheet','Kg','8%'])
+        with server.db() as conn:
+            with self.assertRaises(ValueError):parse_catalog_workbook(conn,book)
+        book.close()
+
     def test_unissued_template_uses_invoice_label_but_keeps_internal_name_for_reconciliation(self):
         self.seed()
         with server.db() as conn:conn.execute("INSERT OR REPLACE INTO outgoing_product_names VALUES('HH-01','Tên xuất đúng','2026-09-13')")

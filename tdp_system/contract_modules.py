@@ -688,7 +688,8 @@ CATALOG_ALIASES = {
         "tenxuathoadon", "tenxuathd", "tenxhd", "tenhoadon", "tenhd", "tendaura",
         "tenhangxuathoadon", "tenhanghoaxuathoadon", "tenhangxhd", "invoicename",
     },
-    "unit": {"dvt", "donvitinh", "unit"},
+    "unit": {"dvt", "donvitinh", "unit", "dvtthanhdatphat", "donvitinhthanhdatphat", "dvttdp"},
+    "invoice_unit": {"dvtxuathd", "dvtxuathoadon", "donvitinhxuathoadon", "donvixuathoadon", "invoiceunit"},
     "tax": {"thue", "thuesuat", "thuegtgt", "tsuat", "vat", "tax"},
 }
 
@@ -1213,7 +1214,8 @@ def catalog_header_fields(row) -> dict:
 def find_catalog_sheet(workbook):
     candidates = []
     required = {"product_code", "product_name", "unit", "tax"}
-    for sheet_index, worksheet in enumerate(workbook.worksheets):
+    explicit = [s for s in workbook.worksheets if mapping_key(s.title) in {'danhmuchh','danhmuchanghoa','danhmuchang'}]
+    for sheet_index, worksheet in enumerate(explicit or workbook.worksheets):
         for row_index, row in enumerate(
             worksheet.iter_rows(min_row=1, max_row=25, max_col=30, values_only=True),
             start=1,
@@ -1413,9 +1415,10 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
         tax = catalog_tax(row[fields["tax"] - 1])
         group = mapping_cell_text(row[fields["product_group"] - 1]).upper() if "product_group" in fields else ""
         invoice_name = mapping_cell_text(row[fields["invoice_name"] - 1]) if "invoice_name" in fields else ""
-        if not any((code, name, unit, tax, group, invoice_name)):
+        invoice_unit = catalog_unit(row[fields['invoice_unit'] - 1]) if 'invoice_unit' in fields else ''
+        if not any((code, name, unit, tax, group, invoice_name, invoice_unit)):
             continue
-        if not any((code,name,unit,group,invoice_name)):
+        if not any((code,name,unit,group,invoice_name,invoice_unit)):
             ignored_rows.append(row_index)
             continue
         scanned += 1
@@ -1425,6 +1428,7 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
             "product_group": group,
             "product_name": name,
             "invoice_name": invoice_name,
+            "invoice_unit": invoice_unit,
             "unit": unit,
             "tax": tax,
             "product_status": "error",
@@ -1443,9 +1447,15 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
             item["errors"].append("Thiếu thuế")
         if "invoice_name" in fields and not invoice_name:
             item["errors"].append("Thiếu tên xuất hóa đơn")
+        if 'invoice_unit' in fields and not invoice_unit:
+            item['errors'].append('Thiếu ĐVT xuất hóa đơn')
+        if invoice_unit and invoice_unit != unit:
+            message='ĐVT xuất hóa đơn '+invoice_unit+' khác ĐVT đơn hàng '+unit+'; cần xác nhận số lượng và tỷ lệ quy đổi trước khi áp dụng.'
+            if mode=='full':item['errors'].append(message)
+            else:item['warnings'].append(message+' Lần nhập tên này chưa áp dụng ĐVT xuất hóa đơn.')
 
         previous = unique_items.get(code) if code else None
-        signature = (mapping_key(name), mapping_key(invoice_name), mapping_key(unit), tax, group)
+        signature = (mapping_key(name), mapping_key(invoice_name), mapping_key(unit), tax, group, invoice_unit)
         if previous:
             previous_signature = source_signatures[code]
             if signature == previous_signature:

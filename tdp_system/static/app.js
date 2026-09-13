@@ -1214,7 +1214,7 @@
       var tagClass = status === "error" ? "tag-red" : status === "new" ? "tag-ok" : "tag-warn";
       return '<tr class="' + (item.errors.length ? 'row-error' : item.warnings.length ? 'row-warning' : '') + '"><td>' + item.source_row + '</td><td><strong>' + esc(item.product_code) +
         '</strong><div class="muted">' + esc(item.product_group || "—") + '</div></td><td><strong>' +
-        esc(item.product_name) + '</strong><div class="muted">' + esc(item.unit) + ' · ' +
+        esc(item.product_name) + '</strong><div class="muted">' + esc(item.unit) + (item.invoice_unit ? ' · ĐVT hóa đơn theo file: '+esc(item.invoice_unit) : '') + ' · ' +
         esc(taxText(item.tax)) + '</div></td><td>' + esc(item.invoice_name || "—") +
         '</td><td><span class="tag ' + tagClass + '">' + esc(statusNames[status] || status) +
         '</span><div class="muted">' + esc(messages.join(" · ")) + '</div></td></tr>';
