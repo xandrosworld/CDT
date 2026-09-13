@@ -1,6 +1,7 @@
 """Cumulative approved demand less issued invoices; downloads are never issues."""
 from collections import defaultdict
 from io import BytesIO
+import json
 
 from openpyxl import Workbook
 from openpyxl.styles import Font,PatternFill
@@ -18,10 +19,56 @@ def _identity(r,local=False):
             str((r['issued_invoice_date'] or r['invoice_date']) if local else r['invoice_date']).strip())
 
 
+def _stock_only_remap_sources(conn):
+    """Stock reclassification is not evidence of which sold item was invoiced.
+
+    The Excel deficit workflow records inventory.output.remap. Audited repairs
+    of an incorrect item identity use a separate event and keep their existing
+    reconciliation behavior. Only still-active stock changes need this hold.
+    """
+    required={'audit_log','output_stock_remaps','output_stock_remap_parts','invoice_inventory_ledger'}
+    tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not required <= tables:
+        return set()
+    ledger_ids=set()
+    incomplete_history=False
+    for row in conn.execute("SELECT metadata_json FROM audit_log WHERE event_type='inventory.output.remap' AND status='ok'"):
+        try:
+            metadata=json.loads(row['metadata_json'])
+            for change in metadata['changes']:
+                ledger_id=int(change['ledger_id'])
+                if ledger_id < 0:
+                    part=conn.execute('SELECT ledger_id FROM output_stock_remap_parts WHERE id=?',(-ledger_id//2,)).fetchone()
+                    if part:ledger_ids.add(part[0])
+                    else:incomplete_history=True
+                else:ledger_ids.add(ledger_id)
+        except (ValueError,TypeError,KeyError):
+            incomplete_history=True
+    if not ledger_ids and not incomplete_history:
+        return set()
+    changed=conn.execute("""SELECT l.id,l.source_invoice_id FROM invoice_inventory_ledger l
+        JOIN output_stock_remaps m ON m.ledger_id=l.id
+        WHERE l.direction='output' AND l.source_invoice_table='outgoing_source_invoices'
+          AND l.event_type='POST' AND l.status='posted' AND m.product_code<>l.product_code
+        UNION SELECT l.id,l.source_invoice_id FROM invoice_inventory_ledger l
+        JOIN output_stock_remap_parts p ON p.ledger_id=l.id
+        WHERE l.direction='output' AND l.source_invoice_table='outgoing_source_invoices'
+          AND l.event_type='POST' AND l.status='posted' AND p.qty>0 AND p.product_code<>l.product_code""")
+    return {r['source_invoice_id'] for r in changed if incomplete_history or r['id'] in ledger_ids}
+
+
+def _remap_review_warning(invoice,contractor):
+    return {'contractor':contractor,'code':'stock_remap_requires_order_review','invoice_id':invoice['id'],
+            'message':'Hóa đơn '+invoice['invoice_number']+' đã đổi mã trừ kho nội bộ. '
+            'Cần đối chiếu mặt hàng trên hóa đơn với đơn đã bán trước khi trừ phần đã xuất; '
+            'chưa tự đối trừ theo mã kho mới.'}
+
+
 def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
     """Prefer explicit order links; otherwise allocate mapped M-Invoice FIFO once."""
     orders=[dict(r) for r in conn.execute("SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id WHERE b.status='approved' AND o.work_date<=? ORDER BY o.work_date,o.id",(asof,))]
     quantities=defaultdict(float);warnings=[];linked=set()
+    remapped_sources=_stock_only_remap_sources(conn)
     sources=[dict(r) for r in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND invoice_date<=? ORDER BY invoice_date,id",(asof,))]
     by_identity=defaultdict(list)
     for s in sources:by_identity[_identity(s)].append(s)
@@ -32,6 +79,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
             linked.update(s['id'] for s in matching);continue
         # A confirmed local issue carries exact order lineage. Same invoice is not counted again.
         if matching:
+            warnings.extend(_remap_review_warning(s,d['contractor']) for s in matching if s['id'] in remapped_sources)
             local=defaultdict(float)
             for r in conn.execute('SELECT product_code,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
                 local[r['product_code']]+=r['qty']
@@ -64,6 +112,8 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
         seen.add(identity)
         if s['source_status_class']!='issued' or s['sync_status']!='synced' or s['stock_status'] not in ('posted','not_inventory'):
             warnings.append({'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' chưa đủ đối chiếu mã/lượng để trừ khỏi đơn.'});continue
+        if s['id'] in remapped_sources:
+            warnings.append(_remap_review_warning(s,party));continue
         # The posted stock ledger already includes reviewed conversions and reversals.
         lines=conn.execute("""SELECT il.product_code,p.unit,-SUM(il.qty_delta) qty FROM invoice_inventory_effective_ledger il
             JOIN products p ON p.code=il.product_code WHERE il.direction='output' AND il.status='posted'
