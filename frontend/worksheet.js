@@ -52,6 +52,16 @@ async function open(options) {
   const pending = new Map();
   const columns = options.columns || [];
   const setStatus = (message, error = false) => { status.textContent = message; status.classList.toggle('is-error', error); };
+  for (const action of options.downloads || []) {
+    const download = button(action.label, async () => {
+      download.disabled = true; setStatus('Đang tải file…');
+      try { await action.run(); setStatus('Đã tải file theo bộ lọc lúc mở bảng'); }
+      catch (error) { setStatus(error.message || 'Chưa tải được file. Bấm tải lại.', true); }
+      finally { download.disabled = false; }
+    });
+    download.className = 'tdp-sheet-download';
+    top.insertBefore(download, close);
+  }
   if (!options.editable) {
     const copy = button('Sao chép ô đã chọn', async () => {
       try {

@@ -29,6 +29,7 @@
         '<button type="button" class="btn btn-small btn-outline" data-doc="all">Chọn tất cả</button>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="none">Bỏ chọn</button>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="excel">Tải Excel đã chọn</button>' +
+        '<button type="button" class="btn btn-small btn-outline" data-doc="pdf">Tải PDF đã chọn</button>' +
         '<label>Khổ giấy <select class="document-paper" aria-label="Khổ giấy"><option value="A4">A4</option><option value="A5">A5 · biên nhận</option></select></label>' +
         '<label>Cách in <select class="document-sides" aria-label="Cách in"><option value="simplex">Một mặt</option><option value="duplex">Hai mặt · biên nhận tờ riêng</option></select></label>' +
         '<button type="button" class="btn btn-small btn-primary" data-doc="print">In phiếu đã chọn</button>' +
@@ -46,7 +47,7 @@
         var summary = Array.from(selected).some(function(i){return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase());});
         var edge = summary ? 'Bảng kê nằm ngang: chọn LẬT CẠNH NGẮN (Flip on short edge) để mặt sau không ngược đầu. ' : 'Trang dọc: chọn LẬT CẠNH DÀI (Flip on long edge). ';
         return paper + (host.querySelector('.document-sides').value === 'duplex' ?
-          edge + 'Chọn in hai mặt và in tất cả trang, kể cả trang trắng. Mỗi biên nhận có mặt sau trắng để mỗi người một tờ riêng. Nếu máy in đang chọn cạnh khác, đổi lại trong hộp thoại máy in.' :
+          edge + 'Chọn in hai mặt và in tất cả trang, kể cả trang trắng. Mỗi người một tờ riêng: biên nhận một trang có mặt sau trắng; biên nhận hai trang in trước và sau cùng tờ. Nếu máy in đang chọn cạnh khác, đổi lại trong hộp thoại máy in.' :
           'Trong hộp thoại máy in, chọn in một mặt. Mỗi biên nhận in trên một tờ riêng.');
       }
       function update() {
@@ -60,7 +61,7 @@
         mode.disabled = busy;
         host.querySelector('.document-print-help').textContent = printHelp();
         host.querySelector('.document-count').textContent = data.sheet_count + ' phiếu · Đã chọn ' + selected.size;
-        host.querySelectorAll('[data-doc="excel"],[data-doc="print"]').forEach(function (b) { b.disabled = busy || !selected.size; });
+        host.querySelectorAll('[data-doc="excel"],[data-doc="pdf"],[data-doc="print"]').forEach(function (b) { b.disabled = busy || !selected.size; });
         host.querySelectorAll('[data-sheet]').forEach(function (c) { c.checked = selected.has(Number(c.dataset.sheet)); });
         host.querySelectorAll('[data-sheet],[data-doc="all"],[data-doc="none"],[data-doc="refresh"]').forEach(function(c) { c.disabled=busy; });
       }
@@ -80,10 +81,11 @@
         if (busy || !selected.size) return;
         busy = true; update();
         var errorBox = host.querySelector('.document-error');
-        errorBox.textContent = type === 'print' ? 'Đang tạo PDF đúng mẫu, vui lòng chờ…' : '';
-        var url = '/api/documents/' + data.token + '/' + (type === 'print' ? 'pdf' : 'excel') + '?sheets=' + Array.from(selected).sort(function(a,b){return a-b;}).join(',');
+        var isPdf = type === 'print' || type === 'pdf';
+        errorBox.textContent = isPdf ? 'Đang tạo PDF đúng mẫu, vui lòng chờ…' : '';
+        var url = '/api/documents/' + data.token + '/' + (isPdf ? 'pdf' : 'excel') + '?sheets=' + Array.from(selected).sort(function(a,b){return a-b;}).join(',');
         url += '&paper=' + host.querySelector('.document-paper').value;
-        if(type === 'print') url += '&sides=' + host.querySelector('.document-sides').value;
+        if(isPdf) url += '&sides=' + host.querySelector('.document-sides').value;
         try {
           var response = await checked(await fetch(url));
           var blob = await response.blob();
@@ -118,7 +120,7 @@
         if (action.dataset.doc === 'refresh') { if (!busy) open(body, hostId, false); }
         if (action.dataset.doc === 'all') { data.sheets.forEach(function (_,i) { selected.add(i); }); update(); }
         if (action.dataset.doc === 'none') { selected.clear(); update(); }
-        if (action.dataset.doc === 'excel' || action.dataset.doc === 'print') output(action.dataset.doc);
+        if (['excel', 'pdf', 'print'].includes(action.dataset.doc)) output(action.dataset.doc);
       };
       host.onchange = function(event) {
         if(busy && event.target.matches('[data-sheet]')) { update(); return; }

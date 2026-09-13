@@ -2589,13 +2589,14 @@
       content.innerHTML = html([
         detailHeader, periodToolbar,
         '<div class="toolbar fade-in debt-download-toolbar"><div class="compact-controls"><a class="btn btn-outline" href="/api/export/debts?from=', encodeURIComponent(state.debtFrom), '&to=', encodeURIComponent(state.debtTo), '">Tải Excel thu/chi</a><a class="btn btn-primary" href="/api/debts/receivables/export?from=', encodeURIComponent(state.debtFrom), '&to=', encodeURIComponent(state.debtTo), '">Tải công nợ phải thu (ZIP)</a></div></div>',
-        '<div class="card"><div class="card-head"><div><h3>Tổng công nợ phải thu</h3><p>Đầu kỳ + phát sinh + điều chỉnh − đã thu</p></div></div>',
+        '<div class="card"><div class="card-head"><div><h3>Tổng công nợ phải thu</h3><p>Đầu kỳ + phát sinh từ đơn đã duyệt + điều chỉnh − đã thu. Số phát sinh gồm thuế và đã trừ hàng khách trả.</p></div></div>',
         '<div class="table-wrap round3-table"><table><thead><tr><th>Nhà thầu</th><th>Đầu kỳ</th><th>Phát sinh</th><th>Điều chỉnh</th><th>Đã thu</th><th>Còn thu</th></tr></thead><tbody>',
         contractorRows || '<tr><td colspan="6"><div class="empty">Chưa có công nợ phải thu trong kỳ.</div></td></tr>', '</tbody>', accountTotalRows(contractorDebt), '</table></div></div>',
         '<div class="card"><div class="card-head"><div><h3>Ghi nhận khách hàng đã thanh toán</h3><p>Lưu số tiền đã nhận từ nhà thầu</p></div></div><div class="card-body"><form id="receiptForm" class="payment-grid">',
         '<div class="form-field"><label>Người ghi nhận</label><input name="actor" maxlength="120" required></div>',
         '<div class="form-field"><label>Ngày nhận tiền</label><input name="payment_date" type="date" value="', currentWorkDate(), '" required></div>',
-        '<input name="kind" type="hidden" value="receipt"><div class="form-field"><label>Mã nhà thầu</label><input name="party_code" placeholder="VD: HATRAN" required></div>',
+        '<input name="kind" type="hidden" value="receipt"><div class="form-field"><label>Nhà thầu thanh toán</label><select name="party_code" required><option value="">Chọn nhà thầu đã thanh toán</option>',
+        (d.master.contractors || []).map(function(item) { return '<option value="' + esc(item.code) + '">' + esc(item.code + ' · ' + item.name) + '</option>'; }).join(''), '</select></div>',
         '<div class="form-field"><label>Số tiền</label><input name="amount" type="number" min="1" step="1" required></div>',
         '<div class="form-field"><label>Nội dung</label><input name="note" placeholder="Ví dụ: Chuyển khoản"></div>',
         '<button class="btn btn-primary" type="submit">Lưu khoản đã thu</button></form></div></div>',
@@ -2955,7 +2956,7 @@
       }).join('') + '</select></label>' +
       '<label>Từ ngày<input name="from" type="date" value="' + esc(filters.from) + '" required></label>' +
       '<label>Đến ngày<input name="to" type="date" value="' + esc(filters.to) + '" required></label>' +
-      '<button class="btn btn-primary" type="submit">Xem và tải bảng kê</button></form>' + buyerProfileFormHtml();
+      '<button class="btn btn-primary" type="submit">Xem đề nghị thanh toán</button></form>' + buyerProfileFormHtml();
   }
 
   function buyerProfileFormHtml() {
@@ -3077,9 +3078,9 @@
       '<div class="document-primary-grid fade-in"><section class="document-primary-card"><div class="document-primary-icon">13</div>',
       '<div><h3>File đưa lên M-Invoice</h3><p>Tải ZIP về máy, giải nén rồi nhập file Excel vào M-Invoice để kiểm tra, ký và phát hành.</p></div><div class="document-primary-action">',
       invoiceFileAction, '</div></section>',
-      '<section class="document-primary-card"><div class="document-primary-icon">KÊ</div><div><details><summary>Bảng kê từ hóa đơn đỏ · sau khi phát hành</summary>',
+      '<section class="document-primary-card" id="invoicePaymentRequest"><div class="document-primary-icon">TT</div><div><h3>Đề nghị thanh toán từ hóa đơn đã phát hành</h3>',
       '<p>Chọn nhà thầu để lấy đúng các hóa đơn Thành Đạt Phát đã phát hành.</p>',
-      paymentRequestFormHtml(), '</details></div></section></div>',
+      paymentRequestFormHtml(), '</div></section></div>',
       outgoingTable, invoicePaymentScopeHtml(),
       '<div id="paymentDocumentPreview"></div>',
       '<div class="card"><div class="card-head"><div><h3>Bảng kê mua hàng và biên nhận</h3><p>Xem đúng hồ sơ người bán; thiếu hoặc trùng CCCD vẫn bị chặn.</p></div><button class="btn btn-outline" data-action="preview-purchase-documents">Xem bảng kê / biên nhận</button></div><div id="purchaseDocumentPreview"></div></div>',
@@ -4690,6 +4691,7 @@
     try {
       await api("/api/payments", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
       formElement.reset(); delete formElement.dataset.requestId;
+      invalidateReceivableWorkspace();
       invalidateDebtPeriod(); await fetchDebtPeriod();
       showToast("Đã ghi nhận khoản thu khách hàng");
     } catch (error) { showToast(error.message, true); }
@@ -5042,6 +5044,7 @@
         method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({reason: reason.trim(), actor: actor.trim(), expected_revision: Number(button.dataset.revision)})
       });
+      invalidateReceivableWorkspace();
       invalidateDebtPeriod(); await fetchDebtPeriod();
       showToast("Đã hoàn tác, vẫn giữ lịch sử khoản thu");
     } catch (error) { showToast(error.message, true); button.disabled = false; }
@@ -6005,6 +6008,12 @@
         );
         renderDocuments();
         showToast("Đã đối chiếu phạm vi hóa đơn đỏ · sẵn sàng tải hồ sơ chính thức");
+        var scope = state.invoicePaymentScope;
+        if (scope && scope.scope_id && window.TDPDocuments) {
+          await window.TDPDocuments.open({kind:"payment", contractor:scope.contractor, from:scope.date_from,
+            to:scope.date_to, scope_id:scope.scope_id}, "paymentDocumentPreview");
+          document.getElementById('paymentDocumentPreview')?.scrollIntoView({block:'start'});
+        }
       } catch (error) {
         state.invoicePaymentScope = { error: error.message };
         renderDocuments();
@@ -7380,7 +7389,7 @@
         button.disabled = true;
         button.textContent = "Đang tạo hồ sơ…";
         await downloadFile(button.dataset.url);
-        showToast("Đã tải Đề nghị thanh toán và Bảng tổng hợp giao nhận");
+        showToast("Đã tải Đề nghị thanh toán và bảng kê đối chiếu hóa đơn");
       } catch (error) {
         showToast(error.message, true);
       } finally {
@@ -7627,7 +7636,18 @@
     if(!matrix.length) return;
     var headings=matrix.shift(); issueRows.shift();
     var title=document.getElementById('pageTitle');
-    window.TDPWorksheet.open({ title:((table.caption && table.caption.innerText) || (title && title.innerText) || 'Bảng dữ liệu')+' · phần đang hiển thị', editable:false,
+    var downloads = [];
+    if (state.view === 'debts') {
+      // Capture existing export URLs with their applied filters before opening.
+      // The fullscreen table is a view; exports still include the complete filtered ledger.
+      var links = table.closest('.receivable-ledger-table') ? content.querySelectorAll('#receivableFilteredExport, #receivableExportSelected') :
+        content.querySelectorAll('.debt-download-toolbar a[href]');
+      downloads = Array.from(links).map(function(link) {
+        var url = link.getAttribute('href');
+        return {label:link.textContent.trim(), run:function() { return downloadFile(url); }};
+      });
+    }
+    window.TDPWorksheet.open({ title:((table.caption && table.caption.innerText) || (title && title.innerText) || 'Bảng dữ liệu')+' · phần đang hiển thị', editable:false, downloads:downloads,
       columns:Array.from({length:maxColumns},function(_,c) { return { key:'c'+c,title:headings[c]||String.fromCharCode(65+c),width:c===1?230:150 }; }),
       rows:matrix.map(function(row,r) { var obj={worksheet_error:issueRows[r]}; row.forEach(function(value,c) { obj['c'+c]=value; }); return obj; }) });
   }

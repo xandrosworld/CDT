@@ -33,10 +33,12 @@ class ReceiptPrintSheetTests(unittest.TestCase):
             self.assertFalse((reader.pages[number-1].extract_text() or '').strip())
         for item in layout['sections']:
             if item['receipt']:
-                self.assertEqual(item['start_page'],item['end_page'])
+                self.assertLessEqual(item['end_page'] - item['start_page'], 1 if duplex else 0)
                 if duplex:
                     self.assertEqual(item['start_page'] % 2,1)
-                    self.assertIn(item['end_page']+1,layout['blank_pages'])
+                    self.assertEqual((item['start_page']-1)//2, (item['end_page']-1)//2)
+                    if item['end_page'] % 2:
+                        self.assertIn(item['end_page']+1,layout['blank_pages'])
         for p, data in originals.items():self.assertEqual(p.read_bytes(),data)
         self.assertEqual(reader.trailer['/Root']['/ViewerPreferences']['/Duplex'], edge if duplex else '/Simplex')
         return layout,reader
@@ -82,7 +84,35 @@ class ReceiptPrintSheetTests(unittest.TestCase):
         self.assertEqual([r['start_page'] for r in layout['sections']],[1,3,5])
         self.assertEqual(layout['blank_pages'],[2,4,6])
 
-    def test_receipt_spanning_multiple_pages_is_blocked_in_both_modes(self):
+    def test_two_page_receipt_uses_both_sides_of_one_sheet(self):
+        sources = [self.source('biên nhận',2,'PERSON_1'), self.source('biên nhận 02',1,'PERSON_2'),
+                   self.source('biên nhận 03',2,'PERSON_3')]
+        layout, reader = self.check(sources, True, '/DuplexFlipLongEdge')
+        self.assertEqual([(r['start_page'],r['end_page']) for r in layout['sections']],[(1,2),(3,3),(5,6)])
+        self.assertEqual(layout['blank_pages'],[4])
+        self.assertEqual(len(reader.pages),6)
+        for number, label in ((1,'PERSON_1'),(2,'PERSON_1'),(3,'PERSON_2'),(5,'PERSON_3'),(6,'PERSON_3')):
+            self.assertIn(label, reader.pages[number-1].extract_text())
+
+    def test_two_page_receipt_after_odd_summary_and_before_next_workbook(self):
+        sources = [self.source('bảng kê tổng',3,'SUMMARY',True),self.source('biên nhận',2,'PERSON_1'),
+                   self.source('bảng kê tổng',1,'NEXT_SUMMARY',True),self.source('biên nhận 02',1,'PERSON_2')]
+        layout, reader = self.check(sources, True)
+        self.assertEqual([(r['start_page'],r['end_page']) for r in layout['sections']],[(1,3),(5,6),(7,7),(9,9)])
+        self.assertEqual(layout['blank_pages'],[4,8,10])
+        self.assertEqual([p.rotation for p in reader.pages], [0,0,0,0,0,180,0,0,0,0])
+
+    def test_receipt_before_landscape_summary_uses_same_binding(self):
+        layout, reader = self.check([self.source('biên nhận',2,'PERSON_1'),
+                                    self.source('bảng kê tổng',2,'SUMMARY',True)], True)
+        self.assertEqual(layout['blank_pages'], [])
+        self.assertEqual([p.rotation for p in reader.pages], [0,180,0,0])
+
+    def test_two_page_receipt_simplex_requires_duplex(self):
+        with self.assertRaisesRegex(ReceiptPrintError, 'Hai mặt'):
+            self.check([self.source('biên nhận 02',2,'TWO_PAGES')],False)
+
+    def test_receipt_longer_than_one_physical_sheet_is_blocked(self):
         for duplex in (False,True):
             with self.subTest(duplex=duplex), self.assertRaises(ReceiptPrintError):
-                self.check([self.source('biên nhận 02',2,'TOO_LONG')],duplex)
+                self.check([self.source('biên nhận 02',3,'TOO_LONG')],duplex)

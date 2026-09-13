@@ -29,7 +29,7 @@ from reportlab.lib.pagesizes import A4, A5
 
 EXCEL_PAPER_SIZES = {"A4": 9, "A5": 11}
 PDF_PAPER_SIZES = {"A4": A4, "A5": A5}
-FORMAT_VERSION = "tdp-excel-artwork-pdf-v5-plain-print"
+FORMAT_VERSION = "tdp-excel-artwork-pdf-v6-receipt-duplex"
 
 
 class ExcelPrintError(RuntimeError):
@@ -306,18 +306,28 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
         writer.add_blank_page(width=float(previous.mediabox.width), height=float(previous.mediabox.height))
         blank_pages.append(len(writer.pages))
     try:
+        # A PDF has one duplex binding preference for the entire job. Determine
+        # it before receipts, including jobs which begin with a receipt.
+        for item in rendered:
+            if not is_receipt_sheet(item.get('sheet', '')):
+                pages = PdfReader(str(item['path'])).pages
+                if pages:
+                    binding_landscape = float(pages[0].mediabox.width) > float(pages[0].mediabox.height)
+                    break
         for item in rendered:
             reader = PdfReader(str(item["path"]))
             receipt = is_receipt_sheet(item.get('sheet', ''))
-            if receipt and len(reader.pages) != 1:
-                raise ReceiptPrintError(f"Biên nhận {item.get('sheet')} đang có {len(reader.pages)} trang. Cần dàn về một trang trước khi in để mỗi người có một tờ riêng.")
+            if receipt and (len(reader.pages) > 2 or not len(reader.pages)):
+                raise ReceiptPrintError(f"Biên nhận {item.get('sheet')} đang có {len(reader.pages)} trang. Cần dàn về tối đa hai trang và chọn in hai mặt để mỗi người có một tờ riêng.")
+            if receipt and len(reader.pages) == 2 and not duplex:
+                raise ReceiptPrintError(f"Biên nhận {item.get('sheet')} có hai trang. Chọn in Hai mặt để hai trang của cùng người nằm trên một tờ riêng.")
             if duplex and receipt and len(writer.pages) % 2:
                 blank_back()
             start_page = len(writer.pages) + 1
-            for page in reader.pages:
+            for page_index, page in enumerate(reader.pages):
                 source_width = float(page.mediabox.width)
                 source_height = float(page.mediabox.height)
-                if not receipt and binding_landscape is None:
+                if binding_landscape is None:
                     binding_landscape = source_width > source_height
                 base_width, base_height = PDF_PAPER_SIZES[paper]
                 if source_width > source_height:
@@ -332,9 +342,14 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
                     page,
                     Transformation().scale(scale).translate(offset_x, offset_y),
                 )
+                # A two-page portrait receipt in a landscape summary job uses
+                # the job's short-edge binding. Turn only its back over so the
+                # same person's two sides are upright after that flip.
+                if duplex and receipt and page_index == 1 and (source_width > source_height) != binding_landscape:
+                    output_page.rotate(180)
             layout.append({'sheet':item.get('sheet',''), 'start_page':start_page,
                            'end_page':len(writer.pages), 'receipt':receipt})
-            if duplex and receipt:
+            if duplex and receipt and len(writer.pages) % 2:
                 blank_back()
         if binding_landscape is None and writer.pages:
             binding_landscape = writer.pages[0].mediabox.width > writer.pages[0].mediabox.height
