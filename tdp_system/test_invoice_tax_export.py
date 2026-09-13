@@ -73,9 +73,16 @@ class InvoiceTaxGoldenTests(unittest.TestCase):
                     for column in range(1, 14):
                         expected_cell = style_sheet.cell(1, column)
                         actual_cell = output.active.cell(1, column)
-                        self.assertEqual(str(actual_cell.font), str(expected_cell.font))
-                        self.assertEqual(str(actual_cell.fill), str(expected_cell.fill))
-                        self.assertEqual(str(actual_cell.border), str(expected_cell.border))
+                        # Customer's updated print style: keep template geometry,
+                        # use regular black text, white fill and fine borders.
+                        self.assertEqual(actual_cell.font.name, expected_cell.font.name)
+                        self.assertEqual(actual_cell.font.sz, expected_cell.font.sz)
+                        self.assertFalse(actual_cell.font.bold)
+                        self.assertEqual(actual_cell.font.color.rgb, '00000000')
+                        self.assertIsNone(actual_cell.fill.patternType)
+                        for side in ('left','right','top','bottom'):
+                            self.assertEqual(getattr(actual_cell.border,side).style,
+                                             'hair' if getattr(expected_cell.border,side).style else None)
                         self.assertEqual(str(actual_cell.alignment), str(expected_cell.alignment))
                         self.assertEqual(actual_cell.number_format, expected_cell.number_format)
                     self.assertEqual(output.active.max_row - 1, len(source_rows))

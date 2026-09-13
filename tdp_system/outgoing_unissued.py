@@ -102,7 +102,8 @@ def unissued_payload(conn,asof,contractor=''):
         done=issued.get(o['id'],0);left=max(q-done,0)
         r={'order_id':o['id'],'work_date':o['work_date'],'contractor':o['contractor'],'product_code':o['product_code'],
            'product_name':o['product_name'],'unit':o['unit'],'approved_qty':q,'issued_qty':done,'drafted_qty':drafted.get(o['id'],0),'unissued_qty':left,'unit_price':o['sell_price'],
-           'ready_qty':min(ready.get(o['id'],0),left) if not any(not w['contractor'] or w['contractor']==o['contractor'] for w in warnings) else 0}
+           'ready_qty':min(ready.get(o['id'],0),left) if not any(not w['contractor'] or w['contractor']==o['contractor'] for w in warnings) else 0,
+           'tax':o['tax'],'invoice_nature':str(o.get('invoice_nature') or '1')}
         r['waiting_qty']=max(left-r['ready_qty'],0)
         r['pending_reason']=units[o['id']]['message'] if o['id'] in units else ''
         details.append(r)
@@ -147,4 +148,11 @@ def unissued_workbook(payload):
         s.freeze_panes='A2';s.auto_filter.ref=s.dimensions
         for cell in s[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='163247')
         for col in s.columns:s.column_dimensions[col[0].column_letter].width=min(55,max(16,max(len(str(c.value or '')) for c in col)+2))
-    output=BytesIO();w.save(output);output.seek(0);return output
+    try:
+        from .template_workbook import safe_workbook_bytes
+    except ImportError:
+        from template_workbook import safe_workbook_bytes
+    try:
+        return BytesIO(safe_workbook_bytes(w))
+    finally:
+        w.close()

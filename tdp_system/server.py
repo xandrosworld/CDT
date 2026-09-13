@@ -4324,6 +4324,7 @@ def api_quotes():
 
 @app.get('/api/outgoing-invoices/unissued')
 @app.get('/api/outgoing-invoices/unissued.xlsx')
+@app.get('/api/outgoing-invoices/unissued-template.zip')
 @app.post('/api/outgoing-invoices/unissued/refresh')
 def api_outgoing_unissued():
     try:
@@ -4335,6 +4336,8 @@ def api_outgoing_unissued():
         party=clean_text(request.args.get('contractor')).upper()
         with db() as conn:
             if request.method=='POST':conn.execute('BEGIN IMMEDIATE')
+            else:
+                conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
             if party and not conn.execute('SELECT 1 FROM contractors WHERE code=?',(party,)).fetchone():
                 raise ValueError('Không tìm thấy nhà thầu đã chọn')
             refreshed=None
@@ -4350,6 +4353,17 @@ def api_outgoing_unissued():
                     if (not party or not warning['contractor'] or warning['contractor']==party) and warning not in payload['warnings']:
                         payload['warnings'].append(warning)
                 payload['reconciliation_complete']=not payload['warnings']
+        if request.path.endswith('unissued-template.zip'):
+            try:
+                from .outgoing_unissued_export import unissued_template_zip
+                from .contract_modules import invoice_tax_percent
+            except ImportError:
+                from outgoing_unissued_export import unissued_template_zip
+                from contract_modules import invoice_tax_percent
+            output, count = unissued_template_zip(payload, TAX_TEMPLATE_DIR, invoice_tax_percent)
+            response = send_file(output,as_attachment=True,download_name=f'CHUA_XUAT_THEO_MAU_{party or "TAT_CA"}_DEN_{cutoff}.zip',mimetype='application/zip')
+            response.headers['X-Unissued-Files']=str(count)
+            return response
         if request.path.endswith('.xlsx'):
             return send_file(unissued_workbook(payload),as_attachment=True,download_name=f'CHUA_XUAT_HOA_DON_{party or "TAT_CA"}_DEN_{cutoff}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         return jsonify(ok=True,**payload)
@@ -4402,6 +4416,7 @@ def api_outgoing_source_scopes(invoice_id=None):
 
 
 @app.post("/api/export/order-invoices")
+@app.post("/api/export/catch-up-invoices")
 def api_export_order_invoices():
     """One ZIP; one consolidated invoice per contractor/tax across selected days."""
     try:
@@ -4422,6 +4437,9 @@ def api_export_order_invoices():
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             raise ValueError('Khoảng ngày và nhà thầu không hợp lệ')
+        catch_up = request.path.endswith('/catch-up-invoices')
+        if catch_up:
+            body = {**body, 'scope':'unissued'}
         with db() as conn:
             start,end,contractor,cumulative=resolve_scope(conn,body,valid_iso_date)
             connected=setting_get(conn,'minvoice_active_connection','')
@@ -4464,8 +4482,22 @@ def api_export_order_invoices():
             except ImportError:
                 from outgoing_line_policy import unit_issues
             held_issues=unit_issues(conn,selected_orders)
-            draft_ids=[]
-            for party in sorted({r['contractor'] for r in selected_orders if net_delivered(r)>1e-9}):
+            parties=sorted({r['contractor'] for r in selected_orders if net_delivered(r)>1e-9})
+            # Release all selected buyers' obsolete holds before any buyer uses
+            # the shared stock. Otherwise a later buyer's signed invoice can
+            # leave stock unavailable until the second download.
+            for party in parties:
+                conn.execute('SAVEPOINT reconcile_export_party')
+                try:
+                    refresh_waiting(conn,now_iso(),fill=False,contractor=party)
+                except (ValueError,InvoiceTaxExportError,OutgoingReadinessError):
+                    conn.execute('ROLLBACK TO reconcile_export_party')
+                    # The ordinary per-buyer handler below reports the error.
+                finally:
+                    conn.execute('RELEASE reconcile_export_party')
+            drafts_by_party={}
+            already_issued,_=issued_allocations(conn)
+            def prepare_party(party):
                 conn.execute('SAVEPOINT export_contractor')
                 try:
                     refreshed=refresh_waiting(conn,now_iso(),fill=False,contractor=party)
@@ -4474,7 +4506,7 @@ def api_export_order_invoices():
                     party_orders=[r for r in selected_orders if r['contractor']==party and r['id'] not in held_issues]
                     replenish=replenishable_scopes(conn,party_orders,[b['id'] for b in batches])
                     for batch in batches:
-                        if not any(r['batch_id']==batch['id'] for r in party_orders):continue
+                        if not any(r['batch_id']==batch['id'] and net_delivered(r)>already_issued.get(r['id'],0)+1e-8 for r in party_orders):continue
                         editable = conn.execute("""SELECT 1 FROM outgoing_invoice_drafts d
                             JOIN outgoing_order_allocations l ON l.draft_id=d.id JOIN orders o ON o.id=l.order_id
                             WHERE (o.batch_id=? OR d.id IN (SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id=?)) AND d.contractor=? AND d.status='draft'
@@ -4487,13 +4519,38 @@ def api_export_order_invoices():
                     for did in party_drafts:
                         lines=[{**dict(r),'contractor':party} for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(did,))]
                         build_invoice_workbook(lines,vat_percent=invoice_tax_percent(lines[0]['tax']),template_dir=TAX_TEMPLATE_DIR)
-                    draft_ids.extend(party_drafts)
+                    drafts_by_party[party]=party_drafts
                 except (ValueError,InvoiceTaxExportError,OutgoingReadinessError) as exc:
                     conn.execute('ROLLBACK TO export_contractor')
                     if contractor:raise
+                    drafts_by_party.pop(party,None)
                     blocked.append({'contractor':party,'message':str(exc),'code':getattr(exc,'code','invalid_order_invoice_export')})
                 finally:
                     conn.execute('RELEASE export_contractor')
+            for party in parties:
+                prepare_party(party)
+            # Rounding a later buyer's quantities can release stock usable by
+            # an earlier buyer. Finish those additions inside this transaction,
+            # before returning the first file, so a redownload is identical.
+            def export_state():
+                return [tuple(r) for r in conn.execute("""SELECT d.contractor,l.product_code,l.unit,l.tax,l.invoice_nature,l.unit_price,SUM(l.qty)
+                    FROM outgoing_invoice_drafts d JOIN outgoing_invoice_lines l ON l.draft_id=d.id
+                    WHERE d.status='draft' GROUP BY d.contractor,l.product_code,l.unit,l.tax,l.invoice_nature,l.unit_price
+                    ORDER BY d.contractor,l.product_code,l.unit,l.tax,l.invoice_nature,l.unit_price""")]
+            for _ in range(len(selected_orders)+1):
+                before=export_state()
+                eligible=[]
+                blocked_parties={w['contractor'] for w in blocked}
+                for party in parties:
+                    if party in blocked_parties:continue
+                    party_orders=[r for r in selected_orders if r['contractor']==party and r['id'] not in held_issues]
+                    if replenishable_scopes(conn,party_orders,[b['id'] for b in batches]):eligible.append(party)
+                if not eligible:break
+                for party in eligible:prepare_party(party)
+                if export_state()==before:break
+            else:
+                raise InvoiceTaxExportError('Phân bổ tồn chưa ổn định; chưa tạo file. Cần kiểm tra phần giữ chờ.',code='unstable_invoice_allocation')
+            draft_ids=[did for party in parties for did in drafts_by_party.get(party,[])]
             if not draft_ids:
                 if blocked:
                     raise InvoiceTaxExportError('; '.join(w['contractor']+': '+w['message'] for w in blocked),code=blocked[0]['code'])
@@ -4524,12 +4581,14 @@ def api_export_order_invoices():
                     'Chỉ gồm lượng đủ tồn; dòng đánh dấu BK ở cột Bảng kê được hưởng ngoại lệ âm kho. KKKNT không tự được miễn kiểm tra tồn. Dòng khác đơn vị kho giữ chờ, không tự quy đổi. Chưa ký/phát hành hóa đơn.',
                     'Dùng file gộp này thay các file tách ngày chưa phát hành, không nhập thêm cả hai bộ file.',
                     'Tải file hoặc tạo nháp chưa tính là đã xuất hóa đơn. Bảng chưa xuất cộng dồn lấy lượng đã duyệt trừ lượng đã phát hành được đồng bộ/xác nhận.',
+                    'Xuất bù từ chính đơn đã duyệt, không tạo/duyệt lại đơn và không ghi thêm doanh thu hoặc công nợ. Ngày chọn là mốc đơn; ngày hóa đơn chọn khi phát hành trên M-Invoice.',
                     f'NHÀ THẦU CHƯA TẠO FILE: {len(blocked)}. Các nhà thầu này giữ nguyên phần chờ, cần sửa trước khi tải riêng:',
                     *[w['contractor']+': '+w['message'] for w in blocked],
                     f'PHẦN CHƯA PHÂN BỔ VÀO FILE NÀY: {len(pending)} dòng (thiếu tồn, phần lẻ Kg hoặc nhà thầu cần sửa; không phải toàn bộ hàng chưa xuất hóa đơn):',*pending]
                 archive.writestr('HUONG_DAN_VA_PHAN_CHUA_XUAT.txt','\n'.join(guide).encode('utf-8-sig'))
         output.seek(0)
-        response=send_file(output,as_attachment=True,download_name=f'BANG_KE_UP_M_INVOICE_{start}_{end}.zip',mimetype='application/zip')
+        name = f'XUAT_BU_UP_M_INVOICE_DEN_{end}.zip' if catch_up else f'BANG_KE_UP_M_INVOICE_{start}_{end}.zip'
+        response=send_file(output,as_attachment=True,download_name=name,mimetype='application/zip')
         response.headers['X-Invoice-Files']=str(len(draft_ids))
         response.headers['X-Pending-Order-Lines']=str(len(pending))
         response.headers['X-Blocked-Contractors']=str(len(blocked))
