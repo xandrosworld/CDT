@@ -3881,12 +3881,13 @@
         dialog.querySelector('[name="code"]').focus();
         return;
       }
-      busy = false; dialog.close();
+      submit.textContent = 'Đã lưu · đang cập nhật danh mục…';
       state.catalogImportPreview = null;
       state.invoiceWorkbench = null; state.invoiceListing = null;
       state.catalogQuery = created.product.code; state.catalogOffset = 0;
       try { await loadData(state.batchId, true); }
       catch (error) { showToast('Đã lưu mã ' + created.product.code + '. Tải lại trang để cập nhật danh mục.', true); return; }
+      finally { busy = false; dialog.close(); }
       showToast('Đã lưu mã ' + created.product.code + ' · ' + created.product.name + ' · ' + created.product.unit);
     };
     document.body.appendChild(dialog); dialog.showModal();
