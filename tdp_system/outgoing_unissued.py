@@ -132,11 +132,22 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
     return dict(quantities),warnings
 
 
-def unissued_payload(conn,asof,contractor=''):
+def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False):
     # The cutoff selects order dates. An invoice issued later can settle those orders.
     issued,warnings=issued_allocations(conn)
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
         WHERE b.status='approved' AND o.work_date<=? AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(asof,contractor,contractor))]
+    excluded=set()
+    line_choices=[]
+    if respect_export_choices:
+        try:
+            from .outgoing_contractors import excluded_codes, selected_orders, line_choices_payload
+        except ImportError:
+            from outgoing_contractors import excluded_codes, selected_orders, line_choices_payload
+        excluded=excluded_codes(conn)
+        line_choices=line_choices_payload(conn,asof,contractor,orders=orders,issued=issued)
+        orders=selected_orders(conn,orders)
+        warnings=[w for w in warnings if w['contractor'] not in excluded]
     try:
         from .outgoing_waiting import waiting_readiness
         from .outgoing_readiness import canonical_available_stock
@@ -183,7 +194,8 @@ def unissued_payload(conn,asof,contractor=''):
         from .outgoing_signed_stock_review import signed_stock_issues
     except ImportError:
         from outgoing_signed_stock_review import signed_stock_issues
-    return {'asof':asof,'contractor':contractor,'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
+    return {'asof':asof,'contractor':contractor,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
+            'line_choices':line_choices,
             'pending_rows':pending,'pending_order_rows':sum(r['waiting_qty']>1e-8 for r in details),
             'signed_stock_issues':signed_stock_issues(conn,contractor),
             'held_line_issues':[{**units[o['id']],'contractor':o['contractor'],'work_date':o['work_date']} for o in orders if o['id'] in units and o['actual_delivered']-o['customer_return_qty']-issued.get(o['id'],0)>1e-8],

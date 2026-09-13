@@ -95,6 +95,14 @@ def _groups(rows, floor_kg=True):
 
 def _write_draft(conn,party,rows,days,tax_percent,timestamp,*,floor_kg=True,kind='consolidated'):
     try:
+        from .outgoing_contractors import assert_enabled, excluded_order_ids
+    except ImportError:
+        from outgoing_contractors import assert_enabled, excluded_order_ids
+    assert_enabled(conn,party)
+    skipped=excluded_order_ids(conn)
+    if any(r['order_id'] in skipped for r in rows):
+        raise ValueError('Dòng đã bỏ chọn không được đưa vào dự thảo mới. Tải lại bảng kê.')
+    try:
         from .outgoing_weights import confirmed_weights
     except ImportError:
         from outgoing_weights import confirmed_weights
@@ -132,6 +140,12 @@ def consolidate(conn,batch_ids,contractor,tax_percent,timestamp):
     """Select editable quantities by day; preserve sale prices and other days' holds."""
     scope=set(batch_ids)
     try:
+        from .outgoing_contractors import assert_enabled, excluded_codes
+    except ImportError:
+        from outgoing_contractors import assert_enabled, excluded_codes
+    assert_enabled(conn,contractor)
+    excluded=excluded_codes(conn)
+    try:
         from .outgoing_weights import confirmed_weights
     except ImportError:
         from outgoing_weights import confirmed_weights
@@ -144,6 +158,7 @@ def consolidate(conn,batch_ids,contractor,tax_percent,timestamp):
         ORDER BY d.invoice_date,d.id''',(contractor,contractor,json.dumps(batch_ids),json.dumps(batch_ids)))]
     grouped=defaultdict(list)
     for d in drafts:
+        if d['contractor'] in excluded:continue
         rows=[dict(r) for r in conn.execute('''SELECT l.*,o.batch_id,o.work_date,o.buy_price,a.source_unit_price
             FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id
             LEFT JOIN outgoing_line_allocations a ON a.line_id=l.id AND a.order_id=l.order_id

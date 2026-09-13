@@ -810,6 +810,11 @@ def init_contract_schema(conn, opening_template_path=None):
         from outgoing_weights import SCHEMA as WEIGHT_SCHEMA
     migrate_outgoing_invoice_rounds(conn)
     conn.executescript(WEIGHT_SCHEMA)
+    try:
+        from .outgoing_contractors import SCHEMA as CONTRACTOR_CHOICE_SCHEMA
+    except ImportError:
+        from outgoing_contractors import SCHEMA as CONTRACTOR_CHOICE_SCHEMA
+    conn.executescript(CONTRACTOR_CHOICE_SCHEMA)
     conn.execute(
         "INSERT OR IGNORE INTO settings(key,value) VALUES('installation_uuid',?)",
         (uuid.uuid4().hex.upper(),),
@@ -4657,6 +4662,11 @@ def outgoing_invoice_readiness_payload(conn, batch_id: int) -> dict:
 
 def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_filter: str = "") -> dict:
     """Reserve every quantity currently invoiceable and retain the remainder."""
+    try:
+        from .outgoing_contractors import assert_enabled, selected_orders as chosen_orders, excluded_codes
+    except ImportError:
+        from outgoing_contractors import assert_enabled, selected_orders as chosen_orders, excluded_codes
+    assert_enabled(conn, contractor_filter)
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
         raise ValueError("Không tìm thấy phiên đơn")
@@ -4665,6 +4675,9 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
     selected_orders = [dict(r) for r in conn.execute(
         'SELECT * FROM orders WHERE batch_id=? AND (? = \'\' OR contractor=?) ORDER BY contractor,id',
         (batch_id, contractor_filter, contractor_filter))]
+    selected_orders = chosen_orders(conn, selected_orders)
+    if not selected_orders:
+        raise ValueError('Phiên này không có nhà thầu được chọn đưa vào file M-Invoice.')
     issues = invoice_order_issues(selected_orders)
     if issues:
         details = '; '.join(f"Dòng {r['order_id']} · {r['product_code']}: {', '.join(r['messages'])}" for r in issues[:5])
@@ -4682,6 +4695,8 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
            ORDER BY id""",
         (batch_id, contractor_filter, contractor_filter),
     )]
+    excluded = excluded_codes(conn)
+    replaceable = [r for r in replaceable if r['contractor'] not in excluded]
     replaceable_ids = {row["id"] for row in replaceable}
     # Only canonical invoice inventory may unlock an outgoing draft.  Active
     # reservations and locally issued invoices awaiting source sync are already

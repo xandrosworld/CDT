@@ -19,16 +19,25 @@ except ImportError:
 def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
     """Caller owns the transaction. Downloads/refreshes never mark invoices issued."""
     try:
+        from .outgoing_contractors import excluded_codes, release_disabled_drafts, selected_orders
+    except ImportError:
+        from outgoing_contractors import excluded_codes, release_disabled_drafts, selected_orders
+    excluded=excluded_codes(conn)
+    release_disabled_drafts(conn,timestamp)
+    if contractor in excluded:
+        return {'created':[], 'replaced':[], 'warnings':[]}
+    try:
         from .contract_modules import invoice_tax_percent, audit
     except ImportError:
         from contract_modules import invoice_tax_percent, audit
     external={}
     issued,warnings=issued_allocations(conn,external_quantities=external)
-    warnings=[w for w in warnings if not contractor or not w['contractor'] or w['contractor']==contractor]
+    warnings=[w for w in warnings if w['contractor'] not in excluded and (not contractor or not w['contractor'] or w['contractor']==contractor)]
     if warnings:
         return {'created':[], 'replaced':[], 'warnings':warnings}
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
         WHERE b.status='approved' AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(contractor,contractor))]
+    orders=selected_orders(conn,orders)
     need={r['id']:max(decimal(r['actual_delivered'])-decimal(r['customer_return_qty'])-decimal(issued.get(r['id'],0)),Decimal(0)) for r in orders}
     settled={r['order_id']:r['external_issued_qty'] for r in conn.execute('SELECT * FROM outgoing_waiting_settlements')}
     if contractor:
@@ -41,6 +50,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
     drafts=[dict(r) for r in conn.execute("""SELECT * FROM outgoing_invoice_drafts WHERE status='draft'
         AND (?='' OR contractor=?)
         ORDER BY CASE WHEN minvoice_status IN ('saved','saving','unknown') THEN 0 ELSE 1 END,id""",(contractor,contractor))]
+    drafts=[r for r in drafts if r['contractor'] not in excluded]
     stock=canonical_available_stock(conn)
     capacity={code:decimal(r['raw_available_qty']) for code,r in stock.items()}
     # Recheck old holds too: a changed policy or stock cannot keep an invalid
@@ -136,10 +146,16 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
 def waiting_readiness(conn,orders,issued,*,stock=None):
     """Read only; a broken reservation or changed stock is never labelled safe."""
     held=defaultdict(float);valid=defaultdict(float);warnings=[]
+    try:
+        from .outgoing_contractors import excluded_codes
+    except ImportError:
+        from outgoing_contractors import excluded_codes
+    excluded=excluded_codes(conn)
     if stock is None:stock=canonical_available_stock(conn)
     by_order={r['id']:r for r in orders}
     units=unit_issues(conn,orders)
     for d in conn.execute("SELECT id,contractor FROM outgoing_invoice_drafts WHERE status='draft'"):
+        if d['contractor'] in excluded:continue
         exempt=exempt_order_codes(conn,draft_policy_rows(conn,d['id']))
         expected={r['product_code']:r['qty'] for r in conn.execute('SELECT product_code,SUM(qty) qty FROM outgoing_invoice_lines WHERE draft_id=? GROUP BY product_code',(d['id'],))}
         reserved={r['product_code']:r['qty'] for r in conn.execute("SELECT product_code,SUM(qty_out) qty FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved' GROUP BY product_code",(str(d['id']),))}

@@ -4061,6 +4061,11 @@ def invoice_workbook(rows, invoice_names=None):
 
 def export_invoices_zip(conn, batch, orders, *, contractor_filter=""):
     try:
+        from .outgoing_contractors import assert_enabled, excluded_codes
+    except ImportError:
+        from outgoing_contractors import assert_enabled, excluded_codes
+    assert_enabled(conn, contractor_filter)
+    try:
         from .outgoing_weights import invoice_rows
     except ImportError:
         from outgoing_weights import invoice_rows
@@ -4082,6 +4087,8 @@ def export_invoices_zip(conn, batch, orders, *, contractor_filter=""):
             ORDER BY d.contractor,d.round_no,l.id""",
         (batch["id"], contractor_filter, contractor_filter),
     )]
+    excluded=excluded_codes(conn)
+    lines = [r for r in lines if r['contractor'] not in excluded]
     try:
         for draft_id, invoice_date in {(line["draft_id"], line["invoice_date"]) for line in lines}:
             # Tax upload templates contain no issue date. Validate today's
@@ -4328,6 +4335,40 @@ def api_quotes():
         return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
 
 
+@app.route('/api/outgoing-invoices/contractor-choices', methods=['GET', 'PUT'])
+def api_outgoing_contractor_choices():
+    try:
+        from .outgoing_contractors import choices_payload, save_choices
+    except ImportError:
+        from outgoing_contractors import choices_payload, save_choices
+    try:
+        with db() as conn:
+            if request.method == 'PUT':
+                conn.execute('BEGIN IMMEDIATE')
+                result = save_choices(conn, request.get_json(silent=True), now_iso())
+            else:
+                conn.execute('PRAGMA query_only=ON')
+                conn.execute('BEGIN')
+                result = choices_payload(conn)
+            return jsonify(ok=True, **result)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+
+
+@app.put('/api/outgoing-invoices/line-choices')
+def api_outgoing_line_choices():
+    try:
+        from .outgoing_contractors import save_line_choices
+    except ImportError:
+        from outgoing_contractors import save_line_choices
+    try:
+        with db() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            return jsonify(ok=True, **save_line_choices(conn,request.get_json(silent=True),now_iso()))
+    except ValueError as exc:
+        return jsonify(ok=False,error=str(exc)),409
+
+
 @app.route('/api/outgoing-invoices/actual-weights', methods=['GET'])
 @app.route('/api/outgoing-invoices/actual-weights/<int:order_id>', methods=['PUT'])
 def api_outgoing_actual_weights(order_id=None):
@@ -4377,7 +4418,7 @@ def api_outgoing_unissued():
                 except ImportError:
                     from outgoing_waiting import refresh_waiting
                 refreshed=refresh_waiting(conn,now_iso())
-            payload=unissued_payload(conn,cutoff,party)
+            payload=unissued_payload(conn,cutoff,party,respect_export_choices=True)
             if refreshed:
                 for warning in refreshed['warnings']:
                     if (not party or not warning['contractor'] or warning['contractor']==party) and warning not in payload['warnings']:
@@ -4464,6 +4505,7 @@ def api_export_order_invoices():
         from .outgoing_unissued import issued_allocations
         from .invoice_tax_export import build_invoice_workbook, _safe_name
         from .order_export_scope import resolve_scope, business_today
+        from .outgoing_contractors import assert_enabled, selected_orders as chosen_orders, excluded_codes
     except ImportError:
         from contract_modules import create_partial_outgoing_drafts, net_delivered, invoice_tax_percent
         from outgoing_readiness import OutgoingReadinessError, allocation_by_order
@@ -4471,6 +4513,7 @@ def api_export_order_invoices():
         from outgoing_unissued import issued_allocations
         from invoice_tax_export import build_invoice_workbook, _safe_name
         from order_export_scope import resolve_scope, business_today
+        from outgoing_contractors import assert_enabled, selected_orders as chosen_orders, excluded_codes
     try:
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
@@ -4480,6 +4523,7 @@ def api_export_order_invoices():
             body = {**body, 'scope':'unissued'}
         with db() as conn:
             start,end,contractor,cumulative=resolve_scope(conn,body,valid_iso_date)
+            assert_enabled(conn,contractor)
             connected=setting_get(conn,'minvoice_active_connection','')
         if connected:
             try:
@@ -4496,13 +4540,17 @@ def api_export_order_invoices():
             conn.execute('BEGIN IMMEDIATE')
             if contractor and not conn.execute('SELECT 1 FROM contractors WHERE code=?', (contractor,)).fetchone():
                 raise ValueError('Không tìm thấy nhà thầu đã chọn')
+            assert_enabled(conn,contractor)
+            excluded=excluded_codes(conn)
             try:
                 from .outgoing_waiting import refresh_waiting
             except ImportError:
                 from outgoing_waiting import refresh_waiting
             batches = conn.execute("""SELECT b.* FROM batches b WHERE b.work_date BETWEEN ? AND ?
                 AND (?=0 OR b.status='approved')
-                AND EXISTS(SELECT 1 FROM orders o WHERE o.batch_id=b.id AND (?='' OR o.contractor=?))
+                AND EXISTS(SELECT 1 FROM orders o WHERE o.batch_id=b.id AND (?='' OR o.contractor=?)
+                    AND NOT EXISTS(SELECT 1 FROM outgoing_contractor_choices c WHERE c.contractor=o.contractor AND c.enabled=0)
+                    AND NOT EXISTS(SELECT 1 FROM outgoing_order_choices c WHERE c.order_id=o.id AND c.enabled=0))
                 ORDER BY b.work_date,b.id""", (start,end,int(cumulative),contractor,contractor)).fetchall()
             if not batches:
                 raise ValueError('Chưa có đơn đã duyệt của nhà thầu này để lập bảng kê')
@@ -4515,6 +4563,7 @@ def api_export_order_invoices():
                 selected_orders.extend(dict(r) for r in conn.execute(
                     "SELECT * FROM orders WHERE batch_id=? AND (?='' OR contractor=?) ORDER BY id",
                     (batch['id'],contractor,contractor)))
+            selected_orders=chosen_orders(conn,selected_orders)
             try:
                 from .outgoing_line_policy import unit_issues
             except ImportError:
@@ -4623,6 +4672,7 @@ def api_export_order_invoices():
                         raise InvoiceTaxExportError('Tên file nhà thầu bị trùng; cần kiểm tra mã nhà thầu.')
                     archive.writestr(filename,payload)
                 guide=['FILE TỪ ĐƠN HÀNG ĐỂ NHẬP M-INVOICE',f'Ngày {start} đến {end}. Nhà thầu: {contractor or "Tất cả"}.',
+                    'NHÀ THẦU ĐÃ BỎ CHỌN KHỎI FILE: '+(', '.join(sorted(excluded)) or 'Không có')+'. Không tính vào phần chờ của lần tải này.',
                     f'{len(draft_ids)} file Excel. Mỗi nhà thầu một file cho từng nhóm thuế. '+('Cộng dồn toàn bộ đơn đã duyệt đến hết ngày chọn, trừ lượng đã ký đến hiện tại, kể cả hóa đơn ký sau ngày đơn.' if cumulative else 'Gộp tất cả ngày đã chọn.'),
                     'Cùng mã và cùng giá bán trên đơn đã duyệt được cộng lượng. Khác giá bán giữ dòng riêng để đối chiếu, không tự tạo giá bình quân mới. Hàng khuyến mại giữ riêng tính chất.',
                     'Kg gốc làm tròn xuống theo 0,1 Kg; kg quy đổi dùng số thực tế đã xác nhận và giữ riêng từng dòng đơn, đơn giá tính lại để giữ thành tiền. Cái, quả, con, chiếc lấy số nguyên sau khi cộng mã. Phần lẻ giữ lại.',
@@ -4640,6 +4690,7 @@ def api_export_order_invoices():
         response.headers['X-Invoice-Files']=str(len(draft_ids))
         response.headers['X-Pending-Order-Lines']=str(len(pending))
         response.headers['X-Blocked-Contractors']=str(len(blocked))
+        response.headers['X-Excluded-Contractors']=str(len(excluded))
         response.headers['X-Held-Unit-Lines']=str(len(held_issues))
         response.headers['X-Order-Scope']='unissued' if cumulative else 'range'
         return response

@@ -934,3 +934,10 @@ body { min-width: 320px; }
 .batch-bk-approval-dialog > p { margin: 16px 24px; }
 .batch-bk-approval-dialog td, .batch-bk-approval-dialog th { padding: 12px; font-size: 16px; }
 .worksheet-loading-dialog [hidden] { display:none !important; }
+.invoice-contractor-choices { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:8px; margin:12px 0; }
+.invoice-contractor-choices label { display:flex; align-items:flex-start; gap:10px; padding:10px; border:1px solid #cbdcdd; border-radius:4px; cursor:pointer; }
+.invoice-contractor-choices input[type=checkbox] { width:18px; height:18px; flex:none; margin:1px 0 0; }
+.invoice-contractor-choices small { display:block; line-height:1.5; }
+#invoiceContractorChoices { margin-bottom:20px; }
+#invoiceContractorChoices summary { cursor:pointer; }
+#invoiceContractorChoices p { line-height:1.5; }

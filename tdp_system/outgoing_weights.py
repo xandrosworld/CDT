@@ -65,9 +65,14 @@ def workbench(conn, cutoff, contractor=''):
     from_module = __package__
     if from_module:
         from .outgoing_unissued import issued_allocations
+        from .outgoing_contractors import excluded_codes, excluded_order_ids
     else:
         from outgoing_unissued import issued_allocations
+        from outgoing_contractors import excluded_codes, excluded_order_ids
     issued, warnings = issued_allocations(conn)
+    excluded=excluded_codes(conn)
+    skipped=excluded_order_ids(conn)
+    warnings=[w for w in warnings if w['contractor'] not in excluded]
     weights = confirmed_weights(conn)
     result = []
     for row in conn.execute('''SELECT o.*,p.unit stock_unit,
@@ -78,6 +83,8 @@ def workbench(conn, cutoff, contractor=''):
         LEFT JOIN outgoing_product_names n ON n.product_code=p.code
         WHERE b.status='approved' AND o.work_date<=? AND (?='' OR o.contractor=?)
         ORDER BY o.work_date,o.contractor,o.kitchen,o.id''', (cutoff, contractor, contractor)):
+        if row['contractor'] in excluded or row['id'] in skipped:
+            continue
         remaining = max(float(row['actual_delivered'] or 0)-float(row['customer_return_qty'] or 0)-issued.get(row['id'], 0), 0)
         if remaining <= 1e-8 or (key(row['unit']) == key(row['stock_unit']) == key(row['invoice_unit'])):
             continue

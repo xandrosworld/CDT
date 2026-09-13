@@ -360,6 +360,17 @@ def invoice_order_issues(orders):
 
 def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     """Read-only recheck before handing off a file or saving a remote draft."""
+    try:
+        from .outgoing_contractors import assert_enabled, assert_draft_lines_enabled
+    except ImportError:
+        from outgoing_contractors import assert_enabled, assert_draft_lines_enabled
+    draft = conn.execute('SELECT contractor FROM outgoing_invoice_drafts WHERE id=?',(draft_id,)).fetchone()
+    if draft:
+        try:
+            assert_enabled(conn,draft['contractor'])
+            assert_draft_lines_enabled(conn,draft_id)
+        except ValueError as exc:
+            raise OutgoingReadinessError(str(exc),code='contractor_not_selected') from None
     required = defaultdict(float)
     lines = conn.execute("SELECT id,product_code,product_name,unit,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
     # Raw line IDs are not order IDs. Check stock units here and confirmed
@@ -545,6 +556,11 @@ def _project_rows(
     orders: list[dict[str, Any]],
     batch_ids: list[int],
 ) -> list[dict[str, Any]]:
+    try:
+        from .outgoing_contractors import selected_orders
+    except ImportError:
+        from outgoing_contractors import selected_orders
+    orders=selected_orders(conn,orders)
     validate_demand_orders(conn, orders)
     stock = canonical_available_stock(conn)
     available = {code: item["available_qty"] for code, item in stock.items()}
