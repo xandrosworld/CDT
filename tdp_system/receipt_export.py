@@ -28,6 +28,7 @@ from typing import Any, Iterable, Mapping
 from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment
 from openpyxl.worksheet.page import PageMargins
+from openpyxl.worksheet.pagebreak import RowBreak
 
 try:
     from seller_identity_catalog import name_key, is_excluded_seller
@@ -415,6 +416,73 @@ def _align_receipt_sheet(sheet: Any, *, total_row: int, signature_row: int) -> N
     sheet.print_options.verticalCentered = False
 
 
+def configure_receipt_paper(sheet: Any, paper: str = "A5") -> None:
+    """Lay out the receipt at its physical paper size, before Excel/PDF export.
+
+    A5 needs narrower columns and wrapped prose at a readable font size; merely
+    setting PaperSize on the A4 form reduced its 12pt body to less than 8pt.
+    This only changes formatting, never the seller identity or purchase values.
+    """
+    if paper not in {"A4", "A5"}:
+        raise ValueError("Biên nhận chỉ hỗ trợ khổ A4 hoặc A5")
+    total_row = next((r for r in range(ITEM_FIRST_ROW, sheet.max_row + 1)
+                      if sheet.cell(r, 3).value == "TỔNG"), None)
+    if total_row is not None:
+        signature_row = total_row + 10
+        _align_receipt_sheet(sheet, total_row=total_row, signature_row=signature_row)
+        if paper == "A5":
+            for column, width in {"C":21, "D":5.5, "E":9.5, "F":8.5, "G":10.5}.items():
+                sheet.column_dimensions[column].width = width
+            for row in sheet.iter_rows(min_row=1, max_row=signature_row, min_col=3, max_col=7):
+                for cell in row:
+                    if not isinstance(cell, MergedCell) and cell.value is not None:
+                        _set_receipt_font(cell, size=16 if cell.coordinate == "C3" else 11)
+            # Heights include the wrapped lines, instead of compressing the
+            # entire form to one page as the number of purchased items grows.
+            import textwrap
+            def height(text, width, minimum=16):
+                lines = sum(max(1, len(textwrap.wrap(line, width=width)))
+                            for line in str(text or "").split('\n'))
+                return max(minimum, lines * 14 + 3)
+            for r, h in {1:17, 2:17, 3:25, 13:7, 14:23}.items():
+                sheet.row_dimensions[r].height = h
+            for r in range(4, 8):
+                sheet.row_dimensions[r].height = height(sheet.cell(r, 3).value, 76)
+            for r in range(8, 13):
+                sheet.row_dimensions[r].height = height(sheet.cell(r, 4).value, 44)
+            for r in range(ITEM_FIRST_ROW, total_row):
+                sheet.row_dimensions[r].height = max(22, height(sheet.cell(r, 3).value, 26))
+            sheet.row_dimensions[total_row].height = height(sheet.cell(total_row, 6).value, 12, 22)
+            sheet.row_dimensions[total_row + 1].height = height(sheet.cell(total_row + 1, 3).value, 76)
+            sheet.row_dimensions[total_row + 2].height = 7
+            for r in (total_row + 3, total_row + 4):
+                sheet.row_dimensions[r].height = height(sheet.cell(r, 3).value, 76)
+            sheet.row_dimensions[total_row + 5].height = 30
+            sheet.cell(total_row + 5, 5).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            sheet.row_dimensions[total_row + 6].height = 22
+            for r in range(total_row + 7, signature_row):
+                sheet.row_dimensions[r].height = 20
+            sheet.row_dimensions[signature_row].height = height(sheet.cell(signature_row, 5).value, 32, 22)
+            sheet.cell(signature_row, 5).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sheet.print_area = f"$C$1:$G${signature_row}"
+    sheet.row_breaks = RowBreak()
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A5 if paper == "A5" else sheet.PAPERSIZE_A4
+    sheet.page_setup.orientation = sheet.ORIENTATION_PORTRAIT
+    sheet.page_setup.scale = None
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0 if paper == "A5" else 1
+    if paper == "A5" and total_row is not None:
+        # A modest fit keeps short receipts and signatures together at >=10pt.
+        # Long receipts keep the full-size text and continue on the reverse.
+        height_points = sum(sheet.row_dimensions[r].height or 15 for r in range(1, signature_row + 1))
+        sheet.page_setup.fitToHeight = 1 if height_points <= 620 else 0
+    sheet.print_title_rows = "14:14" if sheet.page_setup.fitToHeight == 0 and total_row is not None else None
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.print_options.horizontalCentered = True
+    sheet.print_options.verticalCentered = False
+    sheet.page_margins = PageMargins(left=0.24, right=0.24, top=0.28, bottom=0.28, header=0.1, footer=0.1)
+
+
 def _populate_receipt_sheet(
     sheet: Any,
     group: Mapping[str, Any],
@@ -514,16 +582,7 @@ def _populate_receipt_sheet(
     signature_row = total_row + 10
     if sheet.max_row > signature_row:
         sheet.delete_rows(signature_row + 1, sheet.max_row - signature_row)
-    _align_receipt_sheet(sheet, total_row=total_row, signature_row=signature_row)
-    sheet.print_area = f"$C$1:$G${signature_row}"
-    sheet.sheet_properties.pageSetUpPr.fitToPage = True
-    sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
-    sheet.page_setup.orientation = sheet.ORIENTATION_PORTRAIT
-    sheet.page_setup.fitToWidth = 1
-    sheet.page_setup.fitToHeight = 1
-    sheet.page_margins = PageMargins(
-        left=0.25, right=0.25, top=0.35, bottom=0.35, header=0.15, footer=0.15,
-    )
+    configure_receipt_paper(sheet, "A5")
 
 
 def build_purchase_documents_workbook(

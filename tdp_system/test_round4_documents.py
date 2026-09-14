@@ -186,7 +186,8 @@ class Round4DocumentTests(SelectedDocumentExportTests):
             self.assertEqual(generated.sheetnames,['biên nhận'])
             if kwargs['paper']=='A5':
                 self.assertEqual(str(generated.active.page_setup.paperSize),'11')
-                self.assertEqual(generated.active.page_setup.fitToHeight,1)
+                self.assertEqual(generated.active.page_setup.fitToHeight,0)
+                self.assertEqual(generated.active.page_setup.orientation,'portrait')
             generated.close()
             target.write_bytes(b'%PDF-1.4 '+kwargs['paper'].encode())
         url='/api/documents/'+data['token']

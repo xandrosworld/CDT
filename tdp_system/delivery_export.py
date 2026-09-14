@@ -23,10 +23,8 @@ from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.pagebreak import RowBreak
 
 try:
-    from document_totals import quantity_cell
     from document_preview import white_print_style
 except ImportError:
-    from .document_totals import quantity_cell
     from .document_preview import white_print_style
 
 try:
@@ -573,11 +571,9 @@ def _prepare_sheet(
     write_literal(sheet, f"C{total_row}", "TỔNG CỘNG")
     # The visible E:F cells are shared by priced and price-hidden notes.
     sheet.merge_cells(start_row=total_row, start_column=5, end_row=total_row, end_column=6)
-    qty = quantity_cell(records, "quantity")
-    if not isinstance(qty, str):
-        qty = f"{qty:,.6f}".rstrip('0').rstrip('.') + ' ' + str(records[0].get('unit') or '')
-    write_literal(sheet, f"E{total_row}", qty)
-    sheet[f"E{total_row}"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    # The customer checks quantities on each item. Do not print the unwieldy
+    # mixed-unit summary; retain the monetary total on the priced Nhựa form.
+    write_literal(sheet, f"E{total_row}", None)
     if show_price:
         write_literal(sheet, f"I{total_row}", int(total) if total == total.to_integral_value() else float(total))
         sheet[f"I{total_row}"].number_format = "#,##0"
@@ -593,7 +589,8 @@ def _prepare_sheet(
     sheet.column_dimensions["I"].hidden = not show_price
     # Final customer-facing typography, full-width columns and page balance.
     _style_delivery_print_layout(sheet, records=records)
-    sheet.row_dimensions[total_row].height = max(30, 20 * math.ceil(len(qty) / 20))
+    sheet.row_dimensions[total_row].height = 30
+    sheet.row_dimensions[total_row].hidden = not show_price
     sheet.auto_filter.ref = f"C{TABLE_HEADER_ROW}:J{last_item_row}"
     # The source print area stopped at the total even though its approved
     # four-signature artwork is anchored immediately below it.  Include the

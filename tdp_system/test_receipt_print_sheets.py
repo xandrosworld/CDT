@@ -1,14 +1,35 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from openpyxl import Workbook
 
 from pypdf import PdfReader
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfgen.canvas import Canvas
-from .excel_print_renderer import _merge_pdfs, ReceiptPrintError
+from .excel_print_renderer import _merge_pdfs, ReceiptPrintError, build_excel_pdf_bundle
 
 
 class ReceiptPrintSheetTests(unittest.TestCase):
+    def test_auto_receipt_print_uses_duplex_only_when_a_receipt_needs_two_pages(self):
+        source = self.root / 'receipts.xlsx'
+        book = Workbook();book.active.title = 'biên nhận'
+        book.create_sheet('biên nhận 02');book.save(source);book.close()
+        before = source.read_bytes()
+        for count in (1, 2):
+            rendered = [self.source('biên nhận', count, 'FIRST'), self.source('biên nhận 02', 1, 'SECOND')]
+            for item in rendered:item.update(document_type='selected', title=item['sheet'], workbook=source.name)
+            with patch('tdp_system.excel_print_renderer._export_visible_sheets', return_value=rendered):
+                report = build_excel_pdf_bundle([{'path':source, 'document_type':'selected'}],
+                                                self.root / 'auto.pdf', paper='A5', duplex='auto')
+            self.assertEqual(report['duplex'], count == 2)
+            self.assertEqual(report['pages'], 2 if count == 1 else 4)
+            self.assertEqual(report['page_layout']['blank_pages'], [] if count == 1 else [4])
+            self.assertEqual(source.read_bytes(), before)
+            for page in PdfReader(self.root / 'auto.pdf').pages:
+                self.assertAlmostEqual(float(page.mediabox.width), 148 * 72 / 25.4, places=2)
+                self.assertAlmostEqual(float(page.mediabox.height), 210 * 72 / 25.4, places=2)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

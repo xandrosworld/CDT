@@ -13,12 +13,14 @@ from openpyxl import load_workbook
 
 try:
     from .document_preview import create_snapshot, snapshot_files, PDF_LOCK, white_print_style
+    from .receipt_export import configure_receipt_paper
     from .excel_print_renderer import build_excel_pdf_bundle, ExcelPrintError, is_receipt_sheet
     from .invoice_payment_scope import issued_invoice_payment_scope
     from .invoice_payment_documents import invoice_payment_request_workbook
     from .contract_modules import invoice_delivery_statement_scope_workbook
 except ImportError:
     from document_preview import create_snapshot, snapshot_files, PDF_LOCK, white_print_style
+    from receipt_export import configure_receipt_paper
     from excel_print_renderer import build_excel_pdf_bundle, ExcelPrintError, is_receipt_sheet
     from invoice_payment_scope import issued_invoice_payment_scope
     from invoice_payment_documents import invoice_payment_request_workbook
@@ -245,14 +247,11 @@ def register_document_routes(app, context_factory):
             if paper == 'A5':
                 if any(not is_receipt_sheet(sheet.title) for _, book in books for sheet in book if sheet.sheet_state == 'visible'):
                     raise ValueError('Chọn riêng các biên nhận để in A5. Bảng kê tổng in A4.')
-                for _, book in books:
-                    for sheet in book:
-                        sheet.page_setup.paperSize = sheet.PAPERSIZE_A5
-                        sheet.page_setup.fitToWidth = 1
-                        sheet.page_setup.fitToHeight = 1
-                        sheet.page_margins.left = sheet.page_margins.right = 0.2
-                        sheet.page_margins.top = sheet.page_margins.bottom = 0.2
-                        sheet.page_margins.header = sheet.page_margins.footer = 0.1
+            for _, book in books:
+                for sheet in book:
+                    if is_receipt_sheet(sheet.title):
+                        configure_receipt_paper(sheet, paper)
+                white_print_style(book)
             if output == 'excel':
                 if len(books) == 1:
                     stream = io.BytesIO()
@@ -272,9 +271,7 @@ def register_document_routes(app, context_factory):
             sides = request.args.get('sides', 'auto' if deliveries_only else 'duplex')
             if sides not in {'simplex', 'duplex', 'auto'}:
                 raise ValueError('Chọn cách in một mặt hoặc hai mặt')
-            if sides == 'auto' and not deliveries_only:
-                raise ValueError('Chế độ tự động theo số trang chỉ áp dụng cho phiếu giao')
-            digest = hashlib.sha256(('sheet-scope-v8-delivery-layout:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
+            digest = hashlib.sha256(('sheet-scope-v9-a5-receipts:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
             pdf = directory / f'{digest}.pdf'
             print_info = directory / f'{digest}.print.json'
             with PDF_LOCK:
@@ -289,6 +286,7 @@ def register_document_routes(app, context_factory):
                 result = json.loads(print_info.read_text(encoding='utf-8'))
             response = send_file(pdf, mimetype='application/pdf', as_attachment=False, download_name='Chung_tu_da_chon.pdf')
             response.headers['X-Print-Sides'] = 'duplex' if result['duplex'] else 'simplex'
+            response.headers['X-Print-Paper'] = paper
             response.headers['X-Print-Pages'] = str(result.get('pages', ''))
             response.headers['X-Print-Blank-Pages'] = ','.join(str(p) for p in result.get('page_layout', {}).get('blank_pages', []))
             return response

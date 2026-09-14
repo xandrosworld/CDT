@@ -26,6 +26,7 @@ SNAPSHOT_TTL = 24 * 60 * 60
 def white_print_style(workbook):
     """Only generated copies: no template/source writes or numeric changes."""
     for sheet in workbook:
+        receipt = bool(re.fullmatch(r'biên nhận(?:\s+\d+)?', sheet.title.strip().casefold()))
         sheet.conditional_formatting._cf_rules.clear()
         for row in sheet:
             for cell in row:
@@ -40,7 +41,7 @@ def white_print_style(workbook):
                     original = getattr(border, side)
                     if original and original.style:
                         thin = copy(original)
-                        thin.style = 'hair'
+                        thin.style = 'thin' if receipt else 'hair'
                         thin.color = '000000'
                         setattr(border, side, thin)
                 cell.border = border

@@ -29,7 +29,7 @@ from reportlab.lib.pagesizes import A4, A5
 
 EXCEL_PAPER_SIZES = {"A4": 9, "A5": 11}
 PDF_PAPER_SIZES = {"A4": A4, "A5": A5}
-FORMAT_VERSION = "tdp-excel-artwork-pdf-v7-delivery-auto-duplex"
+FORMAT_VERSION = "tdp-excel-artwork-pdf-v8-receipt-a5-layout"
 
 
 class ExcelPrintError(RuntimeError):
@@ -377,17 +377,24 @@ def _keep_delivery_footer_with_items(rendered, sources, *, paper, render_dir):
     compact = lambda text: ''.join(str(text or '').casefold().split())
     result = []
     for index, item in enumerate(rendered):
-        if item['document_type'] != 'deliveries' or item['pages'] < 2:
+        receipt = is_receipt_sheet(item.get('sheet', ''))
+        if (item['document_type'] != 'deliveries' and not receipt) or item['pages'] < 2:
             result.append(item); continue
         source = next(s for s in sources if s['path'].name == item['workbook'])
         book = load_workbook(source['path'])
         try:
             sheet = book[item['sheet']]
-            rows = [r for r in range(11, sheet.max_row+1)
-                    if type(sheet.cell(r,3).value) is int and sheet.cell(r,4).value]
+            if receipt:
+                end = next((r for r in range(15, sheet.max_row+1) if sheet.cell(r,3).value == 'TỔNG'), 15)
+                rows = [r for r in range(15, end) if sheet.cell(r,3).value]
+                name_column = 3
+            else:
+                rows = [r for r in range(11, sheet.max_row+1)
+                        if type(sheet.cell(r,3).value) is int and sheet.cell(r,4).value]
+                name_column = 4
             if len(rows) < 2:
                 result.append(item); continue
-            names = [compact(sheet.cell(r,4).value) for r in rows[-2:]]
+            names = [compact(sheet.cell(r,name_column).value) for r in rows[-2:]]
             last_text = compact(PdfReader(item['path']).pages[-1].extract_text())
             if any(name in last_text for name in names):
                 result.append(item); continue
@@ -407,7 +414,7 @@ def _keep_delivery_footer_with_items(rendered, sources, *, paper, render_dir):
         replacement = _export_visible_sheets([{**source, 'path':adjusted}], paper=paper, render_dir=folder)[0]
         last_text = compact(PdfReader(replacement['path']).pages[-1].extract_text())
         if not any(name in last_text for name in names):
-            raise ExcelPrintError('Phần ký của phiếu giao chưa nằm cùng dòng hàng. Kiểm tra tên hàng hoặc ghi chú quá dài.')
+            raise ExcelPrintError('Phần ký của chứng từ chưa nằm cùng dòng hàng. Kiểm tra tên hàng hoặc ghi chú quá dài.')
         result.append(replacement)
     return result
 
@@ -430,8 +437,6 @@ def build_excel_pdf_bundle(
         raise ExcelPrintError("Không có file Excel để tạo bộ in")
     if duplex not in (False, True, 'auto'):
         raise ExcelPrintError('Cách in không hợp lệ')
-    if duplex == 'auto' and any(s['document_type'] != 'deliveries' for s in normalized):
-        raise ExcelPrintError('Chế độ tự động theo số trang chỉ áp dụng cho phiếu giao')
 
     target = Path(output_path).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -441,8 +446,10 @@ def build_excel_pdf_bundle(
         from openpyxl import load_workbook
         try:
             from .document_preview import white_print_style
+            from .receipt_export import configure_receipt_paper
         except ImportError:
             from document_preview import white_print_style
+            from receipt_export import configure_receipt_paper
         styled_sources = []
         for index, source in enumerate(normalized):
             styled_dir = render_dir / ('source_' + str(index))
@@ -450,6 +457,9 @@ def build_excel_pdf_bundle(
             styled_path = styled_dir / source['path'].name
             workbook = load_workbook(source['path'], data_only=False)
             try:
+                for sheet in workbook:
+                    if is_receipt_sheet(sheet.title):
+                        configure_receipt_paper(sheet, paper_name)
                 white_print_style(workbook)
                 workbook.save(styled_path)
             finally:
