@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from openpyxl.cell.cell import MergedCell
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.pagebreak import RowBreak
 
@@ -429,9 +429,17 @@ def configure_receipt_paper(sheet: Any, paper: str = "A5") -> None:
                       if sheet.cell(r, 3).value == "TỔNG"), None)
     if total_row is not None:
         signature_row = total_row + 10
+        # Excel measures column widths using the workbook's Normal font. The
+        # golden template uses Aptos Narrow, which LibreOffice substitutes and
+        # Windows Excel does not: identical widths then print at different sizes.
+        # Keep the receipt's explicit Times New Roman cells, but use a portable
+        # default font for column measurement in both renderers.
+        normal_font = Font(name="Arial", size=11)
+        sheet.parent._fonts[0] = normal_font
+        sheet.parent._named_styles["Normal"].font = normal_font
         _align_receipt_sheet(sheet, total_row=total_row, signature_row=signature_row)
         if paper == "A5":
-            for column, width in {"C":21, "D":5.5, "E":9.5, "F":8.5, "G":10.5}.items():
+            for column, width in {"C":24, "D":6.5, "E":11, "F":10, "G":12.5}.items():
                 sheet.column_dimensions[column].width = width
             for row in sheet.iter_rows(min_row=1, max_row=signature_row, min_col=3, max_col=7):
                 for cell in row:

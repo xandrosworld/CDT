@@ -616,6 +616,8 @@ body { min-width: 320px; }
 .document-sheet .document-header-row td { position:sticky; top:-16px; z-index:2; background:#fff !important; box-shadow:0 1px 0 #000; }
 .document-error { color:#a32920; padding:8px 14px; white-space:pre-wrap; }
 .document-error:empty { display:none; }
+.document-progress { color:#17324d; padding:8px 14px; background:#f0f7f6; }
+.document-progress:empty { display:none; }
 .document-status { padding:20px; background:#fff; }
 .document-pdf iframe { width:100%; height:75vh; border:1px solid #ccc; }
 .document-pdf p { padding:8px 14px; }
@@ -623,7 +625,7 @@ body { min-width: 320px; }
 .print-batch-table thead th { position:sticky; top:0; z-index:2; }
 .print-customer-filter { display:flex; align-items:center; gap:12px; margin-top:12px; }
 @media print {
-  .document-toolbar,.document-sheet-list,.document-note,.document-error { display:none !important; }
+  .document-toolbar,.document-sheet-list,.document-note,.document-error,.document-progress { display:none !important; }
   .document-preview,.document-scroll { border:0; overflow:visible; max-height:none; }
   .document-sheet td { background:#fff !important; color:#000 !important; }
 }

@@ -37,16 +37,17 @@
         '<button type="button" class="btn btn-small btn-outline" data-doc="pdf">Tải PDF đã chọn</button>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="view-pdf">Xem bản in</button>' +
         '<label>Khổ giấy <select class="document-paper" aria-label="Khổ giấy"><option value="A4">A4</option><option value="A5">A5 · biên nhận</option></select></label>' +
-        '<label>Cách in <select class="document-sides" aria-label="Cách in">'+(deliveries||purchases?'<option value="auto">Tự động · theo số trang</option>':'')+'<option value="simplex">Một mặt</option><option value="duplex">Hai mặt · '+(deliveries?'mỗi đơn tờ riêng':'biên nhận tờ riêng')+'</option></select></label>' +
+        '<label>Cách in <select class="document-sides" aria-label="Cách in">'+(deliveries||purchases?'<option value="auto">Xếp trang tự động</option>':'')+'<option value="simplex">Một mặt</option><option value="duplex">Hai mặt · '+(deliveries?'mỗi đơn tờ riêng':'biên nhận tờ riêng')+'</option></select></label>' +
         '<button type="button" class="btn btn-small btn-primary" data-doc="print">In phiếu đã chọn</button>' +
         '<label>Phóng to bản xem <select class="document-zoom" aria-label="Phóng to chứng từ"><option value="0.8">80%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="refresh">Đọc lại dữ liệu mới</button></div>' +
         '<p class="document-note">Bản xem, Excel và PDF dùng cùng số liệu tại lúc mở. Có thay đổi đơn thì bấm Đọc lại dữ liệu mới. '+(deliveries?'Phiếu giao căn khổ A4; chữ trên bản in đã tăng một cỡ.':purchases?'Biên nhận mặc định A5 dọc. Bảng kê tổng in riêng A4 ngang; chọn tất cả sẽ dùng A4. Bấm Xem bản in để kiểm tra đúng khổ giấy.':'Chọn khổ giấy và bấm Xem bản in để kiểm tra trước khi in.')+'</p>' +
         '<p class="document-note document-print-help" role="status"></p>' +
+        '<details class="document-note document-printer-help" hidden><summary>Máy Canon LBP243dw: cách in A5</summary><p>Chọn giấy A5 dọc trên máy in và trong hộp thoại in; tỷ lệ 100% / Kích thước thực. Khay nạp A5 dọc của Canon dùng thiết lập A5R. Máy hỗ trợ in A5, nhưng không tự đảo hai mặt với khổ A5.</p><p>Biên nhận hai trang: chọn riêng biên nhận đó, tải PDF, in trang 1 rồi đặt giấy lại để in trang 2 trên mặt còn lại. Nếu cần tự đảo mặt bằng máy này, chọn A4 trên web và trong hộp thoại máy in.</p><a href="https://oip.manual.canon/USRMA-8782-zz-SSS-240-enGB/contents/devu-mcn-papers.html" target="_blank" rel="noopener">Khổ giấy hỗ trợ theo hướng dẫn Canon</a></details>' +
         (data.warnings || []).map(function (warning) { return '<p class="document-note tag-warn" role="alert">' + esc(warning) + '</p>'; }).join('') +
         '<div class="document-sheet-list" role="group" aria-label="Chọn từng chứng từ">' +
         data.sheets.map(function (sheet, i) { return '<div><input type="checkbox" checked data-sheet="' + i + '" aria-label="Chọn ' + esc(sheet.name) + '"><button type="button" class="btn btn-small btn-outline" data-open-sheet="' + i + '">' + esc(sheet.name) + '</button></div>'; }).join('') +
-        '</div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
+        '</div><div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false, paperTouched = false;
       function invalidatePrint() {
         resolvedSides = '';
@@ -62,13 +63,14 @@
         }
         var selectedPaper = host.querySelector('.document-paper').value;
         var paper = 'Khổ '+selectedPaper+(selectedPaper==='A5'?' dọc · 148 × 210 mm':'')+'. Khi in chọn đúng khổ '+selectedPaper+' và tỷ lệ 100% / Kích thước thực. ';
+        var a5Duplex = selectedPaper==='A5' ? 'In hai mặt A5 cần máy hỗ trợ đúng khổ giấy; Canon LBP243dw phải lật giấy thủ công. ' : '';
         var selectedSides=host.querySelector('.document-sides').value;
-        if(selectedSides==='auto'&&!resolvedSides) return paper+'Tự động: phiếu một trang in một mặt; có phiếu hai trang thì chuẩn bị in hai mặt, mỗi người một tờ riêng.';
+        if(selectedSides==='auto'&&!resolvedSides) return paper+'Xếp trang: phiếu một trang in một mặt; có phiếu hai trang thì chuẩn bị hai mặt, mỗi người một tờ riêng. '+a5Duplex;
         if(selectedSides==='auto')selectedSides=resolvedSides;
         var summary = Array.from(selected).some(function(i){return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase());});
         var edge = summary ? 'Bảng kê nằm ngang: chọn LẬT CẠNH NGẮN (Flip on short edge) để mặt sau không ngược đầu. ' : 'Trang dọc: chọn LẬT CẠNH DÀI (Flip on long edge). ';
         return paper + (selectedSides === 'duplex' ?
-          edge + 'Chọn in hai mặt và in tất cả trang, kể cả trang trắng. Mỗi người một tờ riêng: biên nhận một trang có mặt sau trắng; biên nhận hai trang in trước và sau cùng tờ. Nếu máy in đang chọn cạnh khác, đổi lại trong hộp thoại máy in.' :
+          a5Duplex + edge + 'Với máy hỗ trợ tự đảo mặt ở khổ giấy đã chọn, chọn in hai mặt và in tất cả trang, kể cả trang trắng. Mỗi người một tờ riêng: biên nhận một trang có mặt sau trắng; biên nhận hai trang in trước và sau cùng tờ.' :
           'Trong hộp thoại máy in, chọn in một mặt. Mỗi biên nhận in trên một tờ riêng.');
       }
       function update() {
@@ -81,6 +83,7 @@
         paper.disabled=busy;
         if (!modeTouched) mode.value = deliveries || purchases ? 'auto' : Array.from(selected).some(function(i){return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase());}) ? 'duplex' : 'simplex';
         mode.disabled = busy;
+        host.querySelector('.document-printer-help').hidden = paper.value !== 'A5';
         host.querySelector('.document-print-help').textContent = printHelp();
         host.querySelector('.document-count').textContent = data.sheet_count + ' phiếu · Đã chọn ' + selected.size;
         host.querySelectorAll('[data-doc="excel"],[data-doc="pdf"],[data-doc="print"],[data-doc="view-pdf"]').forEach(function (b) { b.disabled = busy || !selected.size; });
@@ -104,8 +107,17 @@
         resolvedSides='';
         busy = true; update();
         var errorBox = host.querySelector('.document-error');
+        var progressBox = host.querySelector('.document-progress');
         var isPdf = type === 'print' || type === 'pdf' || type === 'view-pdf';
-        errorBox.textContent = isPdf ? 'Đang tạo PDF đúng mẫu, vui lòng chờ…' : '';
+        errorBox.textContent = '';
+        var started = Date.now();
+        function progress() {
+          if (!isCurrent()) return;
+          var seconds = Math.floor((Date.now()-started)/1000);
+          progressBox.textContent = 'Đang tạo '+(isPdf?'PDF':'Excel')+' cho '+selected.size+' phiếu'+(seconds?' · Đã chờ '+seconds+' giây':'')+'. Các nút sẽ mở lại khi hoàn tất.';
+        }
+        progress();
+        var progressTimer = setInterval(progress, 1000);
         var url = '/api/documents/' + data.token + '/' + (isPdf ? 'pdf' : 'excel') + '?sheets=' + Array.from(selected).sort(function(a,b){return a-b;}).join(',');
         url += '&paper=' + host.querySelector('.document-paper').value;
         if(isPdf) url += '&sides=' + host.querySelector('.document-sides').value;
@@ -133,7 +145,7 @@
             anchor.click(); setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 30000);
           }
         } catch (error) { if (isCurrent()) errorBox.textContent = error.message; }
-        finally { busy = false; if (isCurrent()) update(); }
+        finally { clearInterval(progressTimer); progressBox.textContent=''; busy = false; if (isCurrent()) update(); }
       }
       host.onclick = function (event) {
         var sheet = event.target.closest('[data-open-sheet]');

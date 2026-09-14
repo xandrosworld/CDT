@@ -1,6 +1,6 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
-const requests=[];let prefixed=false;
+const requests=[];let prefixed=false, holdPdf=true, finishPdf, failPdf=false;
 const server=http.createServer((req,res)=>{
  const url=new URL(req.url,'http://localhost');
  if(url.pathname==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end('<script src="/document-preview.js"></script><h1>KIỂM THỬ CHỌN CÁCH IN</h1><div id="preview"></div><script>TDPDocuments.open({kind:"purchases"},"preview")</script>');}
@@ -8,7 +8,13 @@ const server=http.createServer((req,res)=>{
  if(url.pathname==='/api/documents/preview'){
   res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({token:'fixture',sheet_count:6,sheets:['bảng kê tổng','biên nhận','biên nhận 02','biên nhận 03','biên nhận 04','biên nhận 05'].map(name=>({name:(prefixed?'purchases 2026-09-02 5 · ':'')+name,width:800,html:'<table><tr><td>'+name+'</td></tr></table>'}))}));
  }
- if(url.pathname.endsWith('/pdf')){requests.push(req.url);res.setHeader('Content-Type','text/html');return res.end('<script>window.print=()=>{}</script>Bản kiểm thử, không gửi lệnh in');}
+ if(url.pathname.endsWith('/pdf')){
+  requests.push(req.url);
+  if(failPdf){failPdf=false;res.statusCode=422;res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({error:'Không tạo được bản in kiểm thử'}));}
+  const finish=()=>{res.setHeader('Content-Type','text/html');res.end('<script>window.print=()=>{}</script>Bản kiểm thử, không gửi lệnh in');};
+  if(holdPdf){holdPdf=false;finishPdf=finish;return;}
+  return finish();
+ }
  res.statusCode=404;res.end();
 });
 (async()=>{
@@ -21,12 +27,25 @@ const server=http.createServer((req,res)=>{
   assert.equal(await page.locator('[data-sheet="0"]').isChecked(),false);
   assert.equal(await paper.locator('[value=A5]').evaluate(e=>e.disabled),false);
   assert.match(await page.locator('.document-print-help').innerText(),/148 × 210 mm/);
+  assert.match(await page.locator('.document-print-help').innerText(),/Canon LBP243dw phải lật giấy thủ công/);
+  assert.equal(await page.locator('.document-printer-help').isVisible(),true);
   await page.locator('[data-doc=none]').click();assert.equal(await page.locator('[data-doc=print]').isDisabled(),true);
   assert.equal(await page.locator('[data-doc=view-pdf]').isDisabled(),true);
   await page.locator('[data-sheet="2"]').check();assert.equal(await mode.inputValue(),'auto');
-  await page.locator('[data-doc=view-pdf]').click();await page.locator('.document-pdf iframe').waitFor();
+  await page.locator('[data-doc=view-pdf]').click();
+  assert.match(await page.locator('.document-progress').innerText(),/Đang tạo PDF cho 1 phiếu/);
+  assert.equal(await page.locator('.document-error').innerText(),'');
+  assert.equal(await page.locator('[data-doc=print]').isDisabled(),true);
+  await page.waitForFunction(()=>document.querySelector('.document-progress').textContent.includes('Đã chờ'));
+  finishPdf();await page.locator('.document-pdf iframe').waitFor();
+  assert.equal(await page.locator('.document-progress').innerText(),'');
   assert.match(requests.at(-1),/sheets=2&paper=A5&sides=auto/);
+  failPdf=true;await page.locator('[data-doc=view-pdf]').click();
+  await page.waitForFunction(()=>!document.querySelector('[data-doc=print]').disabled);
+  assert.match(await page.locator('.document-error').innerText(),/Không tạo được bản in kiểm thử/);
+  assert.equal(await page.locator('.document-progress').innerText(),'');
   await paper.selectOption('A4');assert.equal(await page.locator('.document-pdf iframe').count(),0);
+  assert.equal(await page.locator('.document-printer-help').isVisible(),false);
   await page.locator('[data-doc=view-pdf]').click();await page.locator('.document-pdf iframe').waitFor();
   assert.match(requests.at(-1),/sheets=2&paper=A4&sides=auto/);
   await paper.selectOption('A5');await page.locator('[data-doc=print]').click();await page.waitForFunction(()=>!document.querySelector('[data-doc=print]').disabled);

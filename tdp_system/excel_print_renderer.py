@@ -29,7 +29,7 @@ from reportlab.lib.pagesizes import A4, A5
 
 EXCEL_PAPER_SIZES = {"A4": 9, "A5": 11}
 PDF_PAPER_SIZES = {"A4": A4, "A5": A5}
-FORMAT_VERSION = "tdp-excel-artwork-pdf-v8-receipt-a5-layout"
+FORMAT_VERSION = "tdp-excel-artwork-pdf-v9-portable-a5-layout"
 
 
 class ExcelPrintError(RuntimeError):
