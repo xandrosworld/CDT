@@ -97,19 +97,22 @@ class InvoiceFinalScopeTests(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.get_json(silent=True))
         with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
             files=[n for n in archive.namelist() if n.startswith('CHUA_XUAT_')]
-            self.assertEqual(len(files),2)
+            self.assertEqual(len(files),1)
             for name in files:
                 book=load_workbook(io.BytesIO(archive.read(name)))
                 sheet=book.active
                 self.assertEqual(sheet.max_column,13)
                 self.assertEqual(sheet['B2'].value,'Tên xuất hóa đơn')
-                if 'KKKNT' in name:
-                    self.assertEqual([sheet.cell(2,c).value for c in (3,4,5,6,10)],['Gói',14,8000,112000,-2])
-                    self.assertEqual(sheet['B2'].font.color.rgb,'00B42318')
-                    self.assertIn('Cần quy đổi',sheet['C2'].comment.text)
-                else:
-                    self.assertEqual(sheet['D2'].value,5)
-                    self.assertIsNone(sheet['C2'].comment)
+                data_rows=[r for r in sheet.iter_rows(min_row=2) if r[0].value]
+                self.assertEqual(len(data_rows),2)
+                converted=next(r for r in data_rows if r[9].value==-2)
+                self.assertEqual([converted[c-1].value for c in (3,4,5,6,10)],['Gói',14,8000,112000,-2])
+                self.assertEqual(converted[1].font.color.rgb,'00B42318')
+                self.assertIn('Cần quy đổi',converted[2].comment.text)
+                regular=next(r for r in data_rows if r[9].value==0)
+                self.assertEqual(regular[3].value,5)
+                self.assertIsNone(regular[2].comment)
+                self.assertEqual(book['Tong hop']['E7'].value,112100)
                 book.close()
         with server.db() as conn:
             self.assertEqual(conn.serialize(),before)
@@ -124,6 +127,37 @@ class InvoiceFinalScopeTests(unittest.TestCase):
         book=load_workbook(io.BytesIO(response.data),data_only=True)
         self.assertEqual(book['Chi tiet theo ngay']['P2'].value,251)
         book.close()
+
+    def test_one_file_per_contractor_has_all_taxes_distinct_prices_and_totals(self):
+        with server.db() as conn:
+            _,ids=fixture.OutgoingReadinessTests.add_batch(conn,'2026-09-01',[
+                {'qty':2,'sell_price':101},{'qty':1,'sell_price':101},
+                {'qty':1,'sell_price':102},{'qty':1,'sell_price':100},
+                {'qty':1,'sell_price':200},{'qty':1,'sell_price':105},
+                {'qty':2,'sell_price':0},{'qty':1,'contractor':'NT-B'}])
+            for oid,tax in zip(ids,['8%','8%','8%','KKKNT','0%','10%','10%','0%']):
+                conn.execute('UPDATE orders SET tax=? WHERE id=?',(tax,oid))
+            conn.execute("UPDATE orders SET invoice_nature='2' WHERE id=?",(ids[6],))
+            before=conn.serialize()
+        response=self.client.get('/api/outgoing-invoices/unissued-template.zip?to=2026-09-01')
+        self.assertEqual(response.status_code,200,response.get_json(silent=True))
+        self.assertEqual(response.headers['X-Unissued-Files'],'2')
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            files=sorted(n for n in archive.namelist() if n.endswith('.xlsx'))
+            self.assertEqual(files,['CHUA_XUAT_NT-A_DEN_2026-09-01.xlsx','CHUA_XUAT_NT-B_DEN_2026-09-01.xlsx'])
+            book=load_workbook(io.BytesIO(archive.read(files[0])),data_only=True)
+            rows=[r for r in book.active.iter_rows(min_row=2,values_only=True) if r[0]]
+            self.assertEqual(len(rows),6)
+            self.assertEqual({r[9] for r in rows},{-2,0,8,10})
+            self.assertEqual(next(r[3] for r in rows if r[9]==8 and r[4]==101),3)
+            self.assertEqual(next(r[3] for r in rows if r[9]==8 and r[4]==102),1)
+            total=next(r for r in book['Tong hop'].values if r[0]=='TỔNG CỘNG')
+            self.assertEqual(total[1:],(6,810,43,853))
+            footer=next(r for r in book.active.values if r[1]=='TỔNG CỘNG')
+            self.assertEqual((footer[8],footer[10],footer[11]),(810,43,853))
+            self.assertEqual(book['Chi tiet don'].max_row,8)
+            book.close()
+        with server.db() as conn:self.assertEqual(conn.serialize(),before)
 
 
 if __name__=='__main__':unittest.main()

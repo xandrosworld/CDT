@@ -961,3 +961,7 @@ body { min-width: 320px; }
 .invoice-conversion-needed,.invoice-conversion-needed td,.invoice-conversion-needed a,.invoice-conversion-needed small,.invoice-conversion-needed .muted{color:#b42318!important;background-color:#fff1f0!important}
 .actual-weight-form.invoice-conversion-needed{border:1px solid #e99c95;border-left:4px solid #b42318}
 .invoice-conversion-needed .warning-summary{color:#b42318;background:#fff1f0;border-color:#e99c95}
+#unitReviewSection{scroll-margin-top:90px}
+#unitReviewSection .table-wrap{max-height:430px;overflow:auto}
+#unitReviewSection table{min-width:980px}
+#unitReviewSection td{white-space:normal;vertical-align:top}

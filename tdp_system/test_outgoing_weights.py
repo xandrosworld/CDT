@@ -53,6 +53,7 @@ class ActualWeightTests(unittest.TestCase):
         self.assertEqual(('Nấm kim châm','Gói','Kg',14,112000,None), tuple(row[k] for k in
             ('invoice_name','unit','invoice_unit','remaining_qty','amount','actual_kg')))
         self.assertTrue(row['editable'])
+        self.assertEqual(row['review_kind'],'actual_kg')
         with server.db() as conn:
             self.assertEqual({},confirmed_weights(conn))
 
@@ -79,6 +80,19 @@ class ActualWeightTests(unittest.TestCase):
     def test_order_stock_mismatch_never_unlocked_by_kg(self):
         with server.db() as conn:conn.execute("UPDATE products SET unit='Hộp' WHERE code='HH-01'")
         self.assertFalse(self.rows()[0]['editable'])
+        self.assertEqual(self.rows()[0]['review_kind'],'unit_mismatch')
+        self.assertEqual(409,self.save().status_code)
+
+    def test_package_label_mismatch_is_not_an_actual_kg_request(self):
+        with server.db() as conn:
+            conn.execute("UPDATE products SET unit='Hộp' WHERE code='HH-01'")
+            conn.execute("UPDATE orders SET unit='Hộp'")
+            conn.execute("UPDATE outgoing_product_units SET invoice_unit='Chai' WHERE product_code='HH-01'")
+        row=self.rows()[0]
+        self.assertEqual(row['review_kind'],'unit_mismatch')
+        self.assertFalse(row['editable'])
+        self.assertIn('Hộp',row['reason'])
+        self.assertIn('Chai',row['reason'])
         self.assertEqual(409,self.save().status_code)
 
     def test_changed_order_invalidates_confirmation(self):

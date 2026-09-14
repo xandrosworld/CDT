@@ -21,7 +21,7 @@ except ImportError:
     from template_workbook import safe_workbook_bytes
 
 
-def unissued_template_zip(payload, template_dir, tax_percent):
+def _tax_split_zip(payload, template_dir, tax_percent):
     waiting=payload.get('portion')=='waiting'
     groups = defaultdict(dict)
     for row in payload['details']:
@@ -98,3 +98,125 @@ def unissued_template_zip(payload, template_dir, tax_percent):
         archive.writestr('HUONG_DAN.txt', '\n'.join(guide).encode('utf-8-sig'))
     output.seek(0)
     return output, count
+
+
+def _literal(value):
+    text=str(value or '')
+    return "'"+text if text.startswith(('=','+','-','@')) else text
+
+
+def _contractor_workbook(archive, names, party, details, payload, tax_percent):
+    """Combine validated 13-column sheets without merging different VAT rates."""
+    workbook=None
+    totals=[]
+    waiting=payload.get('portion')=='waiting'
+    try:
+        for name in names:
+            part=load_workbook(io.BytesIO(archive.read(name)))
+            subtotal=tax_amount=total=0
+            for row in part.active.iter_rows(min_row=2):
+                subtotal+=row[8].value or 0
+                tax_amount+=row[10].value or 0
+                total+=row[11].value or 0
+            vat=part.active['J2'].value
+            label='KKKNT' if vat==-2 else 'KCT' if vat==-1 else f'{vat:g}%'
+            totals.append([label,part.active.max_row-1,subtotal,tax_amount,total])
+            if workbook is None:
+                workbook=part
+                sheet=workbook.active
+                sheet.title='Con cho' if waiting else 'Chua xuat'
+            else:
+                try:
+                    for source_row in part.active.iter_rows(min_row=2):
+                        number=sheet.max_row+1
+                        for source in source_row:
+                            cell=sheet.cell(number,source.column,source.value)
+                            for attr in ('font','fill','border','alignment','protection','comment'):
+                                setattr(cell,attr,copy(getattr(source,attr)))
+                            cell.number_format=source.number_format
+                finally:part.close()
+        end=sheet.max_row
+        sheet.freeze_panes='A2';sheet.auto_filter.ref=f'A1:M{end}'
+        grand=[sum(row[column] for row in totals) for column in (1,2,3,4)]
+        footer=end+2
+        sheet.cell(footer,2,'TỔNG CỘNG')
+        for column,value in ((6,grand[1]),(9,grand[1]),(11,grand[2]),(12,grand[3])):
+            sheet.cell(footer,column,value).number_format='#,##0'
+        sheet.cell(footer+1,2,_literal(f'{party} · Đơn đã duyệt đến {payload["asof"]} · Tiền theo dữ liệu lúc tải'))
+
+        summary=workbook.create_sheet('Tong hop')
+        summary.append(['Nhà thầu',_literal(party)])
+        summary.append(['Đơn đã duyệt đến',payload['asof']])
+        summary.append(['Phạm vi','Chỉ phần còn chờ' if waiting else 'Toàn bộ phần chưa ký được đối chiếu'])
+        summary.append(['Thuế suất','Số dòng sau gộp','Tiền trước thuế','Tiền thuế','Tổng tiền'])
+        for row in totals:summary.append(row)
+        summary.append(['TỔNG CỘNG',*grand])
+        summary.append(['Cách tính','Cùng mã, ĐVT, giá, thuế và tính chất cộng lượng; khác giá/thuế giữ dòng riêng.'])
+        summary.append(['Đơn vị','Số lượng và đơn giá theo đơn gốc. Dòng đỏ cần kiểm tra ĐVT; chưa tự thay số lượng.'])
+
+        detail=workbook.create_sheet('Chi tiet don')
+        detail.append(['Dòng đơn','Ngày đơn','Mã hàng','Tên xuất hóa đơn','ĐVT đơn',
+                       'Lượng còn chờ' if waiting else 'Lượng chưa xuất','Đơn giá','Thuế',
+                       'Tiền hàng','Lý do còn chờ','ĐVT cần đối chiếu'])
+        for row in details:
+            qty=row['waiting_qty'] if waiting else row['unissued_qty']
+            amount=int((Decimal(str(qty))*Decimal(str(row['unit_price']))).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+            vat=tax_percent(row['tax'])
+            tax_label='KKKNT' if vat==-2 else 'KCT' if vat==-1 else f'{vat:g}%'
+            detail.append([row['order_id'],row['work_date'],_literal(row['product_code']),
+                           _literal(row.get('invoice_name') or row['product_name']),_literal(row['unit']),
+                           qty,row['unit_price'],tax_label,amount,_literal(row.get('pending_reason','')),
+                           _literal(row.get('conversion_reason',''))])
+            if row.get('needs_conversion'):
+                for cell in detail[detail.max_row]:
+                    font=copy(cell.font);font.color='B42318';cell.font=font
+        detail.freeze_panes='A2';detail.auto_filter.ref=detail.dimensions
+        for tab in (summary,detail):
+            for col in tab.columns:
+                tab.column_dimensions[col[0].column_letter].width=min(65,max(16,max(len(str(c.value or '')) for c in col)+2))
+            for row in tab.iter_rows(min_row=2):
+                for cell in row:
+                    if isinstance(cell.value,(int,float)):
+                        cell.number_format='#,##0' if float(cell.value).is_integer() else '#,##0.######'
+        return safe_workbook_bytes(workbook,apply_print_style=False)
+    finally:
+        if workbook is not None:workbook.close()
+
+
+def unissued_template_zip(payload, template_dir, tax_percent):
+    # Keep the ordinary M-Invoice export path and its tax-specific templates
+    # unchanged. Only the read-only unissued report is combined by contractor.
+    split,_=_tax_split_zip(payload,template_dir,tax_percent)
+    waiting=payload.get('portion')=='waiting'
+    prefix='CON_CHO' if waiting else 'CHUA_XUAT'
+    parties=defaultdict(list)
+    for row in payload['details']:
+        qty=Decimal(str(row['waiting_qty' if waiting else 'unissued_qty'])).quantize(Decimal('.000001'),rounding=ROUND_HALF_UP)
+        if qty>0:parties[row['contractor']].append(row)
+    output=io.BytesIO()
+    with zipfile.ZipFile(split) as source,zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as target:
+        names=set()
+        for party,details in sorted(parties.items()):
+            parts=[]
+            for vat in sorted({tax_percent(row['tax']) for row in details}):
+                label='KKKNT' if vat==-2 else 'KCT' if vat==-1 else f'VAT{vat:g}'
+                parts.append(f'{prefix}_{_safe_name(party)}_{label}_DEN_{payload["asof"]}.xlsx')
+            name=f'{prefix}_{_safe_name(party)}_DEN_{payload["asof"]}.xlsx'
+            if name.casefold() in names:raise ValueError('Tên file nhà thầu bị trùng; cần kiểm tra lại mã nhà thầu.')
+            names.add(name.casefold())
+            target.writestr(name,_contractor_workbook(source,parts,party,details,payload,tax_percent))
+        guide=[
+            'MỖI NHÀ THẦU MỘT FILE — BẢNG CHƯA XUẤT / CÒN CHỜ',
+            f'Đơn đã duyệt đến {payload["asof"]}.',
+            'Mọi thuế suất của một nhà thầu nằm chung một bảng 13 cột. Cuối bảng có tổng tiền; sheet Tong hop có tổng theo thuế suất và tổng chung. Không cần cộng nhiều file.',
+            'Sheet Chi tiet don ghi từng dòng đơn và lý do còn chờ. Khác giá hoặc khác thuế giữ dòng riêng.',
+            'Dòng đỏ cần kiểm tra ĐVT; không phải mọi dòng đều cần nhập kg. Số lượng và đơn giá giữ theo đơn gốc.',
+            'Lượng chưa xuất = đơn đã duyệt sau trả hàng trừ phần hóa đơn đã ký được đối chiếu; tải file chưa làm giảm lượng chưa xuất.',
+            'File này để đối chiếu, gồm cả dòng chưa đủ điều kiện. Muốn xuất: dùng Tải bảng kê để up M-Invoice trên web để kiểm tra tồn và hóa đơn đã ký.',
+            'Tải bảng không ghi kho hay ghi thêm doanh thu/công nợ. Dòng xóa riêng trong Excel trước khi ký vẫn chưa xuất trên web.',
+        ]
+        if waiting:guide.append('File CON_CHO chỉ lấy lượng còn chờ; không lấy phần đã đủ điều kiện đang giữ để xuất.')
+        guide.extend('Cần đối chiếu: '+w['message'] for w in payload['warnings'])
+        target.writestr('HUONG_DAN.txt','\n'.join(guide).encode('utf-8-sig'))
+    output.seek(0)
+    return output,len(parties)

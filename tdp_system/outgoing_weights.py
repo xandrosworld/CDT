@@ -93,9 +93,9 @@ def workbench(conn, cutoff, contractor=''):
         lock = _lock(conn, row['id'])
         reason = ''
         if key(row['unit']) != key(row['stock_unit']):
-            reason = 'ĐVT đơn khác ĐVT kho; cần đối chiếu đơn và kho trước khi nhập kg.'
+            reason = f'Đơn ghi {row["unit"]}, kho ghi {row["stock_unit"]}. Cần xác định ĐVT đúng và đối chiếu số lượng của đơn gốc.'
         elif key(row['invoice_unit']) != 'kg':
-            reason = 'Màn này nhận kg thực tế. ĐVT hóa đơn hiện không phải Kg.'
+            reason = f'Đơn/kho ghi {row["stock_unit"]}, hóa đơn ghi {row["invoice_unit"]}. Cần xác nhận cách gọi/quy cách tương ứng trước khi đổi ĐVT hoặc số lượng.'
         elif lock:
             reason = f'Đã dùng trong dự thảo {lock[0]} hoặc hóa đơn. Cần đối chiếu file đã tải trước khi đổi kg.'
         elif any(not w['contractor'] or w['contractor'] == row['contractor'] for w in warnings):
@@ -107,6 +107,7 @@ def workbench(conn, cutoff, contractor=''):
         result.append({'order_id': row['id'], 'date': row['work_date'], 'contractor': row['contractor'],
             'kitchen': row['kitchen'], 'product_code': row['product_code'], 'invoice_name': row['invoice_name'],
             'unit': row['unit'], 'stock_unit': row['stock_unit'], 'invoice_unit': row['invoice_unit'],
+            'review_kind': 'actual_kg' if key(row['unit'])==key(row['stock_unit']) and key(row['invoice_unit'])=='kg' else 'unit_mismatch',
             'remaining_qty': remaining, 'amount': amount, 'actual_kg': kg,
             'price_per_kg': float(dec(amount)/dec(kg)) if kg else None,
             'confirmed': bool(confirmed), 'editable': not reason, 'reason': reason,
