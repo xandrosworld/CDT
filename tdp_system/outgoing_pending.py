@@ -34,34 +34,43 @@ def explain_pending(conn, orders, details, units, warnings, stock):
     pending = {}
     for r in details:
         r['pending_reason'] = ''
+        r['pending_codes'] = []
         if r['waiting_qty'] <= 1e-8:
             continue
         o = by_id[r['order_id']]
         relevant = list(dict.fromkeys(w['message'] for w in warnings
                         if not w['contractor'] or w['contractor'] == r['contractor']))
         reasons = relevant[:1]
+        codes = ['source_review'] if relevant else []
         if len(relevant)>1:
             reasons.append(f'Còn {len(relevant)-1} thông báo khác; xem mục đối chiếu hóa đơn / tồn kho.')
         if r['order_id'] in units:
             reasons.append(units[r['order_id']]['message'])
+            codes.append('unit_review')
         for issue in invoice_order_issues([o]):
             reasons.extend(issue['messages'])
+            codes.append('order_data')
         if r['product_code'] not in known:
             reasons.append('Mã hàng chưa có trong danh mục; cần đối chiếu mã.')
+            codes.append('unknown_product')
         if not reasons:
             code = r['product_code']
             available = stock.get(code, {}).get('available_qty', 0)
             shortage = code not in exempt[r['contractor']] and available + 1e-8 < pending_by_code[code]
             if shortage:
                 reasons.append('Chưa đủ tồn khả dụng cho phần còn chờ; cần bổ sung đầu vào hoặc kiểm tra lượng đang giữ ở bảng kê khác.')
+                codes.append('stock_shortage')
             total = groups[key(r)]
             remainder = total - export_quantity(total, r['unit'])
             if remainder > Decimal('0.00000001'):
                 step='0,1 kg' if r['unit'].strip().casefold()=='kg' else 'số nguyên '+r['unit']
                 reasons.append(f'Có phần lẻ chưa đủ {step}; giữ lại để cộng dồn.')
+                codes.append('rounding')
             if not reasons or (not shortage and export_quantity(total,r['unit'])-held_groups[key(r)]>Decimal('0.00000001')):
-                reasons.append('Chờ cập nhật phân bổ; bấm “Cập nhật phần còn chờ” để kiểm tra lại. Chưa kết luận là thiếu đầu vào.')
+                reasons.append('Chờ cập nhật phân bổ; kiểm tra lại bảng kê sau khi cập nhật hóa đơn đã ký. Chưa kết luận là thiếu đầu vào.')
+                codes.append('allocation_refresh')
         r['pending_reason'] = ' · '.join(dict.fromkeys(reasons))
+        r['pending_codes'] = list(dict.fromkeys(codes))
         group_key = (r['contractor'], r['product_code'], r['unit'].strip().casefold(), r['pending_reason'])
         item = pending.setdefault(group_key, {
             'contractor': r['contractor'], 'product_code': r['product_code'],

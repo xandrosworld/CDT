@@ -813,7 +813,8 @@
     if (!response.ok) {
       var type = response.headers.get("content-type") || "";
       var payload = type.indexOf("application/json") >= 0 ? await response.json() : null;
-      throw new Error(friendlyErrorMessage(payload && payload.error, response.status));
+      var failure = new Error(friendlyErrorMessage(payload && payload.error, response.status));
+      failure.status = response.status; failure.payload = payload; throw failure;
     }
     var disposition = response.headers.get("content-disposition") || "";
     var encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i);
@@ -3024,7 +3025,17 @@
       '<p class="muted">Lưu lựa chọn sau khi kiểm tra để mở bước 2. Kho hóa đơn trừ theo hóa đơn đã ký trên M-Invoice được đồng bộ và đối chiếu, một lần.</p>'+
       (state.orderInvoiceExportResult?'<p class="code-note" role="status">'+esc(state.orderInvoiceExportResult)+'</p>':'')+
       (state.unissuedError?'<p class="error-summary" role="alert">'+esc(state.unissuedError)+'</p>':'')+
-      (state.unissuedLoading?'<p role="status">Đang tải bảng kê…</p>':'')+preparedInvoicesHtml()+sourceScopeReviewHtml()+'</div></section>';
+      (state.unissuedLoading?'<p role="status">Đang tải bảng kê…</p>':'')+invoiceExportDiagnosticHtml()+preparedInvoicesHtml()+sourceScopeReviewHtml()+'</div></section>';
+  }
+
+  function invoiceExportDiagnosticHtml() {
+    var d=state.invoiceExportDiagnostic;
+    if(!d||!sameInvoiceScope(d.scope,pendingScope())||exportChoicesDirty()||state.invoiceExportDiagnosticKey!==invoiceReviewKey())return '';
+    return '<section id="invoiceExportDiagnostic" class="invoice-export-diagnostic" aria-label="Kết quả kiểm tra bảng kê"><h3>'+esc(d.message)+'</h3>'+
+      '<p>'+d.groups.map(function(g){return '<strong>'+g.count+' dòng</strong> '+esc(g.label.toLocaleLowerCase());}).join(' · ')+'.</p>'+
+      '<div class="compact-controls">'+(d.unissued_rows?'<button type="submit" form="unissuedForm" value="all-template" class="btn btn-primary"'+(state.unissuedBusy||state.invoiceExportBusy?' disabled':'')+'>Tải bảng chưa xuất '+esc(d.scope.contractor||'theo nhà thầu')+'</button>':'')+'<button type="button" data-view="inventory" class="btn btn-outline">Đối chiếu tồn kho</button></div>'+
+      '<p class="code-note">Bảng chưa xuất vẫn giữ đủ dòng để chị kiểm tra. Lượng đang giữ ở bảng kê khác chưa phải lượng đã ký hóa đơn.</p>'+
+      (d.rows.length?'<details><summary>Xem lý do từng mặt hàng</summary><div class="table-wrap"><table><thead><tr><th>Mã / mặt hàng</th><th>Lượng còn chờ</th><th>Tồn khả dụng</th><th>Đang giữ ở bảng kê</th><th>Lý do</th></tr></thead><tbody>'+d.rows.map(function(r){return '<tr><td>'+esc(r.product_code+' · '+r.invoice_name)+'</td><td>'+stockQty(r.waiting_qty)+' '+esc(r.unit)+'</td><td>'+stockQty(r.stock_available_qty)+' '+esc(r.stock_unit)+'</td><td>'+stockQty(r.stock_reserved_qty)+' '+esc(r.stock_unit)+'</td><td>'+esc(r.pending_reason)+'</td></tr>';}).join('')+'</tbody></table></div></details>':'')+'</section>';
   }
 
   function preparedInvoicesHtml() {
@@ -3049,10 +3060,15 @@
   }
 
   async function prepareSelectedInvoices(invoiceDate) {
+    state.invoiceExportDiagnostic=null;
     var body=Object.assign({},orderInvoiceScope(),{invoice_date:invoiceDate||currentWorkDate(),review_confirmed:true,
       review_rows:((state.unissued&&state.unissued.line_choices)||[]).map(function(r){return {order_id:r.order_id,token:r.token};})});
     state.preparedInvoices=await api('/api/outgoing-invoices/prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     state.preparedStatus={};
+    if(state.preparedInvoices.outcome==='no_eligible_quantity'){
+      state.invoiceExportDiagnostic=state.preparedInvoices.diagnostic;state.orderInvoiceExportResult='';state.outgoingSourceReview=null;
+      await loadUnissuedScope(false);state.invoiceExportDiagnosticKey=invoiceReviewKey();return;
+    }
     var series=await api('/api/minvoice/series');state.minvoiceSeries=series.items||[];
     state.orderInvoiceExportResult='Đã chuẩn bị '+state.preparedInvoices.items.length+' bản nháp. Mở từng nhà thầu bên dưới để kiểm tra và gửi M-Invoice.';
     await loadUnissuedScope(false);
@@ -3060,7 +3076,10 @@
 
   function sourceScopeReviewHtml() {
     if(!state.outgoingSourceReview) return '';
-    return '<details open><summary>Hóa đơn đã ký vừa đối chiếu · '+state.outgoingSourceReview.length+' hóa đơn</summary>'+state.outgoingSourceReview.map(function(r){
+    var party=pendingScope().contractor,enabled=(state.invoiceContractorChoices&&state.invoiceContractorChoices.items||[]).filter(function(r){return r.enabled;}).map(function(r){return r.code;});
+    var rows=state.outgoingSourceReview.filter(function(r){return party?r.contractor===party:enabled.includes(r.contractor);});
+    if(!rows.length)return '';
+    return '<details id="invoiceSourceReview"><summary>Hóa đơn đã ký vừa đối chiếu · '+esc(party||'nhà thầu đã chọn')+' · '+rows.length+' hóa đơn</summary>'+rows.map(function(r){
       var status=r.scope==='outside'?'Đơn riêng · không trừ đơn đã duyệt':r.scope==='orders'?'Trừ đơn của '+r.contractor:'Chưa xác định đơn liên quan';
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
@@ -6330,6 +6349,7 @@
       }
       if(event.submitter && ['export','prepare'].includes(event.submitter.value) && !invoiceReviewReady()){showToast('Kiểm tra và lưu lựa chọn trước khi chuẩn bị bảng kê.',true);return;}
       state.invoiceExportBusy=true;
+      state.invoiceExportDiagnostic=null;state.orderInvoiceExportResult='';
       var orderExportButton = event.submitter || event.target.querySelector('button[type=submit]');
       event.target.querySelectorAll('button,input,select').forEach(function(el){el.disabled=true;});
       content.querySelectorAll('#unissuedForm button,[form=unissuedForm]').forEach(function(el){el.disabled=true;});
@@ -6360,8 +6380,11 @@
         await Promise.all([fetchOutgoingInvoices(),fetchOutgoingReadiness()]);
         await loadUnissuedScope(false);
       } catch(error) {
+        if(error.payload&&error.payload.code==='no_invoiceable_orders'&&error.payload.diagnostic){
+          state.invoiceExportDiagnostic=error.payload.diagnostic;state.orderInvoiceExportResult='';state.outgoingSourceReview=null;
+          await loadUnissuedScope(false);state.invoiceExportDiagnosticKey=invoiceReviewKey();return;
+        }
         state.orderInvoiceExportResult = error.message;
-        try {state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?scope=unissued')).items;} catch(_) {}
         await loadUnissuedScope(false);
         showToast(error.message,true);
       } finally { state.invoiceExportBusy=false;renderDocuments(); }

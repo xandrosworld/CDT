@@ -980,6 +980,12 @@ body { min-width: 320px; }
 #invoiceReviewSaveForm{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:12px}
 #invoiceUnissuedDetails{margin-top:18px}
 #preparedInvoices{margin-top:22px;border-top:1px solid #d9e3e5;padding-top:16px;scroll-margin-top:90px}
+.invoice-export-diagnostic{margin-top:16px;padding:16px;border:1px solid #d9e3e5;border-radius:6px;background:#f5f9f8}
+.invoice-export-diagnostic h3{margin:0 0 10px;font-size:16px}
+.invoice-export-diagnostic details{margin-top:12px}
+.invoice-export-diagnostic summary{cursor:pointer;color:#075f57}
+.invoice-export-diagnostic .table-wrap{max-height:360px;overflow:auto}
+.invoice-export-diagnostic table{min-width:740px}
 .prepared-invoice{margin-top:10px;border:1px solid #d9e3e5;border-radius:6px;padding:12px}
 .prepared-invoice summary{cursor:pointer;color:#075f57;padding:4px 0}
 .prepared-invoice .table-wrap{max-height:360px;overflow:auto;margin:12px 0}

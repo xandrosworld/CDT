@@ -4742,6 +4742,19 @@ def api_export_order_invoices():
         response.headers['X-Order-Scope']='unissued' if cumulative else 'range'
         return response
     except (ValueError,InvoiceTaxExportError,OutgoingReadinessError) as exc:
+        if getattr(exc,'code','') == 'no_invoiceable_orders':
+            try:
+                from .outgoing_export_diagnostics import empty_export_diagnostic
+            except ImportError:
+                from outgoing_export_diagnostics import empty_export_diagnostic
+            period={'from':start,'to':end,'contractor':contractor}
+            with db() as conn:
+                conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
+                diagnostic=empty_export_diagnostic(conn,period)
+            if prepare:
+                return jsonify(ok=True,outcome='no_eligible_quantity',scope=period,items=[],pending=[],blocked=[],
+                               diagnostic=diagnostic,message=diagnostic['message'],remote_write=False)
+            return jsonify(ok=False,code=exc.code,error=diagnostic['message'],diagnostic=diagnostic),409
         return jsonify({'ok':False,'error':str(exc),'code':getattr(exc,'code','invalid_order_invoice_export')}),getattr(exc,'status',409)
 
 
