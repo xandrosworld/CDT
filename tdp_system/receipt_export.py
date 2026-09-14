@@ -472,6 +472,33 @@ def configure_receipt_paper(sheet: Any, paper: str = "A5") -> None:
                 sheet.row_dimensions[r].height = 20
             sheet.row_dimensions[signature_row].height = height(sheet.cell(signature_row, 5).value, 32, 22)
             sheet.cell(signature_row, 5).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            # A short form can spill onto a second sheet because of padding,
+            # particularly the signing space. Try a denser form before allowing
+            # pagination; retain wrapping, font sizes and room to sign. Long
+            # forms keep their normal spacing instead of shrinking indefinitely.
+            if sum(sheet.row_dimensions[r].height or 15 for r in range(1, signature_row + 1)) > 620:
+                compact = {r: sheet.row_dimensions[r].height for r in range(1, signature_row + 1)}
+                def compact_height(text, width, minimum=15):
+                    lines = sum(max(1, len(textwrap.wrap(line, width=width)))
+                                for line in str(text or '').split('\n'))
+                    return max(minimum, lines * 13 + 2)
+                compact.update({1:15, 2:15, 3:23, 13:4, 14:20})
+                for r in range(4, 8):
+                    compact[r] = compact_height(sheet.cell(r, 3).value, 76)
+                for r in range(8, 13):
+                    compact[r] = compact_height(sheet.cell(r, 4).value, 44)
+                for r in range(ITEM_FIRST_ROW, total_row):
+                    compact[r] = compact_height(sheet.cell(r, 3).value, 26, 18)
+                compact[total_row] = compact_height(sheet.cell(total_row, 6).value, 12, 18)
+                for r in (total_row + 1, total_row + 3, total_row + 4):
+                    compact[r] = compact_height(sheet.cell(r, 3).value, 76)
+                compact.update({total_row + 2:4, total_row + 5:28, total_row + 6:18})
+                for r in range(total_row + 7, signature_row):
+                    compact[r] = 14
+                compact[signature_row] = compact_height(sheet.cell(signature_row, 5).value, 32, 18)
+                if sum(compact.values()) <= 620:
+                    for r, h in compact.items():
+                        sheet.row_dimensions[r].height = h
         sheet.print_area = f"$C$1:$G${signature_row}"
     sheet.row_breaks = RowBreak()
     sheet.page_setup.paperSize = sheet.PAPERSIZE_A5 if paper == "A5" else sheet.PAPERSIZE_A4
@@ -480,7 +507,7 @@ def configure_receipt_paper(sheet: Any, paper: str = "A5") -> None:
     sheet.page_setup.fitToWidth = 1
     sheet.page_setup.fitToHeight = 0 if paper == "A5" else 1
     if paper == "A5" and total_row is not None:
-        # A modest fit keeps short receipts and signatures together at >=10pt.
+        # A modest fit keeps short receipts and signatures together at about 10pt.
         # Long receipts keep the full-size text and continue on the reverse.
         height_points = sum(sheet.row_dimensions[r].height or 15 for r in range(1, signature_row + 1))
         sheet.page_setup.fitToHeight = 1 if height_points <= 620 else 0

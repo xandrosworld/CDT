@@ -58,6 +58,29 @@ def receipt_row(**overrides):
 
 
 class ReceiptExportTests(unittest.TestCase):
+    def test_compact_short_form_preserves_content_and_long_form_still_paginates(self):
+        for count in (9, 25):
+            with self.subTest(items=count):
+                book = build_purchase_documents_workbook([
+                    receipt_row(product_name=f'Hàng kiểm thử {i}', source_ref=i + 3)
+                    for i in range(count)
+                ], template_path=GOLDEN)
+                self.addCleanup(book.close)
+                sheet = book['biên nhận']
+                total_row = 15 + count
+                values = {c.coordinate: c.value for row in sheet for c in row if c.value is not None}
+                heights = {r: sheet.row_dimensions[r].height for r in range(1, total_row + 11)}
+                self.assertEqual(sheet.page_setup.fitToHeight, 1 if count == 9 else 0)
+                self.assertEqual(sheet['C15'].font.sz, 11)
+                self.assertGreaterEqual(sum(heights[r] for r in range(total_row + 7, total_row + 10)), 42)
+                if count == 25:
+                    self.assertEqual(sheet.print_title_rows, '$14:$14')
+                    self.assertGreaterEqual(heights[15], 22)
+                configure_receipt_paper(sheet, 'A4')
+                configure_receipt_paper(sheet, 'A5')
+                self.assertEqual({c.coordinate: c.value for row in sheet for c in row if c.value is not None}, values)
+                self.assertEqual({r: sheet.row_dimensions[r].height for r in heights}, heights)
+
     def test_changing_paper_preserves_all_receipt_values_and_restores_a5_layout(self):
         book = build_purchase_documents_workbook([receipt_row()], template_path=GOLDEN)
         self.addCleanup(book.close)
@@ -134,7 +157,7 @@ class ReceiptExportTests(unittest.TestCase):
             self.assertEqual(str(first.page_setup.paperSize), "11")
             self.assertEqual(first.page_setup.orientation, "portrait")
             self.assertEqual(first.page_setup.fitToWidth, 1)
-            self.assertEqual(first.page_setup.fitToHeight, 0)
+            self.assertEqual(first.page_setup.fitToHeight, 1)
             self.assertTrue(first.print_options.horizontalCentered)
             self.assertEqual(first.max_row, 34)
             self.assertIn("C24:E24", {str(value) for value in first.merged_cells.ranges})
@@ -148,7 +171,7 @@ class ReceiptExportTests(unittest.TestCase):
             self.assertEqual(first["E34"].alignment.horizontal, "center")
             self.assertEqual(first["C15"].font.name, "Times New Roman")
             self.assertEqual(first["C15"].font.sz, 11)
-            self.assertGreaterEqual(first.row_dimensions[15].height, 22)
+            self.assertGreaterEqual(first.row_dimensions[15].height, 18)
             self.assertFalse(any(
                 isinstance(cell.value, str) and cell.value.startswith("=")
                 for sheet in workbook.worksheets
