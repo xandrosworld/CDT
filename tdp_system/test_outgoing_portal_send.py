@@ -85,7 +85,12 @@ class PortalSendTests(unittest.TestCase):
         again=self.send(item,False);self.assertTrue(again.json['idempotent']);self.assertEqual(self.remote.posts,1)
         self.assertEqual(self.business(),before)
         with server.db() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM invoice_inventory_ledger WHERE direction='output'").fetchone()[0],0)
-        refresh_sources(server.db,lambda:self.remote,server.now_iso,'2026-09-01','2026-09-14')
+        waiting=refresh_sources(server.db,lambda:self.remote,server.now_iso,'2026-09-01','2026-09-14')
+        self.assertEqual(waiting['sync']['error_count'],0)
+        listing=self.client.get('/api/invoice-workbench/invoices?invoice_type=output&from=2026-09-14&to=2026-09-14&status=all').json
+        self.assertEqual(listing['items'][0]['workbench_status'],'draft')
+        self.assertEqual(listing['totals']['issue_count'],0)
+        self.assertFalse(listing['items'][0]['can_edit_mapping'])
         with server.db() as c:
             self.assertEqual(c.execute("SELECT COUNT(*) FROM invoice_inventory_ledger WHERE direction='output'").fetchone()[0],0)
             self.assertEqual(c.execute('SELECT status FROM outgoing_invoice_drafts WHERE id=?',(item['id'],)).fetchone()[0],'draft')
@@ -120,6 +125,16 @@ class PortalSendTests(unittest.TestCase):
         self.assertFalse(item['stale'])
         r=self.send(item,False);self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(self.remote.posts,1)
+
+    def test_unsigned_source_with_bad_total_still_requires_review(self):
+        item=self.prepare();self.assertEqual(self.send(item,False).status_code,200)
+        self.remote.documents[0]['totalAmount']+=10
+        report=refresh_sources(server.db,lambda:self.remote,server.now_iso,'2026-09-01','2026-09-14')
+        self.assertGreater(report['sync']['error_count'],0)
+        listing=self.client.get('/api/invoice-workbench/invoices?invoice_type=output&from=2026-09-14&to=2026-09-14&status=all').json
+        self.assertEqual(listing['items'][0]['workbench_status'],'error')
+        with server.db() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM invoice_inventory_ledger WHERE direction='output'").fetchone()[0],0)
 
     def test_prepare_requires_current_review_and_persists_preview(self):
         r=self.client.post('/api/outgoing-invoices/prepare',json={**self.period,'invoice_date':'2026-09-14','review_confirmed':True,'review_rows':[]})

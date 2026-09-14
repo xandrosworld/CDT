@@ -628,6 +628,11 @@ def upsert_output_invoice(
         sync_status = "synced"
         stock_status = "pending_mapping" if inventory_items else "not_inventory"
         error_message = ""
+    elif status_class == "draft":
+        # A verified unsigned source is expected while the customer reviews it.
+        # Keep stock blocked; malformed data and previously posted sources are
+        # handled above and must still require review.
+        sync_status, stock_status, error_message = "synced", "blocked", ""
     elif status_class in {"cancelled", "replaced", "adjusted"}:
         sync_status = "reconcile_required"
         # A relation/cancellation first observed before any POST has nothing to
@@ -669,7 +674,8 @@ def _counts(conn, batch_id: int) -> dict[str, int]:
                   COALESCE(SUM(CASE WHEN i.stock_status='ready' THEN 1 ELSE 0 END),0) ready_count,
                   COALESCE(SUM(CASE WHEN i.stock_status='posted' THEN 1 ELSE 0 END),0) posted_count,
                   COALESCE(SUM(CASE WHEN i.sync_status!='synced'
-                                      OR i.stock_status IN ('blocked','reversal_required') THEN 1 ELSE 0 END),0)
+                                      OR i.stock_status='reversal_required'
+                                      OR (i.stock_status='blocked' AND i.source_status_class!='draft') THEN 1 ELSE 0 END),0)
                       error_count
            FROM invoice_sync_batch_output_invoices bi
            JOIN outgoing_source_invoices i ON i.id=bi.invoice_id

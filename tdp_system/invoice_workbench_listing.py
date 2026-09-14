@@ -27,6 +27,7 @@ except ImportError:
 STATUS_LABELS = {
     "all": "Tất cả hóa đơn", "needs_mapping": "Chưa ghép đủ mã / đơn vị",
     "ready": "Sẵn sàng ghi kho", "posted": "Đã ghi kho",
+    "draft": "Chờ ký / chưa phát hành",
     "error": "Cần kiểm tra", "reversed": "Đã hoàn tác kho", "not_inventory": "Không ghi kho",
 }
 LINE_LABELS = {
@@ -51,6 +52,8 @@ def invoice_state(invoice, direction):
     # A changed/cancelled source needs review even if there is an older posting.
     if stock == "reversal_required" or invoice.get("sync_status") != "synced" or invoice.get("error_message"):
         return "error"
+    if direction == "output" and invoice.get("source_status_class") == "draft" and stock == "blocked":
+        return "draft"
     if stock in {"posted", "reversed"}:
         return stock
     if invoice.get('cost_warning'):
@@ -72,6 +75,8 @@ def invoice_state(invoice, direction):
 
 
 def line_issue(item, invoice, status):
+    if status == "draft":
+        return ""
     if invoice.get('adjustment_review',{}).get('confirmed'):
         return ''
     if invoice.get('cost_warning'):

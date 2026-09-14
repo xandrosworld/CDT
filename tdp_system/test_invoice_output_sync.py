@@ -358,10 +358,10 @@ class InvoiceOutputSyncTests(unittest.TestCase):
             for row in self.conn.execute("SELECT * FROM outgoing_source_invoices")
         }
         self.assertEqual(("synced", "pending_mapping"), states["issued"])
-        self.assertEqual(("review_required", "blocked"), states["draft"])
+        self.assertEqual(("synced", "blocked"), states["draft"])
         self.assertEqual(("review_required", "blocked"), states["unknown"])
         self.assertEqual("quarantined", result["status"])
-        self.assertEqual(2, result["error_count"])
+        self.assertEqual(1, result["error_count"])
         self.assertEqual(1, result["needs_mapping_count"])
         self.assertEqual(0, self.conn.execute(
             "SELECT COUNT(*) FROM inventory_transactions"

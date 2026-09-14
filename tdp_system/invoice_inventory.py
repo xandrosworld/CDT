@@ -658,7 +658,9 @@ def invoice_inventory_trace(conn, direction: Any, invoice_id: int) -> dict[str, 
                   l.source_line_id,l.source_line_index,l.product_code,l.txn_date,l.qty_delta,
                   l.unit_cost,l.mapping_revision_id,l.confirmation_id,l.reverses_event_key,
                   l.status,l.created_at,c.action,c.note confirmation_note,c.created_at confirmed_at,
-                  p.name product_name,COALESCE(NULLIF(p.unit,''),r.target_unit) product_unit
+                  p.name product_name,
+                  CASE WHEN l.direction='input' THEN COALESCE(NULLIF(r.target_unit,''),p.unit)
+                       ELSE COALESCE(NULLIF(p.unit,''),r.target_unit) END product_unit
            FROM invoice_inventory_effective_ledger l
            JOIN invoice_inventory_confirmations c ON c.id=l.confirmation_id
            LEFT JOIN products p ON p.code=l.product_code

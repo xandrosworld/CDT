@@ -43,6 +43,7 @@
       return field;
     };
     function mapping(item, invoice, editMode) {
+      if (!input && invoice.workbench_status === 'draft') return '<span class="tag">Chờ ký / chưa phát hành</span><small>Chưa ghi xuất kho. Ký trên M-Invoice rồi cập nhật hóa đơn đã ký.</small>';
       if (!item.id) return esc(item.issue || invoice.error_message || 'Hóa đơn chưa có dòng hàng.');
       if (!input && invoice.adjustment_review) {
         if (invoice.adjustment_review.confirmed) return '<strong>' + esc(item.product_code) + '</strong><div>' + esc(item.product_name) + '</div><small class="invoice-mapping-state">Đã đối chiếu điều chỉnh thuế.</small><small>Không thay đổi kho.</small>';
