@@ -1011,3 +1011,8 @@ body { min-width: 320px; }
 .invoice-unit-dialog [data-weight-form] { border-top:1px solid #dbe3e8; margin-top:16px; padding-top:10px; }
 .invoice-unit-confirm { display:block; margin:14px 0; }
 .invoice-unit-row-picker { display:block; }
+.invoice-next-step { grid-column:1 / -1; width:100%; margin:6px 0; padding:10px 12px; background:#f0f7f6; border-left:3px solid #0f766e; box-sizing:border-box; }
+.invoice-next-link { background:none; border:0; padding:3px 0; color:#075d56; font:inherit; font-weight:600; text-decoration:underline; cursor:pointer; }
+.invoice-review-savebar { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 0; }
+.invoice-review-savebar span { color:#475569; font-size:13px; }
+.invoice-scope-help { grid-column:1 / -1; width:100%; margin:0; color:#475569; }
