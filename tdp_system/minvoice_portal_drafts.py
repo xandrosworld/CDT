@@ -118,7 +118,7 @@ class PortalDrafts:
             raise MinvoiceError('Portal trả định danh bản nháp không hợp lệ.')
         detail = self._portal_json('GET', 'app/invoice/'+quote(remote_id, safe='')+'/detail')
         if (detail.get('id') != remote_id or detail.get('sellerTaxCode') != self.tax_code
-                or detail.get('keyApi') != key_api or detail.get('orderNumber') != key_api
+                or detail.get('keyApi') not in (None, '', key_api) or detail.get('orderNumber') != key_api
                 or not isinstance(detail.get('invoiceDetail'), list)):
             raise MinvoiceError('Bản nháp trả về không khớp công ty hoặc khóa đối soát.')
         try:
@@ -144,10 +144,19 @@ class PortalDrafts:
             if not re.fullmatch(r'[0-9a-fA-F-]{36}', str(remote_id)):
                 raise ValueError('Missing draft id')
             detail = self._portal_json('GET', 'app/invoice/'+quote(remote_id, safe='')+'/detail')
-            fields = ('id', 'keyApi', 'orderNumber', 'sellerTaxCode', 'invoiceSerial', 'invoiceStatus',
-                      'sendTaxStatus', 'totalAmountWithoutVAT', 'vatAmount', 'totalAmount')
+            fields = ('id', 'orderNumber', 'sellerTaxCode', 'invoiceSerial', 'invoiceStatus',
+                      'buyerTaxCode','buyerLegalName','buyerDisplayName','buyerAddress',
+                      'totalAmountWithoutVAT', 'vatAmount', 'totalAmount')
             expected = {**payload, 'id': remote_id}
-            if any(detail.get(k) != expected[k] for k in fields) or detail.get('dateSign') or detail.get('taxAuthorityCode'):
+            try:from .minvoice_portal import portal_date
+            except ImportError:from minvoice_portal import portal_date
+            # Current portal normalizes a new draft to tax status 1 (chờ ký),
+            # and keeps our reference in orderNumber while keyApi is null.
+            if (any(detail.get(k) != expected[k] for k in fields)
+                    or detail.get('keyApi') not in (None, '', payload['keyApi'])
+                    or portal_date(detail.get('invoiceDate')) != payload['invoiceDate']
+                    or type(detail.get('sendTaxStatus')) is not int or detail['sendTaxStatus'] not in (0,1)
+                    or detail.get('invoiceNumber') is not None or detail.get('dateSign') or detail.get('taxAuthorityCode')):
                 raise ValueError('Saved draft needs reconciliation')
             for key in ('productCode', 'productName', 'unitCode', 'quantity', 'unitPrice', 'amountWithoutVAT', 'vatCode', 'property'):
                 if [r.get(key) for r in detail.get('invoiceDetail', [])] != [r.get(key) for r in payload['invoiceDetail']]:

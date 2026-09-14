@@ -21,6 +21,7 @@ class PortalFixture(MinvoicePortalClient):
             assert path=='app/invoice' and kw.get('allow_draft_write') is True
             self._guard_unsigned_payload(kw['payload']);self.posts+=1
             p=copy.deepcopy(kw['payload']);p['id']='00000000-0000-0000-0000-000000000001'
+            p.update(sendTaxStatus=1,keyApi=None)
             self.documents.append(p)
             if self.lose_response:raise OSError('Connection closed after accepted save')
             return p

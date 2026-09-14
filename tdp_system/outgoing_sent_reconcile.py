@@ -40,7 +40,8 @@ def reconcile_sent(conn,timestamp):
         matches=[]
         for s in sources:
             raw=json.loads(s['raw_json'])
-            if raw.get('_tdp_source_contract')=='minvoice_portal_v1' and raw.get('keyApi')==d['minvoice_key_api']:
+            if (raw.get('_tdp_source_contract')=='minvoice_portal_v1' and raw.get('orderNumber')==d['minvoice_key_api']
+                    and raw.get('keyApi') in (None,'',d['minvoice_key_api'])):
                 matches.append((s,raw))
         if not matches:continue
         reason=''
