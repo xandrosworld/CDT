@@ -23,6 +23,7 @@
       var data = await response.json();
       if (!isCurrent()) return;
       var selected = new Set(data.sheets.map(function (_, i) { return i; }));
+      var deliveries = body.kind === 'deliveries', resolvedSides = '';
       var current = 0;
       host.innerHTML = '<section class="document-preview"><div class="document-toolbar">' +
         '<strong>Xem chứng từ</strong><span class="document-count"></span>' +
@@ -31,11 +32,11 @@
         '<button type="button" class="btn btn-small btn-outline" data-doc="excel">Tải Excel đã chọn</button>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="pdf">Tải PDF đã chọn</button>' +
         '<label>Khổ giấy <select class="document-paper" aria-label="Khổ giấy"><option value="A4">A4</option><option value="A5">A5 · biên nhận</option></select></label>' +
-        '<label>Cách in <select class="document-sides" aria-label="Cách in"><option value="simplex">Một mặt</option><option value="duplex">Hai mặt · biên nhận tờ riêng</option></select></label>' +
+        '<label>Cách in <select class="document-sides" aria-label="Cách in">'+(deliveries?'<option value="auto">Tự động · theo số trang</option>':'')+'<option value="simplex">Một mặt</option><option value="duplex">Hai mặt · '+(deliveries?'mỗi đơn tờ riêng':'biên nhận tờ riêng')+'</option></select></label>' +
         '<button type="button" class="btn btn-small btn-primary" data-doc="print">In phiếu đã chọn</button>' +
-        '<label>Cỡ chữ <select class="document-zoom" aria-label="Phóng to chứng từ"><option value="0.8">80%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>' +
+        '<label>Phóng to bản xem <select class="document-zoom" aria-label="Phóng to chứng từ"><option value="0.8">80%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="refresh">Đọc lại dữ liệu mới</button></div>' +
-        '<p class="document-note">Bản xem, Excel và PDF dùng cùng số liệu tại lúc mở. Có thay đổi đơn thì bấm Đọc lại dữ liệu mới. Bảng kê tổng in A4; chọn riêng biên nhận để đổi sang A5.</p>' +
+        '<p class="document-note">Bản xem, Excel và PDF dùng cùng số liệu tại lúc mở. Có thay đổi đơn thì bấm Đọc lại dữ liệu mới. '+(deliveries?'Phiếu giao căn khổ A4; chữ trên bản in đã tăng một cỡ.':'Bảng kê tổng in A4; chọn riêng biên nhận để đổi sang A5.')+'</p>' +
         '<p class="document-note document-print-help" role="status"></p>' +
         (data.warnings || []).map(function (warning) { return '<p class="document-note tag-warn" role="alert">' + esc(warning) + '</p>'; }).join('') +
         '<div class="document-sheet-list" role="group" aria-label="Chọn từng chứng từ">' +
@@ -43,6 +44,12 @@
         '</div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false;
       function printHelp() {
+        if(deliveries){
+          var sides=host.querySelector('.document-sides').value;
+          if(sides==='auto'&&!resolvedSides)return 'Tự động: mỗi đơn một trang thì in một mặt; có đơn nhiều trang thì chuẩn bị hai mặt, mỗi đơn bắt đầu trên tờ riêng. Khi in, kiểm tra khổ A4 và chế độ hai mặt của máy in.';
+          if(sides==='auto')sides=resolvedSides;
+          return 'Khổ A4, tỷ lệ 100%. '+(sides==='duplex'?'Bản in hai mặt · lật cạnh dài. Trong hộp thoại máy in, chọn Hai mặt / Flip on long edge và in tất cả trang, kể cả trang trắng để không ghép hai đơn vào cùng một tờ.':'Bản in một mặt. Trong hộp thoại máy in, chọn Một mặt.');
+        }
         var paper = 'Chọn khổ '+host.querySelector('.document-paper').value+' trong hộp thoại máy in. ';
         var summary = Array.from(selected).some(function(i){return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase());});
         var edge = summary ? 'Bảng kê nằm ngang: chọn LẬT CẠNH NGẮN (Flip on short edge) để mặt sau không ngược đầu. ' : 'Trang dọc: chọn LẬT CẠNH DÀI (Flip on long edge). ';
@@ -57,7 +64,7 @@
         paper.querySelector('[value=A5]').disabled = !receiptsOnly;
         if(!receiptsOnly) paper.value='A4';
         paper.disabled=busy;
-        if (!modeTouched) mode.value = Array.from(selected).some(function(i){return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase());}) ? 'duplex' : 'simplex';
+        if (!modeTouched) mode.value = deliveries ? 'auto' : Array.from(selected).some(function(i){return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase());}) ? 'duplex' : 'simplex';
         mode.disabled = busy;
         host.querySelector('.document-print-help').textContent = printHelp();
         host.querySelector('.document-count').textContent = data.sheet_count + ' phiếu · Đã chọn ' + selected.size;
@@ -79,6 +86,7 @@
       }
       async function output(type) {
         if (busy || !selected.size) return;
+        resolvedSides='';
         busy = true; update();
         var errorBox = host.querySelector('.document-error');
         var isPdf = type === 'print' || type === 'pdf';
@@ -88,6 +96,7 @@
         if(isPdf) url += '&sides=' + host.querySelector('.document-sides').value;
         try {
           var response = await checked(await fetch(url));
+          if(isPdf)resolvedSides=response.headers.get('X-Print-Sides')||'';
           var blob = await response.blob();
           if (!isCurrent()) return;
           var blobUrl = URL.createObjectURL(blob);
@@ -118,20 +127,21 @@
         if (!action) return;
         if (busy) return;
         if (action.dataset.doc === 'refresh') { if (!busy) open(body, hostId, false); }
-        if (action.dataset.doc === 'all') { data.sheets.forEach(function (_,i) { selected.add(i); }); update(); }
-        if (action.dataset.doc === 'none') { selected.clear(); update(); }
+        if (action.dataset.doc === 'all') { resolvedSides='';data.sheets.forEach(function (_,i) { selected.add(i); }); update(); }
+        if (action.dataset.doc === 'none') { resolvedSides='';selected.clear(); update(); }
         if (['excel', 'pdf', 'print'].includes(action.dataset.doc)) output(action.dataset.doc);
       };
       host.onchange = function(event) {
         if(busy && event.target.matches('[data-sheet]')) { update(); return; }
         if (event.target.matches('[data-sheet]')) {
+          resolvedSides='';
           var index = Number(event.target.dataset.sheet);
           if (event.target.checked) selected.add(index); else selected.delete(index);
           update();
         }
         if (event.target.matches('.document-zoom')) show(current);
-        if (event.target.matches('.document-sides')) { modeTouched = true; update(); }
-        if (event.target.matches('.document-paper')) update();
+        if (event.target.matches('.document-sides')) { resolvedSides='';modeTouched = true; update(); }
+        if (event.target.matches('.document-paper')) {resolvedSides='';update();}
       };
       update(); show(0);
       if (printNow) await output('print');

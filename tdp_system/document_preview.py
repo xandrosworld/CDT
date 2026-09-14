@@ -270,7 +270,7 @@ def create_snapshot(root, workbooks):
                 metadata=json.loads((old/'manifest.json').read_text(encoding='utf-8'))
                 if time.time()-metadata['created'] <= SNAPSHOT_TTL: continue
                 for file in old.iterdir():
-                    if file.is_file() and re.fullmatch(r'(?:manifest\.json|\d+\.xlsx|[a-f0-9]{20}\.pdf|print_[a-f0-9]{20}_\d+\.xlsx)',file.name):
+                    if file.is_file() and re.fullmatch(r'(?:manifest\.json|\d+\.xlsx|[a-f0-9]{20}\.(?:pdf|print\.json)|print_[a-f0-9]{20}_\d+\.xlsx)',file.name):
                         file.unlink()
                 old.rmdir()
             except (OSError,ValueError,KeyError,TypeError):

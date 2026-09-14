@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 import zipfile
 from datetime import datetime
@@ -267,20 +268,30 @@ def register_document_routes(app, context_factory):
                         archive.writestr(name, payload.getvalue())
                 stream.seek(0)
                 return send_file(stream, as_attachment=True, download_name='Chung_tu_da_chon.zip', mimetype='application/zip')
-            sides = request.args.get('sides', 'duplex')
-            if sides not in {'simplex', 'duplex'}:
+            deliveries_only = all(name.startswith('deliveries_') for name, _ in books)
+            sides = request.args.get('sides', 'auto' if deliveries_only else 'duplex')
+            if sides not in {'simplex', 'duplex', 'auto'}:
                 raise ValueError('Chọn cách in một mặt hoặc hai mặt')
-            digest = hashlib.sha256(('sheet-scope-v7-receipt-duplex:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
+            if sides == 'auto' and not deliveries_only:
+                raise ValueError('Chế độ tự động theo số trang chỉ áp dụng cho phiếu giao')
+            digest = hashlib.sha256(('sheet-scope-v8-delivery-layout:' + paper + ':' + sides + ':' + selection).encode()).hexdigest()[:20]
             pdf = directory / f'{digest}.pdf'
+            print_info = directory / f'{digest}.print.json'
             with PDF_LOCK:
-                if not pdf.exists():
+                if not pdf.exists() or not print_info.exists():
                     sources = []
-                    for index, (_, workbook) in enumerate(books):
+                    for index, (name, workbook) in enumerate(books):
                         path = directory / f'print_{digest}_{index}.xlsx'
                         workbook.save(path)
-                        sources.append({'path':path, 'document_type':'selected', 'title':'Chứng từ đã chọn'})
-                    build_excel_pdf_bundle(sources, pdf, paper=paper, duplex=sides == 'duplex')
-            return send_file(pdf, mimetype='application/pdf', as_attachment=False, download_name='Chung_tu_da_chon.pdf')
+                        sources.append({'path':path, 'document_type':'deliveries' if name.startswith('deliveries_') else 'selected', 'title':'Chứng từ đã chọn'})
+                    result = build_excel_pdf_bundle(sources, pdf, paper=paper, duplex='auto' if sides == 'auto' else sides == 'duplex')
+                    print_info.write_text(json.dumps(result or {'duplex':sides == 'duplex'}), encoding='utf-8')
+                result = json.loads(print_info.read_text(encoding='utf-8'))
+            response = send_file(pdf, mimetype='application/pdf', as_attachment=False, download_name='Chung_tu_da_chon.pdf')
+            response.headers['X-Print-Sides'] = 'duplex' if result['duplex'] else 'simplex'
+            response.headers['X-Print-Pages'] = str(result.get('pages', ''))
+            response.headers['X-Print-Blank-Pages'] = ','.join(str(p) for p in result.get('page_layout', {}).get('blank_pages', []))
+            return response
         except ExcelPrintError as exc:
             if getattr(exc, 'code', '') == 'receipt_requires_one_page':
                 return jsonify(ok=False, error=str(exc), code=exc.code), 422

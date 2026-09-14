@@ -173,9 +173,9 @@ class DeliveryExportTests(unittest.TestCase):
                 for row in range(11, 13):
                     for column in "CDEFGHIJ":
                         self.assertEqual(sheet[f"{column}{row}"].alignment.vertical, "center")
-                    self.assertGreaterEqual(sheet[f"D{row}"].font.sz or 0, 16)
-                    self.assertGreaterEqual(sheet[f"E{row}"].font.sz or 0, 16)
-                    self.assertGreaterEqual(sheet[f"F{row}"].font.sz or 0, 15)
+                    self.assertGreaterEqual(sheet[f"D{row}"].font.sz or 0, 17)
+                    self.assertGreaterEqual(sheet[f"E{row}"].font.sz or 0, 17)
+                    self.assertGreaterEqual(sheet[f"F{row}"].font.sz or 0, 16)
                     self.assertFalse(sheet[f"D{row}"].font.bold)
                     self.assertFalse(sheet[f"E{row}"].font.bold)
                     self.assertFalse(sheet[f"F{row}"].font.bold)
@@ -266,7 +266,7 @@ class DeliveryExportTests(unittest.TestCase):
         finally:
             workbook.close()
 
-    def test_long_delivery_balances_pages_and_repeats_the_table_header(self):
+    def test_long_delivery_uses_a4_pagination_instead_of_fixed_item_counts(self):
         rows = [
             {
                 "product_name": f"Mặt hàng giao số {index}",
@@ -290,7 +290,7 @@ class DeliveryExportTests(unittest.TestCase):
         )
         try:
             sheet = workbook.active
-            self.assertEqual([item.id for item in sheet.row_breaks.brk], [26])
+            self.assertEqual(sheet.row_breaks.brk, [])
             self.assertEqual(sheet.print_title_rows, "$10:$10")
             self.assertTrue(sheet.print_options.horizontalCentered)
             self.assertAlmostEqual(sheet.page_margins.left, 0.25)
@@ -300,8 +300,21 @@ class DeliveryExportTests(unittest.TestCase):
             self.assertEqual(sheet.column_dimensions["J"].width, 24)
             self.assertEqual(sheet["C26"].value, 16)
             self.assertEqual(sheet["C27"].value, 17)
+            self.assertEqual([sheet.cell(r,3).value for r in range(11,43)],list(range(1,33)))
+            self.assertEqual(sheet.oddFooter.right.text, '&A · Trang &P/&N')
         finally:
             workbook.close()
+
+    def test_long_notes_and_explicit_newlines_have_room_beyond_product_name(self):
+        payload=delivery_payload()[:1]
+        payload[0]['items'][0]['product_name']='Cà rốt'
+        payload[0]['items'][0]['note']='\n'.join(['Giao bếp đúng giờ']*5)
+        workbook=build_delivery_workbook(payload,work_date='2026-09-11',template_path=GOLDEN)
+        try:
+            self.assertGreaterEqual(workbook.active.row_dimensions[11].height,100)
+            self.assertTrue(workbook.active['J11'].alignment.wrap_text)
+            self.assertIn('Giao bếp đúng giờ',workbook.active['J11'].value)
+        finally:workbook.close()
 
     def test_formula_injection_and_empty_deliveries_fail_closed(self):
         with self.assertRaises(DeliveryExportError) as empty:

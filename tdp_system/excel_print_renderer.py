@@ -23,13 +23,13 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from pypdf import PdfReader, PdfWriter, Transformation
-from pypdf.generic import DictionaryObject, NameObject
+from pypdf.generic import BooleanObject, DictionaryObject, NameObject
 from reportlab.lib.pagesizes import A4, A5
 
 
 EXCEL_PAPER_SIZES = {"A4": 9, "A5": 11}
 PDF_PAPER_SIZES = {"A4": A4, "A5": A5}
-FORMAT_VERSION = "tdp-excel-artwork-pdf-v6-receipt-duplex"
+FORMAT_VERSION = "tdp-excel-artwork-pdf-v7-delivery-auto-duplex"
 
 
 class ExcelPrintError(RuntimeError):
@@ -58,11 +58,11 @@ def _clean_source(source: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _input_sha256(sources: Sequence[Mapping[str, Any]], paper: str, duplex: bool = False) -> str:
+def _input_sha256(sources: Sequence[Mapping[str, Any]], paper: str, duplex: bool | str = False) -> str:
     digest = hashlib.sha256()
     digest.update(FORMAT_VERSION.encode("ascii"))
     digest.update(paper.encode("ascii"))
-    digest.update(b'duplex' if duplex else b'simplex')
+    digest.update(b'auto' if duplex == 'auto' else b'duplex' if duplex else b'simplex')
     for source in sources:
         metadata = {
             "document_type": source["document_type"],
@@ -314,14 +314,15 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
                 if pages:
                     binding_landscape = float(pages[0].mediabox.width) > float(pages[0].mediabox.height)
                     break
-        for item in rendered:
+        for item_index, item in enumerate(rendered):
             reader = PdfReader(str(item["path"]))
             receipt = is_receipt_sheet(item.get('sheet', ''))
+            delivery = item.get('document_type') == 'deliveries'
             if receipt and (len(reader.pages) > 2 or not len(reader.pages)):
                 raise ReceiptPrintError(f"Biên nhận {item.get('sheet')} đang có {len(reader.pages)} trang. Cần dàn về tối đa hai trang và chọn in hai mặt để mỗi người có một tờ riêng.")
             if receipt and len(reader.pages) == 2 and not duplex:
                 raise ReceiptPrintError(f"Biên nhận {item.get('sheet')} có hai trang. Chọn in Hai mặt để hai trang của cùng người nằm trên một tờ riêng.")
-            if duplex and receipt and len(writer.pages) % 2:
+            if duplex and (receipt or delivery) and len(writer.pages) % 2:
                 blank_back()
             start_page = len(writer.pages) + 1
             for page_index, page in enumerate(reader.pages):
@@ -349,18 +350,66 @@ def _merge_pdfs(rendered: Sequence[Mapping[str, Any]], target: Path, *, paper: s
                     output_page.rotate(180)
             layout.append({'sheet':item.get('sheet',''), 'start_page':start_page,
                            'end_page':len(writer.pages), 'receipt':receipt})
-            if duplex and receipt and len(writer.pages) % 2:
+            if duplex and (receipt or (delivery and item_index < len(rendered)-1)) and len(writer.pages) % 2:
                 blank_back()
         if binding_landscape is None and writer.pages:
             binding_landscape = writer.pages[0].mediabox.width > writer.pages[0].mediabox.height
         edge = '/DuplexFlipShortEdge' if binding_landscape else '/DuplexFlipLongEdge'
         writer._root_object[NameObject('/ViewerPreferences')] = DictionaryObject({
-            NameObject('/Duplex'): NameObject(edge if duplex else '/Simplex')})
+            NameObject('/Duplex'): NameObject(edge if duplex else '/Simplex'),
+            NameObject('/PrintScaling'): NameObject('/None'),
+            NameObject('/PickTrayByPDFSize'): BooleanObject(True)})
         with target.open("wb") as handle:
             writer.write(handle)
         return {'sections':layout, 'blank_pages':blank_pages, 'total_pages':len(writer.pages)}
     finally:
         writer.close()
+
+
+def _keep_delivery_footer_with_items(rendered, sources, *, paper, render_dir):
+    """Move the last two items with a footer that Calc/Excel put on its own page.
+
+    Only the disposable print copy receives a page break. Customer values,
+    immutable snapshots, font sizes and page scale remain unchanged.
+    """
+    from openpyxl import load_workbook
+    from openpyxl.worksheet.pagebreak import Break, RowBreak
+    compact = lambda text: ''.join(str(text or '').casefold().split())
+    result = []
+    for index, item in enumerate(rendered):
+        if item['document_type'] != 'deliveries' or item['pages'] < 2:
+            result.append(item); continue
+        source = next(s for s in sources if s['path'].name == item['workbook'])
+        book = load_workbook(source['path'])
+        try:
+            sheet = book[item['sheet']]
+            rows = [r for r in range(11, sheet.max_row+1)
+                    if type(sheet.cell(r,3).value) is int and sheet.cell(r,4).value]
+            if len(rows) < 2:
+                result.append(item); continue
+            names = [compact(sheet.cell(r,4).value) for r in rows[-2:]]
+            last_text = compact(PdfReader(item['path']).pages[-1].extract_text())
+            if any(name in last_text for name in names):
+                result.append(item); continue
+            # Count-based breaks from old snapshots must not leave a second
+            # break between the two items that now accompany the signature.
+            cut = rows[-2]-1
+            sheet.row_breaks = RowBreak(brk=[b for b in sheet.row_breaks.brk if b.id < cut]+[Break(id=cut)])
+            for ws in book:
+                ws.sheet_state = 'visible' if ws == sheet else 'hidden'
+            book.active = book.index(sheet)
+            folder = render_dir / f'footer_{index}'
+            folder.mkdir()
+            adjusted = folder / source['path'].name
+            book.save(adjusted)
+        finally:
+            book.close()
+        replacement = _export_visible_sheets([{**source, 'path':adjusted}], paper=paper, render_dir=folder)[0]
+        last_text = compact(PdfReader(replacement['path']).pages[-1].extract_text())
+        if not any(name in last_text for name in names):
+            raise ExcelPrintError('Phần ký của phiếu giao chưa nằm cùng dòng hàng. Kiểm tra tên hàng hoặc ghi chú quá dài.')
+        result.append(replacement)
+    return result
 
 
 def build_excel_pdf_bundle(
@@ -369,7 +418,7 @@ def build_excel_pdf_bundle(
     *,
     paper: str,
     generated_at: str | None = None,
-    duplex: bool = False,
+    duplex: bool | str = False,
 ) -> dict[str, Any]:
     """Export and merge visible Excel sheets while preserving their artwork."""
 
@@ -379,6 +428,10 @@ def build_excel_pdf_bundle(
     normalized = [_clean_source(source) for source in sources]
     if not normalized:
         raise ExcelPrintError("Không có file Excel để tạo bộ in")
+    if duplex not in (False, True, 'auto'):
+        raise ExcelPrintError('Cách in không hợp lệ')
+    if duplex == 'auto' and any(s['document_type'] != 'deliveries' for s in normalized):
+        raise ExcelPrintError('Chế độ tự động theo số trang chỉ áp dụng cho phiếu giao')
 
     target = Path(output_path).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -403,7 +456,9 @@ def build_excel_pdf_bundle(
                 workbook.close()
             styled_sources.append({**source, 'path': styled_path})
         rendered = _export_visible_sheets(styled_sources, paper=paper_name, render_dir=render_dir)
-        layout = _merge_pdfs(rendered, temp_target, paper=paper_name, duplex=duplex)
+        rendered = _keep_delivery_footer_with_items(rendered, styled_sources, paper=paper_name, render_dir=render_dir)
+        resolved_duplex = any(item['pages'] > 1 for item in rendered) if duplex == 'auto' else bool(duplex)
+        layout = _merge_pdfs(rendered, temp_target, paper=paper_name, duplex=resolved_duplex)
         verification = verify_excel_pdf(
             temp_target,
             paper=paper_name,
@@ -437,7 +492,8 @@ def build_excel_pdf_bundle(
         "pages": verification["pages"],
         "paper": paper_name,
         "orientation": "mixed",
-        "duplex": duplex,
+        "duplex": resolved_duplex,
+        "requested_sides": 'auto' if duplex == 'auto' else 'duplex' if duplex else 'simplex',
         "page_layout": layout,
         "generated_at": generated_at or datetime.now().replace(microsecond=0).isoformat(),
         "input_sha256": _input_sha256(normalized, paper_name, duplex),

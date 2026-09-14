@@ -159,6 +159,23 @@ class Round4DocumentTests(SelectedDocumentExportTests):
             self.assertEqual(renderer.call_count,2)
             self.assertEqual(self.client.get(url+'&sides=unknown').status_code,422)
 
+    def test_delivery_auto_sides_and_response_metadata_survive_pdf_cache(self):
+        data=self.preview().get_json()
+        def build(sources,target,**kwargs):
+            self.assertEqual(kwargs['duplex'],'auto')
+            self.assertTrue(all(s['document_type']=='deliveries' for s in sources))
+            target.write_bytes(b'%PDF-1.4 auto')
+            return {'duplex':True,'pages':4,'page_layout':{'blank_pages':[2]}}
+        with patch('tdp_system.round4_documents.build_excel_pdf_bundle',side_effect=build) as renderer:
+            url='/api/documents/'+data['token']+'/pdf?sheets=0,1&sides=auto'
+            for _ in range(2):
+                response=self.client.get(url)
+                self.assertEqual(response.status_code,200)
+                self.assertEqual(response.headers['X-Print-Sides'],'duplex')
+                self.assertEqual(response.headers['X-Print-Pages'],'4')
+                self.assertEqual(response.headers['X-Print-Blank-Pages'],'2')
+            self.assertEqual(renderer.call_count,1)
+
     def test_a5_receipts_have_separate_pdf_cache_and_excel_paper(self):
         from .document_preview import create_snapshot
         book=Workbook();book.active.title='bảng kê tổng';book.active['A1']='Bảng tổng'

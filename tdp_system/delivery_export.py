@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import re
+import textwrap
 from copy import copy
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -19,7 +20,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.page import PageMargins
-from openpyxl.worksheet.pagebreak import Break, RowBreak
+from openpyxl.worksheet.pagebreak import RowBreak
 
 try:
     from document_totals import quantity_cell
@@ -76,7 +77,6 @@ SIGNATURE_HINTS_TEXT = (
     "\u2003\u2003\u2003\u2003\u2003\u2003\u2003\u2003\u2003\u2003\u2003"
     "(Ký và ghi rõ họ tên)\u2003\u2003"
 )
-DELIVERY_MAX_ITEMS_PER_PAGE = 20
 
 INVALID_SHEET_CHARACTER = re.compile(r"[\\/*?:\[\]]")
 
@@ -252,35 +252,24 @@ def _write_signature_cells(sheet: Any, closing_row: int, blank_style: Any) -> No
 
     date_cell = sheet.cell(first_row, 3)
     write_literal(sheet, date_cell.coordinate, SIGNATURE_DATE_TEXT)
-    date_cell.font = Font(name="Arial", size=11, italic=True, color="000000")
+    date_cell.font = Font(name="Arial", size=12, italic=True, color="000000")
     date_cell.alignment = Alignment(horizontal="right", vertical="center", shrink_to_fit=True)
     date_cell.border = Border(top=top_side)
 
     title_cell = sheet.cell(first_row + 1, 3)
     write_literal(sheet, title_cell.coordinate, SIGNATURE_TITLES_TEXT)
-    title_cell.font = Font(name="Arial", size=12, bold=True, color="000000")
+    title_cell.font = Font(name="Arial", size=13, bold=True, color="000000")
     title_cell.alignment = Alignment(horizontal="center", vertical="center", shrink_to_fit=True)
 
     hint_cell = sheet.cell(first_row + 2, 3)
     write_literal(sheet, hint_cell.coordinate, SIGNATURE_HINTS_TEXT)
-    hint_cell.font = Font(name="Arial", size=8, italic=True, color="000000")
+    hint_cell.font = Font(name="Arial", size=9, italic=True, color="000000")
     hint_cell.alignment = Alignment(horizontal="center", vertical="center", shrink_to_fit=True)
 
 
-def _page_chunks(item_count: int) -> list[int]:
-    """Split long notes into balanced pages instead of one full and one sparse page."""
-
-    page_count = max(1, math.ceil(item_count / DELIVERY_MAX_ITEMS_PER_PAGE))
-    base, remainder = divmod(item_count, page_count)
-    return [base + (1 if index < remainder else 0) for index in range(page_count)]
-
-
-def _delivery_base_row_height(item_count: int, chunks: Sequence[int]) -> float:
-    if len(chunks) == 1:
-        return max(23.0, min(32.0, 460.0 / max(1, item_count)))
-    # Roughly 500 points of item rows per page leaves room for the first-page
-    # identity block and the last-page four-signature block.
-    return max(26.0, min(38.0, 500.0 / max(chunks)))
+def _wrapped_line_count(value: Any, width: int) -> int:
+    return sum(max(1, len(textwrap.wrap(line, width=width)))
+               for line in str(value or '').split('\n'))
 
 
 def _style_delivery_print_layout(sheet: Any, *, records: Sequence[Mapping[str, Any]]) -> None:
@@ -298,7 +287,7 @@ def _style_delivery_print_layout(sheet: Any, *, records: Sequence[Mapping[str, A
     for coordinate, (size, bold) in top_styles.items():
         font = copy(sheet[coordinate].font)
         font.name = "Arial"
-        font.sz = size
+        font.sz = size + 1
         font.bold = bold
         font.charset = None
         font.scheme = None
@@ -312,7 +301,7 @@ def _style_delivery_print_layout(sheet: Any, *, records: Sequence[Mapping[str, A
         if str(sheet[coordinate].value or "").startswith("Ngày "):
             font = copy(sheet[coordinate].font)
             font.name = "Arial"
-            font.sz = 14
+            font.sz = 15
             font.bold = True
             font.charset = None
             font.scheme = None
@@ -335,7 +324,7 @@ def _style_delivery_print_layout(sheet: Any, *, records: Sequence[Mapping[str, A
         cell = sheet[f"{column}{TABLE_HEADER_ROW}"]
         font = copy(cell.font)
         font.name = "Arial"
-        font.sz = 14
+        font.sz = 15
         font.bold = True
         font.charset = None
         font.scheme = None
@@ -345,23 +334,21 @@ def _style_delivery_print_layout(sheet: Any, *, records: Sequence[Mapping[str, A
         cell.fill = white_fill
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    chunks = _page_chunks(len(records))
-    base_height = _delivery_base_row_height(len(records), chunks)
     for offset, record in enumerate(records):
         row = TABLE_FIRST_ROW + offset
         product_name = str(record.get("product_name") or record.get("product_code") or "").strip()
-        # Excel/LibreOffice wrap on word boundaries, so a Vietnamese item name
-        # can occupy two lines before a raw character-count estimate predicts
-        # it. Reserve 24pt for every displayed line so the lower line never
-        # touches the bottom border in the printed/PDF version.
-        line_count = max(1, math.ceil(len(product_name) / 28))
-        sheet.row_dimensions[row].height = max(base_height, 24.0 * line_count)
+        # Let the A4 renderer paginate by actual row height, rather than forcing
+        # 15/20 items onto a page and leaving most of the next page empty.
+        # Reserve room for wrapped names AND notes, including explicit newlines.
+        line_count = _wrapped_line_count(product_name, 28)
+        note_lines = _wrapped_line_count(record.get('note'), 22)
+        sheet.row_dimensions[row].height = max(28.0, 24.0 * line_count, 20.0 * note_lines)
         for column in "CDEFGHIJ":
             cell = sheet[f"{column}{row}"]
             cell.fill = white_fill
             font = copy(cell.font)
             font.name = "Arial"
-            font.sz = 16 if column in "DE" else 15 if column == "F" else 13
+            font.sz = 17 if column in "DE" else 16 if column == "F" else 14
             font.bold = False
             font.charset = None
             font.scheme = None
@@ -385,7 +372,7 @@ def _style_delivery_print_layout(sheet: Any, *, records: Sequence[Mapping[str, A
             cell.fill = white_fill
             font = copy(cell.font)
             font.name = "Arial"
-            font.sz = 14
+            font.sz = 15
             font.bold = True
             font.charset = None
             font.scheme = None
@@ -404,16 +391,15 @@ def _style_delivery_print_layout(sheet: Any, *, records: Sequence[Mapping[str, A
     sheet.column_dimensions["J"].width = 24
 
     sheet.row_breaks = RowBreak()
-    cumulative = 0
-    for chunk in chunks[:-1]:
-        cumulative += chunk
-        sheet.row_breaks.append(Break(id=TABLE_FIRST_ROW + cumulative - 1))
     sheet.print_title_rows = f"{TABLE_HEADER_ROW}:{TABLE_HEADER_ROW}"
     sheet.print_options.horizontalCentered = True
     sheet.print_options.verticalCentered = False
     sheet.page_margins = PageMargins(
         left=0.25, right=0.25, top=0.3, bottom=0.3, header=0.1, footer=0.1,
     )
+    sheet.oddFooter.right.text = '&A · Trang &P/&N'
+    sheet.oddFooter.right.size = 10
+    sheet.oddFooter.right.font = 'Arial'
 
 
 def _prepare_sheet(
