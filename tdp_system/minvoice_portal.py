@@ -16,8 +16,10 @@ from urllib.request import Request, build_opener, HTTPCookieProcessor, HTTPRedir
 
 try:
     from .minvoice_client import MinvoiceClient, MinvoiceError
+    from .minvoice_portal_drafts import PortalDrafts
 except ImportError:
     from minvoice_client import MinvoiceClient, MinvoiceError
+    from minvoice_portal_drafts import PortalDrafts
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -60,7 +62,7 @@ def portal_document_role(remote):
             5:'adjusted_original',6:'replaced_original'}.get(code,'unknown')
 
 
-class MinvoicePortalClient(MinvoiceClient):
+class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
     def __init__(self, config, timeout=25):
         super().__init__(config, timeout)
         parsed = urlsplit(config.api_base_url)
@@ -71,20 +73,32 @@ class MinvoicePortalClient(MinvoiceClient):
         self.tax_code = parsed.hostname.split(".")[0]
         self._host = parsed.hostname
         self._cookies = CookieJar()
+        self._can_create = False
         self._opener = build_opener(HTTPCookieProcessor(self._cookies), _NoRedirect())
 
     @property
     def supports_remote_drafts(self):
-        return False
+        return True
 
-    def _portal_json(self, method, path, *, payload=None, params=None):
-        if method != "GET" and (method, path) != ("POST", "account/login"):
-            raise MinvoiceError("Kết nối portal hiện chỉ hỗ trợ đọc hóa đơn")
+    def _portal_json(self, method, path, *, payload=None, params=None, allow_draft_write=False):
+        draft_write = (method, path) == ('POST', 'app/invoice') and allow_draft_write is True
+        if draft_write:
+            self._guard_unsigned_payload(payload)
+            if not self._can_create:
+                raise MinvoiceError('Tài khoản M-Invoice chưa có quyền tạo hóa đơn.')
+        elif method != "GET" and (method, path) != ("POST", "account/login"):
+            raise MinvoiceError("Thao tác ghi portal chưa được xác nhận hoặc không được hỗ trợ")
         url = self.config.api_base_url.rstrip("/") + "/api/api/" + path
         if params:
             url += "?" + urlencode(params)
         headers = {"Accept": "application/json", "Origin": self.config.api_base_url,
                    "Referer": self.config.api_base_url + "/"}
+        if draft_write:
+            from urllib.parse import unquote
+            for cookie in self._cookies:
+                if cookie.name == 'XSRF-TOKEN':
+                    headers['RequestVerificationToken'] = unquote(cookie.value)
+                    headers['X-XSRF-TOKEN'] = unquote(cookie.value)
         body = None
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
@@ -110,6 +124,7 @@ class MinvoicePortalClient(MinvoiceClient):
 
     def login(self):
         self._token = ""
+        self._can_create = False
         self._cookies.clear()
         tenant = self._portal_json("GET", "abp/multi-tenancy/tenants/by-name/" + self.tax_code)
         tenant_id = tenant.get("tenantId")
@@ -127,6 +142,7 @@ class MinvoicePortalClient(MinvoiceClient):
                 or profile.get("currentTenant", {}).get("id") != tenant_id):
             raise MinvoiceError("Phiên đăng nhập M-Invoice chưa khớp công ty đã chọn")
         self._token = "cookie-session-verified"
+        self._can_create = profile.get('auth', {}).get('grantedPolicies', {}).get('MInvoice.InvoiceManagement.Create') is True
         return True
 
     def profile_status(self):
@@ -134,15 +150,12 @@ class MinvoicePortalClient(MinvoiceClient):
         return {"authenticated": True, "credential_verified": True, "official_api": False,
                 "connection_mode": "portal", "company_tax_code": self.tax_code,
                 "test_environment": False, "test_environment_allowed": False,
-                "draft_save_available": False}
+                "draft_save_available": self._can_create}
 
     def outgoing_summary(self):
         result = super().outgoing_summary()
         result["official_api"] = False
         return result
-
-    def create_draft(self, *args, **kwargs):
-        raise MinvoiceError("Portal mới đang hỗ trợ đọc. Hãy tải file M-Invoice rồi nhập trên portal để lập hóa đơn.")
 
     def get_invoice_series(self):
         self._ensure_login()

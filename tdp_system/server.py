@@ -893,6 +893,11 @@ def init_database(*, sync_master=True):
         except ImportError:
             from outgoing_review import SCHEMA as outgoing_review_schema
         conn.executescript(outgoing_review_schema)
+        try:
+            from .outgoing_prepared import SCHEMA as outgoing_prepared_schema
+        except ImportError:
+            from outgoing_prepared import SCHEMA as outgoing_prepared_schema
+        conn.executescript(outgoing_prepared_schema)
         init_invoice_workbench_schema(conn)
         init_inventory_period_close_schema(conn)
         init_bk_import_schema(conn)
@@ -4511,6 +4516,7 @@ def api_outgoing_source_scopes(invoice_id=None):
 
 @app.post("/api/export/order-invoices")
 @app.post("/api/export/catch-up-invoices")
+@app.post("/api/outgoing-invoices/prepare")
 def api_export_order_invoices():
     """One ZIP; one consolidated invoice per contractor/tax across selected days."""
     try:
@@ -4534,6 +4540,10 @@ def api_export_order_invoices():
         if not isinstance(body, dict):
             raise ValueError('Khoảng ngày và nhà thầu không hợp lệ')
         catch_up = request.path.endswith('/catch-up-invoices')
+        prepare = request.path.endswith('/prepare')
+        invoice_date = valid_iso_date(body.get('invoice_date'), 'Ngày hóa đơn') if prepare else ''
+        if prepare and body.get('review_confirmed') is not True:
+            raise ValueError('Kiểm tra và lưu lựa chọn trước khi chuẩn bị gửi M-Invoice.')
         if catch_up:
             body = {**body, 'scope':'unissued'}
         with db() as conn:
@@ -4558,6 +4568,16 @@ def api_export_order_invoices():
                 raise ValueError('Không tìm thấy nhà thầu đã chọn')
             assert_enabled(conn,contractor)
             excluded=excluded_codes(conn)
+            if prepare:
+                try:
+                    from .outgoing_review import choices as review_choices
+                except ImportError:
+                    from outgoing_review import choices as review_choices
+                current = sorted((r['order_id'], r['token']) for r in review_choices(conn, {'from':start,'to':end,'contractor':contractor}))
+                supplied = body.get('review_rows')
+                if (not isinstance(supplied, list) or any(not isinstance(r,dict) or type(r.get('order_id')) is not int or not isinstance(r.get('token'),str) for r in supplied)
+                        or sorted((r['order_id'],r['token']) for r in supplied) != current):
+                    raise ValueError('Bảng lựa chọn vừa thay đổi. Tải lại và kiểm tra trước khi gửi.')
             try:
                 from .outgoing_waiting import refresh_waiting
             except ImportError:
@@ -4671,6 +4691,17 @@ def api_export_order_invoices():
                 if remaining>1e-8:
                     reason=' · '+held_issues[order['id']]['message'] if order['id'] in held_issues else ''
                     pending.append(f"{order['work_date']} · {order['contractor']} · {order['product_code']} · {order['product_name']}: còn {remaining:g} {order['unit']}"+reason)
+            if prepare:
+                try:
+                    from .outgoing_prepared import prepared_payload
+                    from .outgoing_readiness import validate_draft_export_stock
+                except ImportError:
+                    from outgoing_prepared import prepared_payload
+                    from outgoing_readiness import validate_draft_export_stock
+                for did in draft_ids:
+                    conn.execute('UPDATE outgoing_invoice_drafts SET invoice_date=? WHERE id=?', (invoice_date,did))
+                    validate_draft_export_stock(conn,did,invoice_date)
+                return jsonify(prepared_payload(app,conn,draft_ids,{'from':start,'to':end,'contractor':contractor},pending,blocked))
             with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
                 for draft_id in draft_ids:
                     draft=conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?',(draft_id,)).fetchone()
@@ -5494,6 +5525,11 @@ try:
 except ImportError:
     from outgoing_review import register as register_outgoing_review
 register_outgoing_review(app, globals())
+try:
+    from .outgoing_prepared import register as register_outgoing_prepared
+except ImportError:
+    from outgoing_prepared import register as register_outgoing_prepared
+register_outgoing_prepared(app,globals())
 
 try:
     from round3_documents import register_round3_routes, customer_receipt

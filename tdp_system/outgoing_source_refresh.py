@@ -5,12 +5,14 @@ try:
     from .invoice_inventory import post_output_invoice, InvoiceInventoryError
     from .outgoing_source_scope import scope_report
     from .outgoing_waiting import refresh_waiting
+    from .outgoing_sent_reconcile import reconcile_sent
 except ImportError:
     from invoice_workbench import prepare_sync_batch
     from invoice_output_sync import sync_output_batch
     from invoice_inventory import post_output_invoice, InvoiceInventoryError
     from outgoing_source_scope import scope_report
     from outgoing_waiting import refresh_waiting
+    from outgoing_sent_reconcile import reconcile_sent
 
 
 def refresh_sources(db_factory, client_factory, now_iso, start, end):
@@ -35,7 +37,9 @@ def refresh_sources(db_factory, client_factory, now_iso, start, end):
                 postings.append(post_output_invoice(conn,r['id'],confirmed=True,now_iso=now_iso))
             except InvoiceInventoryError as exc:
                 blocked.append({'id':r['id'],'number':r['number'],'error':str(exc)})
+        sent=reconcile_sent(conn,now_iso())
+        blocked.extend(sent['blocked'])
         waiting=refresh_waiting(conn,now_iso(),fill=False)
         sources=scope_report(conn,start,end)
-    return {'sync':result,'posted':postings,'blocked':blocked,'waiting':waiting,'sources':sources,
+    return {'sync':result,'posted':postings,'blocked':blocked,'linked_drafts':sent['linked'],'waiting':waiting,'sources':sources,
             'from':start,'to':end,'checked_at':now_iso()}

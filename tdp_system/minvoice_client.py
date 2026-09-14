@@ -367,6 +367,7 @@ class MinvoiceClient:
         )
 
         lines = cls._first(draft, "lines", "items")
+        buyer_tax_code = tax_code
         if not isinstance(lines, list) or not lines:
             raise MinvoiceError("Hóa đơn phải có ít nhất một dòng hàng")
         if len(lines) > 9999:
@@ -522,7 +523,7 @@ class MinvoiceClient:
             "buyer": {
                 "display_name": display_name,
                 "legal_name": legal_name,
-                "tax_code": tax_code,
+                "tax_code": buyer_tax_code,
                 "address": address,
                 "email": email,
                 "bank_account": bank_account,

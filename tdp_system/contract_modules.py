@@ -6227,10 +6227,14 @@ def register_contract_routes(app, ctx):
                 or abs(parsed_qty - float(local_line["qty"])) > 1e-6
                 or not math.isfinite(parsed_price)
                 or abs(parsed_price - float(local_line["unit_price"])) > 1
-                or clean_text(remote_tax) != clean_text(local_line["tax"])
+                or invoice_tax_percent(remote_tax) != invoice_tax_percent(local_line["tax"])
                 or clean_text(remote_nature) != clean_text(local_line["invoice_nature"])
             ):
                 mismatches.append(f"chi tiết dòng {index}")
+            if data.get('_tdp_source_contract') == 'minvoice_portal_v1' and (
+                    clean_text(remote_line.get('inv_unitCode')).casefold() != clean_text(local_line['unit']).casefold()
+                    or clean_text(remote_line.get('inv_itemName')) != clean_text(local_line['product_name'])):
+                mismatches.append(f"tên hoặc đơn vị dòng {index}")
         return mismatches
 
     def invoice_payload(conn, limit=100, invoice_id=None):
@@ -8617,6 +8621,7 @@ def register_contract_routes(app, ctx):
             return jsonify({"ok": True, "contractor": code})
 
     @app.post("/api/minvoice/drafts/<int:draft_id>")
+    @app.post("/api/outgoing-invoices/prepared/<int:draft_id>/send")
     def api_save_minvoice_draft(draft_id):
         client_factory = app.config.get("MINVOICE_CLIENT_FACTORY") or create_minvoice_client
         if client_factory is None:
@@ -8654,6 +8659,15 @@ def register_contract_routes(app, ctx):
                     "message": "Dự thảo này đã được lưu lên M-Invoice",
                     "requires_user_sign_and_issue": True,
                 })
+            if '/prepared/' in request.path:
+                try:
+                    from .outgoing_prepared import validate_prepared
+                except ImportError:
+                    from outgoing_prepared import validate_prepared
+                try:
+                    validate_prepared(app,conn,draft_id,body.get('review_token'))
+                except ValueError as exc:
+                    return jsonify(ok=False,error=str(exc)),409
             persisted_series = clean_text(draft["minvoice_series"]).upper()
             minvoice_status = clean_text(draft["minvoice_status"]) or "not_sent"
             if (
@@ -8719,6 +8733,8 @@ def register_contract_routes(app, ctx):
 
             snapshot = None
             if not reconcile_only:
+                if hasattr(minvoice_client,'tax_code') and clean_text(setting_get(conn,'company_tax_code','')) != minvoice_client.tax_code:
+                    return jsonify(ok=False,error='Mã số thuế công ty trên web khác tài khoản M-Invoice đang kết nối.'),409
                 try:
                     validate_draft_export_stock(conn, draft_id, draft["invoice_date"])
                 except OutgoingReadinessError as exc:
