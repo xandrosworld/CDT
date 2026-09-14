@@ -2,6 +2,7 @@
   'use strict';
   var esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
   var number = function (v) { return Number(v).toLocaleString('vi-VN', {maximumFractionDigits: 6}); };
+  var date = function (v) { return String(v || '').replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$3/$2/$1'); };
 
   function open(options) {
     if (document.querySelector('.invoice-unit-dialog')) return;
@@ -10,7 +11,7 @@
     dialog.className = 'inventory-totals-dialog invoice-unit-dialog';
     dialog.setAttribute('aria-labelledby', 'invoiceUnitTitle');
     dialog.innerHTML = '<div class="inventory-totals-heading"><h3 id="invoiceUnitTitle">Sửa ĐVT / nhập kg thực tế</h3><button type="button" class="icon-button" data-close aria-label="Đóng">×</button></div>' +
-      '<p>' + esc(options.scope.contractor || 'Tất cả nhà thầu đã chọn') + ' · ' + esc(options.scope.from) + ' → ' + esc(options.scope.to) + '</p>' +
+      '<p>' + esc(options.scope.contractor || 'Tất cả nhà thầu đã chọn') + ' · ' + esc(date(options.scope.from)) + ' → ' + esc(date(options.scope.to)) + '</p>' +
       '<div data-unit-body></div><p data-unit-status role="status"></p><div class="compact-controls"><button type="button" class="btn btn-outline" data-reload>Tải lại dữ liệu dòng</button></div>';
     var body = dialog.querySelector('[data-unit-body]'), status = dialog.querySelector('[data-unit-status]');
     function lock(value) {
@@ -22,7 +23,7 @@
       var row = rows.find(function (r) { return r.order_id === selected; }), weight = currentWeight();
       if (!row) { body.innerHTML = '<p>Không còn dòng đang chọn trong phạm vi này. Kiểm tra nhà thầu, ngày hoặc dòng đã bỏ chọn trên bảng kê.</p>'; return; }
       body.innerHTML = '<label class="invoice-unit-row-picker">Dòng hàng cần sửa<select data-unit-row>' + rows.map(function (r) {
-        return '<option value="' + r.order_id + '"' + (r.order_id === selected ? ' selected' : '') + '>' + esc(r.date + ' · ' + r.contractor + ' · ' + r.kitchen + ' · ' + r.product_code + ' · ' + r.invoice_name + ' · dòng ' + r.order_id) + '</option>';
+        return '<option value="' + r.order_id + '"' + (r.order_id === selected ? ' selected' : '') + '>' + esc(date(r.date) + ' · ' + r.contractor + ' · ' + r.kitchen + ' · ' + r.product_code + ' · ' + r.invoice_name + ' · dòng ' + r.order_id) + '</option>';
       }).join('') + '</select></label><h4>' + esc(row.product_code + ' · ' + row.invoice_name) + '</h4>' +
         '<p>Chưa xuất: <strong>' + number(weight ? weight.remaining_qty : row.qty) + ' ' + esc(row.unit) + '</strong> · ĐVT hóa đơn: <strong>' + esc(weight ? weight.invoice_unit : row.invoice_unit) + '</strong>' +
         (weight ? ' · ĐVT kho: ' + esc(weight.stock_unit) : '') + '</p>' +

@@ -1004,7 +1004,9 @@ body { min-width: 320px; }
 .invoice-excel-upload { margin-bottom:14px; }
 .invoice-scope-note { margin-top:14px; justify-content:space-between; }
 .invoice-unit-dialog { width:min(760px,94vw); max-height:90vh; overflow:auto; }
-.invoice-unit-dialog [data-unit-body] { min-width:0; }
+.invoice-unit-dialog [data-unit-body] { min-width:0; padding:0 20px 8px; }
+.invoice-unit-dialog > p { margin:14px 20px; }
+.invoice-unit-dialog > .compact-controls { margin:0 20px 20px; }
 .invoice-unit-dialog select,.invoice-unit-dialog input:not([type=checkbox]) { display:block; width:100%; max-width:100%; margin:6px 0 12px; padding:8px; box-sizing:border-box; }
 .invoice-unit-dialog [data-weight-form] { border-top:1px solid #dbe3e8; margin-top:16px; padding-top:10px; }
 .invoice-unit-confirm { display:block; margin:14px 0; }
