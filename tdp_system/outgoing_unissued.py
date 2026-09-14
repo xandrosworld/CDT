@@ -173,6 +173,8 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False):
            'tax':o['tax'],'invoice_nature':str(o.get('invoice_nature') or '1')}
         r['waiting_qty']=max(left-r['ready_qty'],0)
         r['pending_reason']=units[o['id']]['message'] if o['id'] in units else ''
+        r['needs_conversion']=o['id'] in units
+        r['conversion_reason']=r['pending_reason']
         details.append(r)
         key=(o['contractor'],o['product_code'],o['unit'].strip().casefold())
         g=grouped.setdefault(key,{**r,'approved_qty':0,'issued_qty':0,'drafted_qty':0,'unissued_qty':0,'ready_qty':0,'waiting_qty':0,'first_date':o['work_date'],'last_date':o['work_date']})
@@ -215,9 +217,11 @@ def unissued_workbook(payload):
     headers=['Nhà thầu','Mã hàng','Tên hàng','ĐVT','Ngày đơn đầu','Ngày đơn cuối','Lượng đã duyệt','Đã phát hành','Tổng lượng đang giữ','Chưa xuất hóa đơn','Đã đủ điều kiện, giữ chờ xuất','Chưa đủ điều kiện / chờ cộng lẻ']
     s.append(headers+['Lý do còn chờ'])
     for r in payload['rows']:s.append([r[k] for k in ('contractor','product_code','product_name','unit','first_date','last_date','approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty')]+[r.get('pending_reason','')])
-    s=w.create_sheet('Chi tiet theo ngay');s.append(['Dòng đơn','Ngày đơn','Nhà thầu','Mã','Tên','ĐVT','Đã duyệt','Đã phát hành','Tổng lượng đang giữ','Chưa xuất','Giá trên đơn','Đủ điều kiện, giữ chờ xuất','Chưa đủ điều kiện / chờ cộng lẻ'])
+    s=w.create_sheet('Chi tiet theo ngay');s.append(['Dòng đơn','Ngày đơn','Nhà thầu','Mã','Tên xuất hóa đơn','ĐVT đơn','Đã duyệt','Đã phát hành','Tổng lượng đang giữ','Chưa xuất','Giá trên đơn','Đủ điều kiện, giữ chờ xuất','Chưa đủ điều kiện / chờ cộng lẻ'])
     s.cell(1,14,'Lý do còn chờ')
-    for r in payload['details']:s.append([r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price','ready_qty','waiting_qty')]+[r.get('pending_reason','')])
+    s.cell(1,15,'Thuế');s.cell(1,16,'Tiền hàng chưa xuất');s.cell(1,17,'Cần quy đổi / đối chiếu ĐVT')
+    for r in payload['details']:
+        s.append([r.get('invoice_name',r['product_name']) if k=='product_name' else r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price','ready_qty','waiting_qty')]+[r.get('pending_reason',''),r['tax'],round(r['unissued_qty']*r['unit_price']),r.get('conversion_reason','')])
     note=w.create_sheet('Ghi chu');note.append(['Cộng dồn đến ngày',payload['asof']]);note.append(['Cách tính',payload['policy']])
     note.append(['Đối chiếu M-Invoice','Nếu đã ký bên ngoài, đồng bộ hóa đơn hoặc xác nhận đúng số hóa đơn đã phát hành trước khi lập tiếp.'])
     for warning in payload['warnings']:note.append(['Cần đối chiếu',warning['message']])
@@ -232,9 +236,15 @@ def unissued_workbook(payload):
         for col in s.columns:s.column_dimensions[col[0].column_letter].width=min(55,max(16,max(len(str(c.value or '')) for c in col)+2))
     try:
         from .template_workbook import safe_workbook_bytes
+        from .document_preview import white_print_style
     except ImportError:
         from template_workbook import safe_workbook_bytes
+        from document_preview import white_print_style
     try:
-        return BytesIO(safe_workbook_bytes(w))
+        white_print_style(w)
+        for number,r in enumerate(payload['details'],start=2):
+            if r.get('needs_conversion'):
+                for cell in w['Chi tiet theo ngay'][number]:cell.font=Font(color='B42318')
+        return BytesIO(safe_workbook_bytes(w,apply_print_style=False))
     finally:
         w.close()

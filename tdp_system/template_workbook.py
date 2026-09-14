@@ -406,12 +406,13 @@ def assert_workbook_safe(workbook: Any) -> None:
             )
 
 
-def safe_workbook_bytes(workbook: Any) -> bytes:
+def safe_workbook_bytes(workbook: Any, *, apply_print_style: bool = True) -> bytes:
     try:
         from .document_preview import white_print_style
     except ImportError:
         from document_preview import white_print_style
-    white_print_style(workbook)
+    if apply_print_style:
+        white_print_style(workbook)
     assert_workbook_safe(workbook)
     output = io.BytesIO()
     workbook.save(output)

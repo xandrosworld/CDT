@@ -7,13 +7,18 @@ import io
 import zipfile
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
+from copy import copy
+from openpyxl import load_workbook
+from openpyxl.comments import Comment
 
 try:
     from .invoice_tax_export import build_invoice_workbook, _safe_name
     from .outgoing_unissued import unissued_workbook
+    from .template_workbook import safe_workbook_bytes
 except ImportError:
     from invoice_tax_export import build_invoice_workbook, _safe_name
     from outgoing_unissued import unissued_workbook
+    from template_workbook import safe_workbook_bytes
 
 
 def unissued_template_zip(payload, template_dir, tax_percent):
@@ -30,8 +35,10 @@ def unissued_template_zip(payload, template_dir, tax_percent):
         lines = groups[(row['contractor'], vat)]
         item = lines.setdefault(key, {'contractor':row['contractor'], 'product_code':row['product_code'],
             'product_name':row.get('invoice_name') or row['product_name'], 'unit':row['unit'], 'unit_price':price,
-            'invoice_nature':nature, 'qty':Decimal(0)})
+            'invoice_nature':nature, 'qty':Decimal(0), 'conversion_reasons':set()})
         item['qty'] += qty
+        if row.get('needs_conversion'):
+            item['conversion_reasons'].add(row['conversion_reason'])
     if not groups:
         raise ValueError('Không còn hàng chờ trong phạm vi đã chọn.' if waiting else 'Không còn hàng chưa xuất hóa đơn trong phạm vi đã chọn.')
     output = io.BytesIO()
@@ -44,6 +51,24 @@ def unissued_template_zip(payload, template_dir, tax_percent):
                 amount = (row['qty'] * row['unit_price']).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
                 lines.append({**row, 'qty':float(row['qty']), 'unit_price':float(row['unit_price']), 'amount':float(amount)})
             book, _ = build_invoice_workbook(lines, vat_percent=vat, template_dir=template_dir)
+            if any(row['conversion_reasons'] for row in lines):
+                workbook = load_workbook(io.BytesIO(book))
+                try:
+                    for number, row in enumerate(lines, start=2):
+                        if not row['conversion_reasons']:
+                            continue
+                        for cell in workbook.active[number]:
+                            font = copy(cell.font)
+                            font.color = 'B42318'
+                            cell.font = font
+                        workbook.active.cell(number, 3).comment = Comment(
+                            'Cần quy đổi / đối chiếu ĐVT. Số lượng và đơn giá đang theo đơn gốc.\n'
+                            + '\n'.join(sorted(row['conversion_reasons'])), 'TĐP')
+                    # The base invoice template has already received print styling.
+                    # Keep the customer's red conversion indicators on this report.
+                    book = safe_workbook_bytes(workbook, apply_print_style=False)
+                finally:
+                    workbook.close()
             label = 'KKKNT' if vat == -2 else 'KCT' if vat == -1 else f'VAT{vat:g}'
             prefix='CON_CHO' if waiting else 'CHUA_XUAT'
             name = f"{prefix}_{_safe_name(party)}_{label}_DEN_{payload['asof']}.xlsx"
@@ -58,6 +83,9 @@ def unissued_template_zip(payload, template_dir, tax_percent):
             'Muốn xuất hóa đơn, kể cả xuất bù: bấm “Tải bảng kê để up M-Invoice” ở đầu trang. Web kiểm tra lại hóa đơn đã ký, đơn cũ và tồn kho rồi tạo bộ file đưa lên M-Invoice.',
             'Lượng chưa xuất = lượng thực giao của đơn đã duyệt sau trả hàng − lượng hóa đơn đã phát hành đã đối chiếu. Giữ nguyên phần lẻ trong bản đối chiếu.',
             'Cùng mã, đơn vị, giá bán, thuế và tính chất được cộng lượng. Khác giá giữ dòng riêng; không đổi giá bán trên đơn.',
+            'Dòng chữ đỏ cần quy đổi hoặc đối chiếu ĐVT; xem ghi chú ở ô ĐVT. Chưa tự đổi gói/hộp/túi thành kg. Số lượng và đơn giá trong bảng này theo đơn gốc.',
+            'Dòng xóa khỏi Excel trước khi ký vẫn còn chưa xuất trên web. Kho hóa đơn chỉ ghi theo hóa đơn đã ký trên M-Invoice được đồng bộ, đối chiếu đúng mã và ĐVT; đồng bộ lại không trừ lần hai.',
+            'Công nợ phải thu theo đơn đã duyệt. Đề nghị thanh toán và bảng kê hóa đơn lấy theo hóa đơn đã ký được đồng bộ từ M-Invoice.',
             'Tải bảng hoặc xuất bù không duyệt lại đơn, không ghi thêm doanh thu hay công nợ. Tải file chưa tính là đã phát hành hóa đơn.',
             'Ngày chọn ở web là mốc đơn hàng. Ngày hóa đơn thực tế chọn khi phát hành trên M-Invoice.',
         ]

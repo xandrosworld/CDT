@@ -951,3 +951,13 @@ body { min-width: 320px; }
 #invoiceUploadCard td{vertical-align:top;white-space:normal}
 #invoiceUploadCard #invoiceUploadMessage{white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:600px){#invoiceUploadCard .card-body{padding:14px}#invoiceUploadCard .compact-controls>*{max-width:100%}}
+.invoice-section-links{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:18px;padding:12px;background:#edf7f6;border:1px solid #bfdedb;border-radius:6px}
+.invoice-section-links a{font-weight:600;color:#07665f}
+#unissuedReconciliation .compact-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:12px 0}
+.invoice-unissued-table{max-height:380px;overflow:auto}
+.invoice-unissued-table table{min-width:1100px}
+.invoice-unissued-table td{vertical-align:top;white-space:normal}
+#unissuedReconciliation,#actualWeightSection,#invoiceLineChoices,.actual-weight-form{scroll-margin-top:90px}
+.invoice-conversion-needed,.invoice-conversion-needed td,.invoice-conversion-needed a,.invoice-conversion-needed small,.invoice-conversion-needed .muted{color:#b42318!important;background-color:#fff1f0!important}
+.actual-weight-form.invoice-conversion-needed{border:1px solid #e99c95;border-left:4px solid #b42318}
+.invoice-conversion-needed .warning-summary{color:#b42318;background:#fff1f0;border-color:#e99c95}
