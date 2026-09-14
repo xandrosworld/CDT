@@ -26,7 +26,7 @@ def parse_supplier_plan(conn, workbook, batch_id, formula_workbook=None):
     if preview is None:
         raise ValueError('Không tìm thấy đúng sheet đặt hàng. Hãy chọn file Excel gốc có sheet này.')
     for item in preview['items']:
-        if item['actual_qty'] > 0 and not item['unit']:
+        if item['actual_qty'] != 0 and not item['unit']:
             item['errors'].append('Dòng đặt hàng thiếu đơn vị tính')
     preview['error_rows'] = sum(bool(r['errors']) for r in preview['items'])
     preview['can_confirm'] = not preview['error_rows']

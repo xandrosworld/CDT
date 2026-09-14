@@ -3,11 +3,13 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 try:
     from . import bk_import as bk
+    from .purchase_returns import RETURN_KIND
     from .purchase_summary_export import _people_by_name, _resolved_identity
     from .seller_identity_catalog import is_excluded_seller
     from .invoice_product_identity import catalog_name_matches
 except ImportError:
     import bk_import as bk
+    from purchase_returns import RETURN_KIND
     from purchase_summary_export import _people_by_name, _resolved_identity
     from seller_identity_catalog import is_excluded_seller
     from invoice_product_identity import catalog_name_matches
@@ -85,6 +87,10 @@ def prepare(conn, batch_id):
     if previous and previous['id'] is None:
         raise bk.BKImportError('Thiếu chứng từ bảng kê đã duyệt; cần đối chiếu lịch sử.', status=409)
     for line in sources:
+        # A supplier return reduces purchasing/payables; it is not a new BK
+        # receipt. Importing this sheet must not fabricate invoice stock.
+        if canonical and line.get('line_kind') == RETURN_KIND:
+            continue
         order = orders.get(line.get('order_id')) if canonical else line
         product = products.get(str(line.get('product_code') or '').upper(), {})
         flag = (order or product).get('purchase_list', 0)

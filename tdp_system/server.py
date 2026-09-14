@@ -3660,7 +3660,7 @@ def export_supplier_orders(conn, batch, orders):
         'SELECT 1 FROM daily_workdays WHERE batch_id=?', (batch['id'],),
     ).fetchone()):
         raise ValueError(payload['source_message'])
-    has_money_adjustments = bool(payload.get("money_adjustments"))
+    has_money_adjustments = any(item.get('line_kind', 'goods') != 'goods' for item in payload['rows'])
     headers = [
         "Mã hàngNCC", "Mã hàng", "Mã bếp", "", "Tên hàng ", "Số lượng",
         "ĐVT", "NCC", "ghi chú", "giá mua", "hỏng", "thêm", "Giảm",
@@ -3705,7 +3705,10 @@ def export_supplier_orders(conn, batch, orders):
             values[14] = 0
             values[15] = item["amount"]
         if has_money_adjustments:
-            ws.cell(row_number, 18, "Trừ tiền mua hộ do hàng hỏng" if item.get("line_kind") == "replacement_deduction" else "Hàng hóa")
+            ws.cell(row_number, 18, {
+                'replacement_deduction': 'Trừ tiền mua hộ do hàng hỏng',
+                'supplier_return': 'Trả hàng nhà cung cấp',
+            }.get(item.get('line_kind'), 'Hàng hóa'))
         for column, value in enumerate(values, 1):
             cell = ws.cell(row_number, column, value)
             cell._style = copy.copy(prototype_styles[column - 1])

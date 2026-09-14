@@ -30,8 +30,10 @@ from flask import jsonify, request
 
 try:
     from .purchase_money_adjustments import DEDUCTION_KIND, DEDUCTION_LABEL
+    from .purchase_returns import RETURN_KIND
 except ImportError:
     from purchase_money_adjustments import DEDUCTION_KIND, DEDUCTION_LABEL
+    from purchase_returns import RETURN_KIND
 
 
 PAYABLE_STATUSES = ("open", "partially_paid", "paid", "reversed")
@@ -357,7 +359,10 @@ def _purchase_sheet_sources(conn):
                 if amount >= 0 or qty != 0 or not row['supplier'] or _is_internal_stock(row['supplier']):
                     problems.append('Khoản trừ tiền mua hộ không hợp lệ')
             else:
-                if qty < 0 or price < 0:
+                returned = row.get('line_kind') == RETURN_KIND
+                if returned and (qty >= 0 or price <= 0 or not row['supplier'] or not row['unit'] or _is_internal_stock(row['supplier'])):
+                    problems.append('Dòng trả hàng nhà cung cấp không hợp lệ')
+                if (qty < 0 and not returned) or price < 0:
                     problems.append('Số lượng hoặc giá mua âm')
                 if qty > 0 and (not row['supplier'] or not row['unit']):
                     problems.append('Thiếu nhà cung cấp hoặc đơn vị tính')

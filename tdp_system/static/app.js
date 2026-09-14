@@ -1841,6 +1841,11 @@
         needs.money_adjustments.map(function (item) { return '<tr><td>' + esc(item.supplier) + '</td><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td class="num-cell">' + money(item.amount) + '</td></tr>'; }).join('') +
         '</tbody><tfoot><tr><td colspan="3">Tổng khoản trừ</td><td class="num-cell">' + money(needs.money_adjustments.reduce(function (total, item) { return total + n(item.amount); }, 0)) + '</td></tr></tfoot></table></div></div></div>';
     }
+    if ((needs.supplier_returns || []).length) {
+      markup += '<div class="card purchase-supplier-returns"><div class="card-head"><h3>Trả hàng nhà cung cấp</h3></div><div class="card-body"><p>Số lượng và tiền âm là phần trả NCC, giảm công nợ khi đơn được duyệt.</p><div class="table-wrap"><table><thead><tr><th>NCC</th><th>Bếp</th><th>Tên hàng</th><th>Số lượng</th><th>ĐVT</th><th>Tiền giảm</th></tr></thead><tbody>' +
+        needs.supplier_returns.map(function (item) { return '<tr><td>' + esc(item.supplier) + '</td><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td class="num-cell">' + stockQty(item.order_qty) + '</td><td>' + esc(item.unit) + '</td><td class="num-cell">' + money(item.amount) + '</td></tr>'; }).join('') +
+        '</tbody><tfoot><tr><td colspan="5">Tổng tiền giảm</td><td class="num-cell">' + money(needs.supplier_returns.reduce(function (total, item) { return total + n(item.amount); }, 0)) + '</td></tr></tfoot></table></div></div></div>';
+    }
     return markup + '<div id="supplierPrintPreview-' + needs.batch_id + '"></div></section>';
   }
 
