@@ -4400,8 +4400,11 @@ def api_outgoing_actual_weights(order_id=None):
             conn.execute('PRAGMA query_only=ON')
             conn.execute('BEGIN')
             cutoff = valid_iso_date(request.args.get('to') or date.today().isoformat(), 'Đến ngày')
+            start = valid_iso_date(request.args['from'], 'Từ ngày') if request.args.get('from') else ''
+            if start and start > cutoff:
+                raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày.')
             party = clean_text(request.args.get('contractor')).upper()
-            return jsonify(ok=True, **workbench(conn, cutoff, party))
+            return jsonify(ok=True, **workbench(conn, cutoff, party, start))
     except ValueError as exc:
         return jsonify(ok=False, error=str(exc)), 409 if request.method == 'PUT' else 400
 

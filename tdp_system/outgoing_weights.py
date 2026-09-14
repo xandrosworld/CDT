@@ -61,7 +61,7 @@ def _lock(conn, order_id):
         LIMIT 1''', (order_id,)).fetchone()
 
 
-def workbench(conn, cutoff, contractor=''):
+def workbench(conn, cutoff, contractor='', start=''):
     from_module = __package__
     if from_module:
         from .outgoing_unissued import issued_allocations
@@ -81,8 +81,9 @@ def workbench(conn, cutoff, contractor=''):
         FROM orders o JOIN batches b ON b.id=o.batch_id JOIN products p ON p.code=o.product_code
         LEFT JOIN outgoing_product_units u ON u.product_code=p.code
         LEFT JOIN outgoing_product_names n ON n.product_code=p.code
-        WHERE b.status='approved' AND o.work_date<=? AND (?='' OR o.contractor=?)
-        ORDER BY o.work_date,o.contractor,o.kitchen,o.id''', (cutoff, contractor, contractor)):
+        WHERE b.status='approved' AND o.work_date<=? AND (?='' OR o.work_date>=?)
+        AND (?='' OR o.contractor=?)
+        ORDER BY o.work_date,o.contractor,o.kitchen,o.id''', (cutoff, start, start, contractor, contractor)):
         if row['contractor'] in excluded or row['id'] in skipped:
             continue
         remaining = max(float(row['actual_delivered'] or 0)-float(row['customer_return_qty'] or 0)-issued.get(row['id'], 0), 0)
@@ -104,7 +105,7 @@ def workbench(conn, cutoff, contractor=''):
         amount = int((dec(remaining)*dec(row['sell_price'] or 0)).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
         token = hashlib.sha256(packed([order_snapshot(row), remaining, row['stock_unit'],
             row['invoice_unit'], saved['revision'] if saved else '', bool(lock)]).encode()).hexdigest()
-        result.append({'order_id': row['id'], 'date': row['work_date'], 'contractor': row['contractor'],
+        result.append({'order_id': row['id'], 'batch_id': row['batch_id'], 'date': row['work_date'], 'contractor': row['contractor'],
             'kitchen': row['kitchen'], 'product_code': row['product_code'], 'invoice_name': row['invoice_name'],
             'unit': row['unit'], 'stock_unit': row['stock_unit'], 'invoice_unit': row['invoice_unit'],
             'review_kind': 'actual_kg' if key(row['unit'])==key(row['stock_unit']) and key(row['invoice_unit'])=='kg' else 'unit_mismatch',
@@ -114,7 +115,7 @@ def workbench(conn, cutoff, contractor=''):
             'token': token, 'note': saved['note'] if saved else '',
             'updated_at': saved['updated_at'] if saved else ''})
     result.sort(key=lambda r: (not r['editable'], r['confirmed'], r['date'], r['contractor'], r['order_id']))
-    return {'rows': result, 'asof': cutoff, 'contractor': contractor, 'warnings': warnings}
+    return {'rows': result, 'asof': cutoff, 'from': start, 'contractor': contractor, 'warnings': warnings}
 
 
 def save_weight(conn, order_id, body, timestamp):

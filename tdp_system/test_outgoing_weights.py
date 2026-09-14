@@ -57,6 +57,34 @@ class ActualWeightTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual({},confirmed_weights(conn))
 
+    def test_weight_editor_respects_both_dates_and_contractor(self):
+        with server.db() as conn:
+            _, middle = support.OutgoingReadinessTests.add_batch(conn, '2026-09-05', [
+                {'qty':2}, {'qty':3,'contractor':'NT-B'}])
+            support.OutgoingReadinessTests.add_batch(conn, '2026-09-10', [{'qty':4}])
+            conn.execute("UPDATE orders SET unit='Gói'")
+        with server.db() as conn:
+            before = conn.serialize()
+        response = self.client.get('/api/outgoing-invoices/actual-weights', query_string={
+            'from':'2026-09-05','to':'2026-09-07','contractor':'NT-A'})
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json['from'], '2026-09-05')
+        self.assertEqual([r['order_id'] for r in response.json['rows']], [middle[0]])
+        self.assertTrue(response.json['rows'][0]['batch_id'])
+        with server.db() as conn:
+            self.assertEqual(conn.serialize(), before)
+        invalid = self.client.get('/api/outgoing-invoices/actual-weights?from=2026-09-08&to=2026-09-07')
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_weight_editor_does_not_restore_excluded_lines_or_contractors(self):
+        with server.db() as conn:
+            conn.execute("INSERT INTO outgoing_order_choices VALUES(?,0,'test','now')", (self.oids[0],))
+        self.assertEqual(self.rows(), [])
+        with server.db() as conn:
+            conn.execute('DELETE FROM outgoing_order_choices')
+            conn.execute("INSERT INTO outgoing_contractor_choices VALUES('NT-A',0,'test','now')")
+        self.assertEqual(self.rows(), [])
+
     def test_save_changes_neither_orders_stock_nor_financial_ledgers(self):
         tables=['orders','inventory_transactions','outgoing_invoice_lines','payable_ledger_lines','receivable_ledger_lines']
         with server.db() as conn:
