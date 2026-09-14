@@ -1,6 +1,7 @@
 """Cumulative approved demand less issued invoices; downloads are never issues."""
 from collections import defaultdict
 from io import BytesIO
+from decimal import Decimal, ROUND_HALF_UP
 import json
 
 from openpyxl import Workbook
@@ -175,6 +176,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False):
         r['pending_reason']=units[o['id']]['message'] if o['id'] in units else ''
         r['needs_conversion']=o['id'] in units
         r['conversion_reason']=r['pending_reason']
+        r['unissued_amount']=int((Decimal(str(left))*Decimal(str(o['sell_price']))).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
         details.append(r)
         key=(o['contractor'],o['product_code'],o['unit'].strip().casefold())
         g=grouped.setdefault(key,{**r,'approved_qty':0,'issued_qty':0,'drafted_qty':0,'unissued_qty':0,'ready_qty':0,'waiting_qty':0,'first_date':o['work_date'],'last_date':o['work_date']})
@@ -221,7 +223,7 @@ def unissued_workbook(payload):
     s.cell(1,14,'Lý do còn chờ')
     s.cell(1,15,'Thuế');s.cell(1,16,'Tiền hàng chưa xuất');s.cell(1,17,'Cần quy đổi / đối chiếu ĐVT')
     for r in payload['details']:
-        s.append([r.get('invoice_name',r['product_name']) if k=='product_name' else r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price','ready_qty','waiting_qty')]+[r.get('pending_reason',''),r['tax'],round(r['unissued_qty']*r['unit_price']),r.get('conversion_reason','')])
+        s.append([r.get('invoice_name',r['product_name']) if k=='product_name' else r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price','ready_qty','waiting_qty')]+[r.get('pending_reason',''),r['tax'],r['unissued_amount'],r.get('conversion_reason','')])
     note=w.create_sheet('Ghi chu');note.append(['Cộng dồn đến ngày',payload['asof']]);note.append(['Cách tính',payload['policy']])
     note.append(['Đối chiếu M-Invoice','Nếu đã ký bên ngoài, đồng bộ hóa đơn hoặc xác nhận đúng số hóa đơn đã phát hành trước khi lập tiếp.'])
     for warning in payload['warnings']:note.append(['Cần đối chiếu',warning['message']])

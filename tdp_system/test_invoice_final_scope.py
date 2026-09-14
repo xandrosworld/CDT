@@ -114,5 +114,16 @@ class InvoiceFinalScopeTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual(conn.serialize(),before)
 
+    def test_detail_amount_rounds_half_up_like_invoice_template(self):
+        with server.db() as conn:
+            fixture.OutgoingReadinessTests.add_batch(conn,'2026-09-01',[{'qty':0.5,'sell_price':501}])
+        query={'to':'2026-09-01','contractor':'NT-A'}
+        data=self.client.get('/api/outgoing-invoices/unissued',query_string=query).json
+        self.assertEqual(data['details'][0]['unissued_amount'],251)
+        response=self.client.get('/api/outgoing-invoices/unissued.xlsx',query_string=query)
+        book=load_workbook(io.BytesIO(response.data),data_only=True)
+        self.assertEqual(book['Chi tiet theo ngay']['P2'].value,251)
+        book.close()
+
 
 if __name__=='__main__':unittest.main()
