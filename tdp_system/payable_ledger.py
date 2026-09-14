@@ -337,12 +337,67 @@ def _base_candidate(
     return item
 
 
+def _purchase_sheet_sources(conn):
+    sources = []
+    for source in conn.execute('''SELECT p.*,b.status batch_status,b.work_date
+        FROM supplier_plan_sources p JOIN batches b ON b.id=p.batch_id ORDER BY p.batch_id'''):
+        sheet = dict(source)
+        sheet['items'] = json.loads(sheet['items_json'])
+        sheet['issues'] = json.loads(sheet['issues_json'])
+        if not sheet['items']:
+            sheet['issues'].append('Sheet Đặt hàng chưa có dữ liệu')
+        for row in sheet['items']:
+            qty = _decimal(row['actual_qty'], 'Số lượng thực tế')
+            price = _decimal(row['buy_price'], 'Giá mua')
+            amount = _vnd(row['amount'])
+            problems = []
+            if row['work_date'] != sheet['work_date']:
+                problems.append('Ngày mua không khớp phiên đơn')
+            if row.get('line_kind') == DEDUCTION_KIND:
+                if amount >= 0 or qty != 0 or not row['supplier'] or _is_internal_stock(row['supplier']):
+                    problems.append('Khoản trừ tiền mua hộ không hợp lệ')
+            else:
+                if qty < 0 or price < 0:
+                    problems.append('Số lượng hoặc giá mua âm')
+                if qty > 0 and (not row['supplier'] or not row['unit']):
+                    problems.append('Thiếu nhà cung cấp hoặc đơn vị tính')
+                if qty > 0 and price <= 0 and not _is_internal_stock(row['supplier']):
+                    problems.append('Chưa có giá mua trên sheet Đặt hàng')
+                if amount != _vnd_product(qty, price):
+                    problems.append('Thành tiền lệch số lượng thực tế × giá mua')
+            sheet['issues'].extend(f"Dòng {row['source_row']}: {p}" for p in problems)
+        sources.append(sheet)
+    return sources
+
+
+def pending_purchase_sheets(conn, date_from, date_to):
+    sheets = {s['batch_id']: s for s in _purchase_sheet_sources(conn)}
+    result = []
+    for batch in conn.execute("SELECT id,work_date FROM batches WHERE status='approved' AND work_date BETWEEN ? AND ? ORDER BY work_date,id", (date_from, date_to)):
+        if _historical_cutoff(conn) and batch['work_date'] <= _historical_cutoff(conn):
+            continue
+        sheet = sheets.get(batch['id'])
+        if sheet is not None:
+            issues = sheet['issues']
+        elif conn.execute("SELECT 1 FROM purchase_workbook_lines WHERE batch_id=? AND status='confirmed' UNION ALL SELECT 1 FROM purchase_order_lines WHERE batch_id=? AND status='confirmed' LIMIT 1", (batch['id'], batch['id'])).fetchone():
+            continue
+        else:
+            issues = ['Chưa có sheet Đặt hàng; chọn file gốc trong Đặt hàng nhà cung cấp']
+        if issues:
+            result.append({'batch_id': batch['id'], 'work_date': batch['work_date'], 'issues': issues})
+    return result
+
+
 def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]:
     """Build the complete source projection without changing database state."""
     existing_by_key = existing_by_key or {}
     cutoff = _historical_cutoff(conn)
     catalog = _supplier_catalog(conn)
     candidates: list[dict[str, Any]] = []
+    # An approved day's priced purchase sheet is the payable source even when
+    # its inventory document is already locked. This projection never posts stock.
+    purchase_sheets = _purchase_sheet_sources(conn)
+    sheet_batches = {row['batch_id'] for row in purchase_sheets}
     canonical_batches = {
         int(row["batch_id"]) for row in conn.execute(
             "SELECT DISTINCT batch_id FROM purchase_workbook_lines"
@@ -354,6 +409,8 @@ def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]
            FROM purchase_workbook_lines p JOIN batches b ON b.id=p.batch_id
            ORDER BY p.batch_id,p.row_key"""
     ):
+        if int(row['batch_id']) in sheet_batches:
+            continue
         source_key = _source_key("purchase_workbook_lines", row["batch_id"], row["row_key"])
         candidates.append(_base_candidate(
             source_key=source_key,
@@ -383,6 +440,25 @@ def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]
             existing=existing_by_key.get(source_key),
         ))
 
+    for sheet in purchase_sheets:
+        for row in sheet['items']:
+            source_key = _source_key('supplier_plan_sources', sheet['batch_id'], row['row_key'])
+            candidates.append(_base_candidate(
+                source_key=source_key, source_type='current_purchase',
+                source_table='supplier_plan_sources', source_id=sheet['batch_id'],
+                source_ref=f"batch:{sheet['batch_id']}/purchase-sheet:{row['row_key']}",
+                source_revision=sheet['revision'], source_hash=sheet['source_hash'],
+                source_sheet=row['source_sheet'], source_row=row['source_row'],
+                batch_id=sheet['batch_id'], work_date=sheet['work_date'],
+                kitchen=row['kitchen'], product_code=row['product_code'],
+                product_name=(DEDUCTION_LABEL + ' · ' + row['product_name']
+                              if row.get('line_kind') == DEDUCTION_KIND else row['product_name']),
+                actual_qty=row['actual_qty'], unit=row['unit'], raw_supplier=row['supplier'],
+                buy_price=row['buy_price'], amount=row['amount'], batch_status=sheet['batch_status'],
+                source_status='confirmed' if not sheet['issues'] else 'invalid_purchase_sheet',
+                cutoff=cutoff, supplier_catalog=catalog, existing=existing_by_key.get(source_key),
+            ))
+
     for row in conn.execute(
         """SELECT o.*,b.status batch_status,p.id plan_id,p.order_qty plan_order_qty,
                   p.supplier plan_supplier,p.buy_price plan_buy_price,
@@ -391,30 +467,20 @@ def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]
            LEFT JOIN purchase_order_lines p ON p.order_id=o.id
            ORDER BY o.batch_id,o.id"""
     ):
-        if int(row["batch_id"]) in canonical_batches:
+        if int(row["batch_id"]) in canonical_batches | sheet_batches:
             continue
         has_plan = row["plan_id"] is not None and row["plan_status"] == "confirmed"
-        if has_plan:
-            source_table = "purchase_order_lines"
-            source_id = int(row["plan_id"])
-            source_hash = row["plan_source_hash"]
-            actual_qty = max(_number(row["plan_order_qty"], "Số lượng đặt"), 0)
-            supplier = row["plan_supplier"]
-            buy_price = row["plan_buy_price"]
-            source_status = row["plan_status"]
-        else:
-            source_table = "orders"
-            source_id = int(row["id"])
-            source_hash = ""
-            actual_qty = max(
-                _number(row["actual_received"], "Số thực nhận")
-                - _number(row["damaged_qty"], "Số hỏng")
-                - _number(row["supplier_return_qty"], "Số trả NCC"),
-                0,
-            )
-            supplier = row["supplier"]
-            buy_price = row["buy_price"]
-            source_status = "confirmed"
+        # A sales order is not evidence of a purchase. Keep compatibility with
+        # explicitly confirmed legacy purchases, never infer debt from orders.
+        if not has_plan:
+            continue
+        source_table = "purchase_order_lines"
+        source_id = int(row["plan_id"])
+        source_hash = row["plan_source_hash"]
+        actual_qty = max(_number(row["plan_order_qty"], "Số lượng đặt"), 0)
+        supplier = row["plan_supplier"]
+        buy_price = row["plan_buy_price"]
+        source_status = row["plan_status"]
         source_key = _source_key(source_table, source_id)
         candidates.append(_base_candidate(
             source_key=source_key,
@@ -557,7 +623,10 @@ def sync_payable_ledger(conn, *, timestamp: str) -> dict[str, int]:
             previous[field] != candidate[field]
             for field in ("supplier_code", "actual_qty", "buy_price", "amount")
         )
-        if previous["paid_amount"] > 0 and financial_changed:
+        if previous["paid_amount"] > 0 and (financial_changed or (
+            candidate['source_table'] == 'supplier_plan_sources' and
+            candidate['reversal_reason'] == 'source_not_confirmed'
+        )):
             raise PayableLedgerError(
                 "Dòng phải trả đã có phân bổ thanh toán nên nguồn mua không được đổi âm thầm",
                 code="paid_payable_source_changed",
@@ -603,6 +672,16 @@ def sync_payable_ledger(conn, *, timestamp: str) -> dict[str, int]:
     for key, previous in existing.items():
         if key in seen or previous["status"] == "reversed":
             continue
+        if previous["paid_amount"] > 0 and (
+            previous['source_table'] == 'orders' or any(
+                item['batch_id'] == previous['batch_id'] and item['source_table'] != previous['source_table']
+                for item in candidates if item['batch_id'] is not None
+            )
+        ):
+            raise PayableLedgerError(
+                "Nguồn phải trả đã có thanh toán; cần đối chiếu phân bổ trước khi thay nguồn",
+                code="paid_payable_source_changed",
+            )
         revision = int(previous["revision"]) + 1
         conn.execute(
             """UPDATE payable_ledger_lines
@@ -792,6 +871,7 @@ def payable_ledger_payload(
             ),
         },
         "historical_through_date": _historical_cutoff(conn) or None,
+        "pending_purchase_sheets": pending_purchase_sheets(conn, safe_from, safe_to),
     }
 
 

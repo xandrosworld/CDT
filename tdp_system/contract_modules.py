@@ -4029,10 +4029,13 @@ class PurchaseOrderApplyError(ValueError):
 def refresh_payable_ledger(conn, timestamp: str) -> dict:
     """Refresh the small dedicated payable projection inside this transaction."""
     try:
-        from payable_ledger import sync_payable_ledger
+        from payable_ledger import sync_payable_ledger, PayableLedgerError
     except ImportError:  # pragma: no cover - package invocation
-        from .payable_ledger import sync_payable_ledger
-    return sync_payable_ledger(conn, timestamp=timestamp)
+        from .payable_ledger import sync_payable_ledger, PayableLedgerError
+    try:
+        return sync_payable_ledger(conn, timestamp=timestamp)
+    except PayableLedgerError as exc:
+        raise PurchaseOrderApplyError(str(exc), code=exc.code, status=exc.status) from exc
 
 
 def apply_purchase_order_preview(
@@ -4250,18 +4253,6 @@ def parse_canonical_purchase_workbook(
     for matches in orders_by_identity.values():
         matches.sort(key=lambda row: int(row["id"]))
 
-    # A combined daily confirmation applies sales first. Resolve links against
-    # those updated rows, but keep the pricing inputs used by the validated
-    # purchase preview: writing sales must not silently reprice purchasing.
-    pricing_by_identity = orders_by_identity
-    if pricing_orders is not None:
-        pricing_by_identity = defaultdict(list)
-        for order in pricing_orders:
-            identity = (mapping_key(order['product_code']), mapping_key(order['kitchen']))
-            pricing_by_identity[identity].append(order)
-        for matches in pricing_by_identity.values():
-            matches.sort(key=lambda row: int(row['id']))
-
     parsed = []
     occurrences = Counter()
     seen_row_keys = set()
@@ -4346,20 +4337,9 @@ def parse_canonical_purchase_workbook(
         matched_order = matches[occurrence - 1] if occurrence <= len(matches) else None
         order_id = int(matched_order["id"]) if matched_order and not deduction else None
         sheet_buy_price = numbers["buy_price"]
-        quoted_buy_price = 0
-        price_matches = pricing_by_identity.get(identity) or []
-        pricing_order = price_matches[occurrence - 1] if occurrence <= len(price_matches) else None
-        if previous and previous.get('price_source') == 'Bảng báo giá' and not deduction:
-            # A confirmed purchase owns its quoted cost. Reimporting sales must
-            # not rewrite that quote or make an identical purchase file drift.
-            quoted_buy_price = max(as_number(previous.get('buy_price')), 0)
-        elif pricing_order and not deduction and not previous:
-            quoted_buy_price = max(as_number(pricing_order.get("buy_price")), 0)
-        if quoted_buy_price > 0:
-            numbers["buy_price"] = quoted_buy_price
-            price_source = "Bảng báo giá"
-        else:
-            price_source = "Sheet đặt hàng chuẩn"
+        # The purchase sheet owns its cost, including subsequent corrections.
+        # Sales rows are links only; their quoted cost must not replace this cell.
+        price_source = "Sheet đặt hàng chuẩn"
         if not kitchen:
             errors.append("Dòng đặt hàng thiếu mã bếp")
         if not product_code and not deduction:

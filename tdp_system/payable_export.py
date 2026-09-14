@@ -10,6 +10,8 @@ payment and allocation history is retained instead of being flattened away.
 
 from __future__ import annotations
 
+import json
+
 try:
     from .document_preview import white_print_style
     from .inventory_preview import workbook_preview
@@ -129,7 +131,7 @@ def _chunks(values: list[int], size: int = 800):
         yield values[index:index + size]
 
 
-def _source_details(conn, lines: list[dict[str, Any]]) -> dict[tuple[str, int], dict[str, Any]]:
+def _source_details(conn, lines: list[dict[str, Any]]) -> dict:
     """Fetch adjustment columns in batches; ledger remains the money authority."""
     requested: dict[str, list[int]] = defaultdict(list)
     for line in lines:
@@ -181,6 +183,13 @@ def _source_details(conn, lines: list[dict[str, Any]]) -> dict[tuple[str, int], 
                 if table == "orders" and "supplier_return_qty" in item:
                     item["reduced_qty"] = item.pop("supplier_return_qty")
                 result[(table, source_id)] = item
+    for batch_id, revision in {(int(line['source_id']), int(line['source_revision'])) for line in lines if line['source_table'] == 'supplier_plan_sources'}:
+        source = conn.execute('SELECT items_json FROM supplier_plan_history WHERE batch_id=? AND revision=? ORDER BY id DESC LIMIT 1', (batch_id, revision)).fetchone()
+        if source is None:
+            source = conn.execute('SELECT items_json FROM supplier_plan_sources WHERE batch_id=? AND revision=?', (batch_id, revision)).fetchone()
+        if source:
+            for row in json.loads(source['items_json']):
+                result[('supplier_plan_sources', batch_id, revision, row['row_key'])] = row
     return result
 
 
@@ -227,6 +236,8 @@ def payable_export_data(
     details = _source_details(conn, lines)
     for line in lines:
         source_detail = details.get((line["source_table"], int(line["source_id"])), {})
+        if line['source_table'] == 'supplier_plan_sources':
+            source_detail = details.get(('supplier_plan_sources', int(line['source_id']), int(line['source_revision']), line['source_ref'].rsplit(':', 1)[-1]), {})
         line["base_qty"] = _number(source_detail.get("base_qty", line["actual_qty"]))
         line["damaged_qty"] = source_detail.get("damaged_qty")
         line["added_qty"] = source_detail.get("added_qty")
@@ -361,6 +372,10 @@ def payable_export_data(
         "posted_payment_amount", "reversed_payment_amount",
     )
     totals = {field: sum(item[field] for item in summaries) for field in total_fields}
+    try:
+        from .payable_ledger import pending_purchase_sheets
+    except ImportError:
+        from payable_ledger import pending_purchase_sheets
     return {
         "statuses": sorted(selected_statuses),
         "date_from": safe_from,
@@ -371,6 +386,7 @@ def payable_export_data(
         "allocations": allocations,
         "suppliers": summaries,
         "totals": totals,
+        "pending_purchase_sheets": pending_purchase_sheets(conn, safe_from, safe_to),
     }
 
 
@@ -542,6 +558,17 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
                      headers=headers, widths=[16, 35, 35, 22, 22, 22],
                      money_columns=(4, 5, 6), total_row=ws.max_row + 2)
     workbook.active = 0
+    pending = data.get('pending_purchase_sheets') or []
+    if pending:
+        ws = workbook.create_sheet('Cần bổ sung Đặt hàng')
+        ws.append(['Ngày chưa tính phải trả', 'Nội dung cần bổ sung'])
+        for item in pending:
+            ws.append([item['work_date'], '; '.join(item['issues'])])
+        ws.column_dimensions['A'].width = 25
+        ws.column_dimensions['B'].width = 100
+        for row in ws:
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical='top')
     return workbook
 
 

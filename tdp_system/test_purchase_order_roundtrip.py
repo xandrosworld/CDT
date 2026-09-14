@@ -863,13 +863,12 @@ class PurchaseOrderRoundtripTests(unittest.TestCase):
         self.assertEqual(readiness["invoiceable_qty"], 0)
         self.assertEqual(readiness["pending_qty"], 0)
 
-    def test_quoted_buy_price_wins_and_second_upload_only_fills_a_blank(self):
+    def test_purchase_sheet_price_wins_over_sales_quotation(self):
         with server.db() as conn:
             batch_id, _ = self._insert_approved_order(conn, original_buy_price=12000)
         exported = self.client.get(f"/api/export/suppliers/{batch_id}")
         self.assertEqual(exported.status_code, 200)
-        # Even if the re-uploaded cell says 50,000, a non-zero price already
-        # sourced from the quotation remains authoritative.
+        # The customer's purchase sheet owns cost even when sales has a quote.
         edited = self._edited_export(exported, order_qty=7, buy_price=50000)
         workbook = load_workbook(edited, read_only=True, data_only=True, keep_links=False)
         try:
@@ -880,9 +879,9 @@ class PurchaseOrderRoundtripTests(unittest.TestCase):
         finally:
             workbook.close()
         self.assertTrue(preview["can_confirm"])
-        self.assertEqual(preview["rows"][0]["buy_price"], 12000)
-        self.assertEqual(preview["rows"][0]["price_source"], "Bảng báo giá")
-        self.assertEqual(preview["total_amount"], 84000)
+        self.assertEqual(preview["rows"][0]["buy_price"], 50000)
+        self.assertEqual(preview["rows"][0]["price_source"], "Sheet đặt hàng chuẩn")
+        self.assertEqual(preview["total_amount"], 350000)
 
     def test_purchase_confirmation_rejects_a_stale_preview_atomically(self):
         with server.db() as conn:

@@ -1770,10 +1770,10 @@
       '</tbody></table></div>',
       issueRows.length ? '<div class="card-body muted">Đang ưu tiên hiện toàn bộ dòng lỗi/cảnh báo; các dòng hợp lệ vẫn được kiểm tra.</div>' : '',
       '<div class="card-body"><div class="simple-warning">', planOnly ?
-      'Nạp đúng sheet đặt hàng để tạo ảnh gửi NCC. Có thể bổ sung giá mua khi chốt tiền hàng.' :
+      'Sheet Đặt hàng dùng để gửi NCC. Với ngày đã duyệt, sheet đủ giá mua và không còn lỗi cũng cập nhật công nợ phải trả.' :
       '<strong>Trước khi xác nhận:</strong> SL thực tế = Số lượng + Thêm − Hỏng − Giảm − Thiếu; Thành tiền được làm tròn VND từ SL thực tế × Giá mua. Mua ngoài có lượng dương bắt buộc có giá mua; Kho được phép giá 0. Đơn khách và giá bán không bị thay đổi.', '</div>',
       '<div class="form-actions"><button class="btn btn-primary" data-action="confirm-purchase-order-import" ',
-      preview.can_confirm ? '' : 'disabled', '>', planOnly ? 'Xác nhận sheet đặt hàng để tạo ảnh' : 'Xác nhận nạp file đặt nhà cung cấp', '</button></div>',
+      preview.can_confirm ? '' : 'disabled', '>', planOnly ? 'Xác nhận sheet Đặt hàng' : 'Xác nhận nạp file đặt nhà cung cấp', '</button></div>',
       preview.can_confirm ? '' : '<div class="code-note"><strong>Chưa thể nạp:</strong> mở Excel sửa các dòng màu đỏ, lưu file rồi chọn lại.</div>',
       '</div></div>'
     ]);
@@ -2322,6 +2322,7 @@
         dateVN(item.work_date) + '</td><td><strong>' + esc(item.supplier.code) + '</strong><div class="muted">' +
         esc(item.supplier.name) + '</div></td><td>' + esc(item.kitchen || "—") + '</td><td><strong>' +
         esc(item.product_name || "—") + '</strong><div class="muted">' + esc(item.product_code || "Không có mã") +
+        (item.source && item.source.sheet ? ' · ' + esc(item.source.sheet) + ' · dòng ' + esc(item.source.row) : '') +
         '</div></td><td class="num-cell">' + stockQty(item.actual_qty) + ' ' + esc(item.unit) +
         '</td><td class="num-cell">' + money(item.buy_price) + '</td><td class="num-cell"><strong>' +
         money(item.amount) + '</strong></td><td class="num-cell">' + money(item.paid_amount) +
@@ -2357,6 +2358,10 @@
     return html([
       '<div class="payable-workspace fade-in">',
       '<div id="supplierPaymentHost"></div>',
+      '<div class="code-note">Phải trả lấy số lượng thực tế và giá mua từ sheet Đặt hàng của ngày đã duyệt.</div>',
+      (ledger.pending_purchase_sheets || []).length ? '<div class="code-note danger-text"><strong>Chưa tính phải trả cho các ngày sau:</strong><ul>' + ledger.pending_purchase_sheets.map(function (item) {
+        return '<li>' + esc(item.work_date) + ': ' + esc((item.issues || []).join('; ')) + '</li>';
+      }).join('') + '</ul>Mở Đặt hàng nhà cung cấp, chọn ngày và nạp lại sheet Đặt hàng đã đủ số lượng, giá mua.</div>' : '',
       '<div class="stats-grid payable-stats">',
       statCard("Tổng số lượng", esc(quantityGroups(summary.filtered_quantities_by_unit)), "Theo bộ lọc đang chọn", "∑"),
       statCard("Tổng tiền", stockMoney(summary.filtered_amount), "Theo bộ lọc; dòng đã đảo chỉ tra cứu", "₫"),
@@ -5857,7 +5862,7 @@
       await fetchSupplierNeeds();
       if (state.debtFrom && state.debtTo) await fetchDebtPeriod();
       var processed = result.processed == null ? (result.count == null ? "" : result.count) : result.processed;
-      showToast(result.plan_only ? 'Đã nạp sheet đặt hàng để tạo ảnh gửi NCC' : "Đã nạp " + (processed === "" ? "file" : processed + " dòng") + " đặt nhà cung cấp · công nợ phải trả đã tính lại");
+      showToast(result.plan_only ? 'Đã lưu sheet Đặt hàng; công nợ dùng sheet đủ giá của ngày đã duyệt' : "Đã nạp " + (processed === "" ? "file" : processed + " dòng") + " đặt nhà cung cấp · công nợ phải trả đã tính lại");
     } catch (error) {
       button.disabled = false;
       button.textContent = "Xác nhận nạp file đặt nhà cung cấp";

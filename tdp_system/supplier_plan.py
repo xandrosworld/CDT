@@ -1,7 +1,8 @@
-"""Supplier instructions from the customer's purchase sheet, without posting debt.
+"""Supplier instructions from the customer's purchase sheet, without posting stock.
 
 The initial workbook is a plan and may not have purchase prices yet. Its rows
-must never be reconstructed from sales or treated as confirmed purchases.
+must never be reconstructed from sales or treated as an inventory receipt.
+For approved days, a fully priced, valid sheet also supplies accounts payable.
 """
 import hashlib
 import json
@@ -59,7 +60,7 @@ def reopen_changed_suppliers(conn, batch_id, before, now_iso):
 
 
 def save_supplier_plan(conn, *, batch_id, preview, source_hash, source_name, now_iso):
-    """Caller owns the transaction. No order, payable or inventory writes."""
+    """Caller owns the transaction. No sales or inventory writes."""
     cm = _modules()
     items = [{k: v for k, v in item.items() if k not in ('_issue_columns', 'errors', 'warnings')}
              for item in preview.get('items', [])]
@@ -95,6 +96,8 @@ def save_supplier_plan(conn, *, batch_id, preview, source_hash, source_name, now
     reopen_changed_suppliers(conn, batch_id, before, now_iso)
     cm.audit(conn, now_iso, 'supplier_plan.import', 'ok', entity_type='batch', entity_id=batch_id,
              metadata={'rows': len(items), 'source_hash': source_hash[:16], 'issues': len(issues)})
+    if conn.execute("SELECT 1 FROM batches WHERE id=? AND status='approved'", (batch_id,)).fetchone():
+        cm.refresh_payable_ledger(conn, now_iso())
     return {'processed': len(items), 'count': len(items), 'idempotent': False, 'plan_only': True}
 
 
