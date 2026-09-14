@@ -78,6 +78,30 @@ class OutgoingChoiceTests(unittest.TestCase):
             self.assertEqual(canonical_available_stock(c)['HH-01']['reserved_qty'],5)
             self.assertEqual({r[0] for r in c.execute("SELECT contractor FROM outgoing_invoice_drafts WHERE status='draft'")},{'NT-A'})
 
+    def test_confirm_existing_two_exclusions_is_read_only_and_checks_stale_snapshot(self):
+        self.select_parties({'NT-B':False,'NT-C':False})
+        self.excel(self.export('NT-A'))
+        snapshot=self.choices()
+        body={'items':[{'code':code,'enabled':r['enabled'],'token':r['token']}
+                       for code,r in snapshot.items()]}
+        with server.db() as c:
+            before=c.serialize()
+        for _ in range(2):
+            response=self.client.put('/api/outgoing-invoices/contractor-choices',json=body)
+            self.assertEqual(response.status_code,200,response.json)
+            self.assertEqual(response.json['excluded'],['NT-B','NT-C'])
+            self.assertEqual(response.json['changed'],[])
+            self.assertEqual(response.json['released_draft_ids'],[])
+        with server.db() as c:
+            self.assertEqual(c.serialize(),before)
+        self.select_parties({'NT-B':True})
+        with server.db() as c:
+            updated=c.serialize()
+        response=self.client.put('/api/outgoing-invoices/contractor-choices',json=body)
+        self.assertEqual(response.status_code,409)
+        with server.db() as c:
+            self.assertEqual(c.serialize(),updated)
+
     def test_disabled_explicit_export_and_catchup_reject_before_remote_sync(self):
         self.select_parties({'NT-A':False})
         with patch('tdp_system.outgoing_source_refresh.refresh_sources') as sync:

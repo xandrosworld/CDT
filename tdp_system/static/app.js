@@ -2978,6 +2978,12 @@
     return Object.keys(state.invoiceChoiceEdits || {}).length>0;
   }
 
+  function invoiceContractorsSavedText(d) {
+    var excluded=d.excluded||[];
+    return 'Đã lưu '+(d.items.length-excluded.length)+'/'+d.items.length+' nhà thầu. '+
+      (excluded.length?'Không đưa vào bảng kê: '+excluded.join(', ')+'.':'Đang chọn tất cả nhà thầu.');
+  }
+
   function exportChoicesDirty() {
     return invoiceChoicesDirty() || Object.keys(state.invoiceLineEdits || {}).length>0;
   }
@@ -3012,7 +3018,10 @@
     var dirty=exportChoicesDirty(),choices=state.invoiceContractorChoices;
     var help=content.querySelector('#invoicePrepareHelp');if(help)help.innerHTML=invoicePrepareHelpHtml();
     var save=content.querySelector('#invoiceContractorChoicesForm button[type=submit]');
-    if(save){save.textContent=state.invoiceChoicesBusy?'Đang lưu…':invoiceChoicesDirty()?'Lưu nhà thầu':'Đã lưu nhà thầu';save.disabled=busy||!invoiceChoicesDirty();}
+    if(save){save.textContent=state.invoiceChoicesBusy?'Đang lưu…':'Lưu nhà thầu';save.disabled=!!busy;}
+    content.querySelectorAll('#invoiceContractorChoicesForm input').forEach(function(el){el.disabled=!!busy;});
+    var choiceStatus=content.querySelector('.invoice-choice-status');
+    if(choiceStatus&&choices)choiceStatus.textContent=state.invoiceChoiceMessage||(invoiceChoicesDirty()?'Có thay đổi chưa lưu. Bấm Lưu nhà thầu để áp dụng.':invoiceContractorsSavedText(choices));
     var title=content.querySelector('#invoiceContractorTitle');
     if(title&&choices){var count=choices.items.filter(function(r){return Object.prototype.hasOwnProperty.call(state.invoiceChoiceEdits||{},r.code)?state.invoiceChoiceEdits[r.code]:r.enabled;}).length;title.textContent='Nhà thầu được phép lập bảng kê · '+count+'/'+choices.items.length+(invoiceChoicesDirty()?' (chưa lưu)':'');}
     var scopeHelp=content.querySelector('#invoiceScopeHint');
@@ -3071,7 +3080,7 @@
     return '<section id="invoiceContractorChoices" class="invoice-contractor-panel"><h4 id="invoiceContractorTitle">Nhà thầu được phép lập bảng kê · '+(d.items.length-d.excluded.length)+'/'+d.items.length+'</h4><p>Tích để đưa vào bảng kê; bỏ tích khi chưa cần. Chị có thể tích lại bất cứ lúc nào rồi lưu.</p><form id="invoiceContractorChoicesForm"><div class="invoice-contractor-choices">'+d.items.map(function(r){
       var checked=Object.prototype.hasOwnProperty.call(state.invoiceChoiceEdits||{},r.code)?state.invoiceChoiceEdits[r.code]:r.enabled;
       return '<label><input type="checkbox" name="contractor_choice" value="'+esc(r.code)+'"'+(checked?' checked':'')+'><span><strong>'+esc(r.code)+'</strong></span></label>';
-    }).join('')+'</div><p>Nhà thầu bỏ chọn không vào file. Các dự thảo chưa gửi của nhà thầu đó được bỏ giữ kho.</p><button type="submit" class="btn btn-primary" aria-describedby="invoiceContractorHint"'+(!invoiceChoicesDirty()||state.invoiceChoicesBusy?' disabled':'')+'>'+(invoiceChoicesDirty()?'Lưu nhà thầu':'Đã lưu nhà thầu')+'</button> <span class="invoice-choice-status" role="status">'+esc(state.invoiceChoiceMessage||'')+'</span><p id="invoiceContractorHint" class="muted">Nút Lưu chỉ mở khi chị tích hoặc bỏ tích nhà thầu. Giữ nguyên lựa chọn thì không cần lưu lại.</p></form></section>';
+    }).join('')+'</div><p>Nhà thầu bỏ chọn không vào file. Các dự thảo chưa gửi của nhà thầu đó được bỏ giữ kho.</p><button type="submit" class="btn btn-primary" aria-describedby="invoiceContractorHint"'+(state.invoiceChoicesBusy?' disabled':'')+'>Lưu nhà thầu</button> <span class="invoice-choice-status" role="status">'+esc(state.invoiceChoiceMessage||'')+'</span><p id="invoiceContractorHint" class="muted">Chị có thể bỏ chọn nhiều nhà thầu rồi lưu một lần, hoặc bấm Lưu để xác nhận lại lựa chọn đang thấy.</p></form></section>';
   }
 
   function invoiceScopeLabel() {
@@ -6045,22 +6054,37 @@
     }
     if(event.target.id==='invoiceContractorChoicesForm') {
       event.preventDefault();
-      if(state.invoiceChoicesBusy||state.invoiceExportBusy||state.unissuedBusy)return;
-      var changes=(state.invoiceContractorChoices.items || []).filter(function(r){return Object.prototype.hasOwnProperty.call(state.invoiceChoiceEdits || {},r.code);}).map(function(r){return {code:r.code,enabled:state.invoiceChoiceEdits[r.code],token:r.token};});
-      if(!changes.length)return;
+      if(state.invoiceChoicesBusy||state.invoiceExportBusy||state.unissuedBusy||state.invoiceReviewBusy||state.preparedBusy||state.unissuedLoading||!state.invoiceContractorChoices)return;
+      var selectedCodes=new Set(new FormData(event.target).getAll('contractor_choice'));
+      var choicesToSave=state.invoiceContractorChoices.items.map(function(r){return {code:r.code,enabled:selectedCodes.has(r.code),token:r.token};});
+      state.invoiceChoiceEdits={};
+      var changes=choicesToSave.filter(function(r,index){
+        if(r.enabled===state.invoiceContractorChoices.items[index].enabled)return false;
+        state.invoiceChoiceEdits[r.code]=r.enabled;return true;
+      });
+      // An unchanged confirmation still validates the displayed snapshot on the server.
+      // save_choices performs no writes or reservation release when nothing changed.
+      var wasChanged=changes.length>0;
       state.invoiceChoicesBusy=true;
+      state.invoiceChoiceMessage='Đang lưu lựa chọn nhà thầu…';
       refreshInvoiceActionHints();
       event.target.querySelectorAll('input,button').forEach(function(el){el.disabled=true;});
       try {
-        var saved=await api('/api/outgoing-invoices/contractor-choices',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:changes})});
+        var saved=await api('/api/outgoing-invoices/contractor-choices',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:wasChanged?changes:choicesToSave})});
         state.invoiceContractorChoices=saved;state.invoiceChoiceEdits={};
-        state.invoiceChoiceMessage='Đã lưu. '+saved.excluded.length+' nhà thầu được bỏ khỏi file.'+(saved.released_draft_ids.length?' Đã bỏ giữ kho của '+saved.released_draft_ids.length+' dự thảo chưa gửi.':'');
-        state.orderInvoiceExportResult='';state.invoiceChoicesBusy=false;
-        await loadUnissuedScope(false);
+        state.invoiceChoiceMessage=invoiceContractorsSavedText(saved)+(saved.released_draft_ids.length?' Đã bỏ giữ kho của '+saved.released_draft_ids.length+' dự thảo chưa gửi.':'');
+        state.invoiceChoicesBusy=false;
+        if(wasChanged){state.invoiceReviewedKey='';state.orderInvoiceExportResult='';await loadUnissuedScope(false);}
+        else renderDocuments();
       }catch(error){
-        state.invoiceChoicesBusy=false;state.invoiceChoiceMessage=error.message;
-        state.invoiceChoiceEdits={};
+        state.invoiceChoicesBusy=false;
         await loadUnissuedScope(false);
+        Object.keys(state.invoiceChoiceEdits).forEach(function(code){
+          var latest=state.invoiceContractorChoices.items.find(function(r){return r.code===code;});
+          if(latest&&latest.enabled===state.invoiceChoiceEdits[code])delete state.invoiceChoiceEdits[code];
+        });
+        state.invoiceChoiceMessage='Chưa xác nhận được việc lưu: '+error.message+' Lựa chọn được giữ lại; chị kiểm tra rồi bấm Lưu nhà thầu để thử lại.';
+        renderDocuments();
       }
       return;
     }
@@ -6691,9 +6715,6 @@
       if(choice.enabled===event.target.checked)delete state.invoiceChoiceEdits[choice.code];
       else state.invoiceChoiceEdits[choice.code]=event.target.checked;
       state.invoiceReviewedKey='';state.invoiceChoiceMessage='';
-      var cf=event.target.closest('form');
-      cf.querySelector('button[type=submit]').disabled=!invoiceChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy;
-      cf.querySelector('.invoice-choice-status').textContent=invoiceChoicesDirty()?'Có thay đổi chưa lưu. Lưu lựa chọn trước khi tải file.':'';
       refreshInvoiceActionHints();
       return;
     }
