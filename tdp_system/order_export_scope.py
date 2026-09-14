@@ -8,7 +8,7 @@ def business_today():
 
 def resolve_scope(conn, body, validate_date):
     cumulative = body.get('scope') == 'unissued' or not (body.get('from') or body.get('to'))
-    if body.get('scope') not in (None, '', 'unissued'):
+    if body.get('scope') not in (None, '', 'unissued', 'approved_range'):
         raise ValueError('Phạm vi bảng kê không hợp lệ')
     contractor = str(body.get('contractor') or '').strip().upper()
     if contractor == '*':

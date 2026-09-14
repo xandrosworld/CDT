@@ -133,11 +133,11 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
     return dict(quantities),warnings
 
 
-def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False):
+def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,start=''):
     # The cutoff selects order dates. An invoice issued later can settle those orders.
     issued,warnings=issued_allocations(conn)
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
-        WHERE b.status='approved' AND o.work_date<=? AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(asof,contractor,contractor))]
+        WHERE b.status='approved' AND o.work_date<=? AND o.work_date>=? AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(asof,start,contractor,contractor))]
     excluded=set()
     line_choices=[]
     if respect_export_choices:
@@ -198,7 +198,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False):
         from .outgoing_signed_stock_review import signed_stock_issues
     except ImportError:
         from outgoing_signed_stock_review import signed_stock_issues
-    return {'asof':asof,'contractor':contractor,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
+    return {'from':start,'asof':asof,'contractor':contractor,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
             'line_choices':line_choices,
             'pending_rows':pending,'pending_order_rows':sum(r['waiting_qty']>1e-8 for r in details),
             'signed_stock_issues':signed_stock_issues(conn,contractor),
@@ -224,7 +224,7 @@ def unissued_workbook(payload):
     s.cell(1,15,'Thuế');s.cell(1,16,'Tiền hàng chưa xuất');s.cell(1,17,'Cần quy đổi / đối chiếu ĐVT')
     for r in payload['details']:
         s.append([r.get('invoice_name',r['product_name']) if k=='product_name' else r[k] for k in ('order_id','work_date','contractor','product_code','product_name','unit','approved_qty','issued_qty','drafted_qty','unissued_qty','unit_price','ready_qty','waiting_qty')]+[r.get('pending_reason',''),r['tax'],r['unissued_amount'],r.get('conversion_reason','')])
-    note=w.create_sheet('Ghi chu');note.append(['Cộng dồn đến ngày',payload['asof']]);note.append(['Cách tính',payload['policy']])
+    note=w.create_sheet('Ghi chu');note.append(['Từ ngày đơn',payload.get('from') or 'Tất cả']);note.append(['Đến ngày đơn',payload['asof']]);note.append(['Cách tính',payload['policy']])
     note.append(['Đối chiếu M-Invoice','Nếu đã ký bên ngoài, đồng bộ hóa đơn hoặc xác nhận đúng số hóa đơn đã phát hành trước khi lập tiếp.'])
     for warning in payload['warnings']:note.append(['Cần đối chiếu',warning['message']])
     for issue in payload.get('held_line_issues',[]):note.append(['Dòng giữ riêng',issue['work_date'],issue['contractor'],issue['message']])

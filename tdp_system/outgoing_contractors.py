@@ -150,6 +150,8 @@ def line_choices_payload(conn, cutoff, contractor='', *, orders=None, issued=Non
     excluded=excluded_codes(conn)
     settings={r['order_id']:dict(r) for r in conn.execute('SELECT * FROM outgoing_order_choices')}
     names={r['product_code']:r['invoice_name'] for r in conn.execute('SELECT * FROM outgoing_product_names')}
+    units={r['code']:r['unit'] for r in conn.execute('SELECT code,unit FROM products')}
+    units.update({r['product_code']:r['invoice_unit'] for r in conn.execute('SELECT * FROM outgoing_product_units')})
     protected={r[0] for r in conn.execute("""SELECT a.order_id FROM outgoing_order_allocations a JOIN outgoing_invoice_drafts d ON d.id=a.draft_id
         WHERE d.status='draft' AND d.minvoice_status IN ('saved','saving','unknown')""")}
     result=[]
@@ -160,10 +162,11 @@ def line_choices_payload(conn, cutoff, contractor='', *, orders=None, issued=Non
         setting=settings.get(o['id'],{})
         enabled=bool(setting.get('enabled',1))
         locked=o['id'] in protected
-        token=_token(o['id'],enabled,[setting.get('revision',''),o['updated_at'],remaining,o['product_code'],o['unit'],o['sell_price'],locked])
+        token=_token(o['id'],enabled,[setting.get('revision',''),o['updated_at'],remaining,o['product_code'],o['unit'],o['sell_price'],locked,
+                                    names.get(o['product_code']) or o['product_name'],units.get(o['product_code'],o['unit']),o['tax']])
         result.append({'order_id':o['id'],'contractor':o['contractor'],'date':o['work_date'],'kitchen':o['kitchen'],
             'product_code':o['product_code'],'invoice_name':names.get(o['product_code']) or o['product_name'],
-            'qty':remaining,'unit':o['unit'],'price':o['sell_price'],'enabled':enabled,'token':token,
+            'qty':remaining,'unit':o['unit'],'price':o['sell_price'],'tax':o['tax'],'invoice_unit':units.get(o['product_code'],o['unit']),'enabled':enabled,'token':token,
             'editable':not locked,'reason':'Đang có bản đã lưu/đang gửi M-Invoice; đối chiếu bản đó trước.' if locked else ''})
     return result
 

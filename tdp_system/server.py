@@ -888,6 +888,11 @@ def init_database(*, sync_master=True):
         except ImportError:
             from outgoing_upload import SCHEMA as outgoing_upload_schema
         conn.executescript(outgoing_upload_schema)
+        try:
+            from .outgoing_review import SCHEMA as outgoing_review_schema
+        except ImportError:
+            from outgoing_review import SCHEMA as outgoing_review_schema
+        conn.executescript(outgoing_review_schema)
         init_invoice_workbench_schema(conn)
         init_inventory_period_close_schema(conn)
         init_bk_import_schema(conn)
@@ -4407,6 +4412,8 @@ def api_outgoing_unissued():
         from outgoing_unissued import unissued_payload, unissued_workbook
     try:
         cutoff=valid_iso_date(request.args.get('to') or date.today().isoformat(),'Cộng dồn đến ngày')
+        start=valid_iso_date(request.args['from'],'Từ ngày') if request.args.get('from') else ''
+        if start and start>cutoff:raise ValueError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày.')
         party=clean_text(request.args.get('contractor')).upper()
         portion=request.args.get('portion','all')
         if portion not in ('all','waiting'):raise ValueError('Phạm vi hàng chưa xuất không hợp lệ.')
@@ -4423,7 +4430,7 @@ def api_outgoing_unissued():
                 except ImportError:
                     from outgoing_waiting import refresh_waiting
                 refreshed=refresh_waiting(conn,now_iso())
-            payload=unissued_payload(conn,cutoff,party,respect_export_choices=True)
+            payload=unissued_payload(conn,cutoff,party,respect_export_choices=True,start=start)
             if refreshed:
                 for warning in refreshed['warnings']:
                     if (not party or not warning['contractor'] or warning['contractor']==party) and warning not in payload['warnings']:
@@ -4444,12 +4451,14 @@ def api_outgoing_unissued():
                 from contract_modules import invoice_tax_percent
             output, count = unissued_template_zip(payload, TAX_TEMPLATE_DIR, invoice_tax_percent)
             prefix='CON_CHO_THEO_MAU' if portion=='waiting' else 'CHUA_XUAT_THEO_MAU'
-            response = send_file(output,as_attachment=True,download_name=f'{prefix}_{party or "TAT_CA"}_DEN_{cutoff}.zip',mimetype='application/zip')
+            period=(f'TU_{start}_' if start else '')+f'DEN_{cutoff}'
+            response = send_file(output,as_attachment=True,download_name=f'{prefix}_{party or "TAT_CA"}_{period}.zip',mimetype='application/zip')
             response.headers['X-Unissued-Files']=str(count)
             return response
         if request.path.endswith('.xlsx'):
             prefix='HANG_CON_CHO_VA_LY_DO' if portion=='waiting' else 'CHUA_XUAT_HOA_DON'
-            return send_file(unissued_workbook(payload),as_attachment=True,download_name=f'{prefix}_{party or "TAT_CA"}_DEN_{cutoff}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            period=(f'TU_{start}_' if start else '')+f'DEN_{cutoff}'
+            return send_file(unissued_workbook(payload),as_attachment=True,download_name=f'{prefix}_{party or "TAT_CA"}_{period}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         return jsonify(ok=True,**payload)
     except ValueError as exc:
         return jsonify(ok=False,error=str(exc)),400
@@ -4468,6 +4477,7 @@ def api_sync_issued_orders():
         if not isinstance(body,dict):raise ValueError('Khoảng ngày không hợp lệ.')
         with db() as conn:
             start,requested_end,_,_=resolve_scope(conn,body,valid_iso_date)
+            start,_,_,_=resolve_scope(conn,{'scope':'unissued','to':requested_end},valid_iso_date)
         end=max(requested_end,business_today())
         return jsonify(ok=True,**refresh_sources(db,create_minvoice_client,now_iso,start,end))
     except (ValueError,MinvoiceError) as exc:
@@ -4530,13 +4540,14 @@ def api_export_order_invoices():
             start,end,contractor,cumulative=resolve_scope(conn,body,valid_iso_date)
             assert_enabled(conn,contractor)
             connected=setting_get(conn,'minvoice_active_connection','')
+            sync_start,_,_,_=resolve_scope(conn,{'scope':'unissued','to':end},valid_iso_date)
         if connected:
             try:
                 from .outgoing_source_refresh import refresh_sources
             except ImportError:
                 from outgoing_source_refresh import refresh_sources
             try:
-                refresh_sources(db,create_minvoice_client,now_iso,start,max(end,business_today()))
+                refresh_sources(db,create_minvoice_client,now_iso,sync_start,max(end,business_today()))
             except (ValueError,MinvoiceError) as exc:
                 raise InvoiceTaxExportError('Chưa cập nhật đủ hóa đơn đã ký từ M-Invoice; chưa tạo file để tránh xuất trùng. '+str(exc),code='issued_sync_required') from exc
         output = io.BytesIO()
@@ -4556,7 +4567,7 @@ def api_export_order_invoices():
                 AND EXISTS(SELECT 1 FROM orders o WHERE o.batch_id=b.id AND (?='' OR o.contractor=?)
                     AND NOT EXISTS(SELECT 1 FROM outgoing_contractor_choices c WHERE c.contractor=o.contractor AND c.enabled=0)
                     AND NOT EXISTS(SELECT 1 FROM outgoing_order_choices c WHERE c.order_id=o.id AND c.enabled=0))
-                ORDER BY b.work_date,b.id""", (start,end,int(cumulative),contractor,contractor)).fetchall()
+                ORDER BY b.work_date,b.id""", (start,end,int(cumulative or body.get('scope')=='approved_range'),contractor,contractor)).fetchall()
             if not batches:
                 raise ValueError('Chưa có đơn đã duyệt của nhà thầu này để lập bảng kê')
             if not cumulative and len(batches)>100:
@@ -5478,6 +5489,11 @@ except ImportError:
     from outgoing_upload import register as register_outgoing_upload
     from contract_modules import invoice_tax_percent as upload_tax_percent
 register_outgoing_upload(app, {**globals(), 'invoice_tax_percent': upload_tax_percent})
+try:
+    from .outgoing_review import register as register_outgoing_review
+except ImportError:
+    from outgoing_review import register as register_outgoing_review
+register_outgoing_review(app, globals())
 
 try:
     from round3_documents import register_round3_routes, customer_receipt

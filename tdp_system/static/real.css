@@ -965,3 +965,13 @@ body { min-width: 320px; }
 #unitReviewSection .table-wrap{max-height:430px;overflow:auto}
 #unitReviewSection table{min-width:980px}
 #unitReviewSection td{white-space:normal;vertical-align:top}
+
+.invoice-workflow-actions{grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.invoice-workflow #invoiceContractorChoices{margin-bottom:18px}
+.invoice-review-table{max-height:430px;overflow:auto}
+.invoice-review-table table{min-width:1080px}
+#invoiceReviewNotesForm textarea{display:block;width:100%;box-sizing:border-box;margin-bottom:10px;resize:vertical}
+.invoice-note-text{white-space:pre-wrap;overflow-wrap:anywhere}
+#invoiceLineChoices,#invoiceReviewNotes{scroll-margin-top:90px}
+#invoiceReviewSaveForm{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:12px}
+#invoiceUnissuedDetails{margin-top:18px}

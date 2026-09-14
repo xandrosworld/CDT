@@ -2915,13 +2915,36 @@
     ]);
   }
 
+
+  content.addEventListener('input',function(event){
+    if(event.target.form && event.target.form.id==='invoiceReviewNotesForm'){
+      state.invoiceNoteDrafts=state.invoiceNoteDrafts||{};state.invoiceNoteDrafts[JSON.stringify(pendingScope())]=event.target.value;
+    }
+  });
+  content.addEventListener('toggle',function(event){
+    if(event.target.id==='invoiceUnissuedDetails')state.invoiceUnissuedOpen=event.target.open;
+  },true);
+
   function orderInvoiceScope() {
-    var filters=state.orderInvoiceFilters || {};
-    return {contractor:filters.contractor || '*',to:filters.to || (state.data.batch && state.data.batch.work_date) || currentWorkDate(),scope:'unissued'};
+    if(!state.orderInvoiceFilters){try{state.orderInvoiceFilters=JSON.parse(localStorage.getItem('tdp.invoice.review.scope'))||{};}catch(_){state.orderInvoiceFilters={};}}
+    var f=state.orderInvoiceFilters || {},to=f.to || (state.data.batch && state.data.batch.work_date) || currentWorkDate();
+    return {contractor:f.contractor || '*',from:f.from || to.slice(0,7)+'-01',to:to,scope:'approved_range'};
   }
 
   function pendingScope() {
-    var f=orderInvoiceScope();return {to:f.to,contractor:f.contractor==='*'?'':f.contractor};
+    var f=orderInvoiceScope();return {from:f.from,to:f.to,contractor:f.contractor==='*'?'':f.contractor};
+  }
+
+  function invoiceReviewKey() {
+    return JSON.stringify([pendingScope(),((state.unissued && state.unissued.line_choices)||[]).map(function(r){return [r.order_id,r.token];})]);
+  }
+
+  function sameInvoiceScope(a,b) {
+    return !!a && !!b && a.from===b.from && a.to===b.to && a.contractor===b.contractor;
+  }
+
+  function invoiceReviewReady() {
+    return !!state.unissued && !exportChoicesDirty() && state.invoiceReviewedKey===invoiceReviewKey();
   }
 
   async function loadUnissuedScope(refresh) {
@@ -2936,8 +2959,8 @@
         f=pendingScope();key=JSON.stringify(f);state.unissuedLoadKey=key;
       }
       var d=await api('/api/outgoing-invoices/unissued'+(refresh?'/refresh':'')+'?'+new URLSearchParams(f).toString(),refresh?{method:'POST'}:undefined);
-      var weights=await api('/api/outgoing-invoices/actual-weights?'+new URLSearchParams(f).toString());
-      if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope())){state.unissued=d;state.actualWeights=weights;}
+      var notes=await api('/api/outgoing-invoices/review-notes?'+new URLSearchParams(f).toString());
+      if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope())){state.unissued=d;state.invoiceReviewNotes=notes;}
     } catch(error) {
       if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope()))state.unissuedError=error.message;
     } finally {
@@ -2955,51 +2978,48 @@
 
   function invoiceLineChoicesHtml() {
     var d=state.unissued,f=pendingScope();
-    if(!d || d.asof!==f.to || d.contractor!==f.contractor)return '';
-    var all=d.line_choices || [],search=(state.invoiceLineSearch || '').toLocaleLowerCase();
-    var rows=all.filter(function(r){return (!state.invoiceLinesSkipped || !r.enabled) && (!search || [r.contractor,r.kitchen,r.product_code,r.invoice_name,r.date].join(' ').toLocaleLowerCase().indexOf(search)!==-1);});
-    var page=Math.min(state.invoiceLinePage || 0,Math.max(0,Math.ceil(rows.length/50)-1));state.invoiceLinePage=page;
-    return '<section class="card" id="invoiceLineChoices"><div class="card-head"><div><h3>Chọn mặt hàng đưa vào file</h3><p>Chỉ gồm phần chưa xuất sau khi trừ hóa đơn đã ký. Áp dụng theo từng dòng đơn; dòng bỏ chọn được lưu riêng và có thể chọn lại.</p></div></div><div class="card-body">'+
-      '<div class="compact-controls"><label>Tìm mã / tên hàng / bếp<input id="invoiceLineSearch" value="'+esc(state.invoiceLineSearch || '')+'" placeholder="Ví dụ: nấm kim châm"></label><button type="button" class="btn btn-outline" data-invoice-lines="search">Tìm dòng</button><label><input type="checkbox" id="invoiceLinesSkipped"'+(state.invoiceLinesSkipped?' checked':'')+'> Chỉ xem dòng đã bỏ chọn ('+all.filter(function(r){return !r.enabled;}).length+')</label></div>'+
-      '<form id="invoiceLineChoicesForm"><div class="table-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>Đưa vào file</th><th>Ngày / nhà thầu / bếp</th><th>Mã / tên xuất hóa đơn</th><th>SL chưa xuất (ĐVT đơn)</th><th>Trạng thái</th></tr></thead><tbody>'+rows.slice(page*50,page*50+50).map(function(r){
-        var checked=Object.prototype.hasOwnProperty.call(state.invoiceLineEdits || {},r.order_id)?state.invoiceLineEdits[r.order_id]:r.enabled;
-        return '<tr'+(conversionIssue(r.order_id)?' class="invoice-conversion-needed"':'')+'><td><input type="checkbox" name="invoice_line_choice" value="'+r.order_id+'" aria-label="Đưa dòng '+r.order_id+' vào file"'+(checked?' checked':'')+(!r.editable?' disabled':'')+'></td><td>'+esc(dateVN(r.date)+' · '+r.contractor+' · '+r.kitchen)+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'<small> · dòng '+r.order_id+'</small></td><td>'+stockQty(r.qty)+' '+esc(r.unit)+'</td><td>'+(conversionIssue(r.order_id)?'<a href="#actualWeight-'+r.order_id+'">'+esc(unitReviewLabel(r.order_id))+'</a><br>':'')+esc(r.reason || (r.enabled?'Đang chọn':'Đã bỏ chọn'))+'</td></tr>';
-      }).join('')+(rows.length?'':'<tr><td colspan="5">Không có dòng trong phạm vi này.</td></tr>')+'</tbody></table></div>'+
-      '<p>'+rows.length+' dòng · Trang '+(page+1)+'/'+Math.max(1,Math.ceil(rows.length/50))+' <button type="button" class="btn btn-outline" data-invoice-lines="prev"'+(page===0?' disabled':'')+'>Trang trước</button> <button type="button" class="btn btn-outline" data-invoice-lines="next"'+((page+1)*50>=rows.length?' disabled':'')+'>Trang sau</button></p>'+
-      '<button type="submit" class="btn btn-primary"'+(!Object.keys(state.invoiceLineEdits || {}).length||state.invoiceChoicesBusy?' disabled':'')+'>Lưu lựa chọn mặt hàng</button> <span class="invoice-line-status" role="status">'+esc(state.invoiceLineMessage || '')+'</span></form>'+
-      '<p>Sau khi lưu, tải lại bảng kê ở trên để lấy file theo lựa chọn mới. File đã tải trước đó không tự thay đổi. Dòng chưa đủ tồn hoặc thiếu quy đổi vẫn chờ xử lý dù được chọn.</p></div></section>';
+    if(!d || d.asof!==f.to || d.from!==f.from || d.contractor!==f.contractor)return '';
+    var all=d.line_choices||[],search=(state.invoiceLineSearch||'').toLocaleLowerCase();
+    var rows=all.filter(function(r){return (!state.invoiceLinesSkipped||!r.enabled)&&(!search||[r.contractor,r.kitchen,r.product_code,r.invoice_name,r.date].join(' ').toLocaleLowerCase().includes(search));});
+    var page=Math.min(state.invoiceLinePage||0,Math.max(0,Math.ceil(rows.length/50)-1));state.invoiceLinePage=page;
+    var busy=state.invoiceChoicesBusy||state.invoiceExportBusy||state.unissuedBusy||state.invoiceReviewBusy;
+    var preview=state.invoiceReviewPreview,key=JSON.stringify(f);
+    if(preview && !sameInvoiceScope(preview.scope,f))preview=null;
+    return '<section class="card" id="invoiceLineChoices"><div class="card-head"><div><h3>Lựa chọn mặt hàng · bỏ chọn và lưu lại</h3><p>Dòng bỏ chọn được nhớ cho các lần tải sau. Có thể chọn lại; đơn hàng và công nợ giữ nguyên.</p></div></div><div class="card-body">'+
+      '<form id="invoiceReviewUploadForm" class="compact-controls"><label>Nhập lại bảng đã chỉnh<input type="file" id="invoiceReviewFile" accept=".xlsx"'+(busy?' disabled':'')+'></label><span>'+esc(state.invoiceReviewFile?state.invoiceReviewFile.name:'')+'</span><button type="submit" class="btn btn-outline"'+(busy||exportChoicesDirty()?' disabled':'')+'>Xem thay đổi từ Excel</button></form>'+
+      (state.invoiceReviewMessage?'<p role="status">'+esc(state.invoiceReviewMessage)+'</p>':'')+
+      (preview?'<div class="code-note"><p>'+preview.total+' dòng trong file gốc · '+preview.selected+' dòng chọn · '+preview.excluded+' dòng bỏ chọn. Có '+preview.changes.length+' thay đổi cần lưu.</p>'+
+        '<div class="table-wrap"><table><thead><tr><th>Ngày / Nhà thầu</th><th>Mã / Tên hàng</th><th>Thay đổi</th></tr></thead><tbody>'+preview.changes.slice(0,100).map(function(r){return '<tr><td>'+esc(dateVN(r.date)+' · '+r.contractor)+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'</td><td>'+(r.enabled?'Chọn lại':'Bỏ chọn')+'</td></tr>';}).join('')+'</tbody></table></div>'+
+        '<form id="invoiceReviewSaveForm"><label><input type="checkbox" name="confirmed" required> Tôi đã kiểm tra các lựa chọn trong file.</label><button type="submit" class="btn btn-primary"'+(busy?' disabled':'')+'>Lưu lựa chọn từ Excel</button><button type="button" class="btn btn-outline" data-invoice-review="cancel">Hủy bản xem trước</button></form></div>':'')+
+      (state.invoiceReviewOpen?'<div class="compact-controls"><label>Tìm mã / tên hàng / bếp<input id="invoiceLineSearch" value="'+esc(state.invoiceLineSearch||'')+'"></label><button type="button" class="btn btn-outline" data-invoice-lines="search">Tìm dòng</button><label><input type="checkbox" id="invoiceLinesSkipped"'+(state.invoiceLinesSkipped?' checked':'')+'> Xem dòng đã bỏ chọn ('+all.filter(function(r){return !r.enabled;}).length+')</label></div>'+
+      '<form id="invoiceLineChoicesForm"><div class="table-wrap invoice-review-table"><table><thead><tr><th>Đưa vào file</th><th>Ngày / Nhà thầu / Bếp</th><th>Mã / Tên xuất hóa đơn</th><th>SL chưa xuất</th><th>ĐVT đơn</th><th>ĐVT hóa đơn</th><th>Đơn giá</th><th>Thuế</th><th>Trạng thái</th></tr></thead><tbody>'+rows.slice(page*50,page*50+50).map(function(r){
+        var checked=Object.prototype.hasOwnProperty.call(state.invoiceLineEdits||{},r.order_id)?state.invoiceLineEdits[r.order_id]:r.enabled;
+        return '<tr><td><input type="checkbox" name="invoice_line_choice" value="'+r.order_id+'" aria-label="Đưa dòng '+r.order_id+' vào file"'+(checked?' checked':'')+(!r.editable||busy?' disabled':'')+'></td><td>'+esc(dateVN(r.date)+' · '+r.contractor+' · '+r.kitchen)+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'<small> · dòng '+r.order_id+'</small></td><td>'+stockQty(r.qty)+'</td><td>'+esc(r.unit)+'</td><td>'+esc(r.invoice_unit)+'</td><td>'+stockQty(r.price)+'</td><td>'+esc(taxText(r.tax))+'</td><td>'+esc(r.reason||(r.enabled?'Đang chọn':'Đã bỏ chọn'))+'</td></tr>';
+      }).join('')+(!rows.length?'<tr><td colspan="9">Không có dòng phù hợp.</td></tr>':'')+'</tbody></table></div><p>'+rows.length+' dòng · Trang '+(page+1)+'/'+Math.max(1,Math.ceil(rows.length/50))+' <button type="button" class="btn btn-outline" data-invoice-lines="prev"'+(!page?' disabled':'')+'>Trang trước</button> <button type="button" class="btn btn-outline" data-invoice-lines="next"'+((page+1)*50>=rows.length?' disabled':'')+'>Trang sau</button></p>'+
+      '<button type="submit" class="btn btn-primary"'+(busy||!all.length?' disabled':'')+'>Lưu lựa chọn mặt hàng</button> <span class="invoice-line-status" role="status">'+esc(state.invoiceLineMessage||'')+'</span></form>':
+      '<p>Kiểm tra bằng Excel ở trên, hoặc bấm “Chọn ngay trên web” để tích bỏ từng dòng tại đây.</p>')+'</div></section>';
   }
 
   function invoiceChoicesHtml() {
     var d=state.invoiceContractorChoices;
-    if(!d)return '<p role="status">Đang tải lựa chọn nhà thầu…</p>';
-    return '<details id="invoiceContractorChoices" open><summary><strong>Nhà thầu đưa vào file M-Invoice · '+(d.items.length-d.excluded.length)+'/'+d.items.length+' đang chọn</strong></summary>'+
-      '<p>Bỏ chọn nhà thầu không đưa vào đợt xuất này rồi bấm Lưu lựa chọn. Lựa chọn được giữ cho các lần tải tiếp theo và áp dụng cho phần còn chờ bên dưới.</p>'+
-      '<form id="invoiceContractorChoicesForm"><div class="invoice-contractor-choices">'+d.items.map(function(r){
-        var checked=Object.prototype.hasOwnProperty.call(state.invoiceChoiceEdits || {},r.code)?state.invoiceChoiceEdits[r.code]:r.enabled;
-        return '<label><input type="checkbox" name="contractor_choice" value="'+esc(r.code)+'"'+(checked?' checked':'')+'><span><strong>'+esc(r.code)+'</strong>'+(r.name!==r.code?'<small>'+esc(r.name)+'</small>':'')+(r.protected_drafts?'<small>'+r.protected_drafts+' dự thảo đã lưu/đang gửi M-Invoice cần đối chiếu</small>':'')+'</span></label>';
-      }).join('')+'</div><p>Dự thảo chưa gửi của nhà thầu bỏ chọn sẽ được hủy và bỏ giữ kho. Hóa đơn đã ký, bản đã lưu/đang gửi M-Invoice vẫn giữ để đối chiếu. Đơn hàng, doanh thu và công nợ giữ nguyên.</p>'+
-      '<button type="submit" class="btn btn-primary"'+(!invoiceChoicesDirty()||state.invoiceChoicesBusy?' disabled':'')+'>Lưu lựa chọn</button> <span class="invoice-choice-status" role="status">'+esc(state.invoiceChoiceMessage || (invoiceChoicesDirty()?'Có thay đổi chưa lưu.':''))+'</span></form>'+
-      '<p><strong>Đã bỏ chọn:</strong> '+esc(d.excluded.join(', ') || 'Chưa có nhà thầu nào')+'</p></details>';
+    if(!d)return '<p role="status">Đang tải nhà thầu…</p>';
+    return '<details id="invoiceContractorChoices"><summary><strong>Nhà thầu được chọn · '+(d.items.length-d.excluded.length)+'/'+d.items.length+'</strong></summary><form id="invoiceContractorChoicesForm"><div class="invoice-contractor-choices">'+d.items.map(function(r){
+      var checked=Object.prototype.hasOwnProperty.call(state.invoiceChoiceEdits||{},r.code)?state.invoiceChoiceEdits[r.code]:r.enabled;
+      return '<label><input type="checkbox" name="contractor_choice" value="'+esc(r.code)+'"'+(checked?' checked':'')+'><span><strong>'+esc(r.code)+'</strong></span></label>';
+    }).join('')+'</div><p>Nhà thầu bỏ chọn không vào file. Các dự thảo chưa gửi của nhà thầu đó được bỏ giữ kho.</p><button type="submit" class="btn btn-primary"'+(!invoiceChoicesDirty()||state.invoiceChoicesBusy?' disabled':'')+'>Lưu nhà thầu</button> <span class="invoice-choice-status" role="status">'+esc(state.invoiceChoiceMessage||'')+'</span></form></details>';
   }
 
   function orderInvoiceExportHtml() {
-    var filters = orderInvoiceScope();
-    var cutoff = filters.to;
-    var result = state.orderInvoiceExportResult;
-    return '<section class="card"><div class="card-head"><div><h3>Bảng kê từ đơn hàng để đưa lên M-Invoice</h3>' +
-      '<p>Một nút tải cho cả đơn mới và phần xuất bù từ đơn đã duyệt. Không ghi thêm doanh thu hoặc công nợ.</p></div></div>' +
-      '<div class="card-body"><nav class="invoice-section-links" aria-label="Các phần xuất hóa đơn"><a href="#unissuedReconciliation">Bảng chưa xuất hóa đơn</a><a href="#unitReviewSection">Đối chiếu ĐVT</a><a href="#actualWeightSection">Nhập kg thực tế</a><a href="#invoiceLineChoices">Chọn từng mặt hàng</a><button type="button" class="btn btn-outline" data-view="payment-request">Đề nghị thanh toán từ hóa đơn đã ký</button></nav>'+invoiceChoicesHtml()+'<form id="orderInvoiceExportForm" class="document-contractor-form">' +
-      '<label>Nhà thầu<select name="contractor" required><option value="*"'+(filters.contractor==='*'?' selected':'')+'>Tất cả nhà thầu đã chọn</option>' + (state.invoiceContractorChoices?state.invoiceContractorChoices.items.filter(function(r){return r.enabled;}):[]).map(function(item) {
-        return '<option value="'+esc(item.code)+'"'+(filters.contractor===item.code?' selected':'')+'>'+esc(item.code+' · '+item.name)+'</option>';
-      }).join('') + '</select></label><label>Đến hết ngày đơn<input type="date" name="to" value="'+esc(cutoff)+'" required></label><input type="hidden" name="scope" value="unissued">' +
-      '<button type="submit" value="sync" class="btn btn-outline"'+(state.invoiceExportBusy||state.unissuedBusy?' disabled':'')+'>Cập nhật hóa đơn đã ký</button>' +
-      '<button type="submit" value="export" class="btn btn-primary"'+(state.invoiceExportBusy||state.unissuedBusy||state.invoiceChoicesBusy||exportChoicesDirty()||!state.invoiceContractorChoices?' disabled':'')+'>Tải bảng kê để up M-Invoice</button></form>' +
-      '<p><strong>Nhà thầu và ngày chọn ở đây áp dụng cho cả file xuất và danh sách còn chờ bên dưới.</strong> Trước mỗi lần tải, web cập nhật hóa đơn đã ký và kiểm tra lại tồn kho. Bảng chưa xuất đầy đủ nằm ngay bên dưới.</p><p><strong>Kho hóa đơn trừ theo hóa đơn đã ký trên M-Invoice được đồng bộ và đối chiếu đúng mã/ĐVT, một lần.</strong> Chị có thể xóa dòng trong Excel trước khi ký; dòng chưa ký vẫn còn trong bảng chưa xuất. Công nợ phải thu theo đơn đã duyệt; đề nghị thanh toán theo hóa đơn đã ký.</p><p><a href="#invoiceUploadCard">Nhập Excel để chọn số lượng lập hóa đơn từ đơn đã duyệt</a></p><details><summary>Cách lấy lượng xuất hóa đơn</summary>' +
-      '<p>Chỉ lấy lượng đủ tồn, không âm kho; dòng đánh dấu BK ở cột Bảng kê được hưởng ngoại lệ. KKKNT không tự được phép âm kho. Dòng khác đơn vị kho được giữ riêng chờ xác nhận, các dòng hợp lệ vẫn tải được.</p>' +
-      '<p><strong>Cộng dồn đơn đã duyệt đến hết ngày chọn, trừ lượng đã ký M-Invoice đến hiện tại.</strong> Hóa đơn ký sau ngày đơn vẫn được trừ. Hóa đơn chưa ký và phần còn thiếu giữ chờ. Tải file chưa tính là đã phát hành.</p>' +
-      '<p>Một ZIP, mỗi nhà thầu một file cho từng nhóm thuế. Cùng mã và cùng giá bán cộng lượng; khác giá giữ dòng riêng. Kg gốc lấy một chữ số thập phân; kg quy đổi lấy số thực tế đã xác nhận, giữ riêng từng dòng đơn. Cái, quả, con, chiếc lấy số nguyên. Phần lẻ giữ lại. Khi chọn tất cả, nhà thầu cần sửa được ghi rõ trong hướng dẫn kèm ZIP.</p></details>' +
-      (result ? '<div class="code-note" role="status">'+esc(result)+'</div>' : '') + sourceScopeReviewHtml() + '</div></section>';
+    var f=orderInvoiceScope(),busy=state.invoiceExportBusy||state.unissuedBusy||state.invoiceChoicesBusy||state.invoiceReviewBusy;
+    var disabled=busy||exportChoicesDirty()||!state.unissued?' disabled':'';
+    return '<section class="card invoice-workflow" id="invoiceWorkflow"><div class="card-head"><div><h3>Kiểm tra bảng kê trước khi lập hóa đơn</h3><p>Chọn ngày và nhà thầu → bỏ mặt hàng, lưu lựa chọn → tải bảng kê đã chọn.</p></div></div><div class="card-body">'+invoiceChoicesHtml()+
+      '<form id="orderInvoiceExportForm" class="document-contractor-form"><label>Nhà thầu<select name="contractor"><option value="*"'+(f.contractor==='*'?' selected':'')+'>Tất cả nhà thầu đã chọn</option>'+((state.invoiceContractorChoices&&state.invoiceContractorChoices.items)||[]).filter(function(r){return r.enabled;}).map(function(r){return '<option value="'+esc(r.code)+'"'+(f.contractor===r.code?' selected':'')+'>'+esc(r.code)+'</option>';}).join('')+'</select></label>'+
+      '<label>Từ ngày đơn<input type="date" name="from" value="'+esc(f.from)+'" required></label><label>Đến ngày đơn<input type="date" name="to" value="'+esc(f.to)+'" required></label><input type="hidden" name="scope" value="approved_range">'+
+      '<div class="invoice-workflow-actions"><button type="submit" value="review" class="btn btn-primary"'+disabled+'>1. Tải bảng kê lựa chọn mặt hàng</button><button type="submit" value="open-review" class="btn btn-outline"'+disabled+'>Chọn ngay trên web</button><button type="submit" value="export" class="btn btn-primary"'+(disabled||(!invoiceReviewReady()?' disabled':''))+'>2. Tải bảng kê đã chọn để up M-Invoice</button><button type="submit" value="sync" class="btn btn-outline"'+(busy?' disabled':'')+'>Cập nhật hóa đơn đã ký</button></div></form>'+
+      '<p class="muted">Lưu lựa chọn sau khi kiểm tra để mở bước 2. Kho hóa đơn trừ theo hóa đơn đã ký trên M-Invoice được đồng bộ và đối chiếu, một lần.</p>'+
+      (state.orderInvoiceExportResult?'<p class="code-note" role="status">'+esc(state.orderInvoiceExportResult)+'</p>':'')+
+      (state.unissuedError?'<p class="error-summary" role="alert">'+esc(state.unissuedError)+'</p>':'')+
+      (state.unissuedLoading?'<p role="status">Đang tải bảng kê…</p>':'')+sourceScopeReviewHtml()+'</div></section>';
   }
 
   function sourceScopeReviewHtml() {
@@ -3025,30 +3045,28 @@
 
   function unissuedHtml() {
     var f=pendingScope(),d=state.unissued;
-    if(d && (d.asof!==f.to || d.contractor!==f.contractor))d=null;
-    var all=d?d.details:[],search=(state.unissuedSearch || '').toLocaleLowerCase();
-    var rows=all.filter(function(r){return (!state.unissuedConversionOnly || r.needs_conversion) && (!search || [r.contractor,r.product_code,r.invoice_name,r.work_date].join(' ').toLocaleLowerCase().indexOf(search)!==-1);});
-    var page=Math.min(state.unissuedPage || 0,Math.max(0,Math.ceil(rows.length/50)-1));state.unissuedPage=page;
-    var busy=state.unissuedBusy||state.invoiceExportBusy||state.unissuedLoading;
-    return '<section class="card" id="unissuedReconciliation" data-loaded="'+(d?'true':'false')+'"><div class="card-head"><div><h3>Bảng chưa xuất hóa đơn</h3><p>Đơn đã duyệt − phần hóa đơn đã ký được đối chiếu. Gồm cả hàng đủ điều kiện nhưng chưa ký và hàng còn chờ.</p></div></div><div class="card-body">'+
-      '<p class="code-note">'+esc(f.contractor||'Tất cả nhà thầu đã chọn')+' · Đơn đã duyệt đến '+esc(dateVN(f.to))+'</p>'+
-      '<form id="unissuedForm" class="compact-controls"><button class="btn btn-primary" type="submit" value="all-template"'+(busy||!all.length||exportChoicesDirty()?' disabled':'')+'>Tải Excel toàn bộ chưa xuất</button><button class="btn btn-outline" type="submit" value="all-excel"'+(busy||!all.length?' disabled':'')+'>Tải đối chiếu từng dòng</button></form>'+
-      '<p>Mỗi nhà thầu một file Excel, mọi thuế suất nằm chung một bảng 13 cột. Cuối bảng có tổng tiền; sheet “Tong hop” có tổng theo thuế suất và tổng chung. Số lượng và đơn giá theo đơn gốc.</p>'+
-      '<p class="muted">Số liệu theo hóa đơn đã đồng bộ. Sau khi ký trên M-Invoice, bấm <a href="#orderInvoiceExportForm">Cập nhật hóa đơn đã ký</a> ở trên. Tải file hoặc xóa dòng trong Excel chưa làm giảm số chưa xuất.</p>'+
-      (state.unissuedLoading?'<p role="status">Đang tải bảng chưa xuất…</p>':'')+
-      (state.unissuedError?'<p class="error-summary" role="alert">'+esc(state.unissuedError)+'</p>':'')+
+    if(d && (d.asof!==f.to||d.from!==f.from||d.contractor!==f.contractor))d=null;
+    var all=d?d.details:[],search=(state.unissuedSearch||'').toLocaleLowerCase();
+    var rows=all.filter(function(r){return !search||[r.contractor,r.product_code,r.invoice_name].join(' ').toLocaleLowerCase().includes(search);});
+    var page=Math.min(state.unissuedPage||0,Math.max(0,Math.ceil(rows.length/50)-1));state.unissuedPage=page;
+    return '<section class="card" id="unissuedReconciliation" data-loaded="'+(d?'true':'false')+'"><div class="card-head"><div><h3>3. Excel chưa xuất hóa đơn</h3><p>Đơn đã duyệt trong khoảng ngày chọn − phần hóa đơn đã ký được đối chiếu.</p></div></div><div class="card-body"><p class="code-note">'+esc(f.contractor||'Tất cả nhà thầu đã chọn')+' · '+esc(dateVN(f.from)+' → '+dateVN(f.to))+'</p>'+
+      '<form id="unissuedForm"><button class="btn btn-primary" type="submit" value="all-template"'+(!all.length||state.unissuedBusy||state.invoiceExportBusy||exportChoicesDirty()||state.invoiceReviewPreview?' disabled':'')+'>Tải Excel chưa xuất theo nhà thầu</button></form><p>Mỗi nhà thầu một file, cùng mẫu 13 cột, gộp các thuế suất và có tổng tiền sẵn. Số lượng, đơn giá theo đơn gốc để chị kiểm tra trước khi lập hóa đơn.</p>'+
       (state.unissuedExportResult?'<p role="status">'+esc(state.unissuedExportResult)+'</p>':'')+
-      (d && d.warnings.length?'<details class="warning-summary"><summary>'+d.warnings.length+' thông báo cần đối chiếu hóa đơn đã ký</summary>'+d.warnings.map(function(w){return '<p>'+esc(w.message)+'</p>';}).join('')+'</details>':'')+
-      '<div class="compact-controls"><label>Tìm nhà thầu / mã / tên hàng<input id="unissuedSearch" value="'+esc(state.unissuedSearch||'')+'"></label><button type="button" class="btn btn-outline" data-unissued="search">Tìm trong bảng chưa xuất</button><label><input type="checkbox" id="unissuedConversionOnly"'+(state.unissuedConversionOnly?' checked':'')+'> Chỉ dòng đỏ cần kiểm tra ĐVT ('+all.filter(function(r){return r.needs_conversion;}).length+')</label><a href="#unitReviewSection">Đối chiếu ĐVT</a><a href="#actualWeightSection">Nhập kg thực tế</a></div>'+
-      '<div class="table-wrap invoice-unissued-table"><table><thead><tr><th>Ngày / Nhà thầu</th><th>Mã / Tên xuất hóa đơn</th><th>ĐVT đơn</th><th>Đã duyệt</th><th>Đã ký đối chiếu</th><th>Chưa xuất</th><th>Đơn giá</th><th>Thuế</th><th>Tiền hàng chưa xuất</th><th>Trạng thái</th></tr></thead><tbody>'+rows.slice(page*50,page*50+50).map(function(r){
-        return '<tr'+(r.needs_conversion?' class="invoice-conversion-needed"':'')+'><td>'+dateVN(r.work_date)+'<br>'+esc(r.contractor)+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'<small> · dòng '+r.order_id+'</small></td><td>'+esc(r.unit)+'</td><td>'+stockQty(r.approved_qty)+'</td><td>'+stockQty(r.issued_qty)+'</td><td><strong>'+stockQty(r.unissued_qty)+'</strong></td><td>'+stockQty(r.unit_price)+'</td><td>'+esc(taxText(r.tax))+'</td><td>'+money(Math.round(r.unissued_qty*r.unit_price))+'</td><td>'+(r.needs_conversion?'<a href="#actualWeight-'+r.order_id+'">'+esc(unitReviewLabel(r.order_id))+'</a><div>'+esc(r.conversion_reason)+'</div>':esc(r.pending_reason||'Chưa ký hóa đơn'))+'</td></tr>';
-      }).join('')+(!rows.length?'<tr><td colspan="10">'+(d?'Không có dòng phù hợp.':'Đang tải…')+'</td></tr>':'')+'</tbody></table></div>'+
-      '<div class="compact-controls"><span>'+rows.length+' / '+all.length+' dòng chưa xuất · Trang '+(page+1)+'/'+Math.max(1,Math.ceil(rows.length/50))+'</span><button type="button" class="btn btn-outline" data-unissued="prev"'+(page===0?' disabled':'')+'>Trang trước</button><button type="button" class="btn btn-outline" data-unissued="next"'+((page+1)*50>=rows.length?' disabled':'')+'>Trang sau</button></div></div></section>';
+      (d&&d.warnings.length?'<details><summary>'+d.warnings.length+' thông tin cần đối chiếu hóa đơn đã ký</summary>'+d.warnings.map(function(w){return '<p>'+esc(w.message)+'</p>';}).join('')+'</details>':'')+
+      '<details'+(state.invoiceUnissuedOpen?' open':'')+' id="invoiceUnissuedDetails"><summary>Xem danh sách chưa xuất · '+all.length+' dòng</summary><div class="compact-controls"><input id="unissuedSearch" value="'+esc(state.unissuedSearch||'')+'" placeholder="Tìm nhà thầu / mã / tên hàng"><button type="button" class="btn btn-outline" data-unissued="search">Tìm</button></div><div class="table-wrap invoice-unissued-table"><table><thead><tr><th>Ngày / Nhà thầu</th><th>Mã / Tên hóa đơn</th><th>ĐVT đơn</th><th>Chưa xuất</th><th>Đơn giá</th><th>Thuế</th><th>Tiền hàng</th></tr></thead><tbody>'+rows.slice(page*50,page*50+50).map(function(r){return '<tr><td>'+esc(dateVN(r.work_date)+' · '+r.contractor)+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'</td><td>'+esc(r.unit)+'</td><td>'+stockQty(r.unissued_qty)+'</td><td>'+stockQty(r.unit_price)+'</td><td>'+esc(taxText(r.tax))+'</td><td>'+money(r.unissued_amount)+'</td></tr>';}).join('')+'</tbody></table></div><div class="compact-controls"><span>'+rows.length+' dòng · Trang '+(page+1)+'/'+Math.max(1,Math.ceil(rows.length/50))+'</span><button type="button" class="btn btn-outline" data-unissued="prev"'+(!page?' disabled':'')+'>Trang trước</button><button type="button" class="btn btn-outline" data-unissued="next"'+((page+1)*50>=rows.length?' disabled':'')+'>Trang sau</button></div></details></div></section>';
+  }
+
+  function invoiceReviewNotesHtml() {
+    var f=pendingScope(),key=JSON.stringify(f),n=state.invoiceReviewNotes;
+    if(!n || !sameInvoiceScope(n.scope,f))return '';
+    var drafts=state.invoiceNoteDrafts||{},value=Object.prototype.hasOwnProperty.call(drafts,key)?drafts[key]:n.current.note;
+    return '<section class="card" id="invoiceReviewNotes"><div class="card-head"><div><h3>Ghi chú tiến độ</h3><p>'+esc((f.contractor||'Tất cả nhà thầu đã chọn')+' · '+dateVN(f.from)+' → '+dateVN(f.to))+'</p></div></div><div class="card-body"><form id="invoiceReviewNotesForm"><textarea name="note" maxlength="3000" rows="2" placeholder="Ví dụ: đã kiểm tra ATV đến ngày 12/09; còn chờ…">'+esc(value)+'</textarea><button type="submit" class="btn btn-outline"'+(state.invoiceNoteBusy?' disabled':'')+'>Lưu ghi chú</button> <span role="status">'+esc(state.invoiceNoteMessage||(n.current.updated_at?'Đã lưu: '+n.current.updated_at:''))+'</span></form>'+
+      (n.recent.length?'<details><summary>Ghi chú các đợt trước</summary>'+n.recent.map(function(r){return '<p><strong>'+esc((r.contractor||'Tất cả nhà thầu đã chọn')+' · '+dateVN(r.date_from)+' → '+dateVN(r.date_to))+'</strong><br><span class="invoice-note-text">'+esc(r.note||'(Ghi chú trống)')+'</span></p>';}).join('')+'</details>':'')+'</div></section>';
   }
 
   function pendingHtml() {
     var f=pendingScope(),d=state.unissued;
-    if(d && (d.asof!==f.to || d.contractor!==f.contractor))d=null;
+    if(d && (d.asof!==f.to || (d.from||'')!==f.from || d.contractor!==f.contractor))d=null;
     var rows=d && d.pending_rows || [],busy=state.unissuedBusy||state.invoiceExportBusy||state.unissuedLoading;
     var disabled=busy?' disabled':'';
     return '<section class="card" id="pendingInvoiceSection" data-loaded="'+(d?'true':'false')+'"><div class="card-head"><div><h3>Hàng còn chờ · chưa đủ điều kiện xuất</h3><p>Chỉ phần còn thiếu, phần lẻ hoặc cần cập nhật / đối chiếu. Phần xuất được tải bằng nút phía trên.</p></div></div><div class="card-body">'+
@@ -3066,7 +3084,7 @@
 
   function unitReviewHtml() {
     var f=pendingScope(),d=state.actualWeights;
-    if(!d || d.asof!==f.to || d.contractor!==f.contractor)return '';
+    if(!d || d.asof!==f.to || (d.from||'')!==f.from || d.contractor!==f.contractor)return '';
     var rows=(d.rows||[]).filter(function(r){return r.review_kind==='unit_mismatch';});
     return '<section class="card" id="unitReviewSection"><div class="card-head"><div><h3>Đối chiếu ĐVT giữa đơn, kho và hóa đơn</h3><p>'+rows.length+' dòng có ĐVT chưa khớp. Cần xác định đơn vị nào đúng; chưa kết luận phải quy đổi số lượng.</p></div></div><div class="card-body"><p>So sánh ba cột ĐVT dưới đây với đơn gốc và danh mục. Nếu chỉ khác cách gọi của cùng quy cách hàng, cần xác nhận trước khi xử lý. Những dòng cần tổng kg thực tế nằm ở <a href="#actualWeightSection">mục nhập kg riêng</a>.</p><div class="table-wrap"><table><thead><tr><th>Ngày / Nhà thầu / Bếp</th><th>Mã / Tên hàng</th><th>SL chưa xuất</th><th>ĐVT đơn</th><th>ĐVT kho</th><th>ĐVT hóa đơn</th><th>Cần đối chiếu</th></tr></thead><tbody>'+rows.map(function(r){
       return '<tr id="actualWeight-'+r.order_id+'" class="invoice-conversion-needed"><td>'+esc(dateVN(r.date)+' · '+r.contractor+' · '+r.kitchen)+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'<small> · dòng '+r.order_id+'</small></td><td>'+stockQty(r.remaining_qty)+'</td><td>'+esc(r.unit)+'</td><td>'+esc(r.stock_unit)+'</td><td>'+esc(r.invoice_unit)+'</td><td>'+esc(r.reason)+'</td></tr>';
@@ -3075,7 +3093,7 @@
 
   function actualWeightsHtml() {
     var f=pendingScope(),d=state.actualWeights;
-    if(!d || d.asof!==f.to || d.contractor!==f.contractor)return '';
+    if(!d || d.asof!==f.to || (d.from||'')!==f.from || d.contractor!==f.contractor)return '';
     var rows=(d.rows||[]).filter(function(r){return r.review_kind==='actual_kg';}),editable=rows.filter(function(r){return r.editable&&!r.confirmed;}).length;
     return '<section class="card" id="actualWeightSection"><div class="card-head"><div><h3>Nhập kg thực tế · ĐVT hóa đơn là Kg</h3><p>'+rows.length+' dòng được gom riêng · '+editable+' dòng cần nhập kg. Theo nhà thầu và ngày đã chọn ở trên.</p></div></div><div class="card-body">'+
       '<p>Nhập <strong>tổng kg thực tế của lượng chưa xuất trên từng dòng</strong>. Web tính lại giá/kg để giữ nguyên thành tiền. Tên hàng lấy từ cột Tên xuất hóa đơn trong danh mục.</p><p class="muted">Lưu kg chưa phải xuất hóa đơn. Sau khi lưu, dùng nút Tải bảng kê để up M-Invoice ở trên; web vẫn kiểm tra đầu vào và tồn kho.</p>'+
@@ -3155,17 +3173,12 @@
   }
 
   function renderDocuments() {
-    // Async invoice callbacks must not replace a different workspace after navigation.
-    if (state.view === 'payment-request') { renderPaymentRequest(); return; }
-    if (state.view === 'invoice-tools') { renderInvoiceTools(); return; }
-    if (state.view !== 'documents') return;
-    if(state.unissuedLoadKey!==JSON.stringify(pendingScope()))setTimeout(function(){if(state.view==='documents' && state.unissuedLoadKey!==JSON.stringify(pendingScope()))loadUnissuedScope(false);},0);
-    content.innerHTML = orderInvoiceExportHtml() + unissuedHtml() + unitReviewHtml() + actualWeightsHtml() + invoiceLineChoicesHtml() + pendingHtml() + invoiceUploadHtml() +
-      '<section class="card" id="invoiceZipCard"><div class="card-head"><div><h3>ZIP hóa đơn</h3>' +
-      '<p>Tải theo ngày lập dự thảo. Đơn đang chọn có thể được gộp vào dự thảo của ngày sau; mỗi ZIP gồm các dự thảo chưa phát hành của ngày ghi trên nút.</p></div></div><div class="card-body compact-controls">' +
-      invoiceFileActionHtml() + '</div>' +
-      (state.outgoingActionError && state.outgoingActionError.batchId === state.batchId ? '<div class="error-summary" role="alert">' + esc(state.outgoingActionError.message) + '<button class="btn btn-outline" data-view="invoice-tools">Xem nguyên nhân / xử lý</button></div>' : '') + '</section>';
-    if(state.invoiceExportBusy || state.unissuedBusy || state.invoiceUploadBusy)content.querySelectorAll('#orderInvoiceExportForm input,#orderInvoiceExportForm select,#orderInvoiceExportForm button').forEach(function(el){el.disabled=true;});
+    if(state.view==='payment-request'){renderPaymentRequest();return;}
+    if(state.view==='invoice-tools'){renderInvoiceTools();return;}
+    if(state.view!=='documents')return;
+    if(state.unissuedLoadKey!==JSON.stringify(pendingScope()))setTimeout(function(){if(state.view==='documents'&&state.unissuedLoadKey!==JSON.stringify(pendingScope()))loadUnissuedScope(false);},0);
+    content.innerHTML=orderInvoiceExportHtml()+invoiceLineChoicesHtml()+unissuedHtml()+invoiceReviewNotesHtml();
+    if(state.invoiceExportBusy||state.unissuedBusy||state.invoiceReviewBusy)content.querySelectorAll('#orderInvoiceExportForm input,#orderInvoiceExportForm select,#orderInvoiceExportForm button').forEach(function(el){el.disabled=true;});
   }
 
   function invoiceFileActionHtml() {
@@ -5827,20 +5840,54 @@
       finally {state.invoiceUploadBusy=false;renderDocuments();}
       return;
     }
+
+    if(event.target.id==='invoiceReviewUploadForm' || event.target.id==='invoiceReviewSaveForm') {
+      event.preventDefault();if(state.invoiceReviewBusy||exportChoicesDirty())return;
+      state.invoiceReviewBusy=true;state.invoiceReviewMessage='';
+      try {
+        if(event.target.id==='invoiceReviewUploadForm'){
+          if(!state.invoiceReviewFile)throw new Error('Chọn bảng lựa chọn đã chỉnh sửa.');
+          var reviewData=new FormData();reviewData.append('file',state.invoiceReviewFile);
+          var rp=await api('/api/outgoing-invoices/review/preview',{method:'POST',body:reviewData});
+          if(rp.scope.from!==pendingScope().from||rp.scope.to!==pendingScope().to||rp.scope.contractor!==pendingScope().contractor)throw new Error('File thuộc khoảng '+dateVN(rp.scope.from)+' → '+dateVN(rp.scope.to)+' · '+(rp.scope.contractor||'tất cả nhà thầu')+'. Chọn đúng phạm vi ở trên rồi nhập lại.');
+          state.invoiceReviewPreview=rp;state.invoiceReviewedKey='';
+          state.invoiceReviewMessage='Chưa lưu thay đổi. Kiểm tra lựa chọn bên dưới rồi bấm Lưu.';
+        }else{
+          if(!state.invoiceReviewPreview)throw new Error('Nhập lại file để xem thay đổi.');
+          await api('/api/outgoing-invoices/review/choices',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:state.invoiceReviewPreview.token,confirmed:!!new FormData(event.target).get('confirmed')})});
+          state.invoiceReviewPreview=null;await loadUnissuedScope(false);state.invoiceReviewedKey=invoiceReviewKey();
+          state.invoiceReviewMessage='Đã lưu lựa chọn từ Excel. Dòng bỏ chọn không tự lặp lại; bước 2 đã sẵn sàng.';
+        }
+      }catch(error){state.invoiceReviewMessage=error.message;state.invoiceReviewPreview=null;}
+      finally{state.invoiceReviewBusy=false;renderDocuments();}
+      return;
+    }
+    if(event.target.id==='invoiceReviewNotesForm'){
+      event.preventDefault();if(state.invoiceNoteBusy)return;
+      var ns=pendingScope(),nk=JSON.stringify(ns),nd=state.invoiceReviewNotes;
+      var note=new FormData(event.target).get('note');state.invoiceNoteBusy=true;
+      try{
+        var savedNote=await api('/api/outgoing-invoices/review-notes',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({},ns,{note:note,revision:nd.current.revision}))});
+        state.invoiceReviewNotes=savedNote;if(state.invoiceNoteDrafts)delete state.invoiceNoteDrafts[nk];state.invoiceNoteMessage='Đã lưu ghi chú.';
+      }catch(error){state.invoiceNoteMessage=error.message;}
+      finally{state.invoiceNoteBusy=false;renderDocuments();}return;
+    }
     if(event.target.id==='invoiceLineChoicesForm') {
       event.preventDefault();
       if(state.invoiceChoicesBusy||state.invoiceExportBusy||state.unissuedBusy)return;
       var lineChanges=(state.unissued.line_choices || []).filter(function(r){return Object.prototype.hasOwnProperty.call(state.invoiceLineEdits || {},r.order_id);}).map(function(r){return {order_id:r.order_id,enabled:state.invoiceLineEdits[r.order_id],token:r.token};});
-      if(!lineChanges.length)return;
+      if(!lineChanges.length){state.invoiceReviewedKey=invoiceReviewKey();state.invoiceLineMessage='Đã kiểm tra và lưu lựa chọn. Bước 2 đã sẵn sàng.';renderDocuments();return;}
+      var lineSaveOk=false;
       state.invoiceChoicesBusy=true;
       event.target.querySelectorAll('input,button').forEach(function(el){el.disabled=true;});
       try {
         var lineSaved=await api('/api/outgoing-invoices/line-choices',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:lineChanges})});
-        state.invoiceLineMessage='Đã lưu '+lineSaved.changed.length+' dòng. Tải lại bảng kê ở trên để lấy file mới.';
+        lineSaveOk=true;state.invoiceLineMessage='Đã lưu '+lineSaved.changed.length+' dòng. Dòng bỏ chọn không lặp lại ở lần tải sau.';
         state.orderInvoiceExportResult='';
       }catch(error){state.invoiceLineMessage=error.message;}
       state.invoiceLineEdits={};state.invoiceChoicesBusy=false;
       await loadUnissuedScope(false);
+      if(lineSaveOk){state.invoiceReviewedKey=invoiceReviewKey();renderDocuments();}
       return;
     }
     if(event.target.id==='invoiceContractorChoicesForm') {
@@ -6214,13 +6261,23 @@
       if(state.invoiceExportBusy || state.unissuedBusy || state.invoiceChoicesBusy || exportChoicesDirty() || !state.invoiceContractorChoices)return;
       var selectedOrderScope = Object.fromEntries(new FormData(event.target).entries());
       state.orderInvoiceFilters = selectedOrderScope;
+      if(event.submitter && event.submitter.value==='open-review'){
+        state.invoiceReviewOpen=true;renderDocuments();content.querySelector('#invoiceLineChoices').scrollIntoView({block:'start'});return;
+      }
+      if(event.submitter && event.submitter.value==='export' && !invoiceReviewReady()){showToast('Kiểm tra và lưu lựa chọn trước khi tải bảng kê.',true);return;}
       state.invoiceExportBusy=true;
       var orderExportButton = event.submitter || event.target.querySelector('button[type=submit]');
       event.target.querySelectorAll('button,input,select').forEach(function(el){el.disabled=true;});
       content.querySelectorAll('#unissuedForm button,[form=unissuedForm]').forEach(function(el){el.disabled=true;});
       orderExportButton.textContent = 'Đang kiểm tra tồn và tạo file…';
       try {
+        if(event.submitter && event.submitter.value==='review') {
+          await downloadFile('/api/outgoing-invoices/review.xlsx?'+new URLSearchParams(pendingScope()).toString());
+          state.invoiceReviewOpen=true;state.orderInvoiceExportResult='Đã tải bảng lựa chọn. Sửa cột 1/0 hoặc xóa dòng, nhập lại file rồi lưu lựa chọn.';
+          return;
+        }
         if(event.submitter && event.submitter.value==='sync') {
+          state.invoiceReviewedKey='';
           orderExportButton.textContent='Đang cập nhật hóa đơn đã ký…';
           var syncedSource=await api('/api/outgoing-invoices/sync-issued',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
           state.outgoingSourceReview=syncedSource.sources;
@@ -6229,7 +6286,7 @@
           return;
         }
         var exported = await downloadFile('/api/export/order-invoices', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
-        state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel cho đơn đến hết '+dateVN(selectedOrderScope.to)+'. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa phân bổ vào file này.' : 'Đã phân bổ lượng được chọn vào file.')+' Đã trừ hóa đơn ký đến hiện tại. Tải file chưa tính là đã xuất; xem bảng chưa xuất cộng dồn bên dưới.';
+        state.orderInvoiceExportResult = 'Đã tải '+exported.invoiceFiles+' file Excel cho đơn từ '+dateVN(selectedOrderScope.from)+' đến '+dateVN(selectedOrderScope.to)+'. '+(exported.pendingLines ? 'Còn '+exported.pendingLines+' dòng chưa phân bổ vào file này.' : 'Đã phân bổ lượng được chọn vào file.')+' Đã trừ hóa đơn ký đến hiện tại. Tải file chưa tính là đã ký hóa đơn.';
         if(exported.blockedContractors) state.orderInvoiceExportResult+=' Có '+exported.blockedContractors+' nhà thầu chưa tạo file do cần sửa. Xem tên nhà thầu và lý do trong HUONG_DAN_VA_PHAN_CHUA_XUAT.txt kèm ZIP.';
         showToast('Đã tải bảng kê từ đơn hàng để up M-Invoice');
         state.outgoingInvoices = null; state.outgoingReadiness = null; state.outgoingPeriodShortages = null;
@@ -6260,7 +6317,7 @@
       event.preventDefault();
       if (state.unissuedBusy || state.invoiceExportBusy) return;
       var f=pendingScope();
-      var params='?to='+encodeURIComponent(f.to)+'&contractor='+encodeURIComponent(f.contractor);
+      var params='?'+new URLSearchParams(f).toString();
       var action=event.submitter && event.submitter.value || 'view';
       state.unissuedBusy=true;
       event.target.querySelectorAll('button,input,select').forEach(function(el){el.disabled=true;});
@@ -6423,17 +6480,18 @@
     if(event.target.id==='invoiceLinesSkipped'){
       state.invoiceLinesSkipped=event.target.checked;state.invoiceLinePage=0;renderDocuments();return;
     }
+    if(event.target.id==='invoiceReviewFile'){state.invoiceReviewFile=event.target.files[0]||null;state.invoiceReviewPreview=null;state.invoiceReviewMessage='';return;}
     if(event.target.name==='invoice_line_choice') {
       var lineChoice=(state.unissued.line_choices || []).find(function(r){return r.order_id===Number(event.target.value);});
       if(!lineChoice)return;
       state.invoiceLineEdits=state.invoiceLineEdits || {};
       if(lineChoice.enabled===event.target.checked)delete state.invoiceLineEdits[lineChoice.order_id];
       else state.invoiceLineEdits[lineChoice.order_id]=event.target.checked;
-      state.invoiceLineMessage='';
+      state.invoiceReviewedKey='';state.invoiceLineMessage='';
       var lineForm=event.target.closest('form');
-      lineForm.querySelector('button[type=submit]').disabled=!Object.keys(state.invoiceLineEdits).length||state.invoiceExportBusy||state.unissuedBusy;
+      lineForm.querySelector('button[type=submit]').disabled=state.invoiceExportBusy||state.unissuedBusy;
       lineForm.querySelector('.invoice-line-status').textContent=Object.keys(state.invoiceLineEdits).length+' dòng thay đổi chưa lưu.';
-      content.querySelector('#orderInvoiceExportForm [value=export]').disabled=exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy;
+      content.querySelector('#orderInvoiceExportForm [value=export]').disabled=!invoiceReviewReady()||state.invoiceExportBusy||state.unissuedBusy;
       return;
     }
     if(event.target.name==='contractor_choice') {
@@ -6442,11 +6500,11 @@
       state.invoiceChoiceEdits=state.invoiceChoiceEdits || {};
       if(choice.enabled===event.target.checked)delete state.invoiceChoiceEdits[choice.code];
       else state.invoiceChoiceEdits[choice.code]=event.target.checked;
-      state.invoiceChoiceMessage='';
+      state.invoiceReviewedKey='';state.invoiceChoiceMessage='';
       var cf=event.target.closest('form');
       cf.querySelector('button[type=submit]').disabled=!invoiceChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy;
       cf.querySelector('.invoice-choice-status').textContent=invoiceChoicesDirty()?'Có thay đổi chưa lưu. Lưu lựa chọn trước khi tải file.':'';
-      content.querySelector('#orderInvoiceExportForm [value=export]').disabled=exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy;
+      content.querySelector('#orderInvoiceExportForm [value=export]').disabled=!invoiceReviewReady()||state.invoiceExportBusy||state.unissuedBusy;
       return;
     }
     if (event.target.form && event.target.form.id === 'orderInvoiceExportForm') {
@@ -6455,7 +6513,8 @@
         renderDocuments();return;
       }
       state.orderInvoiceFilters=Object.fromEntries(new FormData(event.target.form).entries());
-      state.unissued=null;state.unissuedLoadKey='';state.unissuedError='';state.unissuedExportResult='';state.orderInvoiceExportResult='';
+      try{localStorage.setItem('tdp.invoice.review.scope',JSON.stringify(state.orderInvoiceFilters));}catch(_){}
+      state.unissued=null;state.unissuedLoadKey='';state.unissuedError='';state.unissuedExportResult='';state.orderInvoiceExportResult='';state.invoiceReviewedKey='';state.invoiceReviewPreview=null;state.invoiceReviewMessage='';state.invoiceNoteMessage='';state.invoiceReviewOpen=false;
       renderDocuments();return;
     }
     if (event.target.matches('.invoice-group-select')) {
@@ -6627,6 +6686,7 @@
   });
   content.addEventListener("click", function (event) {
     var unissuedAction=event.target.closest('[data-unissued]');
+    if(event.target.closest('[data-invoice-review="cancel"]')){state.invoiceReviewPreview=null;state.invoiceReviewMessage='Đã hủy bản xem trước; lựa chọn trên hệ thống giữ nguyên.';renderDocuments();return;}
     if(unissuedAction){
       event.preventDefault();
       if(unissuedAction.dataset.unissued==='search'){
@@ -8242,3 +8302,4 @@
   },true);
   loadData(null);
 })();
+

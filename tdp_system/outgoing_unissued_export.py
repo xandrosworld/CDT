@@ -21,6 +21,10 @@ except ImportError:
     from template_workbook import safe_workbook_bytes
 
 
+def _period(payload):
+    return (f'TU_{payload["from"]}_' if payload.get('from') else '')+f'DEN_{payload["asof"]}'
+
+
 def _tax_split_zip(payload, template_dir, tax_percent):
     waiting=payload.get('portion')=='waiting'
     groups = defaultdict(dict)
@@ -71,7 +75,7 @@ def _tax_split_zip(payload, template_dir, tax_percent):
                     workbook.close()
             label = 'KKKNT' if vat == -2 else 'KCT' if vat == -1 else f'VAT{vat:g}'
             prefix='CON_CHO' if waiting else 'CHUA_XUAT'
-            name = f"{prefix}_{_safe_name(party)}_{label}_DEN_{payload['asof']}.xlsx"
+            name = f"{prefix}_{_safe_name(party)}_{label}_{_period(payload)}.xlsx"
             if name.casefold() in filenames:
                 raise ValueError('Tên file nhà thầu bị trùng; cần kiểm tra lại mã nhà thầu.')
             filenames.add(name.casefold()); archive.writestr(name, book); count += 1
@@ -142,11 +146,12 @@ def _contractor_workbook(archive, names, party, details, payload, tax_percent):
         sheet.cell(footer,2,'TỔNG CỘNG')
         for column,value in ((6,grand[1]),(9,grand[1]),(11,grand[2]),(12,grand[3])):
             sheet.cell(footer,column,value).number_format='#,##0'
-        sheet.cell(footer+1,2,_literal(f'{party} · Đơn đã duyệt đến {payload["asof"]} · Tiền theo dữ liệu lúc tải'))
+        dates=(payload['from']+' → ' if payload.get('from') else 'Đến ')+payload['asof']
+        sheet.cell(footer+1,2,_literal(f'{party} · Ngày đơn {dates} · Tiền theo dữ liệu lúc tải'))
 
         summary=workbook.create_sheet('Tong hop')
         summary.append(['Nhà thầu',_literal(party)])
-        summary.append(['Đơn đã duyệt đến',payload['asof']])
+        summary.append(['Khoảng ngày đơn',dates])
         summary.append(['Phạm vi','Chỉ phần còn chờ' if waiting else 'Toàn bộ phần chưa ký được đối chiếu'])
         summary.append(['Thuế suất','Số dòng sau gộp','Tiền trước thuế','Tiền thuế','Tổng tiền'])
         for row in totals:summary.append(row)
@@ -200,14 +205,14 @@ def unissued_template_zip(payload, template_dir, tax_percent):
             parts=[]
             for vat in sorted({tax_percent(row['tax']) for row in details}):
                 label='KKKNT' if vat==-2 else 'KCT' if vat==-1 else f'VAT{vat:g}'
-                parts.append(f'{prefix}_{_safe_name(party)}_{label}_DEN_{payload["asof"]}.xlsx')
-            name=f'{prefix}_{_safe_name(party)}_DEN_{payload["asof"]}.xlsx'
+                parts.append(f'{prefix}_{_safe_name(party)}_{label}_{_period(payload)}.xlsx')
+            name=f'{prefix}_{_safe_name(party)}_{_period(payload)}.xlsx'
             if name.casefold() in names:raise ValueError('Tên file nhà thầu bị trùng; cần kiểm tra lại mã nhà thầu.')
             names.add(name.casefold())
             target.writestr(name,_contractor_workbook(source,parts,party,details,payload,tax_percent))
         guide=[
             'MỖI NHÀ THẦU MỘT FILE — BẢNG CHƯA XUẤT / CÒN CHỜ',
-            f'Đơn đã duyệt đến {payload["asof"]}.',
+            f'Ngày đơn: {payload.get("from") or "từ đầu"} → {payload["asof"]}.',
             'Mọi thuế suất của một nhà thầu nằm chung một bảng 13 cột. Cuối bảng có tổng tiền; sheet Tong hop có tổng theo thuế suất và tổng chung. Không cần cộng nhiều file.',
             'Sheet Chi tiet don ghi từng dòng đơn và lý do còn chờ. Khác giá hoặc khác thuế giữ dòng riêng.',
             'Dòng đỏ cần kiểm tra ĐVT; không phải mọi dòng đều cần nhập kg. Số lượng và đơn giá giữ theo đơn gốc.',
