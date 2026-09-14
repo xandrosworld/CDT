@@ -7,6 +7,7 @@ $requiredSourceFiles = @(
   "tdp_system\print_bundle.py",
   "tdp_system\invoice_tax_export.py",
   "tdp_system\outgoing_substitution.py",
+  "tdp_system\outgoing_upload.py",
   "tdp_system\invoice_payment_scope.py",
   "tdp_system\invoice_payment_documents.py",
   "tdp_system\invoice_delivery_statement.py",
@@ -81,6 +82,7 @@ python -m PyInstaller `
   --hidden-import xcom_payment_documents `
   --hidden-import invoice_tax_export `
   --hidden-import outgoing_substitution `
+  --hidden-import outgoing_upload `
   --hidden-import invoice_payment_scope `
   --hidden-import invoice_payment_documents `
   --hidden-import invoice_delivery_statement `

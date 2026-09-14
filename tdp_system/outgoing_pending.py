@@ -68,6 +68,10 @@ def explain_pending(conn, orders, details, units, warnings, stock):
             'product_name': r['product_name'], 'unit': r['unit'], 'waiting_qty': 0,
             'first_date': r['work_date'], 'last_date': r['work_date'],
             'pending_reason': r['pending_reason'], 'order_rows': 0,
+            'invoice_name': r.get('invoice_name') or r['product_name'],
+            'stock_unit': stock.get(r['product_code'], {}).get('unit', r['unit']),
+            'stock_available_qty': stock.get(r['product_code'], {}).get('available_qty', 0),
+            'stock_reserved_qty': stock.get(r['product_code'], {}).get('reserved_qty', 0),
         })
         item['waiting_qty'] += r['waiting_qty']
         item['last_date'] = r['work_date']

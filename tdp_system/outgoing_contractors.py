@@ -46,6 +46,12 @@ def assert_draft_lines_enabled(conn, draft_id):
         raise ValueError('Dự thảo có dòng đã bỏ chọn khỏi file M-Invoice. Tải lại bảng kê để cập nhật lựa chọn.')
 
 
+def assert_order_enabled(conn, contractor, order_id):
+    assert_enabled(conn, contractor)
+    if order_id in excluded_order_ids(conn):
+        raise ValueError('Dòng đơn đã bỏ chọn khỏi file M-Invoice; chưa được tạo dự thảo hoặc giữ tồn cho dòng này.')
+
+
 def _token(code, enabled, revision):
     return hashlib.sha256(json.dumps([code, enabled, revision]).encode()).hexdigest()
 
@@ -88,6 +94,12 @@ def release_disabled_drafts(conn, timestamp):
     conn.execute("""UPDATE inventory_transactions SET status='cancelled',updated_at=?
         WHERE source_type='OUTGOING_DRAFT' AND status='reserved'
         AND CAST(source_id AS INTEGER) IN (SELECT value FROM json_each(?))""", (timestamp, payload))
+    try:
+        from .outgoing_substitution import mark_substitution_actions_reversed_for_draft
+    except ImportError:
+        from outgoing_substitution import mark_substitution_actions_reversed_for_draft
+    for draft_id in ids:
+        mark_substitution_actions_reversed_for_draft(conn, draft_id, timestamp)
     conn.execute("""INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at)
         VALUES('outgoing.contractor_choices.release','outgoing_invoice','','ok',?,?,?)""",
         ('Bỏ dự thảo chưa gửi có nhà thầu hoặc dòng đã bỏ chọn khỏi file M-Invoice',

@@ -178,6 +178,53 @@ class OutgoingSubstitutionTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM outgoing_substitution_actions").fetchone()[0], 0)
 
+    def test_disabled_contractor_and_line_reject_before_reservation(self):
+        with server.db() as conn:
+            bid,oid=self.add_batch(conn)
+            self.add_opening(conn,5)
+            self.add_quote(conn,'2026-09', [('SUB-1','GROUP-A',150)])
+            conn.execute("INSERT INTO outgoing_contractor_choices VALUES('NT-A',0,'test','today')")
+        body=self.request_body(bid,oid)
+        self.assertEqual(self.preview(body).status_code,409)
+        with server.db() as conn:
+            conn.execute('DELETE FROM outgoing_contractor_choices')
+            conn.execute("INSERT INTO outgoing_order_choices VALUES(?,0,'test','today')",(oid,))
+        self.assertEqual(self.preview(body).status_code,409)
+        with server.db() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM outgoing_invoice_drafts').fetchone()[0],0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],0)
+
+    def test_choice_changed_after_preview_rejects_confirm(self):
+        with server.db() as conn:
+            bid,oid=self.add_batch(conn)
+            self.add_opening(conn,5)
+            self.add_quote(conn,'2026-09',[('SUB-1','GROUP-A',150)])
+        body=self.request_body(bid,oid);preview=self.preview(body).get_json()
+        with server.db() as conn:conn.execute("INSERT INTO outgoing_order_choices VALUES(?,0,'test','today')",(oid,))
+        response=self.confirm(body,preview)
+        self.assertEqual(response.status_code,409)
+        self.assertEqual(response.get_json()['code'],'invoice_choice_disabled')
+        with server.db() as conn:self.assertEqual(conn.execute('SELECT COUNT(*) FROM outgoing_invoice_drafts').fetchone()[0],0)
+
+    def test_disabling_existing_draft_preserves_reversed_history(self):
+        try:
+            from .outgoing_contractors import choices_payload,save_choices
+        except ImportError:
+            from outgoing_contractors import choices_payload,save_choices
+        with server.db() as conn:
+            bid,oid=self.add_batch(conn)
+            self.add_opening(conn,5)
+            self.add_quote(conn,'2026-09',[('SUB-1','GROUP-A',150)])
+        body=self.request_body(bid,oid);preview=self.preview(body).get_json()
+        self.assertEqual(self.confirm(body,preview).status_code,200)
+        with server.db() as conn:
+            choice=next(r for r in choices_payload(conn)['items'] if r['code']=='NT-A')
+            save_choices(conn,{'items':[{'code':'NT-A','enabled':False,'token':choice['token']}]},server.now_iso())
+            self.assertEqual(conn.execute('SELECT status FROM outgoing_substitution_actions').fetchone()[0],'reversed')
+            self.assertEqual(conn.execute('SELECT status FROM outgoing_invoice_drafts').fetchone()[0],'cancelled')
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],0)
+            self.assertEqual(conn.execute('SELECT product_code FROM orders WHERE id=?',(oid,)).fetchone()[0],'ORIG-1')
+
     def test_correct_period_and_contractor_price_flows_to_export_and_is_idempotent(self):
         with server.db() as conn:
             batch_id, order_id = self.add_batch(conn)
@@ -432,7 +479,7 @@ class OutgoingSubstitutionTests(unittest.TestCase):
         ):
             self.assertIn(marker, app_js)
         self.assertNotIn("Gợi ý mã thay thế", app_js)
-        self.assertRegex(index_html, r"/static/app\.js\?v=\d{8}-\d+")
+        self.assertRegex(index_html, r"/static/app\.js\?v=\d{8}-[\w-]+")
         self.assertIn("outgoing_substitution.py", build_script)
         self.assertIn("--hidden-import outgoing_substitution", build_script)
 

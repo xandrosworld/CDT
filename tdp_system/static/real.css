@@ -941,3 +941,13 @@ body { min-width: 320px; }
 #invoiceContractorChoices { margin-bottom:20px; }
 #invoiceContractorChoices summary { cursor:pointer; }
 #invoiceContractorChoices p { line-height:1.5; }
+#invoiceUploadCard label.btn{position:relative;cursor:pointer}
+#invoiceUploadCard label.btn:focus-within{outline:2px solid #087e78;outline-offset:2px}
+#invoiceUploadCard input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+#invoiceUploadCard .compact-controls{flex-wrap:wrap;align-items:center;gap:10px}
+#invoiceUploadCard .invoice-upload-preview{margin-top:18px}
+#invoiceUploadCard .table-wrap{max-height:440px;overflow:auto}
+#invoiceUploadCard table{min-width:960px}
+#invoiceUploadCard td{vertical-align:top;white-space:normal}
+#invoiceUploadCard #invoiceUploadMessage{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:600px){#invoiceUploadCard .card-body{padding:14px}#invoiceUploadCard .compact-controls>*{max-width:100%}}

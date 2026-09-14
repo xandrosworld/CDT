@@ -883,6 +883,11 @@ def init_database(*, sync_master=True):
         init_order_price_override_schema(conn)
         init_quote_import_schema(conn)
         init_outgoing_substitution_schema(conn)
+        try:
+            from .outgoing_upload import SCHEMA as outgoing_upload_schema
+        except ImportError:
+            from outgoing_upload import SCHEMA as outgoing_upload_schema
+        conn.executescript(outgoing_upload_schema)
         init_invoice_workbench_schema(conn)
         init_inventory_period_close_schema(conn)
         init_bk_import_schema(conn)
@@ -5465,6 +5470,14 @@ register_outgoing_substitution_routes(app, {
     "now_iso": now_iso,
     "audit_event": audit_event,
 })
+
+try:
+    from .outgoing_upload import register as register_outgoing_upload
+    from .contract_modules import invoice_tax_percent as upload_tax_percent
+except ImportError:
+    from outgoing_upload import register as register_outgoing_upload
+    from contract_modules import invoice_tax_percent as upload_tax_percent
+register_outgoing_upload(app, {**globals(), 'invoice_tax_percent': upload_tax_percent})
 
 try:
     from round3_documents import register_round3_routes, customer_receipt

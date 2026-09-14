@@ -251,6 +251,14 @@ def substitution_preview(conn, body: dict[str, Any]) -> dict[str, Any]:
     if not source:
         raise OutgoingSubstitutionError("Không tìm thấy dòng thiếu trong phiên", code="order_not_found", status=404)
     order = dict(source)
+    try:
+        from .outgoing_contractors import assert_order_enabled
+    except ImportError:
+        from outgoing_contractors import assert_order_enabled
+    try:
+        assert_order_enabled(conn, order['contractor'], order_id)
+    except ValueError as exc:
+        raise OutgoingSubstitutionError(str(exc), code='invoice_choice_disabled') from None
     if order["batch_status"] != "approved":
         raise OutgoingSubstitutionError("Chỉ thay thế trên phiên đơn đã duyệt", code="batch_not_approved")
     original_code = _plain(order.get("product_code")).upper()
@@ -382,6 +390,14 @@ def confirm_substitution(conn, body: dict[str, Any], now_iso, audit_event) -> di
     ).fetchone()
     if existing:
         if existing["status"] == "active":
+            try:
+                from .outgoing_contractors import assert_order_enabled
+            except ImportError:
+                from outgoing_contractors import assert_order_enabled
+            try:
+                assert_order_enabled(conn, existing['contractor'], existing['original_order_id'])
+            except ValueError as exc:
+                raise OutgoingSubstitutionError(str(exc), code='invoice_choice_disabled') from None
             return {"action": dict(existing), "idempotent": True}
         raise OutgoingSubstitutionError(
             "Lựa chọn này đã được hoàn tác; cần preview lại nếu muốn làm lượt mới",
