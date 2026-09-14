@@ -85,6 +85,10 @@ class PortalSendTests(unittest.TestCase):
         again=self.send(item,False);self.assertTrue(again.json['idempotent']);self.assertEqual(self.remote.posts,1)
         self.assertEqual(self.business(),before)
         with server.db() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM invoice_inventory_ledger WHERE direction='output'").fetchone()[0],0)
+        refresh_sources(server.db,lambda:self.remote,server.now_iso,'2026-09-01','2026-09-14')
+        with server.db() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM invoice_inventory_ledger WHERE direction='output'").fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT status FROM outgoing_invoice_drafts WHERE id=?',(item['id'],)).fetchone()[0],'draft')
         # A real portal signs this same draft later. The test transport supplies
         # the signed provider response; no signing endpoint exists in our app.
         self.remote.documents[0].update(invoiceNumber=88,sendTaxStatus=4,dateSign='2026-09-14T13:00:00',taxAuthorityCode='fixture')

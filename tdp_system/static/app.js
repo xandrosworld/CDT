@@ -2964,7 +2964,7 @@
       if(preparedList.items.length && !(state.minvoiceSeries||[]).length){state.minvoiceSeries=(await api('/api/minvoice/series')).items||[];}
       if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope())){
         state.unissued=d;state.invoiceReviewNotes=notes;
-        if(!state.preparedInvoices || !sameInvoiceScope(state.preparedInvoices.scope,f)){state.preparedInvoices=preparedList;state.preparedStatus={};}
+        state.preparedInvoices=preparedList;state.preparedStatus={};
       }
     } catch(error) {
       if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope()))state.unissuedError=error.message;
