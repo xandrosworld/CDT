@@ -97,7 +97,7 @@
     invoiceDirection: storedInvoiceFilters.direction === "output" ? "output" : "input",
     invoiceFrom: storedInvoiceFilters.date_from || todayIso.slice(0, 7) + "-01",
     invoiceTo: storedInvoiceFilters.date_to || todayIso,
-    invoiceStatus: ["all", "needs_mapping", "ready", "posted", "error", "reversed", "not_inventory"].indexOf(storedInvoiceFilters.status) >= 0 ? storedInvoiceFilters.status : "all",
+    invoiceStatus: ["all", "needs_mapping", "ready", "posted", "error", "reversed", "not_inventory", "draft"].indexOf(storedInvoiceFilters.status) >= 0 ? storedInvoiceFilters.status : "all",
     invoiceLineFilter: storedInvoiceFilters.line_filter || "all",
     invoicePending: storedInvoiceFilters.scope_version === 2 && storedInvoiceFilters.pending === true,
     supplierNeeds: null,
