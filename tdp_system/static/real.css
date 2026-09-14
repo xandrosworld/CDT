@@ -967,6 +967,10 @@ body { min-width: 320px; }
 #unitReviewSection td{white-space:normal;vertical-align:top}
 
 .invoice-workflow-actions{grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.invoice-workflow #orderInvoiceExportForm{display:grid;grid-template-columns:minmax(200px,1fr) repeat(2,180px);align-items:end}
+.invoice-workflow #orderInvoiceExportForm label{min-width:0;flex:initial}
+.invoice-workflow #orderInvoiceExportForm input{box-sizing:border-box;width:100%}
+@media(max-width:720px){.invoice-workflow #orderInvoiceExportForm{grid-template-columns:minmax(0,1fr)}}
 .invoice-workflow #invoiceContractorChoices{margin-bottom:18px}
 .invoice-review-table{max-height:430px;overflow:auto}
 .invoice-review-table table{min-width:1080px}
