@@ -1396,6 +1396,29 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name, *, pres
     }
 
 
+def filtered_money_subtotal(ws, formula, column, orders, total_index, expected):
+    """Accept a filtered SUBTOTAL only when its visible rows reconcile exactly.
+
+    Every imported row is still checked separately, including hidden rows. Other
+    formulas, truncated ranges, stale caches and unfiltered totals remain blocked.
+    """
+    match = re.fullmatch(r'=\+?SUBTOTAL\((9|109),\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)\)',
+                         str(formula or '').replace(' ', '').upper())
+    if not match or not ws.auto_filter.ref or not math.isfinite(expected):
+        return False
+    _, start_col, start, end_col, end = match.groups()
+    if start_col != column or end_col != column:
+        return False
+    if not all(int(start) <= o['source_row'] <= int(end) for o in orders):
+        return False
+    hidden = [o for o in orders if ws.row_dimensions[o['source_row']].hidden]
+    if not hidden:
+        return False
+    visible = sum(order_totals(o)[total_index] for o in orders
+                  if not ws.row_dimensions[o['source_row']].hidden)
+    return abs(visible - expected) <= 1
+
+
 def parse_workbook(path: Path, fallback_date: str, selected_sheets=None, *, catalog_preview=None):
     wb = load_workbook(io.BytesIO(path.read_bytes()), data_only=True, read_only=False)
     parsed = []
@@ -1473,6 +1496,17 @@ def parse_workbook(path: Path, fallback_date: str, selected_sheets=None, *, cata
                     expected = number_value(cell.value, math.nan)
                     actual = sum(order_totals(o)[index] for o in sheet_orders)
                     if not math.isfinite(expected) or abs(expected - actual) > 1:
+                        formula_wb = load_workbook(io.BytesIO(path.read_bytes()), data_only=False, read_only=True)
+                        try:
+                            formula = formula_wb[ws.title][cell.coordinate].value
+                        finally:
+                            formula_wb.close()
+                        if filtered_money_subtotal(ws, formula, cell.column_letter, sheet_orders, index, expected):
+                            sheet_orders[0]['warnings'].append(
+                                f'Excel đang lọc: {label} ô {cell.coordinate} chỉ cộng các dòng đang hiện ({expected:,.0f}đ). '
+                                f'Web nhập đủ {len(sheet_orders)} dòng, kể cả dòng ẩn: {actual:,.0f}đ. Bỏ lọc Excel để đối chiếu toàn ngày.')
+                            sheet_orders[0]['_issue_columns'] = mapping
+                            continue
                         message = f'{label} toàn sheet ô {cell.coordinate} chưa khớp: Excel {cell.value}, tổng dòng nhập {actual:,.0f}đ. Kiểm tra các dòng và công thức tổng trước khi duyệt.'
                         sheet_orders[0]['errors'].append(message)
                         sheet_orders[0]['_issue_columns'] = mapping

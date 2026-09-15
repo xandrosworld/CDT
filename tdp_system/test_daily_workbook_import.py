@@ -831,5 +831,45 @@ class DailyWorkbookImportTests(unittest.TestCase):
                 with server.db() as conn:
                     self.assertEqual(conn.execute('SELECT status FROM batches WHERE id=?',(batch_id,)).fetchone()[0], 'draft')
 
+    def filtered_money_workbook(self, *, cached=24000, hidden_amount=12000, formula='SUBTOTAL(9,L3:L4)'):
+        import zipfile
+        from xml.etree import ElementTree as ET
+        path = self.money_workbook()
+        wb = load_workbook(path); ws = wb['01.09']
+        for cell in list(ws[3]):
+            ws.cell(4, cell.column, cell.value)
+        # Look up the header so this regression tests the actual import mapping.
+        _, mapping = server.detect_header(ws)
+        ws.cell(4, mapping['qty'], 1)
+        ws['L4'], ws['N4'], ws['N1'] = hidden_amount, 12960, 38880
+        ws['L1'] = '=' + formula
+        ws.auto_filter.ref = 'A2:N4'; ws.auto_filter.add_filter_column(0, ['P1'])
+        ws.row_dimensions[4].hidden = True
+        wb.save(path); wb.close()
+        ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+        with zipfile.ZipFile(path) as z:
+            entries = {n: z.read(n) for n in z.namelist()}
+        sheet_path = 'xl/worksheets/sheet2.xml'
+        root = ET.fromstring(entries[sheet_path])
+        root.find(".//s:c[@r='L1']/s:v", ns).text = str(cached)
+        entries[sheet_path] = ET.tostring(root)
+        with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+            for name, data in entries.items(): z.writestr(name, data)
+        return path
+
+    def test_filtered_excel_subtotal_imports_hidden_rows_with_explicit_warning(self):
+        rows, _ = server.parse_workbook(self.filtered_money_workbook(), '2026-09-01', ['01.09'])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([r['errors'] for r in rows], [[], []])
+        self.assertEqual(sum(server.order_totals(r)[0] for r in rows), 36000)
+        self.assertTrue(any('Excel đang lọc' in w for w in rows[0]['warnings']))
+
+    def test_filter_cannot_hide_bad_rows_stale_totals_or_truncated_sum_range(self):
+        for kwargs, cell in [({'cached':25000}, 'L1'), ({'hidden_amount':13000}, 'L4'),
+                             ({'formula':'SUBTOTAL(9,L3:L3)'}, 'L1')]:
+            with self.subTest(kwargs=kwargs):
+                rows, _ = server.parse_workbook(self.filtered_money_workbook(**kwargs), '2026-09-01', ['01.09'])
+                self.assertTrue(any(cell in e for r in rows for e in r['errors']))
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ except ImportError:
 
 import hashlib
 import json
+import re
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import date, datetime
@@ -371,7 +372,7 @@ def _purchase_sheet_sources(conn):
                     problems.append('Chưa có giá mua trên sheet Đặt hàng')
                 if amount != _vnd_product(qty, price):
                     problems.append('Thành tiền lệch số lượng thực tế × giá mua')
-            sheet['issues'].extend(f"Dòng {row['source_row']}: {p}" for p in problems)
+            sheet['issues'].extend(f"Dòng {row['source_row']} · {row.get('product_code', '')} · {row.get('product_name', '')}: {p}" for p in problems)
         sources.append(sheet)
     return sources
 
@@ -385,6 +386,25 @@ def pending_purchase_sheets(conn, date_from, date_to):
         sheet = sheets.get(batch['id'])
         if sheet is not None:
             issues = sheet['issues']
+            # Retain the source row while adding the identity needed to find and
+            # repair a formula error in the customer's own workbook.
+            by_row = {str(r['source_row']): r for r in sheet['items']}
+            detailed = []
+            for issue in issues:
+                match = re.match(r'^Dòng (\d+): (.*)', issue)
+                row = by_row.get(match.group(1)) if match else None
+                detailed.append(f"Dòng {match.group(1)} · {row.get('product_code', '')} · {row.get('product_name', '')}: {match.group(2)}" if row else issue)
+            row_issues = {}
+            other_issues = []
+            for issue in dict.fromkeys(detailed):
+                match = re.match(r'^Dòng (\d+)(.*?): (.*)', issue)
+                if not match:
+                    other_issues.append(issue)
+                    continue
+                key = (int(match.group(1)), match.group(2))
+                row_issues.setdefault(key, []).append(match.group(3))
+            issues = other_issues + [f'Dòng {number}{identity}: ' + '; '.join(messages)
+                                     for (number, identity), messages in sorted(row_issues.items())]
         elif conn.execute("SELECT 1 FROM purchase_workbook_lines WHERE batch_id=? AND status='confirmed' UNION ALL SELECT 1 FROM purchase_order_lines WHERE batch_id=? AND status='confirmed' LIMIT 1", (batch['id'], batch['id'])).fetchone():
             continue
         else:

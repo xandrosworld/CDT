@@ -1547,13 +1547,14 @@
     var lineCount = batches.reduce(function (total, batch) { return total + n(batch.line_count); }, 0);
     var s = d.summary.totals;
     var hasBatch = Boolean(d.batch);
+    var reviewHasBatch = hasBatch && batches.some(function (b) { return b.id === d.batch.id; });
     var errorCount = hasBatch ? n(s.errors) : 0;
     var warningCount = hasBatch ? n(s.warnings) : 0;
     var approved = hasBatch && d.batch.status === "approved";
-    var reviewText = !hasBatch
-      ? "Chưa có đơn để hoàn thiện"
+    var reviewText = !reviewHasBatch
+      ? "Chọn một ngày trong khoảng để xem và sửa đơn."
       : approved
-        ? "Đã duyệt · doanh thu " + money(s.revenue) + " · lợi nhuận " + money(s.profit)
+        ? "Đã duyệt · doanh thu chưa VAT " + money(s.revenue) + " · lợi nhuận " + money(s.profit)
         : errorCount
           ? errorCount + " dòng còn thiếu hoặc sai dữ liệu"
           : warningCount
@@ -1576,9 +1577,14 @@
       '<section class="daily-action-card"><div class="daily-action-number">3</div><div><h3>Bảng kê và biên nhận</h3>',
       '<p>Xem ngay trên phần mềm, chọn phiếu cần in hoặc tải Excel.</p></div>',
       '<button class="btn btn-primary" data-action="open-print-workspace" data-document="purchases" ', hasBatch ? '' : 'disabled', '>Xem bảng kê và biên nhận</button></section>',
-      '<section class="daily-action-card ', errorCount ? 'has-error' : approved ? 'is-done' : '', '"><div class="daily-action-number">4</div><div><h3>Duyệt đơn - sửa đơn</h3>',
-      '<p>', hasBatch ? dateVN(d.batch.work_date) + ' · ' : '', esc(reviewText), '</p></div>',
-      '<div class="form-actions"><button class="btn ', errorCount ? 'btn-outline' : 'btn-primary', '" data-view="orders" ', hasBatch ? '' : 'disabled', '>',
+      '<section class="daily-action-card ', reviewHasBatch && errorCount ? 'has-error' : reviewHasBatch && approved ? 'is-done' : '', '"><div class="daily-action-number">4</div><div><h3>Duyệt đơn - sửa đơn</h3>',
+      '<div class="compact-controls"><label>Từ ngày <input id="reviewFrom" class="input-date" type="date" value="', esc(state.homeFrom), '"></label>',
+      '<label>Đến ngày <input id="reviewTo" class="input-date" type="date" value="', esc(state.homeTo), '"></label></div>',
+      '<label>Ngày cần xem / sửa <select id="reviewBatch">', reviewHasBatch ? '' : '<option value="">Chọn ngày</option>',
+      batches.map(function (b) { return '<option value="' + b.id + '" ' + (reviewHasBatch && b.id === d.batch.id ? 'selected' : '') + '>' + dateVN(b.work_date) + ' · ' + (b.status === 'approved' ? 'Đã duyệt' : 'Chưa duyệt') + '</option>'; }).join(''), '</select></label>',
+      '<p>', reviewHasBatch ? dateVN(d.batch.work_date) + ' · ' : '', esc(reviewText), '</p>',
+      reviewHasBatch ? '<p>Tổng tiền hàng gồm VAT ngày này: <strong>' + money(s.total) + '</strong>. Phải thu còn lại xem tại Công nợ.</p>' : '', '</div>',
+      '<div class="form-actions"><button class="btn ', errorCount ? 'btn-outline' : 'btn-primary', '" data-view="orders" ', reviewHasBatch ? '' : 'disabled', '>',
       approved ? 'Xem / sửa đơn đã duyệt' : errorCount ? 'Sửa các dòng đang thiếu' : 'Kiểm tra và duyệt', '</button>',
       '<button class="btn btn-outline" data-action="download-order-input-bk" data-scope="range" ', batches.some(function (b) { return b.status === 'approved'; }) ? '' : 'disabled', '>Tải bảng kê đầu vào</button></div>',
       '<small>Bảng kê theo khoảng ngày đã chọn, chỉ lấy ngày đã duyệt.</small></section>',
@@ -2386,8 +2392,8 @@
       '<div id="supplierPaymentHost"></div>',
       '<div class="code-note">Phải trả tập hợp đầy đủ các dòng từ sheet Đặt hàng của ngày đã duyệt, gồm cả NCC “kho”; tính theo số lượng thực tế và giá mua trên sheet.</div>',
       (ledger.pending_purchase_sheets || []).length ? '<div class="code-note danger-text payable-source-warning"><strong>Công nợ chưa được tính đủ trong khoảng ngày đã chọn.</strong><p>Web cần bổ sung dữ liệu Đặt hàng hoặc giá mua cho các ngày dưới đây. File Excel của chị vẫn có thể đã có đầy đủ sheet Đặt hàng.</p><ul>' + ledger.pending_purchase_sheets.map(function (item) {
-        return '<li>' + esc(dateVN(item.work_date)) + ': ' + esc((item.issues || []).join('; ')) + '</li>';
-      }).join('') + '</ul>Các tổng bên dưới chỉ gồm phần đã đủ dữ liệu; số 0 không có nghĩa là không còn nợ. Mở Đặt hàng nhà cung cấp, chọn đúng ngày và nạp sheet từ bản Excel đã chốt; bổ sung giá mua cho các dòng được báo thiếu.</div>' : '',
+        return '<li><strong>' + esc(dateVN(item.work_date)) + '</strong><ul>' + (item.issues || []).map(function (issue) { return '<li>' + esc(issue) + '</li>'; }).join('') + '</ul><button class="btn btn-outline" data-action="repair-payable-source" data-date="' + esc(item.work_date) + '">Bổ sung Đặt hàng ngày ' + esc(dateVN(item.work_date)) + '</button></li>';
+      }).join('') + '</ul><p>Cách tự sửa: mở file Excel của ngày được báo → vào sheet Đặt hàng, sửa giá mua/công thức tại các dòng trên → lưu Excel rồi bấm Bổ sung Đặt hàng để nạp lại và xác nhận.</p><p>Chỉ cập nhật phần Đặt hàng. Không cần hoàn tác kho hoặc duyệt lại đơn bán. Các tổng bên dưới chỉ gồm phần đã đủ dữ liệu; số 0 không có nghĩa là không còn nợ.</p></div>' : '',
       '<div class="stats-grid payable-stats">',
       statCard("Tổng số lượng", esc(quantityGroups(summary.filtered_quantities_by_unit)), "Theo bộ lọc đang chọn", "∑"),
       statCard("Tổng tiền", stockMoney(summary.filtered_amount), "Theo bộ lọc; dòng đã đảo chỉ tra cứu", "₫"),
@@ -5932,6 +5938,10 @@
   });
   batchSelect.addEventListener("change", function () {
     state.batchId = Number(batchSelect.value) || null;
+    var selectedBatch = (state.data.batches || []).find(function (b) { return b.id === state.batchId; });
+    if (selectedBatch && (selectedBatch.work_date < state.homeFrom || selectedBatch.work_date > state.homeTo)) {
+      state.homeFrom = state.homeTo = selectedBatch.work_date;
+    }
     if(state.orderInvoiceFilters) delete state.orderInvoiceFilters.to;
     state.orderInvoiceExportResult=null;
     state.quoteItems = null;
@@ -6805,9 +6815,13 @@
       return;
     }
     if (event.target.id === 'orderIssueFilter') { state.orderIssueFilter = event.target.value; applyOrderFilter(); }
-    if (event.target.id === "homeFrom" || event.target.id === "homeTo") {
-      if (event.target.id === "homeFrom") state.homeFrom = event.target.value;
-      if (event.target.id === "homeTo") state.homeTo = event.target.value;
+    if (event.target.id === 'reviewBatch') {
+      if (event.target.value) { batchSelect.value = event.target.value; batchSelect.dispatchEvent(new Event('change')); }
+      return;
+    }
+    if (["homeFrom", "homeTo", "reviewFrom", "reviewTo"].includes(event.target.id)) {
+      if (event.target.id.endsWith("From")) state.homeFrom = event.target.value;
+      if (event.target.id.endsWith("To")) state.homeTo = event.target.value;
       if (!state.homeFrom || !state.homeTo || state.homeFrom > state.homeTo) {
         showToast("Từ ngày phải nhỏ hơn hoặc bằng Đến ngày", true);
         return;
@@ -7160,6 +7174,13 @@
     var button = event.target.closest("[data-action]");
     if (!button) return;
     var action = button.dataset.action;
+    if (action === 'repair-payable-source') {
+      state.supplierFrom = state.supplierTo = button.dataset.date;
+      state.supplierNeeds = null; state.supplierError = ''; state.supplierLoading = false;
+      state.purchaseOrderPreview = null; state.purchaseOrderBatchId = null;
+      navigate('purchases');
+      return;
+    }
     if (action === 'review-invoice-amount') {
       await window.TdpInvoiceAmountReview(button.dataset.id, {esc: esc, money: money,
         beforeApply: function () {
