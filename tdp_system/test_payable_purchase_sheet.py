@@ -48,6 +48,50 @@ class PayablePurchaseSheetTests(fixtures.SupplierPlanSourceTests):
             self.assertEqual(len(pending_purchase_sheets(conn,'2026-09-01','2026-09-01')),1)
         self.assertEqual(self.active(),[])
 
+    def test_complete_sheet_includes_kho_in_details_summary_and_export(self):
+        wb = load_workbook(io.BytesIO(self.file(7, 9000)))
+        sheet = wb['đặt hàng']
+        for cell in list(sheet[3]):
+            sheet.cell(4, cell.column, cell.value)
+        sheet.cell(4, 4, 6)
+        sheet.cell(4, 6, 'kho')
+        sheet.cell(4, 8, 14000)
+        sheet.cell(4, 13, 6)
+        sheet.cell(4, 14, 84000)
+        stream = io.BytesIO(); wb.save(stream); wb.close()
+        bid = self.daily(stream.getvalue())
+        self.approve_for_payable(bid)
+        with server.db() as conn:
+            rows = [dict(r) for r in conn.execute("SELECT * FROM payable_ledger_lines WHERE status!='reversed'")]
+            self.assertEqual(len(rows), 2)
+            kho = next(r for r in rows if r['supplier_snapshot'] == 'kho')
+            self.assertEqual((kho['status'], kho['amount']), ('open', 84000))
+            # Existing deployments have retained this source as a reversed row.
+            conn.execute("UPDATE payable_ledger_lines SET status='reversed',reversal_reason='internal_stock' WHERE id=?", (kho['id'],))
+        before = self.protected()
+        with server.db() as conn:
+            result = sync_payable_ledger(conn, timestamp=server.now_iso())
+            self.assertEqual(result['reactivated'], 1)
+            repeat = sync_payable_ledger(conn, timestamp=server.now_iso())
+            self.assertEqual(repeat['inserted'] + repeat['updated'] + repeat['reversed'], 0)
+            self.assertEqual(repeat['reactivated'], 0)
+            data = payable_export_data(conn, date_from='2026-09-01', date_to='2026-09-01',
+                supplier='', canonical_party_code=lambda conn, kind, code: code)
+            self.assertEqual(sum(r['amount'] for r in data['lines'] if r['status'] != 'reversed'), 147000)
+            restored = dict(conn.execute('SELECT * FROM payable_ledger_lines WHERE id=?', (kho['id'],)).fetchone())
+            self.assertEqual(restored['revision'], kho['revision'] + 1)
+            self.assertEqual(restored['source_hash'], kho['source_hash'])
+        for table, old in before.items():
+            if not table.startswith('payable_'):
+                self.assertEqual(self.protected()[table], old, table)
+        ledger = self.client.get('/api/debts/payables/ledger?from=2026-09-01&to=2026-09-01').get_json()
+        self.assertEqual(ledger['summary']['charge_amount'], 147000)
+        period = self.client.get('/api/debts?from=2026-09-01&to=2026-09-01').get_json()
+        self.assertEqual(sum(r['period_charge'] for r in period['suppliers'].values()), 147000)
+        filtered = self.client.get('/api/debts/payables/ledger?from=2026-09-01&to=2026-09-01&supplier=kho').get_json()
+        self.assertEqual(filtered['summary']['charge_amount'], 84000)
+        self.assertEqual(len(filtered['rows']), 1)
+
     def test_correcting_priced_sheet_updates_only_payable_and_keeps_revisions(self):
         bid=self.daily(self.file(7,9000));self.approve_for_payable(bid)
         before=self.protected();old=self.active()[0]

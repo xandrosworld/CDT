@@ -279,6 +279,25 @@ class PayableLedgerTests(unittest.TestCase):
         self.assertEqual(debt["suppliers"]["S1"]["period_charge"], 100)
         self.assertNotIn("S2", debt["suppliers"])
 
+    def test_kho_purchase_is_payable_with_approval_confirmation_and_cutoff_guards(self):
+        with server.db() as conn:
+            approved = self._batch(conn, '2026-09-02')
+            draft = self._batch(conn, '2026-09-03', status='draft')
+            historical = self._batch(conn, '2026-08-31')
+            for bid, day, key in [(approved, '2026-09-02', 'approved'),
+                                  (draft, '2026-09-03', 'draft'),
+                                  (historical, '2026-08-31', 'historical')]:
+                self._purchase(conn, bid, day, row_key=key, supplier='kho', amount=467600)
+            unconfirmed = self._purchase(conn, approved, '2026-09-02', row_key='unconfirmed', supplier='kho')
+            conn.execute("UPDATE purchase_workbook_lines SET status='draft' WHERE id=?", (unconfirmed,))
+            server.setting_set(conn, 'historical_payables_through_date', '2026-08-31')
+            sync_payable_ledger(conn, timestamp=server.now_iso())
+            rows = {r['source_ref'].rsplit(':', 1)[-1]: dict(r) for r in conn.execute('SELECT * FROM payable_ledger_lines')}
+        self.assertEqual((rows['approved']['status'], rows['approved']['amount']), ('open', 467600))
+        self.assertEqual(rows['draft']['reversal_reason'], 'batch_not_approved')
+        self.assertEqual(rows['historical']['reversal_reason'], 'covered_by_historical_snapshot')
+        self.assertEqual(rows['unconfirmed']['reversal_reason'], 'source_not_confirmed')
+
     def test_supplier_filter_keeps_accent_distinct_master_codes_separate(self):
         with server.db() as conn:
             conn.execute(

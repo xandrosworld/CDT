@@ -269,8 +269,9 @@ def _policy_reason(
         return "batch_not_approved"
     if source_status and source_status != "confirmed":
         return "source_not_confirmed"
-    if _is_internal_stock(supplier):
-        return "internal_stock"
+    # Payables reconcile the complete approved purchase sheet, including its
+    # "kho" account (customer-confirmed 2026-09-15). Warehouse routing remains
+    # a separate concern; it must not remove priced rows from this ledger.
     if cutoff and work_date <= cutoff:
         return "covered_by_historical_snapshot"
     return ""

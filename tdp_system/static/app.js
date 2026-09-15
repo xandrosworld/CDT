@@ -1153,6 +1153,11 @@
     if (view === "kitchen" || view === "payroll") view = "home";
     if (view !== state.view) state.paymentScopeSerial++;
     if(view==='documents' && view!==state.view){state.unissued=null;state.unissuedLoadKey='';state.unissuedError='';}
+    if (view === 'debts') {
+      invalidateDebtPeriod();
+      invalidatePayableWorkspace(true);
+      invalidateReceivableWorkspace(true);
+    }
     state.view = view;
     syncNavigationChrome(view);
     sidebar.classList.remove("open");
@@ -2363,7 +2368,7 @@
     return html([
       '<div class="payable-workspace fade-in">',
       '<div id="supplierPaymentHost"></div>',
-      '<div class="code-note">Phải trả lấy số lượng thực tế và giá mua từ sheet Đặt hàng của ngày đã duyệt.</div>',
+      '<div class="code-note">Phải trả tập hợp đầy đủ các dòng từ sheet Đặt hàng của ngày đã duyệt, gồm cả NCC “kho”; tính theo số lượng thực tế và giá mua trên sheet.</div>',
       (ledger.pending_purchase_sheets || []).length ? '<div class="code-note danger-text payable-source-warning"><strong>Công nợ chưa được tính đủ trong khoảng ngày đã chọn.</strong><p>Web cần bổ sung dữ liệu Đặt hàng hoặc giá mua cho các ngày dưới đây. File Excel của chị vẫn có thể đã có đầy đủ sheet Đặt hàng.</p><ul>' + ledger.pending_purchase_sheets.map(function (item) {
         return '<li>' + esc(dateVN(item.work_date)) + ': ' + esc((item.issues || []).join('; ')) + '</li>';
       }).join('') + '</ul>Các tổng bên dưới chỉ gồm phần đã đủ dữ liệu; số 0 không có nghĩa là không còn nợ. Mở Đặt hàng nhà cung cấp, chọn đúng ngày và nạp sheet từ bản Excel đã chốt; bổ sung giá mua cho các dòng được báo thiếu.</div>' : '',
@@ -7321,6 +7326,9 @@
     if (action === "refresh-invoice-buyers") { await fetchOutgoingInvoices(); return; }
     if (action === "open-debt-section") {
       state.debtSection = button.dataset.section || "";
+      invalidateDebtPeriod();
+      if (state.debtSection === 'payable') invalidatePayableWorkspace(true);
+      else invalidateReceivableWorkspace(true);
       renderDebts();
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
