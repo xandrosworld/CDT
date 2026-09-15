@@ -1394,12 +1394,14 @@ def payables_database_state_hash(conn) -> str:
 
 
 def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
-    if mode not in ('full','names_and_new'):
+    if mode not in ('full','names_and_new', 'new_only'):
         raise ValueError('Chọn đúng phạm vi nhập danh mục.')
     found = find_catalog_sheet(workbook)
     if not found:
         raise ValueError("Không tìm thấy bảng có Mã hàng, Tên Thành Đạt Phát, ĐVT và Thuế")
     worksheet, header_row, fields = found
+    if mode == 'new_only' and worksheet.max_row > 100_000:
+        raise ValueError('Sheet danh mục vượt 100.000 dòng; hãy bỏ các dòng trống dư rồi nạp lại.')
     existing_products = {
         row["code"]: dict(row)
         for row in conn.execute(
@@ -1419,13 +1421,19 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
     for row_index, row in enumerate(
         worksheet.iter_rows(
             min_row=header_row + 1,
-            max_row=min(worksheet.max_row, header_row + MAPPING_IMPORT_MAX_ROWS + 1),
+            max_row=(worksheet.max_row if mode == 'new_only'
+                     else min(worksheet.max_row, header_row + MAPPING_IMPORT_MAX_ROWS + 1)),
             max_col=max_column,
             values_only=True,
         ),
         start=header_row + 1,
     ):
         code = mapping_cell_text(row[fields["product_code"] - 1]).upper()
+        if mode == 'new_only' and code in existing_products:
+            scanned += 1
+            if scanned > MAPPING_IMPORT_MAX_ROWS:
+                raise ValueError(f'File vượt quá giới hạn {MAPPING_IMPORT_MAX_ROWS:,} dòng dữ liệu')
+            continue
         name = mapping_cell_text(row[fields["product_name"] - 1])
         unit = catalog_unit(row[fields["unit"] - 1])
         tax = catalog_tax(row[fields["tax"] - 1])
@@ -1462,9 +1470,9 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
             item["errors"].append("Thiếu đơn vị tính")
         if not tax:
             item["errors"].append("Thiếu thuế")
-        if "invoice_name" in fields and not invoice_name:
+        if mode != 'new_only' and "invoice_name" in fields and not invoice_name:
             item["errors"].append("Thiếu tên xuất hóa đơn")
-        if 'invoice_unit' in fields and not invoice_unit:
+        if mode != 'new_only' and 'invoice_unit' in fields and not invoice_unit:
             item['errors'].append('Thiếu ĐVT xuất hóa đơn')
         if invoice_unit and invoice_unit != unit:
             message='ĐVT xuất hóa đơn '+invoice_unit+' khác ĐVT đơn hàng '+unit+'; cần xác nhận số lượng và tỷ lệ quy đổi trước khi áp dụng.'
@@ -1537,7 +1545,7 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
 
     if scanned > MAPPING_IMPORT_MAX_ROWS:
         raise ValueError(f"File vượt quá giới hạn {MAPPING_IMPORT_MAX_ROWS:,} dòng dữ liệu")
-    if not rows:
+    if not rows and mode != 'new_only':
         raise ValueError("Sheet được nhận diện nhưng không có dòng dữ liệu")
 
     unique_rows = [item for item in rows if item["apply"] and item["product_status"] != "duplicate"]

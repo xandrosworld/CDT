@@ -4539,9 +4539,14 @@
       var parts = fileDate.split(".");
       fallback = new Date().getFullYear() + "-" + String(parts[1]).padStart(2, "0") + "-" + String(parts[0]).padStart(2, "0");
     }
-    var referenceNote = payload.strictDaily && payload.ignoredSheets && payload.ignoredSheets.length
+    var referenceSheets = (payload.ignoredSheets || []).filter(function(item) { return item.role !== 'product_reference'; });
+    var catalog = payload.catalogAdditions;
+    var catalogNote = catalog && catalog.sheets.length
+      ? '<div class="form-field span-4"><div class="code-note"><strong>Danh mục hàng hóa: '+n(catalog.newCount)+' mã mới sẽ được thêm khi lưu file.</strong> Giữ nguyên các mã đã có.'+
+        (catalog.errors.length ? '<p class="error-summary">Chưa thể lưu: '+catalog.errors.map(esc).join('<br>')+'</p>' : '')+'</div></div>' : '';
+    var referenceNote = payload.strictDaily && referenceSheets.length
       ? '<div class="form-field span-4"><div class="code-note"><strong>Các trang tham chiếu không nhập ở bước này:</strong> ' +
-        payload.ignoredSheets.map(function (item) { return esc(item.name); }).join(", ") +
+        referenceSheets.map(function (item) { return esc(item.name); }).join(", ") +
         '. Các trang CCCD, BÁO GIÁ và gộp đơn được bảo vệ; dữ liệu danh mục khác chỉ thay đổi ở màn hình riêng sau khi xem và xác nhận.</div></div>'
       : "";
     var importDetails = payload.strictDaily ? payload.sheets.map(function(sheet) {
@@ -4575,9 +4580,10 @@
         ? "Bổ sung sheet Đặt hàng để đối chiếu nhà cung cấp và tính công nợ phải trả. Đơn bán, phải thu và chứng từ kho đã ghi được giữ nguyên. Dòng chưa có giá mua vẫn cần bổ sung trước khi tính đủ công nợ."
         : payload.phase === "finalization"
         ? "File chưa thể tự lưu vì còn phần lỗi. Chỉ những phần đã kiểm tra đạt mới được chọn; phần mua không sửa đơn khách, doanh thu hay phải thu."
-        : "Chỉ các trang Excel được chọn mới đi vào đơn hàng. File hợp lệ mới cùng ngày và đúng phạm vi sheet cũ sẽ thay toàn bộ dòng phiên đó, kể cả dòng sửa/thêm tay. Ngày và sheet khác, danh mục và lịch sử bản cũ được giữ; phần đã liên kết chứng từ sẽ bị chặn để đối chiếu.",
+        : "Chỉ các trang Excel được chọn mới đi vào đơn hàng. File hợp lệ mới cùng ngày và đúng phạm vi sheet cũ sẽ thay toàn bộ dòng phiên đó, kể cả dòng sửa/thêm tay. Ngày và sheet khác, mã hàng đã có và lịch sử bản cũ được giữ; phần đã liên kết chứng từ sẽ bị chặn để đối chiếu.",
       "</div></div>",
       referenceNote,
+      catalogNote,
       '<div class="form-field span-4"><label>Trang Excel cần nhập</label><div class="sheet-list">', sheetCards, "</div></div>",
       importDetails,
       field("Ngày làm việc dự phòng", "work_date", fallback, "date", "required", "span-2"),
@@ -4626,7 +4632,9 @@
       state.orderImportMessage = imported.purchasePlanOnly ? 'Đã lưu sheet Đặt hàng để tính công nợ phải trả. Đơn bán và chứng từ kho đã ghi được giữ nguyên.' :
         imported.replacement ? imported.replacement.message + ' ' + imported.replacement.replaced_rows + ' dòng cũ → ' + imported.replacement.new_rows + ' dòng mới.' :
         imported.idempotent ? 'File này đã được nạp; giữ bản hiện tại, không tạo thêm dòng hoặc trừ kho lần nữa.' :
-        'Đã cập nhật phạm vi vừa chọn. Các ngày khác, danh mục và phần mua/bán không chọn được giữ nguyên.';
+        'Đã cập nhật phạm vi vừa chọn. Các ngày khác, mã hàng đã có và phần mua/bán không chọn được giữ nguyên.';
+      var addedProducts = n(imported.catalogImport && imported.catalogImport.inserted);
+      if (addedProducts) state.orderImportMessage += ' Đã thêm '+addedProducts+' mã hàng mới từ danh mục trong file.';
       state.pendingImport = null;
       closeModal();
       var automaticallyApproved = false;
@@ -4656,6 +4664,7 @@
           }).join(" + ")
           : "Đã nhập " + imported.orders.length + " dòng · " + imported.summary.totals.errors +
             " lỗi · " + (imported.summary.totals.warnings || 0) + " cảnh báo";
+      if (addedProducts) message += ' · Đã thêm '+addedProducts+' mã hàng mới';
       showToast(message, Boolean(approvalWarning));
       if (pending.continuous && !imported.purchasePlanOnly) openOrderWorksheet();
       return true;

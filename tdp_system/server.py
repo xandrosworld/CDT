@@ -245,6 +245,11 @@ except ImportError:
     from .daily_workbook_import import analysis_state_hash, analyze_daily_workbook
 
 try:
+    from daily_catalog_capture import preview_catalog_additions, staged_products, apply_catalog_additions
+except ImportError:
+    from .daily_catalog_capture import preview_catalog_additions, staged_products, apply_catalog_additions
+
+try:
     from daily_reference_import import init_daily_reference_schema, register_daily_reference_routes
 except ImportError:
     from .daily_reference_import import init_daily_reference_schema, register_daily_reference_routes
@@ -1385,13 +1390,17 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
     }
 
 
-def parse_workbook(path: Path, fallback_date: str, selected_sheets=None):
+def parse_workbook(path: Path, fallback_date: str, selected_sheets=None, *, catalog_preview=None):
     wb = load_workbook(io.BytesIO(path.read_bytes()), data_only=True, read_only=False)
     parsed = []
     skipped_sheets = []
     selected = set(selected_sheets) if selected_sheets else None
     with db() as conn:
         by_code, by_name = product_lookup(conn)
+        for product in staged_products(catalog_preview):
+            if product['code'] not in by_code:
+                by_code[product['code']] = product
+                by_name[slug(product['name'])].append(product)
         for ws in wb.worksheets:
             if selected is not None and ws.title not in selected:
                 continue
@@ -1593,11 +1602,14 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
             analysis["daySheets"] = matching_days
             selected_dates = matching_days[0].get("workDates") or []
             analysis["detectedWorkDate"] = selected_dates[0] if len(selected_dates) == 1 else ""
+    with db() as conn:
+        analysis['catalogAdditions'] = preview_catalog_additions(conn, path)
     customer_orders_by_sheet = {}
     for sheet in analysis["daySheets"]:
         dates = sheet.get("workDates") or []
         fallback_date = dates[0] if len(dates) == 1 else date.today().isoformat()
-        orders, skipped = parse_workbook(path, fallback_date, [sheet["name"]])
+        orders, skipped = parse_workbook(path, fallback_date, [sheet["name"]],
+                                        catalog_preview=analysis['catalogAdditions'])
         customer_orders_by_sheet[sheet["name"]] = orders
         sheet["parsedRows"] = len(orders)
         sheet["errorRows"] = sum(bool(item.get("errors")) for item in orders)
@@ -1719,6 +1731,9 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
                 analysis["databaseStateHash"] = strict_daily_database_state_hash(
                     conn, 0, detected_date, day_sheet["name"],
                 )
+    if not analysis['catalogAdditions']['canConfirm']:
+        for sheet in analysis['daySheets'] + analysis['purchaseSheets']:
+            sheet['confirmAvailable'] = False
     analysis["stateHash"] = analysis_state_hash(analysis)
     return analysis
 
@@ -2075,6 +2090,10 @@ def confirm_strict_daily_finalization(pending, body, sheets):
                 "Dữ liệu đã đổi sau preview; hãy tải lại file trước khi chốt",
                 code="stale_database_state",
             )
+        catalog_result = apply_catalog_additions(
+            conn, analysis.get('catalogAdditions'), timestamp=now_iso(),
+            source_hash=source_hash, source_name=pending['name'], audit=audit_event,
+        )
         if analysis.get("purchasePlanOnly"):
             # Historical sales and posted inventory remain immutable. The
             # purchase sheet is a separate, versioned source for supplier/AP
@@ -2096,6 +2115,7 @@ def confirm_strict_daily_finalization(pending, body, sheets):
                 ok=True, selectedSheets=sheets, selectedScopes=selected_scopes,
                 sourceHash=source_hash, idempotent=applied["idempotent"],
                 purchasePlanOnly=True, scopeResults={"purchase_orders": applied}, finalized=None,
+                catalogImport=catalog_result,
             )
             return jsonify(payload)
         blocked = batch_mutation_blocker(conn, batch_id)
@@ -2252,6 +2272,7 @@ def confirm_strict_daily_finalization(pending, body, sheets):
                 for scope, result in scope_results.items()
             ),
             scopeResults=scope_results,
+            catalogImport=catalog_result,
             dailyImport=daily_import,
             finalized=finalized,
         )
@@ -2741,6 +2762,8 @@ def api_import_analyze():
             scopeSelectionRequired=bool(strict_analysis.get("scopeSelectionRequired")),
             purchasePlanOnly=bool(strict_analysis.get("purchasePlanOnly")),
             ignoredSheets=strict_analysis["ignoredSheets"],
+            catalogAdditions={key: strict_analysis['catalogAdditions'][key]
+                              for key in ('sheets', 'newCount', 'errors', 'canConfirm')},
         )
     return jsonify(payload)
 
@@ -2804,7 +2827,8 @@ def confirm_strict_daily_import(pending, body):
                 "Nội dung workbook đã thay đổi sau preview",
                 code="source_changed",
             )
-        orders, skipped = parse_workbook(pending["path"], work_date, sheets)
+        orders, skipped = parse_workbook(pending["path"], work_date, sheets,
+                                        catalog_preview=analysis.get('catalogAdditions'))
         if not orders:
             raise DailyImportError(
                 "Sheet ngày đã chọn không có dòng đơn để nhập",
@@ -2814,6 +2838,10 @@ def confirm_strict_daily_import(pending, body):
         contract_rows = strict_daily_contract_rows(orders)
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            catalog_result = apply_catalog_additions(
+                conn, analysis.get('catalogAdditions'), timestamp=now_iso(),
+                source_hash=source_hash, source_name=pending['name'], audit=audit_event,
+            )
             existing = valid_order_import_batch(conn, import_key)
             if existing:
                 batch_id = int(existing["id"])
@@ -2829,6 +2857,7 @@ def confirm_strict_daily_import(pending, body):
                     sourceHash=source_hash,
                     importKey=import_key,
                     idempotent=True,
+                    catalogImport=catalog_result,
                     dailyImport=strict_daily_version_payload(
                         conn, batch_id, source_hash, sheets[0],
                     ),
@@ -2918,6 +2947,7 @@ def confirm_strict_daily_import(pending, body):
                 sourceHash=source_hash,
                 importKey=import_key,
                 idempotent=is_existing_current,
+                catalogImport=catalog_result,
                 dailyImport=daily_import,
             )
             return jsonify(payload)

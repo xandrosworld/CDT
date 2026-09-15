@@ -29,6 +29,8 @@ REFERENCE_ROLES = {
     "cccd": "identity_reference",
     "t.chieu": "contractor_kitchen_reference",
     "danh muc hang hoa": "product_reference",
+    "danh muc hh": "product_reference",
+    "danh muc hang": "product_reference",
     "bao gia": "price_reference",
     "danh muc nha cc": "supplier_reference",
     "gop don": "intermediate_reference",
@@ -47,6 +49,7 @@ REFERENCE_POLICIES = {
     "product_reference": {
         "purpose": "product_catalog_validation",
         "writePolicy": "separate_preview_confirm",
+        "newProductPolicy": "add_with_daily_confirmation",
         "previewEndpoint": "/api/daily-references/preview",
     },
     "price_reference": {
@@ -198,6 +201,7 @@ def analysis_state_hash(analysis: dict[str, Any]) -> str:
         "phase": analysis.get("phase", "first_load"),
         "batchId": analysis.get("batchId"),
         "databaseStateHash": analysis.get("databaseStateHash", ""),
+        "catalogStateHash": (analysis.get('catalogAdditions') or {}).get('databaseHash', ''),
         "daySheets": [
             {
                 key: item.get(key)
