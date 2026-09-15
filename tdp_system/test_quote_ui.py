@@ -48,7 +48,7 @@ class QuoteUiContractTests(unittest.TestCase):
         self.assertIn(".quote-import-preview", self.css)
         self.assertIn('quoteDetailsOpen: true', self.app_js)
         self.assertIn('quoteHistoryOpen: false', self.app_js)
-        self.assertRegex(self.index, r'/static/app\.js\?v=\d+-\d+')
+        self.assertRegex(self.index, r'/static/app\.js\?v=\d+-[a-zA-Z0-9-]+')
 
 
 if __name__ == "__main__":

@@ -58,7 +58,7 @@ def selected_workbooks(conn, body, ctx):
             period = ctx['quote_period_arg'](body.get('period'))
             if not period: raise ValueError('Hãy chọn kỳ báo giá')
             version_id = ctx['quote_version_arg'](body.get('version_id'))
-            version = conn.execute("""SELECT id FROM quote_versions WHERE effective_period=? AND status='confirmed'
+            version = conn.execute("""SELECT id,effective_from,effective_to FROM quote_versions WHERE effective_period=? AND status='confirmed'
                 AND (? IS NULL OR id=?) ORDER BY version_no DESC LIMIT 1""",(period,version_id,version_id)).fetchone()
             if not version: raise ValueError('Kỳ này chưa có báo giá đã xác nhận')
             batch_id = positive_id(body['batch_id']) if body.get('batch_id') else None
@@ -66,6 +66,9 @@ def selected_workbooks(conn, body, ctx):
                 batch = conn.execute('SELECT work_date FROM batches WHERE id=?',(batch_id,)).fetchone()
                 if not batch or batch['work_date'][:7] != period:
                     raise ValueError('Đơn theo ngày không thuộc kỳ báo giá đang xem')
+                if ((version['effective_from'] and batch['work_date'] < version['effective_from'])
+                    or (version['effective_to'] and batch['work_date'] > version['effective_to'])):
+                    batch_id = None
             for contractor in conn.execute("SELECT code,pricing_mode FROM contractors ORDER BY code"):
                 daily = contractor['pricing_mode']=='daily'
                 if daily and not batch_id: continue

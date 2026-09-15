@@ -195,7 +195,7 @@ def _normalized_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if item.get("exportable") is not True:
             continue
         state = _literal(item.get("price_state"), "trạng thái giá").lower()
-        if state not in {"numeric", "zero"}:
+        if state not in {"numeric", "zero", "text"}:
             continue
         code = _literal(item.get("product_code"), "mã hàng", required=True).upper()
         if code in seen:
@@ -204,7 +204,8 @@ def _normalized_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 code="quote_duplicate_conflict",
             )
         seen.add(code)
-        price = _price(item.get("sell_price"))
+        price = (_literal(item.get('status'), 'giá/trạng thái', required=True)
+                 if state == 'text' else _price(item.get("sell_price")))
         if state == "zero" and price != 0:
             raise QuoteExportError(f"Trạng thái giá 0 của mã {code} không khớp giá trị")
         group_code = code[:1] if code else ""
@@ -310,6 +311,10 @@ def build_contractor_quote_workbook(
             raise QuoteExportError("Phiên bản nguồn báo giá không hợp lệ")
         source_hash = _literal(version.get("source_hash"), "hash nguồn", required=True).upper()
         title_text = f"BẢNG BÁO GIÁ THÁNG {month:02d} - NĂM {year}"
+        if str(version.get('effective_from') or '').endswith('-16'):
+            title_text = f"BẢNG BÁO GIÁ KỲ 2 THÁNG {month}"
+        elif str(version.get('effective_to') or '').endswith('-15'):
+            title_text = f"BẢNG BÁO GIÁ KỲ 1 THÁNG {month}"
         source_text = f"{contractor} · kỳ {period} · phiên bản {version_no} · {source_hash[:16]}"
         subject_text = f"{contractor} · kỳ {period} · phiên bản {version_no}"
         keyword_text = f"{contractor},{period},version-{version_no},{source_hash}"

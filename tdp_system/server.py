@@ -1257,7 +1257,7 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
     customer_return_qty = order_number(raw.get("customer_return_qty"), "Số lượng khách trả")
     unit = clean_text(raw.get("unit")) or (clean_text(product["unit"]) if product else "")
     requested_buy_price = order_number(raw.get("buy_price"), "Giá mua")
-    period_buy_price = quote_buy_price(conn, code, batch_date, contractor) if code else {
+    period_buy_price = quote_buy_price(conn, code, batch_date, contractor, supplier=supplier) if code else {
         "has_version": False, "value": None, "allow_actual_fallback": True,
     }
     if period_buy_price["has_version"]:
@@ -5113,7 +5113,7 @@ def api_export_all_quotes():
         with db() as conn:
             if requested_version_id is None:
                 version = conn.execute(
-                    """SELECT id,version_no FROM quote_versions
+                    """SELECT id,version_no,effective_from,effective_to FROM quote_versions
                        WHERE effective_period=? AND status='confirmed'
                        ORDER BY version_no DESC LIMIT 1""",
                     (period,),
@@ -5123,7 +5123,7 @@ def api_export_all_quotes():
                 missing_message = "Kỳ báo giá này chưa có phiên bản đã xác nhận"
             else:
                 version = conn.execute(
-                    """SELECT id,version_no FROM quote_versions
+                    """SELECT id,version_no,effective_from,effective_to FROM quote_versions
                        WHERE id=? AND effective_period=? AND status='confirmed'""",
                     (requested_version_id, period),
                 ).fetchone()
@@ -5157,6 +5157,10 @@ def api_export_all_quotes():
                         "Đơn hàng theo ngày không thuộc kỳ báo giá đã chọn",
                         code="daily_batch_period_mismatch",
                     )
+                daily_batch_allowed = bool(
+                    (not version['effective_from'] or batch['work_date'] >= version['effective_from'])
+                    and (not version['effective_to'] or batch['work_date'] <= version['effective_to'])
+                )
 
             archive_stream = io.BytesIO()
             written = 0

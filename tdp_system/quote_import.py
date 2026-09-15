@@ -8,6 +8,7 @@ period, while orders keep the numeric price snapshots they were created with.
 from __future__ import annotations
 
 import hashlib
+import calendar
 import io
 import json
 import math
@@ -102,6 +103,10 @@ class QuoteImportError(ValueError):
 
 def init_quote_import_schema(conn) -> None:
     conn.executescript(QUOTE_IMPORT_SCHEMA)
+    version_columns = {row['name'] for row in conn.execute('PRAGMA table_info(quote_versions)')}
+    for field in ('effective_from', 'effective_to'):
+        if field not in version_columns:
+            conn.execute(f'ALTER TABLE quote_versions ADD COLUMN {field} TEXT')
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(quote_version_prices)")}
     if "source_header" not in columns:
         conn.execute(
@@ -110,7 +115,7 @@ def init_quote_import_schema(conn) -> None:
 
 
 def _plain(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip())
+    return re.sub(r"\s+", " ", str(value if value is not None else "").strip())
 
 
 def _key(value: Any) -> str:
@@ -146,6 +151,22 @@ def _period_from_date(value: Any) -> str:
         return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m")
     except ValueError:
         return ""
+
+
+def _effective_dates(period, start=None, end=None):
+    year, month = map(int, period.split('-'))
+    start = _plain(start) or period + '-01'
+    end = _plain(end) or f'{period}-{calendar.monthrange(year, month)[1]:02d}'
+    try:
+        first = datetime.strptime(start, '%Y-%m-%d')
+        last = datetime.strptime(end, '%Y-%m-%d')
+        if first.strftime('%Y-%m-%d') != start or last.strftime('%Y-%m-%d') != end:
+            raise ValueError
+        if start[:7] != period or end[:7] != period or start > end:
+            raise ValueError
+    except ValueError:
+        raise QuoteImportError('Ngày áp dụng phải nằm trong tháng báo giá, từ ngày không được sau đến ngày.', code='invalid_effective_dates') from None
+    return start, end
 
 
 def _cell_value(value: Any, *, buy_price: bool = False) -> tuple[str, float | None, str]:
@@ -320,6 +341,7 @@ def _duplicate_analysis(items: list[dict[str, Any]], price_groups: list[str]) ->
     for item in items:
         by_code.setdefault(item["product_code"], []).append(item)
     conflicts: list[dict[str, Any]] = []
+    buy_conflicts = []
     duplicate_codes = 0
     safe_duplicate_codes = 0
     for code, rows in by_code.items():
@@ -348,7 +370,8 @@ def _duplicate_analysis(items: list[dict[str, Any]], price_groups: list[str]) ->
                 if (signature := _buy_explicit_signature(item)) is not None
             }
             if len(explicit_buys) > 1:
-                reasons.append("giá mua khác nhau")
+                buy_conflicts.append({'productCode': code, 'priceGroup': group,
+                                      'sourceRows': [item['source_row'] for item, _price in candidates]})
             if not reasons:
                 continue
             code_conflicts += 1
@@ -374,6 +397,7 @@ def _duplicate_analysis(items: list[dict[str, Any]], price_groups: list[str]) ->
         "conflict_count": len(conflicts),
         "conflict_codes": len({item["productCode"] for item in conflicts}),
         "conflicts": conflicts,
+        "buy_conflicts": buy_conflicts,
     }
 
 
@@ -381,7 +405,7 @@ def _database_state_hash(conn) -> str:
     queries = (
         "SELECT code,name FROM products ORDER BY code",
         "SELECT code,COALESCE(price_group,''),pricing_mode FROM contractors ORDER BY code",
-        "SELECT effective_period,version_no,source_hash,content_hash,status "
+        "SELECT effective_period,version_no,source_hash,content_hash,status,effective_from,effective_to "
         "FROM quote_versions ORDER BY effective_period,version_no",
     )
     digest = hashlib.sha256()
@@ -434,7 +458,12 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
         if not code:
             errors.append("Thiếu mã hàng")
         elif code not in known_products:
-            errors.append("Mã hàng chưa có trong danh mục")
+            # A quotation is a source snapshot, not an inventory/master import.
+            # A fully described new item can be quoted before being stocked.
+            row_warnings.append("Mã chưa có trong danh mục; giữ thông tin trong báo giá, không tự thêm vào kho")
+            for field, label in (('unit', 'ĐVT'), ('tax', 'thuế')):
+                if field not in columns or not _plain(sheet.cell(row_no, columns[field]).value):
+                    errors.append('Mã mới thiếu ' + label)
         if not name and code in known_products:
             name = known_products[code]
             row_warnings.append("Tên hàng trống; dùng tên danh mục")
@@ -515,6 +544,7 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
             "safe_duplicate_codes": duplicate_analysis["safe_duplicate_codes"],
             "conflict_codes": duplicate_analysis["conflict_codes"],
             "conflicts": duplicate_analysis["conflict_count"],
+            "buy_price_conflicts": len(duplicate_analysis['buy_conflicts']),
         },
     }
 
@@ -545,7 +575,13 @@ def _public_items(items: list[dict[str, Any]], limit: int = 250) -> list[dict[st
     return public
 
 
-def active_quote_version(conn, period: str):
+def active_quote_version(conn, period: str, work_date: str = ''):
+    if work_date:
+        return conn.execute('''SELECT * FROM quote_versions
+            WHERE effective_period=? AND status='confirmed'
+              AND (effective_from IS NULL OR effective_from<=?)
+              AND (effective_to IS NULL OR effective_to>=?)
+            ORDER BY version_no DESC LIMIT 1''', (period, work_date, work_date)).fetchone()
     return conn.execute(
         """SELECT * FROM quote_versions
            WHERE effective_period=? AND status='confirmed'
@@ -554,7 +590,7 @@ def active_quote_version(conn, period: str):
     ).fetchone()
 
 
-def _resolve_stored_candidates(rows) -> dict[str, Any]:
+def _resolve_stored_candidates(rows, *, check_buy_price=True) -> dict[str, Any]:
     candidates = [dict(row) for row in rows if row["price_state"] not in {"blank", "excluded"}]
     if not candidates:
         states = {row["price_state"] for row in rows}
@@ -576,7 +612,7 @@ def _resolve_stored_candidates(rows) -> dict[str, Any]:
         (row["buy_price_state"], float(row["buy_price"] or 0))
         for row in candidates if row["buy_price_state"] in {"numeric", "zero"}
     }
-    if len(explicit_buys) > 1:
+    if check_buy_price and len(explicit_buys) > 1:
         reasons.append("giá mua khác nhau")
     if reasons:
         return {
@@ -587,7 +623,7 @@ def _resolve_stored_candidates(rows) -> dict[str, Any]:
             "candidates": candidates,
         }
     selected = candidates[0]
-    if explicit_buys:
+    if len(explicit_buys) == 1:
         buy_signature = next(iter(explicit_buys))
         selected = next(
             row for row in candidates
@@ -657,7 +693,7 @@ def quote_rows_for_contractor(
     conflicts = []
     excluded_count = 0
     for code, code_rows in by_code.items():
-        resolution = _resolve_stored_candidates(code_rows)
+        resolution = _resolve_stored_candidates(code_rows, check_buy_price=False)
         if resolution["conflict"]:
             conflicts.append({
                 "product_code": code,
@@ -685,7 +721,7 @@ def quote_rows_for_contractor(
             "sell_price": selected["price_value"],
             "status": status,
             "price_state": state,
-            "exportable": state in {"numeric", "zero"},
+            "exportable": state in {"numeric", "zero", "text"},
             "source_row": selected["source_row"],
             "source_rows": resolution["source_rows"],
             "source_column": selected["source_column"],
@@ -701,12 +737,14 @@ def quote_rows_for_contractor(
             "version_no": version["version_no"],
             "source_hash": version["source_hash"],
             "confirmed_at": version["confirmed_at"],
+            "effective_from": version['effective_from'],
+            "effective_to": version['effective_to'],
         },
         "items": items,
         "conflicts": conflicts,
         "excluded_count": excluded_count,
         "output_count": sum(bool(item["exportable"]) for item in items),
-        "status_count": sum(not item["exportable"] for item in items),
+        "status_count": sum(item['price_state'] == 'text' for item in items),
     }
 
 
@@ -718,7 +756,7 @@ def quote_sell_price(conn, product_code: str, contractor: str, work_date: str) -
     ).fetchone()
     if contractor_row and contractor_row["pricing_mode"] == "daily":
         return {"has_version": False, "applicable": False, "value": None, "message": ""}
-    version = active_quote_version(conn, period) if period else None
+    version = active_quote_version(conn, period, work_date) if period else None
     if not version:
         return {"has_version": False, "applicable": True, "value": None, "message": ""}
     group = _plain(contractor_row["price_group"] if contractor_row else contractor_code).upper()
@@ -734,7 +772,7 @@ def quote_sell_price(conn, product_code: str, contractor: str, work_date: str) -
     if not rows:
         context["message"] = "Chưa có giá cho nhà thầu trong báo giá đúng kỳ"
         return context
-    resolution = _resolve_stored_candidates(rows)
+    resolution = _resolve_stored_candidates(rows, check_buy_price=False)
     if resolution["conflict"]:
         context["message"] = "Mã hàng bị trùng và xung đột trong báo giá đúng kỳ"
         return context
@@ -756,9 +794,9 @@ def quote_sell_price(conn, product_code: str, contractor: str, work_date: str) -
     return context
 
 
-def quote_buy_price(conn, product_code: str, work_date: str, contractor: str = "") -> dict[str, Any]:
+def quote_buy_price(conn, product_code: str, work_date: str, contractor: str = "", *, supplier: str = '') -> dict[str, Any]:
     period = _period_from_date(work_date)
-    version = active_quote_version(conn, period) if period else None
+    version = active_quote_version(conn, period, work_date) if period else None
     if not version:
         return {"has_version": False, "value": None, "allow_actual_fallback": True}
     contractor_code = _plain(contractor).upper()
@@ -768,6 +806,8 @@ def quote_buy_price(conn, product_code: str, work_date: str, contractor: str = "
     if contractor_row and contractor_row["pricing_mode"] != "daily":
         group = _plain(contractor_row["price_group"] or contractor_code).upper()
         priced_rows = _stored_group_rows(conn, version["id"], product_code, group)
+        if supplier:
+            priced_rows = [row for row in priced_rows if _key(row['supplier']) == _key(supplier)]
         resolution = _resolve_stored_candidates(priced_rows)
         if resolution["conflict"]:
             rows = []
@@ -780,10 +820,12 @@ def quote_buy_price(conn, product_code: str, work_date: str, contractor: str = "
             forced_conflict = False
     else:
         rows = conn.execute(
-            """SELECT buy_price,buy_price_state,source_row FROM quote_version_products
+            """SELECT buy_price,buy_price_state,source_row,supplier FROM quote_version_products
                WHERE version_id=? AND product_code=? ORDER BY source_row""",
             (version["id"], _plain(product_code).upper()),
         ).fetchall()
+        if supplier:
+            rows = [row for row in rows if _key(row['supplier']) == _key(supplier)]
         forced_conflict = False
     result = {
         "has_version": True,
@@ -794,7 +836,8 @@ def quote_buy_price(conn, product_code: str, work_date: str, contractor: str = "
         "allow_actual_fallback": False,
     }
     if forced_conflict:
-        result["message"] = "Mã hàng bị trùng và xung đột trong báo giá đúng kỳ"
+        result.update(allow_actual_fallback=True,
+                      message="Có nhiều giá mua nguồn; cần giá mua thực tế của nhà cung cấp đã chọn")
         return result
     if not rows:
         result.update(allow_actual_fallback=True, message="Mã hàng không có trong báo giá đúng kỳ")
@@ -804,7 +847,8 @@ def quote_buy_price(conn, product_code: str, work_date: str, contractor: str = "
         for row in rows if row["buy_price_state"] in {"numeric", "zero"}
     }
     if len(explicit) > 1:
-        result["message"] = "Mã hàng bị trùng và khác giá mua trong báo giá đúng kỳ"
+        result.update(allow_actual_fallback=True,
+                      message="Có nhiều giá mua nguồn; cần giá mua thực tế của nhà cung cấp đã chọn")
         return result
     if explicit:
         signature = next(iter(explicit))
@@ -837,6 +881,8 @@ def register_quote_import_routes(app, ctx) -> None:
     def api_quote_import_preview():
         try:
             period = _valid_period(request.form.get("effective_period"))
+            effective_from, effective_to = _effective_dates(
+                period, request.form.get('effective_from'), request.form.get('effective_to'))
         except QuoteImportError as exc:
             return error_response(exc)
         upload = request.files.get("file")
@@ -866,9 +912,11 @@ def register_quote_import_routes(app, ctx) -> None:
                 parsed = _parse_quote(conn, workbook, value_workbook)
                 database_state_hash = _database_state_hash(conn)
                 existing = conn.execute(
-                    "SELECT id,version_no FROM quote_versions WHERE effective_period=? AND source_hash=?",
+                    "SELECT id,version_no,effective_from,effective_to FROM quote_versions WHERE effective_period=? AND source_hash=?",
                     (period, hashlib.sha256(payload).hexdigest().upper()),
                 ).fetchone()
+                if existing and _effective_dates(period, existing['effective_from'], existing['effective_to']) != (effective_from, effective_to):
+                    raise QuoteImportError('File này đã lưu cho khoảng ngày khác; chọn đúng kỳ áp dụng của bản đã lưu hoặc nạp file báo giá mới.', code='effective_range_conflict', status=409)
                 latest_no = conn.execute(
                     "SELECT COALESCE(MAX(version_no),0) FROM quote_versions WHERE effective_period=?",
                     (period,),
@@ -886,12 +934,14 @@ def register_quote_import_routes(app, ctx) -> None:
         source_hash = hashlib.sha256(payload).hexdigest().upper()
         proposed_version = int(existing["version_no"] if existing else latest_no + 1)
         state_hash = hashlib.sha256(
-            f"{source_hash}\0{period}\0{database_state_hash}\0{parsed['content_hash']}\0{proposed_version}".encode("utf-8")
+            f"{source_hash}\0{period}\0{effective_from}\0{effective_to}\0{database_state_hash}\0{parsed['content_hash']}\0{proposed_version}".encode("utf-8")
         ).hexdigest().upper()
         token = uuid.uuid4().hex
         pending = {
             "created": time.time(),
             "period": period,
+            "effective_from": effective_from,
+            "effective_to": effective_to,
             "source_hash": source_hash,
             "source_name": Path(upload.filename).name[:255],
             "state_hash": state_hash,
@@ -910,6 +960,8 @@ def register_quote_import_routes(app, ctx) -> None:
             "ok": True,
             "token": token,
             "effectivePeriod": period,
+            "effectiveFrom": effective_from,
+            "effectiveTo": effective_to,
             "sourceHash": source_hash,
             "stateHash": state_hash,
             "sheet": parsed["sheet"],
@@ -953,10 +1005,12 @@ def register_quote_import_routes(app, ctx) -> None:
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 receipt = conn.execute(
-                    "SELECT id,version_no FROM quote_versions WHERE effective_period=? AND source_hash=?",
+                    "SELECT id,version_no,effective_from,effective_to FROM quote_versions WHERE effective_period=? AND source_hash=?",
                     (pending["period"], pending["source_hash"]),
                 ).fetchone()
                 if receipt:
+                    if _effective_dates(pending['period'], receipt['effective_from'], receipt['effective_to']) != (pending['effective_from'], pending['effective_to']):
+                        return jsonify(ok=False, error='File đã được lưu cho khoảng ngày khác; hãy xem trước lại.', code='effective_range_conflict'), 409
                     return jsonify({
                         "ok": True,
                         "effectivePeriod": pending["period"],
@@ -986,12 +1040,12 @@ def register_quote_import_routes(app, ctx) -> None:
                 cursor = conn.execute(
                     """INSERT INTO quote_versions(
                            effective_period,version_no,source_hash,source_name,source_sheet,
-                           content_hash,product_count,price_count,status,created_at,confirmed_at
-                       ) VALUES(?,?,?,?,?,?,?,?, 'confirmed',?,?)""",
+                           content_hash,product_count,price_count,status,created_at,confirmed_at,effective_from,effective_to
+                       ) VALUES(?,?,?,?,?,?,?,?, 'confirmed',?,?,?,?)""",
                     (
                         pending["period"], next_version, pending["source_hash"], pending["source_name"],
                         pending["sheet"], pending["content_hash"], pending["counts"]["products"],
-                        pending["counts"]["price_cells"], timestamp, timestamp,
+                        pending["counts"]["price_cells"], timestamp, timestamp, pending['effective_from'], pending['effective_to'],
                     ),
                 )
                 version_id = cursor.lastrowid
@@ -1027,6 +1081,8 @@ def register_quote_import_routes(app, ctx) -> None:
                     entity_id=str(version_id),
                     metadata={
                         "effective_period": pending["period"],
+                        "effective_from": pending['effective_from'],
+                        "effective_to": pending['effective_to'],
                         "version_no": int(next_version),
                         "source_hash": pending["source_hash"],
                         "content_hash": pending["content_hash"],
@@ -1057,7 +1113,7 @@ def register_quote_import_routes(app, ctx) -> None:
         with db_factory() as conn:
             sql = (
                 "SELECT id,effective_period,version_no,source_hash,source_name,source_sheet,"
-                "content_hash,product_count,price_count,status,created_at,confirmed_at "
+                "content_hash,product_count,price_count,status,created_at,confirmed_at,effective_from,effective_to "
                 "FROM quote_versions"
             )
             params: tuple[Any, ...] = ()

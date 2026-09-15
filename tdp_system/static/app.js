@@ -47,6 +47,7 @@
     priceOverrideReason: "",
     quoteContractor: "HATRAN",
     quotePeriod: todayIso.slice(0, 7),
+    quoteCycle: 'month',
     quoteItems: null,
     quoteMode: "group",
     quoteMeta: null,
@@ -1967,12 +1968,12 @@
       ? '<div class="code-note danger-note"><strong>Phải sửa file rồi xem trước lại:</strong> hệ thống không tự chọn giữa các dòng cùng mã.</div>' +
         '<div class="table-wrap"><table><thead><tr><th>Mã hàng</th><th>Nhóm giá</th><th>Dòng nguồn</th><th>Xung đột</th></tr></thead><tbody>' +
         conflicts + "</tbody></table></div>"
-      : '<div class="status-bar">✓ Không có mã lặp xung đột; mã lặp cùng dữ liệu sẽ chỉ hiện một dòng.</div>';
+      : '<div class="status-bar">✓ Báo giá theo từng nhà thầu: bỏ dòng X; mã trùng cùng tên, ĐVT, thuế và giá bán chỉ giữ một dòng.</div>';
     return html([
       '<div class="card quote-import-preview fade-in"><div class="card-head"><div><p class="eyebrow">KIỂM TRA FILE BÁO GIÁ</p><h3>Kỳ ',
       esc(preview.effectivePeriod), " · phiên bản dự kiến ", preview.proposedVersion,
       '</h3><p>Trang Excel ', esc(preview.sheet), " · ", counts.products || 0,
-      " dòng dữ liệu · ", counts.price_groups || 0, " nhóm giá</p></div>",
+      " dòng dữ liệu · ", counts.price_groups || 0, " nhóm giá · Áp dụng ", esc(dateVN(preview.effectiveFrom)), " – ", esc(dateVN(preview.effectiveTo)), "</p></div>",
       '<span class="tag ', preview.canConfirm ? "tag-ok" : "tag-red", '">',
       preview.canConfirm ? "File hợp lệ" : "Đang bị chặn", "</span></div>",
       '<div class="code-note"><strong>Các cột giá đã nhận:</strong> ', mappings, "</div>",
@@ -1981,6 +1982,7 @@
       '</strong></div><div><span>Mã xung đột</span><strong>', counts.conflict_codes || 0,
       '</strong></div><div><span>Xung đột nhóm</span><strong>', counts.conflicts || 0, "</strong></div></div>",
       conflictTable,
+      counts.buy_price_conflicts ? '<div class="code-note">Có mã cùng giá bán nhưng khác giá mua theo nhà cung cấp. Báo giá vẫn gộp một dòng; giá mua được giữ theo từng nguồn.</div>' : '',
       '<div class="toolbar"><button class="btn btn-light" data-action="cancel-quote-import">Bỏ file này</button>',
       preview.canConfirm ? '<button class="btn btn-primary" data-action="confirm-quote-import">Lưu lại file này</button>' : "",
       "</div></div>"
@@ -2019,7 +2021,7 @@
     }).join("");
     var note = state.quoteMode === "daily"
       ? "GIANHAPTAY/YLKHAN không dùng bảng giá nhà thầu: báo giá lấy từ giá nhập của đơn hàng theo ngày."
-      : "Giá lấy đúng cột của nhóm nhà thầu trong bản mới nhất đã lưu; X/rỗng không xuất, giá 0 vẫn giữ rõ để người dùng quyết định.";
+      : "Giá lấy đúng cột nhà thầu; bỏ X/rỗng, gộp mã trùng cùng giá bán. Giữ nguyên giá 0 và các ghi chú giá như HM, Báo khi ăn.";
     var versionText = state.quoteMode === "daily"
       ? meta.dailySource
         ? "Đơn hàng số " + meta.dailySource.batch_id + " · ngày " + dateVN(meta.dailySource.work_date)
@@ -2044,7 +2046,9 @@
     var bundleQuery = latestVersion
       ? "?period=" + encodeURIComponent(state.quotePeriod) + "&version_id=" + latestVersion.id
       : "";
-    if (latestVersion && selectedBatch && String(selectedBatch.work_date || "").slice(0, 7) === state.quotePeriod) {
+    if (latestVersion && selectedBatch && String(selectedBatch.work_date || "").slice(0, 7) === state.quotePeriod &&
+        (!latestVersion.effective_from || selectedBatch.work_date >= latestVersion.effective_from) &&
+        (!latestVersion.effective_to || selectedBatch.work_date <= latestVersion.effective_to)) {
       bundleQuery += "&batch_id=" + selectedBatch.id;
     }
     var bundleControl = latestVersion
@@ -2060,7 +2064,8 @@
           esc(state.quoteContractor) + "</a>";
       return '<tr><td><strong>Phiên bản ' + version.version_no + '</strong></td><td>' +
         esc(dateTimeVN(version.confirmed_at || version.created_at || "")) + '</td><td>' +
-        esc(version.source_name || "Không có tên file") + '</td><td><div class="table-actions">' +
+        esc(version.source_name || "Không có tên file") +
+        (version.effective_from ? '<br>Áp dụng '+esc(dateVN(version.effective_from))+' – '+esc(dateVN(version.effective_to)) : '') + '</td><td><div class="table-actions">' +
         contractorDownload + '<a class="btn btn-small btn-outline" href="/api/export/quotes/all' +
         historyQuery + '">Tải tất cả bản này (.zip)</a></div></td></tr>';
     }).join("");
@@ -2074,7 +2079,8 @@
       return esc(item.product_code) + " (dòng " + esc((item.source_rows || []).join(", ")) + ")";
     }).join("; ");
     var latestText = latestVersion
-      ? "Bản mới nhất: lần " + latestVersion.version_no + " · " + dateTimeVN(latestVersion.confirmed_at || latestVersion.created_at)
+      ? "Bản mới nhất: lần " + latestVersion.version_no + " · " + dateTimeVN(latestVersion.confirmed_at || latestVersion.created_at) +
+        (latestVersion.effective_from ? ' · Áp dụng '+dateVN(latestVersion.effective_from)+' – '+dateVN(latestVersion.effective_to) : '')
       : "Chưa có báo giá đã lưu trong tháng";
     var detailPanel = state.quoteDetailsOpen ? html([
       '<div class="card fade-in quote-detail-panel"><div class="card-head"><div><h3>Chi tiết báo giá ',
@@ -2090,7 +2096,10 @@
     ]) : "";
     content.innerHTML = html([
       '<div class="quote-topline fade-in"><label><strong>Tháng báo giá</strong><input class="input" id="quotePeriod" type="month" value="',
-      esc(state.quotePeriod), '"></label><button class="btn btn-outline" data-action="choose-quote-workbook">Nạp báo giá tháng mới</button>',
+      esc(state.quotePeriod), '"></label><label><strong>Kỳ áp dụng của file nạp</strong><select class="select" id="quoteCycle">',
+      [['month','Cả tháng'],['first','Kỳ 1 · ngày 01–15'],['second','Kỳ 2 · ngày 16–cuối tháng']].map(function(item) {
+        return '<option value="'+item[0]+'"'+(state.quoteCycle===item[0]?' selected':'')+'>'+item[1]+'</option>';
+      }).join(''), '</select></label><button class="btn btn-outline" data-action="choose-quote-workbook">Nạp báo giá tháng mới</button>',
       '<span>', esc(latestText), '</span></div>',
       quoteImportPreviewHtml(),
       activeConflicts ? '<div class="code-note danger-note"><strong>Chưa thể xuất:</strong> mã đang xung đột ' + activeConflicts + "</div>" : "",
@@ -2115,6 +2124,12 @@
     try {
       var form = new FormData();
       form.append("effective_period", state.quotePeriod);
+      var quoteCycle = document.getElementById('quoteCycle');
+      if (quoteCycle) state.quoteCycle = quoteCycle.value;
+      var periodParts = state.quotePeriod.split('-');
+      var lastDay = new Date(Number(periodParts[0]), Number(periodParts[1]), 0).getDate();
+      form.append('effective_from', state.quotePeriod + (state.quoteCycle === 'second' ? '-16' : '-01'));
+      form.append('effective_to', state.quotePeriod + '-' + (state.quoteCycle === 'first' ? '15' : lastDay));
       form.append("file", file);
       state.quoteImportPreview = await api("/api/quotes/import/preview", { method: "POST", body: form });
       if (state.quoteImportPreview.canConfirm) {
@@ -6875,6 +6890,10 @@
       state.quoteMeta = null;
       state.quoteVersions = null;
       renderQuotes();
+      return;
+    }
+    if (event.target.id === 'quoteCycle') {
+      state.quoteCycle = event.target.value;
       return;
     }
     if (event.target.id === "reportFrom" || event.target.id === "reportTo") {

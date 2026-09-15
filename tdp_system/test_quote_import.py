@@ -133,11 +133,12 @@ class QuoteImportTests(unittest.TestCase):
         workbook.close()
         return stream.getvalue()
 
-    def preview(self, period: str, payload: bytes | None = None, filename="quote.xlsx"):
+    def preview(self, period: str, payload: bytes | None = None, filename="quote.xlsx", **dates):
         return self.client.post(
             "/api/quotes/import/preview",
             data={
                 "effective_period": period,
+                **dates,
                 "file": (io.BytesIO(payload or self.workbook_bytes()), filename),
             },
             content_type="multipart/form-data",
@@ -627,7 +628,7 @@ class QuoteImportTests(unittest.TestCase):
         self.assertEqual(unknown.status_code, 404)
         self.assertEqual(unknown.get_json()["code"], "contractor_not_found")
 
-    def test_same_duplicate_deduplicates_but_different_price_or_buy_blocks_confirm(self):
+    def test_duplicate_sell_price_conflicts_block_but_buy_differences_do_not(self):
         same = self.matrix_bytes(["TOYOTA"], [
             {"code": "P1", "name": "Product 1", "buy": 10_000, "supplier": "S1", "prices": [12_000]},
             {"code": "P1", "name": "Product 1", "buy": 10_000, "supplier": "OTHER", "prices": [12_000]},
@@ -666,8 +667,129 @@ class QuoteImportTests(unittest.TestCase):
             {"code": "P1", "name": "Product 1", "buy": 11_000, "prices": [12_000]},
         ])
         buy_preview = self.preview("2026-09", buy_conflict).get_json()
-        self.assertFalse(buy_preview["canConfirm"])
-        self.assertIn("giá mua khác nhau", buy_preview["conflicts"][0]["reasons"])
+        self.assertTrue(buy_preview["canConfirm"])
+        self.assertEqual(buy_preview['counts']['buy_price_conflicts'], 1)
+        self.assertEqual(self.confirm(buy_preview).status_code, 200)
+        rows = self.client.get('/api/quotes?contractor=TOYOTA&period=2026-09').get_json()['items']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['sell_price'], 12000)
+        with server.db() as conn:
+            self.assertEqual(quote_import.quote_sell_price(conn,'P1','TOYOTA','2026-09-16')['value'],12000)
+            buy = quote_import.quote_buy_price(conn,'P1','2026-09-16','TOYOTA')
+            self.assertIsNone(buy['value'])
+            self.assertTrue(buy['allow_actual_fallback'])
+
+    def test_contractor_x_filter_precedes_dedup_and_purchase_prices_follow_supplier(self):
+        data = self.matrix_bytes(['ATV','BIADAUVOI'],[
+            {'code':'P1','name':'Product 1','buy':92000,'supplier':'HUONG','prices':[98000,'x']},
+            {'code':'P1','name':'Product 1','buy':100000,'supplier':'LINH','prices':[98000,125000]},
+        ])
+        p=self.preview('2026-09',data).get_json()
+        self.assertTrue(p['canConfirm']);self.assertEqual(self.confirm(p).status_code,200)
+        with server.db() as conn:
+            for contractor,price,source_rows in [('ATV',98000,[4,5]),('BIADAUVOI',125000,[5])]:
+                q=quote_import.quote_rows_for_contractor(conn,contractor,'2026-09')
+                self.assertEqual(len(q['items']),1)
+                self.assertEqual(q['items'][0]['sell_price'],price)
+                self.assertEqual(q['items'][0]['source_rows'],source_rows)
+            for supplier,price in [('HUONG',92000),('LINH',100000)]:
+                buy=quote_import.quote_buy_price(conn,'P1','2026-09-16','ATV',supplier=supplier)
+                self.assertEqual(buy['value'],price)
+
+    def test_new_quote_item_does_not_require_or_write_inventory_master(self):
+        data=self.matrix_bytes(['TOYOTA'],[
+            {'code':'NEWITEM','name':'New quoted product','unit':'Kg','tax':'8%','prices':[270000]},
+            {'code':'EXCLUDED','name':'Excluded product','unit':'Kg','tax':'8%','prices':['x']},
+        ])
+        p=self.preview('2026-09',data).get_json()
+        self.assertTrue(p['canConfirm']);self.assertEqual(self.confirm(p).status_code,200)
+        rows=self.client.get('/api/quotes?contractor=TOYOTA&period=2026-09').get_json()['items']
+        self.assertEqual([r['product_code'] for r in rows],['NEWITEM'])
+        self.assertEqual(self.client.get('/api/export/quote/TOYOTA?period=2026-09').status_code,200)
+        with server.db() as conn:
+            self.assertIsNone(conn.execute("SELECT * FROM products WHERE code='NEWITEM'").fetchone())
+
+    def test_second_half_dates_preserve_first_half_prices_and_saved_orders(self):
+        first=self.preview('2026-09',self.workbook_bytes(p1_c1=12000)).get_json()
+        self.assertEqual(self.confirm(first).status_code,200)
+        self.create_order('2026-09-10',buy_price=10000)
+        with server.db() as conn:
+            before=[tuple(r) for r in conn.execute('SELECT * FROM orders ORDER BY id')]
+        second=self.preview('2026-09',self.workbook_bytes(p1_buy=15000,p1_c1=20000),
+                            effective_from='2026-09-16',effective_to='2026-09-30').get_json()
+        self.assertTrue(second['canConfirm']);self.assertEqual(self.confirm(second).status_code,200)
+        with server.db() as conn:
+            for day,expected in [('2026-09-01',12000),('2026-09-15',12000),('2026-09-16',20000),('2026-09-30',20000)]:
+                self.assertEqual(quote_import.quote_sell_price(conn,'P1','C1',day)['value'],expected)
+            self.assertFalse(quote_import.quote_sell_price(conn,'P1','C1','2026-10-01')['has_version'])
+            self.assertEqual(quote_import.quote_buy_price(conn,'P1','2026-09-15','C1',supplier='S1')['value'],10000)
+            self.assertEqual(quote_import.quote_buy_price(conn,'P1','2026-09-16','C1',supplier='S1')['value'],15000)
+            self.assertEqual(before,[tuple(r) for r in conn.execute('SELECT * FROM orders ORDER BY id')])
+        response=self.client.get('/api/export/quote/C1?period=2026-09')
+        self.assertEqual(response.status_code,200)
+        wb=load_workbook(io.BytesIO(response.data),data_only=True)
+        self.assertEqual(wb.active['A5'].value,'BẢNG BÁO GIÁ KỲ 2 THÁNG 9')
+        self.assertIsNone(wb.active['A7'].value)
+        self.assertFalse(any('16/09' in str(c.value) or '30/09' in str(c.value) for row in wb.active for c in row))
+        wb.close()
+
+    def test_invalid_dates_and_same_file_wrong_date_replay_are_rejected(self):
+        for start,end in [('2026-09-30','2026-09-16'),('2026-08-16','2026-09-30'),('2026-09-16','2026-09-31')]:
+            self.assertEqual(self.preview('2026-09',effective_from=start,effective_to=end).status_code,400)
+        p=self.preview('2026-09',effective_from='2026-09-16',effective_to='2026-09-30').get_json()
+        self.assertEqual(self.confirm(p).status_code,200)
+        self.assertEqual(self.preview('2026-09',effective_from='2026-09-01',effective_to='2026-09-15').status_code,409)
+        same=self.preview('2026-09',effective_from='2026-09-16',effective_to='2026-09-30').get_json()
+        self.assertTrue(self.confirm(same).get_json()['idempotent'])
+
+    def test_non_x_price_notes_are_kept_literally_in_customer_excel(self):
+        payload=self.matrix_bytes(['TOYOTA'],[
+            {'code':'P1','name':'Product 1','prices':['HM']},
+            {'code':'P2','name':'Product 2','prices':['Báo khi ăn']},
+            {'code':'P3','name':'Product 3','prices':['-']},
+        ])
+        p=self.preview('2026-09',payload).get_json();self.assertEqual(self.confirm(p).status_code,200)
+        wb=load_workbook(io.BytesIO(self.client.get('/api/export/quote/TOYOTA?period=2026-09').data),data_only=True)
+        values={row[1].value:row[4].value for row in wb.active.iter_rows(min_row=9,max_col=6) if row[1].value}
+        self.assertEqual(values,{'P1':'HM','P2':'Báo khi ăn','P3':'-'})
+        wb.close()
+        with server.db() as conn:
+            self.assertIsNone(quote_import.quote_sell_price(conn,'P1','TOYOTA','2026-09-16')['value'])
+
+    def test_numeric_zero_tax_is_preserved_for_known_and_new_quote_items(self):
+        payload = self.matrix_bytes(['TOYOTA'], [
+            {'code': 'P1', 'name': 'Product 1', 'tax': 0, 'prices': [12000]},
+            {'code': 'NEWTAXZERO', 'name': 'New zero tax item', 'tax': 0, 'prices': [13000]},
+        ])
+        preview = self.preview('2026-09', payload).get_json()
+        self.assertTrue(preview['canConfirm'])
+        self.assertEqual(self.confirm(preview).status_code, 200)
+        response = self.client.get('/api/export/quote/TOYOTA?period=2026-09')
+        self.assertEqual(response.status_code, 200)
+        book = load_workbook(io.BytesIO(response.data), data_only=True)
+        cells = {row[1].value: row[5] for row in book.active.iter_rows(min_row=9, max_col=6) if row[1].value}
+        for code in ('P1', 'NEWTAXZERO'):
+            self.assertEqual(cells[code].value, 0)
+            self.assertEqual(cells[code].number_format, '0%')
+        book.close()
+
+    def test_quote_bundle_only_includes_daily_orders_within_effective_dates(self):
+        batch_id, _ = self.create_order('2026-09-12', buy_price=10000)
+        with server.db() as conn:
+            conn.execute("UPDATE orders SET contractor='GIANHAPTAY' WHERE batch_id=?", (batch_id,))
+        preview = self.preview('2026-09', effective_from='2026-09-16', effective_to='2026-09-30').get_json()
+        self.assertEqual(self.confirm(preview).status_code, 200)
+        for date, expected_count in [('2026-09-12', 2), ('2026-09-16', 3)]:
+            with server.db() as conn:
+                conn.execute('UPDATE batches SET work_date=? WHERE id=?', (date, batch_id))
+                conn.execute('UPDATE orders SET work_date=? WHERE batch_id=?', (date, batch_id))
+            archive = self.client.get(f'/api/export/quotes/all?period=2026-09&batch_id={batch_id}')
+            self.assertEqual(archive.status_code, 200)
+            with zipfile.ZipFile(io.BytesIO(archive.data)) as bundle:
+                self.assertEqual(len(bundle.namelist()), expected_count)
+            response = self.client.post('/api/documents/preview', json={'kind': 'quotes', 'period': '2026-09', 'batch_id': batch_id})
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertEqual(response.get_json()['sheet_count'], expected_count)
 
 
 if __name__ == "__main__":
