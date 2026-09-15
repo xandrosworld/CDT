@@ -1127,6 +1127,7 @@ HEADER_ALIASES = {
     "customer_return_qty": {"khachtra", "khachhangtra", "soluongkhachtra"},
     "source_subtotal": {"tienhangchuavat", "thanhtienchuavat", "tientruocthue"},
     "source_total": {"tongtien", "thanhtiensauthue", "tongthanhtoan"},
+    "source_profit": {"loinhuan"},
 }
 
 
@@ -1467,9 +1468,10 @@ def parse_workbook(path: Path, fallback_date: str, selected_sheets=None, *, cata
                 order = resolve_order(conn, raw, fallback_date, by_code, by_name, preserve_prices=True)
                 order["source_sheet"] = ws.title
                 order["source_row"] = row
-                revenue, _, _, total = order_totals(order)
+                revenue, _, profit, total = order_totals(order)
                 for field, calculated, label in [('source_subtotal', revenue, 'Tiền hàng chưa VAT'),
-                                                  ('source_total', total, 'Tổng tiền')]:
+                                                  ('source_total', total, 'Tổng tiền'),
+                                                  ('source_profit', profit, 'Lợi nhuận')]:
                     if field not in mapping:
                         continue
                     expected = number_value(raw.get(field), math.nan)

@@ -4,6 +4,8 @@
 
 Khi sheet Excel dùng SUBTOTAL và đang lọc, kiểm tra riêng tổng các dòng hiện. Nếu tổng đó đúng, nhập toàn bộ dòng và cảnh báo rõ tổng cả ngày; vẫn chặn dòng tiền sai, tổng lưu cũ và công thức chỉ cộng thiếu phạm vi. File khách ngày 03/09, 10/09 thuộc trường hợp tổng đang lọc.
 
+Kiểm tra cả cột Lợi nhuận từng dòng để phát hiện trường hợp giá mua được lấy dự phòng làm lệch giá vốn dù doanh thu vẫn khớp. Dung sai tối đa 1đ mỗi dòng cho phần lẻ VND của công thức Excel.
+
 Phải trả thiếu nguồn/giá mua hiển thị dòng Excel, mã, tên hàng và nút mở đúng ngày Đặt hàng. Người dùng sửa file, lưu rồi nạp lại và xác nhận; không cần hoàn tác kho hay duyệt lại đơn bán. Chưa đủ giá vẫn báo thiếu, không tự suy đoán giá.
 
 Kiểm tra: 71 tests thuộc daily_workbook_import (23), daily_payable_recovery (17), supplier_plan_source (10), daily_import_issues (3), daily_catalog_capture (12), order_price_override (6) đều qua. Trình duyệt thử đổi khoảng/ngày, số chưa VAT/gồm VAT, mở đúng ngày lỗi và nạp lại file. Bản sao DB thử sửa sáu giá bằng dữ liệu giả: hết lỗi, ghi nhận đúng tổng mới, nạp lại không trùng; đơn bán, phải thu, kho và nguồn hóa đơn giữ nguyên.

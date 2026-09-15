@@ -794,12 +794,13 @@ class DailyWorkbookImportTests(unittest.TestCase):
         )
 
 
-    def money_workbook(self, *, total=25920, summary=25920, subtotal=24000):
+    def money_workbook(self, *, total=25920, summary=25920, subtotal=24000, profit=4000):
         wb = load_workbook(io.BytesIO(self.workbook_bytes(quantities=(2,))))
         ws = wb['01.09']
         ws['L2'], ws['M2'], ws['N2'] = 'Tiền hàng chưa VAT', 'Thuế', 'Tổng tiền'
         ws['L3'], ws['M3'], ws['N3'] = subtotal, '8%', total
         ws['L1'], ws['N1'] = subtotal, summary
+        ws['O2'], ws['O3'] = 'Lợi nhuận', profit
         path = server.DATA_DIR / 'reconcile.xlsx'; wb.save(path); wb.close()
         return path
 
@@ -819,7 +820,8 @@ class DailyWorkbookImportTests(unittest.TestCase):
 
     def test_mismatched_row_vat_or_sheet_total_is_persisted_and_cannot_be_approved(self):
         for kwargs, cell in [({'total':26000}, 'N3'), ({'summary':26000}, 'N1'),
-                             ({'subtotal':25000}, 'L3'), ({'total':'#VALUE!'}, 'N3')]:
+                             ({'subtotal':25000}, 'L3'), ({'total':'#VALUE!'}, 'N3'),
+                             ({'profit':5000}, 'O3')]:
             with self.subTest(kwargs=kwargs):
                 rows, _ = server.parse_workbook(self.money_workbook(**kwargs), '2026-09-01', ['01.09'])
                 self.assertTrue(any(cell in error for error in rows[0]['errors']))
@@ -842,6 +844,7 @@ class DailyWorkbookImportTests(unittest.TestCase):
         _, mapping = server.detect_header(ws)
         ws.cell(4, mapping['qty'], 1)
         ws['L4'], ws['N4'], ws['N1'] = hidden_amount, 12960, 38880
+        ws['O4'] = 2000
         ws['L1'] = '=' + formula
         ws.auto_filter.ref = 'A2:N4'; ws.auto_filter.add_filter_column(0, ['P1'])
         ws.row_dimensions[4].hidden = True
