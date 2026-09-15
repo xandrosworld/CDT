@@ -98,6 +98,42 @@ class CatalogInvoiceLabelsTests(unittest.TestCase):
         p=self.preview([['','Thiếu mã hàng','Tên xuất','Kg','8%']])
         self.assertFalse(p['can_confirm']);self.assertIn('Thiếu mã hàng',p['rows'][0]['errors'])
 
+    def test_new_only_import_ignores_old_unit_changes_and_replay_keeps_existing_data(self):
+        self.seed()
+        rows=[['HH-01','Tên cũ trong file','Tên hóa đơn cũ','Gói','KKKNT'],
+              ['NEW-ONLY-CAT','Vỏ đậu hũ','Vỏ đậu hũ','Gói','8%']]
+        protected=('products','outgoing_product_names','outgoing_product_units','orders',
+                   'inventory_transactions','outgoing_invoice_lines')
+        with server.db() as conn:
+            before={t:[tuple(r) for r in conn.execute('SELECT * FROM '+t)] for t in protected}
+        preview=self.preview(rows,mode='new_only')
+        self.assertTrue(preview['can_confirm']);self.assertEqual(1,preview['counts']['new_products'])
+        self.assertEqual(0,preview['counts']['error'])
+        response=self.client.post('/api/catalog/import/confirm',json={'token':preview['token'],'confirmed':True})
+        self.assertEqual(200,response.status_code,response.get_json())
+        self.assertEqual(1,response.get_json()['inserted_products'])
+        with server.db() as conn:
+            self.assertEqual(('Vỏ đậu hũ','Gói','0.08'),tuple(conn.execute("SELECT name,unit,tax FROM products WHERE code='NEW-ONLY-CAT'").fetchone()))
+            for table,values in before.items():
+                after=[tuple(r) for r in conn.execute('SELECT * FROM '+table)]
+                self.assertEqual(values,[r for r in after if r[0]!='NEW-ONLY-CAT'],table)
+            first={t:[tuple(r) for r in conn.execute('SELECT * FROM '+t)] for t in protected}
+        replay=self.preview(rows,mode='new_only')
+        self.assertEqual(0,replay['counts']['new_products'])
+        response=self.client.post('/api/catalog/import/confirm',json={'token':replay['token'],'confirmed':True})
+        self.assertEqual(200,response.status_code);self.assertEqual(0,response.get_json()['processed'])
+        with server.db() as conn:
+            self.assertEqual(first,{t:[tuple(r) for r in conn.execute('SELECT * FROM '+t)] for t in protected})
+
+    def test_new_only_import_still_blocks_conflicting_new_product_rows(self):
+        preview=self.preview([['NEW-ONLY-CONFLICT','Mặt hàng A','A','Gói','8%'],
+                              ['NEW-ONLY-CONFLICT','Mặt hàng B','B','Gói','8%']],mode='new_only')
+        self.assertFalse(preview['can_confirm']);self.assertEqual(2,preview['counts']['error'])
+        response=self.client.post('/api/catalog/import/confirm',json={'token':preview['token'],'confirmed':True})
+        self.assertEqual(400,response.status_code)
+        with server.db() as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM products WHERE code='NEW-ONLY-CONFLICT'").fetchone())
+
     def test_reference_added_after_preview_blocks_unit_change_and_rolls_back(self):
         p=self.preview([['NEW-FIRST','New','New','Kg','8%'],['HH-01','Hàng hóa 01','Tên mới','Gói','0%']])
         self.assertTrue(p['can_confirm'])
