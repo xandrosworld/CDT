@@ -28,7 +28,10 @@ def parse_supplier_plan(conn, workbook, batch_id, formula_workbook=None):
     for item in preview['items']:
         if item['actual_qty'] != 0 and not item['unit']:
             item['errors'].append('Dòng đặt hàng thiếu đơn vị tính')
+        if item['actual_qty'] > 0 and item['buy_price'] <= 0 and not cm.is_internal_stock_supplier(item['supplier']):
+            item['warnings'].append('Chưa có giá mua trên sheet Đặt hàng; cần bổ sung để tính công nợ phải trả của ngày này')
     preview['error_rows'] = sum(bool(r['errors']) for r in preview['items'])
+    preview['warning_rows'] = sum(bool(r['warnings']) for r in preview['items'])
     preview['can_confirm'] = not preview['error_rows']
     preview['issues'] = [r for r in preview['items'] if r['errors'] or r['warnings']][:200]
     preview['plan_only'] = True

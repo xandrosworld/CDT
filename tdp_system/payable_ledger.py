@@ -387,7 +387,7 @@ def pending_purchase_sheets(conn, date_from, date_to):
         elif conn.execute("SELECT 1 FROM purchase_workbook_lines WHERE batch_id=? AND status='confirmed' UNION ALL SELECT 1 FROM purchase_order_lines WHERE batch_id=? AND status='confirmed' LIMIT 1", (batch['id'], batch['id'])).fetchone():
             continue
         else:
-            issues = ['Chưa có sheet Đặt hàng; chọn file gốc trong Đặt hàng nhà cung cấp']
+            issues = ['Web chưa lưu dữ liệu từ sheet Đặt hàng của phiên này; cần đọc bổ sung từ file gốc']
         if issues:
             result.append({'batch_id': batch['id'], 'work_date': batch['work_date'], 'issues': issues})
     return result

@@ -2364,9 +2364,9 @@
       '<div class="payable-workspace fade-in">',
       '<div id="supplierPaymentHost"></div>',
       '<div class="code-note">Phải trả lấy số lượng thực tế và giá mua từ sheet Đặt hàng của ngày đã duyệt.</div>',
-      (ledger.pending_purchase_sheets || []).length ? '<div class="code-note danger-text"><strong>Chưa tính phải trả cho các ngày sau:</strong><ul>' + ledger.pending_purchase_sheets.map(function (item) {
-        return '<li>' + esc(item.work_date) + ': ' + esc((item.issues || []).join('; ')) + '</li>';
-      }).join('') + '</ul>Mở Đặt hàng nhà cung cấp, chọn ngày và nạp lại sheet Đặt hàng đã đủ số lượng, giá mua.</div>' : '',
+      (ledger.pending_purchase_sheets || []).length ? '<div class="code-note danger-text payable-source-warning"><strong>Công nợ chưa được tính đủ trong khoảng ngày đã chọn.</strong><p>Web cần bổ sung dữ liệu Đặt hàng hoặc giá mua cho các ngày dưới đây. File Excel của chị vẫn có thể đã có đầy đủ sheet Đặt hàng.</p><ul>' + ledger.pending_purchase_sheets.map(function (item) {
+        return '<li>' + esc(dateVN(item.work_date)) + ': ' + esc((item.issues || []).join('; ')) + '</li>';
+      }).join('') + '</ul>Các tổng bên dưới chỉ gồm phần đã đủ dữ liệu; số 0 không có nghĩa là không còn nợ. Mở Đặt hàng nhà cung cấp, chọn đúng ngày và nạp sheet từ bản Excel đã chốt; bổ sung giá mua cho các dòng được báo thiếu.</div>' : '',
       '<div class="stats-grid payable-stats">',
       statCard("Tổng số lượng", esc(quantityGroups(summary.filtered_quantities_by_unit)), "Theo bộ lọc đang chọn", "∑"),
       statCard("Tổng tiền", stockMoney(summary.filtered_amount), "Theo bộ lọc; dòng đã đảo chỉ tra cứu", "₫"),
@@ -2376,7 +2376,7 @@
       '<div class="card"><div class="card-head"><div><h3>Sổ phải trả chi tiết</h3><p>Đã trả và Còn trả tự cập nhật sau khi ghi nhận. Có thể chọn riêng dòng cần thanh toán.</p></div><span class="tag">',
       num((ledger.pagination || {}).returned || 0), ' dòng đang hiển thị</span></div>',
       '<div class="table-wrap round3-table payable-ledger-table"><table><thead><tr><th>Chọn</th><th>Ngày</th><th>Nhà cung cấp</th><th>Bếp</th><th>Hàng</th><th>Số thực tế</th><th>Giá mua</th><th>Thành tiền</th><th>Đã trả</th><th>Còn trả</th><th>Trạng thái</th><th>Phân bổ lần này</th></tr></thead><tbody>',
-      lineRows || '<tr><td colspan="12"><div class="empty">Không có dòng nợ theo bộ lọc này.</div></td></tr>',
+      lineRows || '<tr><td colspan="12"><div class="empty">' + ((ledger.pending_purchase_sheets || []).length ? 'Chưa có dòng công nợ đủ dữ liệu để hiển thị. Xem các ngày cần bổ sung ở trên.' : 'Không có dòng nợ theo bộ lọc này.') + '</div></td></tr>',
       '</tbody><tfoot><tr class="table-total-row"><td colspan="5">TỔNG THEO BỘ LỌC</td><td class="num-cell">',
       esc(quantityGroups(summary.filtered_quantities_by_unit)), '</td><td></td><td class="num-cell">', money(summary.filtered_amount),
       '</td><td class="num-cell">', money(summary.filtered_paid_amount), '</td><td class="num-cell">',
@@ -4484,7 +4484,8 @@
     state.modalMode = "import";
     setOrderModalWide(Boolean(payload.strictDaily));
     state.pendingImport = payload;
-    document.getElementById("modalTitle").textContent = payload.phase === "finalization"
+    document.getElementById("modalTitle").textContent = payload.purchasePlanOnly
+      ? "Bổ sung Đặt hàng / công nợ phải trả" : payload.phase === "finalization"
       ? "File cuối ngày còn phần cần kiểm tra" : "Chọn trang Excel của đơn hàng";
     function dateToken(value) {
       var match = String(value || "").match(/(?:^|\D)(\d{1,2})[.\-_/](\d{1,2})(?:\D|$)/);
@@ -4546,6 +4547,7 @@
         row_count_mismatch:'Số dòng đọc được khác số dòng trong trang. Kiểm tra hàng tiêu đề và các dòng có số lượng.',
         customer_scope_must_be_loaded_first:'Cần nhập trang đơn khách trước khi cập nhật trang đặt hàng.',
         customer_scope_conflict:'Có dòng đơn đã liên kết chứng từ bị bỏ khỏi file. Giữ lại dòng đó hoặc đối chiếu chứng từ trước khi thay đơn.',
+        customer_scope_locked:'Đơn bán/giao đã chốt hoặc đã liên kết chứng từ. Có thể chọn riêng trang đặt hàng bên dưới để bổ sung công nợ phải trả; chứng từ và kho đã ghi được giữ nguyên.',
         workday_finalized:'Ngày này đã chốt. Cần kiểm tra chứng từ đã liên kết trước khi thay dữ liệu.',
         purchase_scope_parse_failed:'Không đọc được trang đặt hàng theo mẫu. Xem lý do bên dưới.'
       };
@@ -4564,7 +4566,9 @@
     orderForm.innerHTML = html([
       '<div class="form-grid"><div class="form-field span-4"><div class="code-note"><strong>File: ',
       esc(payload.filename), "</strong><br>",
-      payload.phase === "finalization"
+      payload.purchasePlanOnly
+        ? "Bổ sung sheet Đặt hàng để đối chiếu nhà cung cấp và tính công nợ phải trả. Đơn bán, phải thu và chứng từ kho đã ghi được giữ nguyên. Dòng chưa có giá mua vẫn cần bổ sung trước khi tính đủ công nợ."
+        : payload.phase === "finalization"
         ? "File chưa thể tự lưu vì còn phần lỗi. Chỉ những phần đã kiểm tra đạt mới được chọn; phần mua không sửa đơn khách, doanh thu hay phải thu."
         : "Chỉ các trang Excel được chọn mới đi vào đơn hàng. File hợp lệ mới cùng ngày và đúng phạm vi sheet cũ sẽ thay toàn bộ dòng phiên đó, kể cả dòng sửa/thêm tay. Ngày và sheet khác, danh mục và lịch sử bản cũ được giữ; phần đã liên kết chứng từ sẽ bị chặn để đối chiếu.",
       "</div></div>",
@@ -4574,7 +4578,7 @@
       field("Ngày làm việc dự phòng", "work_date", fallback, "date", "required", "span-2"),
       '<div class="form-actions"><button type="button" class="btn btn-outline" data-action="close-modal">Hủy</button>',
       '<button type="submit" class="btn btn-primary" '+(payload.strictDaily && !payload.sheets.some(function(sheet) {return sheet.confirmAvailable;})?'disabled':'')+'>',
-      payload.phase === "finalization" ? "Dùng các phần đạt làm bản mới nhất" : "Nhập các trang đã chọn",
+      payload.purchasePlanOnly ? "Lưu sheet Đặt hàng" : payload.phase === "finalization" ? "Dùng các phần đạt làm bản mới nhất" : "Nhập các trang đã chọn",
       "</button></div></div>"
     ]);
     backdrop.hidden = false;
@@ -4614,7 +4618,8 @@
           state_hash: pending.stateHash || ""
         })
       });
-      state.orderImportMessage = imported.replacement ? imported.replacement.message + ' ' + imported.replacement.replaced_rows + ' dòng cũ → ' + imported.replacement.new_rows + ' dòng mới.' :
+      state.orderImportMessage = imported.purchasePlanOnly ? 'Đã lưu sheet Đặt hàng để tính công nợ phải trả. Đơn bán và chứng từ kho đã ghi được giữ nguyên.' :
+        imported.replacement ? imported.replacement.message + ' ' + imported.replacement.replaced_rows + ' dòng cũ → ' + imported.replacement.new_rows + ' dòng mới.' :
         imported.idempotent ? 'File này đã được nạp; giữ bản hiện tại, không tạo thêm dòng hoặc trừ kho lần nữa.' :
         'Đã cập nhật phạm vi vừa chọn. Các ngày khác, danh mục và phần mua/bán không chọn được giữ nguyên.';
       state.pendingImport = null;
@@ -4634,7 +4639,9 @@
       state.batchId = imported.batch.id;
       state.view = "orders";
       await loadData(state.batchId, true);
-      var message = useAsLatest
+      var message = imported.purchasePlanOnly
+        ? "Đã lưu sheet Đặt hàng; giữ nguyên đơn bán và chứng từ kho đã ghi"
+        : useAsLatest
         ? (automaticallyApproved
           ? "Đã dùng file cuối cùng làm bản chuẩn và tự chốt đơn"
           : "Đã dùng file cuối cùng làm bản mới nhất" + (approvalWarning ? " · chưa tự chốt: " + approvalWarning : ""))
@@ -4645,7 +4652,7 @@
           : "Đã nhập " + imported.orders.length + " dòng · " + imported.summary.totals.errors +
             " lỗi · " + (imported.summary.totals.warnings || 0) + " cảnh báo";
       showToast(message, Boolean(approvalWarning));
-      if (pending.continuous) openOrderWorksheet();
+      if (pending.continuous && !imported.purchasePlanOnly) openOrderWorksheet();
       return true;
     } catch (error) {
       state.busy = false;

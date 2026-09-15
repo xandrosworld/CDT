@@ -110,9 +110,9 @@ except ImportError:
     )
 
 try:
-    from .supplier_plan import capture_supplier_plan
+    from .supplier_plan import capture_supplier_plan, parse_supplier_plan, save_supplier_plan
 except ImportError:
-    from supplier_plan import capture_supplier_plan
+    from supplier_plan import capture_supplier_plan, parse_supplier_plan, save_supplier_plan
 
 try:
     from invoice_workbench import init_invoice_workbench_schema, register_invoice_workbench_routes
@@ -1641,10 +1641,14 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
                     latest and latest["phase"] == "first_load"
                     and latest["source_hash"] == analysis["sourceHash"]
                 )
-                if not first_load_replay:
+                purchase_plan_only = bool(
+                    batch_mutation_blocker(conn, batch_id)
+                )
+                if not first_load_replay or purchase_plan_only:
                     analysis["phase"] = "finalization"
                     analysis["batchId"] = batch_id
                     analysis["scopeSelectionRequired"] = True
+                    analysis["purchasePlanOnly"] = purchase_plan_only
                     customer_diff = strict_customer_scope_diff(
                         conn, batch_id, customer_orders_by_sheet[day_sheet["name"]], continuous=continuous,
                     )
@@ -1655,16 +1659,20 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
                     if customer_diff["conflicts"]:
                         day_sheet["confirmAvailable"] = False
                         day_sheet["previewIssue"] = "customer_scope_conflict"
+                    if purchase_plan_only:
+                        day_sheet["confirmAvailable"] = False
+                        day_sheet["previewIssue"] = "customer_scope_locked"
                     purchase_preview = None
                     if len(analysis["purchaseSheets"]) == 1:
                         purchase_sheet = analysis["purchaseSheets"][0]
                         try:
                             purchase_preview = strict_purchase_preview_from_path(
-                                conn, path, batch_id,
+                                conn, path, batch_id, plan_only=purchase_plan_only,
                             )
                             purchase_diff = strict_purchase_scope_diff(
                                 conn, batch_id, purchase_preview["items"],
                                 purchase_preview["error_rows"],
+                                plan_only=purchase_plan_only,
                             )
                             purchase_sheet.update(
                                 parsedRows=purchase_preview["count"],
@@ -1681,7 +1689,7 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
                         except ValueError as exc:
                             purchase_sheet.update(
                                 confirmAvailable=False,
-                                errorRows=max(int(purchase_sheet.get("rows") or 0), 1),
+                                errorRows=1,
                                 writeScope="purchase_orders",
                                 previewIssue="purchase_scope_parse_failed",
                                 previewMessage=str(exc),
@@ -1692,7 +1700,7 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
                                 },
                             )
                     analysis["_purchasePreview"] = purchase_preview
-                    if workday["lifecycle_status"] == "finalized":
+                    if workday["lifecycle_status"] == "finalized" and not purchase_plan_only:
                         for scope_sheet in analysis["daySheets"] + analysis["purchaseSheets"]:
                             diff = scope_sheet.get("diff") or {}
                             has_changes = any(int(diff.get(key) or 0) for key in (
@@ -1866,12 +1874,18 @@ def strict_customer_scope_diff(conn, batch_id: int, incoming_orders, *, continuo
     }
 
 
-def strict_purchase_scope_diff(conn, batch_id: int, items, error_rows=0):
+def strict_purchase_scope_diff(conn, batch_id: int, items, error_rows=0, *, plan_only=False):
     previous = {
         row["row_key"]: dict(row) for row in conn.execute(
             "SELECT * FROM purchase_workbook_lines WHERE batch_id=?", (batch_id,),
         )
     }
+    if plan_only:
+        source = conn.execute(
+            "SELECT items_json FROM supplier_plan_sources WHERE batch_id=?", (batch_id,),
+        ).fetchone()
+        if source:
+            previous = {row["row_key"]: row for row in json.loads(source["items_json"])}
     incoming = {item["row_key"]: item for item in items}
     shared = set(previous) & set(incoming)
     removed = set(previous) - set(incoming)
@@ -1910,6 +1924,8 @@ def strict_daily_database_state_hash(conn, batch_id: int, work_date: str, day_sh
              "ORDER BY order_id", (batch_id,)),
         ])
     digest = hashlib.sha256()
+    if batch_id:
+        digest.update((batch_mutation_blocker(conn, batch_id) or "").encode("utf-8"))
     for label, sql, params in queries:
         digest.update(label.encode("ascii"))
         digest.update(b"\0")
@@ -1919,10 +1935,12 @@ def strict_daily_database_state_hash(conn, batch_id: int, work_date: str, day_sh
     return digest.hexdigest().upper()
 
 
-def strict_purchase_preview_from_path(conn, path: Path, batch_id: int, *, pricing_orders=None):
+def strict_purchase_preview_from_path(conn, path: Path, batch_id: int, *, pricing_orders=None, plan_only=False):
     workbook = load_workbook(path, read_only=True, data_only=True, keep_links=False)
     formula_workbook = load_workbook(path, read_only=True, data_only=False, keep_links=False)
     try:
+        if plan_only:
+            return parse_supplier_plan(conn, workbook, batch_id, formula_workbook)
         return parse_purchase_order_workbook(
             conn, workbook, batch_id, formula_workbook=formula_workbook,
             pricing_orders=pricing_orders,
@@ -2057,6 +2075,29 @@ def confirm_strict_daily_finalization(pending, body, sheets):
                 "Dữ liệu đã đổi sau preview; hãy tải lại file trước khi chốt",
                 code="stale_database_state",
             )
+        if analysis.get("purchasePlanOnly"):
+            # Historical sales and posted inventory remain immutable. The
+            # purchase sheet is a separate, versioned source for supplier/AP
+            # reconciliation, with its own stale/paid-line guards.
+            if selected_scopes != ["purchase_orders"] or not purchase_preview or not purchase_preview["can_confirm"]:
+                raise DailyImportError(
+                    "Chỉ được bổ sung sheet Đặt hàng đã kiểm tra đạt cho ngày đã chốt",
+                    code="scope_not_confirmable", status=400,
+                )
+            try:
+                applied = save_supplier_plan(
+                    conn, batch_id=batch_id, preview=purchase_preview,
+                    source_hash=source_hash, source_name=pending["name"], now_iso=now_iso,
+                )
+            except PurchaseOrderApplyError as error:
+                raise DailyImportError(str(error), code=error.code, status=error.status) from error
+            payload = batch_payload(conn, batch_id)
+            payload.update(
+                ok=True, selectedSheets=sheets, selectedScopes=selected_scopes,
+                sourceHash=source_hash, idempotent=applied["idempotent"],
+                purchasePlanOnly=True, scopeResults={"purchase_orders": applied}, finalized=None,
+            )
+            return jsonify(payload)
         blocked = batch_mutation_blocker(conn, batch_id)
         if blocked:
             raise DailyImportError(blocked, code="batch_locked")
@@ -2698,6 +2739,7 @@ def api_import_analyze():
             phase=strict_analysis.get("phase", "first_load"),
             batchId=strict_analysis.get("batchId"),
             scopeSelectionRequired=bool(strict_analysis.get("scopeSelectionRequired")),
+            purchasePlanOnly=bool(strict_analysis.get("purchasePlanOnly")),
             ignoredSheets=strict_analysis["ignoredSheets"],
         )
     return jsonify(payload)

@@ -4256,6 +4256,19 @@ def parse_canonical_purchase_workbook(
     for matches in orders_by_identity.values():
         matches.sort(key=lambda row: int(row["id"]))
 
+    # A blank unit may be recovered only from the matching code AND name in
+    # the explicit goods catalogue inside this very workbook. No master write.
+    source_units = defaultdict(dict)
+    catalog_sheet = find_catalog_sheet(workbook)
+    if catalog_sheet and mapping_key(catalog_sheet[0].title) in {'danhmuchh', 'danhmuchanghoa', 'danhmuchang'}:
+        cat_sheet, cat_header, cat_fields = catalog_sheet
+        for cat_row, values in enumerate(cat_sheet.iter_rows(min_row=cat_header + 1, values_only=True), cat_header + 1):
+            def catalog_value(field):
+                col = cat_fields[field]
+                return mapping_cell_text(values[col - 1]) if col <= len(values) else ''
+            cat_code, cat_name, cat_unit = (catalog_value(f) for f in ('product_code', 'product_name', 'unit'))
+            if cat_code and cat_name and cat_unit:
+                source_units[(mapping_key(cat_code), mapping_key(cat_name))][mapping_key(cat_unit)] = (cat_unit, cat_sheet.title, cat_row)
     parsed = []
     occurrences = Counter()
     seen_row_keys = set()
@@ -4278,6 +4291,10 @@ def parse_canonical_purchase_workbook(
         note = mapping_cell_text(cell("note"))
         errors = []
         warnings = []
+        unit_matches = source_units.get((mapping_key(product_code), mapping_key(product_name)), {})
+        if not unit and len(unit_matches) == 1:
+            unit, unit_sheet, unit_row = next(iter(unit_matches.values()))
+            warnings.append(f'ĐVT trống được lấy từ {unit_sheet}, dòng {unit_row}: {unit} (khớp mã và tên hàng)')
         try:
             work_date = purchase_work_date(cell("work_date"), batch["work_date"])
         except ValueError as exc:
