@@ -424,6 +424,46 @@ class InvoicePaymentScopeTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM outgoing_source_invoices').fetchone()[0], 0)
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0], 0)
 
+    def test_source_name_address_case_and_unicode_do_not_block_payment(self):
+        import unicodedata
+        with server.db() as conn:
+            self.add_direct_source(conn)
+            second=self.add_direct_source(conn,invoice_number='0000002')
+            conn.execute('UPDATE outgoing_source_invoices SET buyer_name=?,raw_json=? WHERE id=?',
+                (unicodedata.normalize('NFD','công ty mua'),json.dumps({'inv_buyerAddressLine':'  ĐỊA CHỈ   MUA  '}),second))
+            before=conn.serialize()
+        result=self.scope()
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual(result.json['totals']['total_amount'],432)
+        self.assertEqual(len(result.json['invoices']),2)
+        with server.db() as conn:self.assertEqual(before,conn.serialize())
+        response=self.client.get('/api/export/invoice-payment-bundle/NT-A?from=2026-09-01&to=2026-09-30')
+        self.assertEqual(response.status_code,200)
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            self.assertIsNone(archive.testzip())
+        with server.db() as conn:
+            conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',
+                (json.dumps({'inv_buyerAddressLine':'Địa chỉ khác'}),second))
+        result=self.scope()
+        self.assertEqual(result.status_code,409)
+        self.assertEqual(result.json['code'],'issued_invoice_snapshot_conflict')
+
+    def test_snapshot_identity_identifiers_and_accents_remain_distinct(self):
+        from .invoice_payment_scope import _snapshot_key,SNAPSHOT_FIELDS
+        original={field:'Thông tin' for field in SNAPSHOT_FIELDS}
+        for field in ('buyer_tax_code_snapshot','company_tax_code_snapshot','payment_bank_account_snapshot'):
+            self.assertNotEqual(_snapshot_key(original),_snapshot_key({**original,field:'THÔNG TIN'}))
+        self.assertNotEqual(_snapshot_key(original),_snapshot_key({**original,'buyer_address_snapshot':'Thong tin'}))
+
+    def test_local_issued_name_case_differences_allow_one_payment_scope(self):
+        with server.db() as conn:
+            self.add_invoice(conn)
+            self.add_invoice(conn,invoice_number='0000002')
+            conn.execute("UPDATE outgoing_invoice_drafts SET buyer_name_snapshot='công ty mua',buyer_address_snapshot='ĐỊA CHỈ MUA' WHERE issued_invoice_number='0000002'")
+        response=self.scope()
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(response.json['totals']['total_amount'],432)
+
     def test_unissued_source_draft_does_not_inflate_or_block_issued_payment(self):
         with server.db() as conn:
             self.add_direct_source(conn)

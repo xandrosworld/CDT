@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import re
+import unicodedata
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
@@ -38,6 +39,17 @@ class InvoicePaymentScopeError(ValueError):
 
 def _plain(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _snapshot_key(snapshot):
+    # Presentation-only differences in names/addresses do not change identity.
+    # Keep tax codes and bank account identifiers exact; preserve source text.
+    text_fields = {'buyer_name_snapshot', 'buyer_address_snapshot',
+                   'company_name_snapshot', 'company_address_snapshot',
+                   'payment_requester_snapshot', 'payment_bank_name_snapshot'}
+    return tuple(unicodedata.normalize('NFC', _plain(snapshot.get(field))).casefold()
+                 if field in text_fields else _plain(snapshot.get(field))
+                 for field in SNAPSHOT_FIELDS)
 
 
 def _strict_date(value: Any, label: str) -> str:
@@ -241,7 +253,7 @@ def _local_issued_payment_scope(
                 code="issued_invoice_snapshot_incomplete",
             )
     snapshot_keys = {
-        tuple(_plain(draft.get(field)) for field in SNAPSHOT_FIELDS) for draft in drafts
+        _snapshot_key(draft) for draft in drafts
     }
     if len(snapshot_keys) != 1:
         raise InvoicePaymentScopeError(
@@ -413,7 +425,7 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
         if any(not source_snapshot[field] for field in SNAPSHOT_FIELDS):
             raise InvoicePaymentScopeError('Cần điền đủ hồ sơ công ty và thông tin thanh toán trước khi lập đề nghị.',
                                            code='invoice_payment_settings_incomplete')
-        if snapshot is not None and any(_plain(snapshot[f]) != source_snapshot[f] for f in SNAPSHOT_FIELDS):
+        if snapshot is not None and _snapshot_key(snapshot) != _snapshot_key(source_snapshot):
             raise InvoicePaymentScopeError('Các hóa đơn có hồ sơ người mua hoặc thanh toán khác nhau; cần xuất tách kỳ.',
                                            code='issued_invoice_snapshot_conflict')
         snapshot = source_snapshot
