@@ -1125,6 +1125,8 @@ HEADER_ALIASES = {
     "damaged_qty": {"hanghong", "soluonghong", "slhong"},
     "supplier_return_qty": {"trancc", "tranhacungcap", "soluongtrancc"},
     "customer_return_qty": {"khachtra", "khachhangtra", "soluongkhachtra"},
+    "source_subtotal": {"tienhangchuavat", "thanhtienchuavat", "tientruocthue"},
+    "source_total": {"tongtien", "thanhtiensauthue", "tongthanhtoan"},
 }
 
 
@@ -1198,7 +1200,7 @@ def display_date_vn(value) -> str:
     return text
 
 
-def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
+def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name, *, preserve_prices=False):
     errors = []
     warnings = []
 
@@ -1260,7 +1262,9 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
     period_buy_price = quote_buy_price(conn, code, batch_date, contractor, supplier=supplier) if code else {
         "has_version": False, "value": None, "allow_actual_fallback": True,
     }
-    if period_buy_price["has_version"]:
+    if preserve_prices and requested_buy_price > 0:
+        buy_price = requested_buy_price
+    elif period_buy_price["has_version"]:
         if period_buy_price["value"] is not None:
             # A non-blank price in the confirmed quotation is authoritative for
             # this period, even when the daily workbook carries a stale value.
@@ -1289,14 +1293,16 @@ def resolve_order(conn, raw: dict, fallback_date: str, by_code, by_name):
         if code and contractor and not is_promotion
         else {"has_version": False, "applicable": False, "value": None, "message": ""}
     )
-    if period_sell_price["has_version"] and period_sell_price["applicable"]:
+    if preserve_prices and raw.get('sell_price') not in (None, ''):
+        sell_price = requested_sell_price
+    elif period_sell_price["has_version"] and period_sell_price["applicable"]:
         # Once a quotation exists for the order's period, group-priced orders
         # must use that version rather than a possibly different embedded value.
         sell_price = float(period_sell_price["value"] or 0)
         price_message = period_sell_price["message"]
     else:
         sell_price = requested_sell_price
-    if sell_price <= 0 and code and contractor and not is_promotion and not period_sell_price["has_version"]:
+    if sell_price <= 0 and code and contractor and not is_promotion and not period_sell_price["has_version"] and not (preserve_prices and raw.get('sell_price') not in (None, '')):
         sell_price, price_message = get_sell_price(conn, code, contractor, batch_date)
         if not math.isfinite(sell_price):
             errors.append("Giá bán trong bảng giá phải là số hữu hạn")
@@ -1413,6 +1419,7 @@ def parse_workbook(path: Path, fallback_date: str, selected_sheets=None, *, cata
                 skipped_sheets.append(ws.title)
                 continue
             sheet_count = 0
+            sheet_orders = []
             empty_run = 0
             for row in range(header_row + 1, ws.max_row + 1):
                 raw = {field: ws.cell(row, col).value for field, col in mapping.items()}
@@ -1434,13 +1441,41 @@ def parse_workbook(path: Path, fallback_date: str, selected_sheets=None, *, cata
                 parsed_qty = number_value(raw_qty, math.nan)
                 if raw_qty in (None, "") or (math.isfinite(parsed_qty) and parsed_qty <= 0):
                     continue
-                order = resolve_order(conn, raw, fallback_date, by_code, by_name)
+                order = resolve_order(conn, raw, fallback_date, by_code, by_name, preserve_prices=True)
                 order["source_sheet"] = ws.title
                 order["source_row"] = row
+                revenue, _, _, total = order_totals(order)
+                for field, calculated, label in [('source_subtotal', revenue, 'Tiền hàng chưa VAT'),
+                                                  ('source_total', total, 'Tổng tiền')]:
+                    if field not in mapping:
+                        continue
+                    expected = number_value(raw.get(field), math.nan)
+                    cell = ws.cell(row, mapping[field]).coordinate
+                    if not math.isfinite(expected):
+                        order['errors'].append(f'{label} ô {cell} chưa có số hợp lệ; hãy tính lại và lưu Excel trước khi nạp.')
+                    elif abs(expected - calculated) > 1:
+                        order['errors'].append(f'{label} ô {cell} lệch Excel: file {expected:,.0f}đ, tính từ số lượng/giá/thuế {calculated:,.0f}đ. Kiểm tra công thức và lưu lại file.')
                 if order.get('errors') or order.get('warnings'):
                     order['_issue_columns'] = mapping
                 parsed.append(order)
+                sheet_orders.append(order)
                 sheet_count += 1
+            if sheet_orders and header_row > 1:
+                # Only recognized money columns are compared; filters or omitted
+                # business rows must not silently change a customer's sheet total.
+                for field, index, label in [('source_subtotal', 0, 'Tiền hàng chưa VAT'),
+                                             ('source_total', 3, 'Tổng tiền')]:
+                    if field not in mapping:
+                        continue
+                    cell = ws.cell(header_row - 1, mapping[field])
+                    if cell.value in (None, ''):
+                        continue
+                    expected = number_value(cell.value, math.nan)
+                    actual = sum(order_totals(o)[index] for o in sheet_orders)
+                    if not math.isfinite(expected) or abs(expected - actual) > 1:
+                        message = f'{label} toàn sheet ô {cell.coordinate} chưa khớp: Excel {cell.value}, tổng dòng nhập {actual:,.0f}đ. Kiểm tra các dòng và công thức tổng trước khi duyệt.'
+                        sheet_orders[0]['errors'].append(message)
+                        sheet_orders[0]['_issue_columns'] = mapping
             if sheet_count == 0:
                 skipped_sheets.append(ws.title)
     wb.close()
@@ -2316,7 +2351,7 @@ def strict_daily_version_payload(conn, batch_id: int, source_hash: str, sheet_na
 def validate_existing_order(conn, item: dict):
     raw = dict(item)
     resolved = resolve_order(conn, raw, item.get("work_date") or date.today().isoformat(),
-                             *product_lookup(conn))
+                             *product_lookup(conn), preserve_prices=True)
     return resolved["errors"]
 
 
@@ -3244,7 +3279,7 @@ def api_add_orders_bulk():
             }
             if not any(clean_text(raw.get(key)) for key in ("product_name", "product_code", "kitchen")):
                 continue
-            resolved = resolve_order(conn, raw, batch["work_date"], by_code, by_name)
+            resolved = resolve_order(conn, raw, batch["work_date"], by_code, by_name, preserve_prices=True)
             if inserted == 0:
                 clear_batch_derived_inventory(conn, batch_id)
             conn.execute(
@@ -3337,7 +3372,7 @@ def api_update_orders_bulk():
                 if key in patch_item:
                     item[key] = patch_item[key]
             resolved = resolve_order(
-                conn, item, batch["work_date"], *lookup
+                conn, item, batch["work_date"], *lookup, preserve_prices=True
             )
             for key in ORDER_FIELDS:
                 if key in resolved:
@@ -3401,7 +3436,7 @@ def api_update_order(order_id):
             "SELECT work_date FROM batches WHERE id=?", (current["batch_id"],),
         ).fetchone()
         resolved = resolve_order(
-            conn, item, batch["work_date"], *product_lookup(conn)
+            conn, item, batch["work_date"], *product_lookup(conn), preserve_prices=True
         )
         for key in ORDER_FIELDS:
             if key in resolved:

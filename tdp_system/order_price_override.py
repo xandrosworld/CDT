@@ -193,7 +193,7 @@ def register_order_price_override_routes(app, helpers) -> None:
                 candidate = dict(current)
                 candidate["sell_price"] = price
                 resolved = resolve_order(
-                    conn, candidate, batch["work_date"], *lookup,
+                    conn, candidate, batch["work_date"], *lookup, preserve_prices=True,
                 )
                 changes.append({
                     "order_id": order_id,

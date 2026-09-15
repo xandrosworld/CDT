@@ -794,5 +794,42 @@ class DailyWorkbookImportTests(unittest.TestCase):
         )
 
 
+    def money_workbook(self, *, total=25920, summary=25920, subtotal=24000):
+        wb = load_workbook(io.BytesIO(self.workbook_bytes(quantities=(2,))))
+        ws = wb['01.09']
+        ws['L2'], ws['M2'], ws['N2'] = 'Tiền hàng chưa VAT', 'Thuế', 'Tổng tiền'
+        ws['L3'], ws['M3'], ws['N3'] = subtotal, '8%', total
+        ws['L1'], ws['N1'] = subtotal, summary
+        path = server.DATA_DIR / 'reconcile.xlsx'; wb.save(path); wb.close()
+        return path
+
+    def test_excel_prices_are_preserved_despite_different_active_quote(self):
+        from unittest.mock import patch
+        path = self.money_workbook()
+        buy = {'has_version': True, 'value': 20000, 'allow_actual_fallback': False}
+        sell = {'has_version': True, 'applicable': True, 'value': 30000, 'message': ''}
+        with patch.object(server, 'quote_buy_price', return_value=buy), patch.object(server, 'quote_sell_price', return_value=sell):
+            rows, _ = server.parse_workbook(path, '2026-09-01', ['01.09'])
+            self.assertEqual(rows[0]['buy_price'], 10000)
+            self.assertEqual(rows[0]['sell_price'], 12000)
+            self.assertEqual(rows[0]['errors'], [])
+            self.assertEqual(server.order_totals(rows[0])[3], 25920)
+            with server.db() as conn:
+                self.assertEqual(server.validate_existing_order(conn, rows[0]), [])
+
+    def test_mismatched_row_vat_or_sheet_total_is_persisted_and_cannot_be_approved(self):
+        for kwargs, cell in [({'total':26000}, 'N3'), ({'summary':26000}, 'N1'),
+                             ({'subtotal':25000}, 'L3'), ({'total':'#VALUE!'}, 'N3')]:
+            with self.subTest(kwargs=kwargs):
+                rows, _ = server.parse_workbook(self.money_workbook(**kwargs), '2026-09-01', ['01.09'])
+                self.assertTrue(any(cell in error for error in rows[0]['errors']))
+                with server.db() as conn:
+                    batch_id = conn.execute("INSERT INTO batches(work_date,source_name,status,created_at) VALUES('2026-09-01','mismatch','draft','now')").lastrowid
+                    server.save_imported_orders(conn, batch_id, rows)
+                r = self.client.post(f'/api/batches/{batch_id}/approve', json={})
+                self.assertEqual(r.status_code, 400)
+                with server.db() as conn:
+                    self.assertEqual(conn.execute('SELECT status FROM batches WHERE id=?',(batch_id,)).fetchone()[0], 'draft')
+
 if __name__ == "__main__":
     unittest.main()
