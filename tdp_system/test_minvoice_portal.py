@@ -29,6 +29,34 @@ def client():
 
 
 class PortalTests(unittest.TestCase):
+    def test_original_pdf_checks_identity_buyer_status_and_amounts_before_download(self):
+        import io
+        from unittest.mock import MagicMock
+        from pypdf import PdfWriter
+        c = client(); c._token = 'fixture'; d = document()
+        c._portal_json = Mock(return_value=d)
+        writer = PdfWriter(); writer.add_blank_page(width=100, height=100)
+        stream = io.BytesIO(); writer.write(stream); content = stream.getvalue()
+        response = MagicMock(); response.__enter__.return_value.read.return_value = content
+        c._opener = Mock(); c._opener.open.return_value = response
+        kwargs = dict(remote_id=d['id'], series=d['invoiceSerial'], number=str(d['invoiceNumber']),
+                      invoice_date='2026-08-31', buyer_tax_code=d['buyerTaxCode'],
+                      subtotal=100000, tax_amount=8000, total_amount=108000)
+        self.assertEqual(c.get_issued_invoice_pdf(**kwargs), content)
+        request = c._opener.open.call_args.args[0]
+        self.assertEqual(request.get_method(), 'GET')
+        self.assertTrue(request.full_url.endswith('/' + d['id'] + '/downloaf-pdf'))
+        for key, value in [('buyerTaxCode', 'OTHER'), ('invoiceStatus', 1), ('totalAmount', 108100),
+                           ('sellerTaxCode', 'OTHER'), ('invoiceSerial', 'OTHER'), ('invoiceNumber', 99),
+                           ('invoiceDate', '2026-09-01')]:
+            c._portal_json.return_value = dict(d, **{key: value}); c._opener.reset_mock()
+            with self.assertRaises(MinvoiceError): c.get_issued_invoice_pdf(**kwargs)
+            c._opener.open.assert_not_called()
+        c._portal_json.return_value = d
+        for bad in [b'<html>login</html>', b'%PDF-invalid', b'%PDF-' + b'0' * (20*1024*1024)]:
+            response.__enter__.return_value.read.return_value = bad
+            with self.assertRaises(MinvoiceError): c.get_issued_invoice_pdf(**kwargs)
+
     def test_tenant_cookie_is_selected_before_login_and_profile_checked(self):
         c = client()
         def respond(method, path, **kw):

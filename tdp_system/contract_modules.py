@@ -10598,6 +10598,72 @@ def register_contract_routes(app, ctx):
             response.headers["X-TDP-Invoice-Scope"] = scope["scope_id"]
             return response
 
+    @app.get("/api/export/invoice-pdfs/<contractor>")
+    def api_invoice_original_pdfs(contractor):
+        period_from, period_to = request.args.get('from'), request.args.get('to')
+        expected = clean_text(request.args.get('scope_id')).upper()
+        try:
+            with db_factory() as conn:
+                conn.execute('PRAGMA query_only=ON')
+                scope = issued_invoice_payment_scope(conn, contractor, period_from, period_to)
+                if not expected or expected != scope['scope_id']:
+                    raise InvoicePaymentScopeError('Phạm vi hóa đơn đã thay đổi; hãy xem lại đề nghị thanh toán trước khi tải PDF.',
+                                                   code='stale_invoice_payment_scope', status=409)
+                if len(scope['invoices']) > 100:
+                    raise InvoicePaymentScopeError('Hãy chọn kỳ nhỏ hơn để tải tối đa 100 PDF mỗi lần.', code='invoice_pdf_limit')
+                rows = []
+                for item in scope['invoices']:
+                    source = conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=? AND source=\'minvoice\'',
+                                          (item.get('source_invoice_id'),)).fetchone()
+                    if not source or not source['remote_id']:
+                        raise InvoicePaymentScopeError('Hóa đơn ' + item['invoice_number'] +
+                            ' chưa liên kết bản gốc M-Invoice. Hãy tải hóa đơn đầu ra rồi thử lại.', code='invoice_pdf_source_missing')
+                    rows.append((item, dict(source)))
+            factory = app.config.get('MINVOICE_CLIENT_FACTORY') or create_minvoice_client
+            client = factory() if callable(factory) else None
+            if not callable(getattr(client, 'get_issued_invoice_pdf', None)):
+                raise MinvoiceError('Kết nối M-Invoice hiện tại chưa hỗ trợ tải PDF hóa đơn gốc.')
+            files, total_size = [], 0
+            for item, source in rows:
+                try:
+                    content = client.get_issued_invoice_pdf(
+                        remote_id=source['remote_id'], series=item['invoice_series'],
+                        number=item['invoice_number'], invoice_date=item['invoice_date'],
+                        buyer_tax_code=scope['snapshot']['buyer_tax_code_snapshot'],
+                        **{k: item[k] for k in ('subtotal', 'tax_amount', 'total_amount')})
+                except MinvoiceError as exc:
+                    raise MinvoiceError(f"Hóa đơn {item['invoice_series']}/{item['invoice_number']}: {exc}") from None
+                total_size += len(content)
+                if total_size > 100 * 1024 * 1024:
+                    raise MinvoiceError('Tổng PDF vượt 100 MB; hãy chọn kỳ nhỏ hơn.')
+                filename = re.sub(r'[^A-Za-z0-9_-]', '_',
+                    f"{item['invoice_date']}_{item['invoice_series']}_{item['invoice_number']}") + '.pdf'
+                files.append((filename, content))
+            with db_factory() as conn:
+                conn.execute('PRAGMA query_only=ON')
+                latest = issued_invoice_payment_scope(conn, contractor, period_from, period_to)
+                if latest['scope_id'] != expected:
+                    raise InvoicePaymentScopeError('Dữ liệu đã thay đổi trong lúc tải PDF; hãy xem lại đề nghị thanh toán.',
+                                                   code='stale_invoice_payment_scope', status=409)
+        except InvoicePaymentScopeError as exc:
+            return jsonify(ok=False, error=str(exc), code=exc.code), exc.status
+        except MinvoiceError as exc:
+            return jsonify(ok=False, error=str(exc), code='invoice_pdf_download_failed'), 502
+        safe_code = re.sub(r'[^A-Z0-9_-]', '_', scope['contractor'])[:40]
+        if len(files) == 1:
+            stream, mimetype, name = io.BytesIO(files[0][1]), 'application/pdf', safe_code + '_' + files[0][0]
+        else:
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, 'w', zipfile.ZIP_DEFLATED) as archive:
+                for filename, content in files:
+                    archive.writestr(filename, content)
+            stream.seek(0)
+            mimetype, name = 'application/zip', f"Hoa_don_PDF_{safe_code}_{scope['date_from']}_{scope['date_to']}.zip"
+        response = send_file(stream, as_attachment=True, download_name=name, mimetype=mimetype)
+        response.headers['X-TDP-Invoice-Scope'] = expected
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
     @app.get("/api/export/invoice-payment-bundle/<contractor>")
     def api_invoice_payment_bundle(contractor):
         period_from = request.args.get("from")

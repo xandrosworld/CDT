@@ -47,6 +47,7 @@
         (data.warnings || []).map(function (warning) { return '<p class="document-note tag-warn" role="alert">' + esc(warning) + '</p>'; }).join('') +
         '<div class="document-sheet-list" role="group" aria-label="Chọn từng chứng từ">' +
         data.sheets.map(function (sheet, i) { return '<div><input type="checkbox" checked data-sheet="' + i + '" aria-label="Chọn ' + esc(sheet.name) + '"><button type="button" class="btn btn-small btn-outline" data-open-sheet="' + i + '">' + esc(sheet.name) + '</button></div>'; }).join('') +
+        (body.kind === 'payment' ? '<button type="button" class="btn btn-small btn-primary" data-doc="invoice-pdfs" title="Tải PDF gốc của các hóa đơn đã phát hành trong kỳ của nhà thầu đang xem. Nhiều hóa đơn được đóng chung file ZIP.">Tải PDF hóa đơn</button>' : '') +
         '</div><div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false, paperTouched = false;
       function invalidatePrint() {
@@ -87,6 +88,7 @@
         host.querySelector('.document-print-help').textContent = printHelp();
         host.querySelector('.document-count').textContent = data.sheet_count + ' phiếu · Đã chọn ' + selected.size;
         host.querySelectorAll('[data-doc="excel"],[data-doc="pdf"],[data-doc="print"],[data-doc="view-pdf"]').forEach(function (b) { b.disabled = busy || !selected.size; });
+        host.querySelectorAll('[data-doc="invoice-pdfs"]').forEach(function (b) { b.disabled = busy; });
         host.querySelectorAll('[data-sheet]').forEach(function (c) { c.checked = selected.has(Number(c.dataset.sheet)); });
         host.querySelectorAll('[data-sheet],[data-doc="all"],[data-doc="none"],[data-doc="refresh"],[data-doc="receipts"],[data-doc="summary"]').forEach(function(c) { c.disabled=busy; });
       }
@@ -103,7 +105,8 @@
         });
       }
       async function output(type) {
-        if (busy || !selected.size) return;
+        var originalInvoices = type === 'invoice-pdfs';
+        if (busy || (!originalInvoices && !selected.size)) return;
         resolvedSides='';
         busy = true; update();
         var errorBox = host.querySelector('.document-error');
@@ -114,13 +117,14 @@
         function progress() {
           if (!isCurrent()) return;
           var seconds = Math.floor((Date.now()-started)/1000);
-          progressBox.textContent = 'Đang tạo '+(isPdf?'PDF':'Excel')+' cho '+selected.size+' phiếu'+(seconds?' · Đã chờ '+seconds+' giây':'')+'. Các nút sẽ mở lại khi hoàn tất.';
+          progressBox.textContent = (originalInvoices ? 'Đang tải PDF hóa đơn gốc từ M-Invoice · Nhiều hóa đơn sẽ nằm trong một file ZIP' : 'Đang tạo '+(isPdf?'PDF':'Excel')+' cho '+selected.size+' phiếu')+(seconds?' · Đã chờ '+seconds+' giây':'')+'. Các nút sẽ mở lại khi hoàn tất.';
         }
         progress();
         var progressTimer = setInterval(progress, 1000);
         var url = '/api/documents/' + data.token + '/' + (isPdf ? 'pdf' : 'excel') + '?sheets=' + Array.from(selected).sort(function(a,b){return a-b;}).join(',');
         url += '&paper=' + host.querySelector('.document-paper').value;
         if(isPdf) url += '&sides=' + host.querySelector('.document-sides').value;
+        if(originalInvoices) url = '/api/export/invoice-pdfs/' + encodeURIComponent(body.contractor) + '?from=' + encodeURIComponent(body.from) + '&to=' + encodeURIComponent(body.to) + '&scope_id=' + encodeURIComponent(body.scope_id || '');
         try {
           var response = await checked(await fetch(url));
           if(isPdf)resolvedSides=response.headers.get('X-Print-Sides')||'';
@@ -161,7 +165,7 @@
           data.sheets.forEach(function(_,i){if(action.dataset.doc === 'receipts' ? receiptAt(i) : summaryAt(i)) selected.add(i);});
           update();if(selected.size)show(selected.values().next().value);
         }
-        if (['excel', 'pdf', 'print', 'view-pdf'].includes(action.dataset.doc)) output(action.dataset.doc);
+        if (['excel', 'pdf', 'print', 'view-pdf', 'invoice-pdfs'].includes(action.dataset.doc)) output(action.dataset.doc);
       };
       host.onchange = function(event) {
         if(busy && event.target.matches('[data-sheet]')) { update(); return; }

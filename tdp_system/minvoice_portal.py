@@ -194,6 +194,47 @@ class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
             raise MinvoiceError("M-Invoice chưa trả đủ chi tiết hóa đơn. Hãy thử lại.")
         return normalize_portal_document(detail)
 
+    def get_issued_invoice_pdf(self, *, remote_id, series, number, invoice_date,
+                               buyer_tax_code, subtotal, tax_amount, total_amount):
+        """Download the provider's original PDF after checking the issued identity."""
+        import io
+        from pypdf import PdfReader
+        if not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", str(remote_id)):
+            raise MinvoiceError('Hóa đơn chưa có định danh M-Invoice hợp lệ để tải PDF.')
+        detail = self.get_outgoing_invoice(remote_id=remote_id, series=series,
+                                          number=number, invoice_date=invoice_date)
+        if (portal_status(detail)[1] != 'issued'
+                or str(detail.get('buyerTaxCode') or '').strip() != str(buyer_tax_code).strip()):
+            raise MinvoiceError('Trạng thái hoặc người mua của hóa đơn đã thay đổi; hãy tải lại hóa đơn đầu ra.')
+        try:
+            amounts = [('totalAmountWithoutVAT', subtotal), ('vatAmount', tax_amount), ('totalAmount', total_amount)]
+            if any(not Decimal(str(detail[key])).is_finite()
+                   or abs(Decimal(str(detail[key])) - Decimal(str(expected))) > Decimal('1')
+                   for key, expected in amounts):
+                raise ValueError()
+        except (KeyError, ValueError, InvalidOperation):
+            raise MinvoiceError('Số tiền hóa đơn đã thay đổi; hãy tải lại hóa đơn đầu ra trước khi lấy PDF.') from None
+        # Spelling is from the tenant portal's InvoiceAppService API definition.
+        url = self.config.api_base_url.rstrip('/') + '/api/api/app/invoice/' + remote_id + '/downloaf-pdf'
+        try:
+            with self._opener.open(Request(url, headers={
+                'Accept': 'application/pdf', 'Referer': self.config.api_base_url + '/',
+            }), timeout=self.timeout) as response:
+                content = response.read(20 * 1024 * 1024 + 1)
+                if len(content) > 20 * 1024 * 1024 or not content.startswith(b'%PDF-'):
+                    raise MinvoiceError('M-Invoice chưa trả PDF hợp lệ hoặc file vượt 20 MB; hãy thử lại.')
+        except HTTPError as error:
+            raise MinvoiceError(f'Không tải được PDF từ M-Invoice (HTTP {error.code}); hãy thử lại.') from None
+        except (URLError, OSError):
+            raise MinvoiceError('Mất kết nối khi tải PDF hóa đơn; hãy thử lại.') from None
+        try:
+            pdf = PdfReader(io.BytesIO(content))
+            if pdf.is_encrypted or not len(pdf.pages):
+                raise ValueError()
+        except Exception:
+            raise MinvoiceError('PDF M-Invoice bị lỗi hoặc không đọc được; chưa tải hồ sơ thiếu.') from None
+        return content
+
     def get_outgoing_invoices(self, start_date, end_date, series, start=0, count=300, include_details=True):
         self._ensure_login()
         start_date, end_date = portal_date(start_date), portal_date(end_date)

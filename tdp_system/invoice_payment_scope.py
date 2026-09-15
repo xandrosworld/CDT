@@ -382,6 +382,20 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
     if not sources:
         if local:
             return local
+        outside = []
+        if tax_code and _table_exists(conn, 'outgoing_source_invoices'):
+            outside = [r[0] for r in conn.execute(
+                "SELECT DISTINCT invoice_date FROM outgoing_source_invoices WHERE source='minvoice' "
+                "AND UPPER(TRIM(buyer_tax_code))=? AND source_status_class='issued' "
+                "AND (invoice_date < ? OR invoice_date > ?) "
+                "ORDER BY ABS(julianday(invoice_date)-julianday(?)) LIMIT 3",
+                (tax_code.upper(), safe_from, safe_to, safe_to))]
+        if outside:
+            dates = ', '.join('/'.join(day.split('-')[::-1]) for day in sorted(outside))
+            raise InvoicePaymentScopeError(
+                f'Không có hóa đơn đã phát hành trong kỳ đang chọn. {party} có hóa đơn ngày {dates} '
+                'nằm ngoài kỳ. Hãy chọn lại Từ ngày / Đến ngày theo ngày hóa đơn rồi bấm Xem đề nghị thanh toán.',
+                code='issued_invoice_scope_empty', status=404)
         raise InvoicePaymentScopeError(
             'Không có hóa đơn VAT đã phát hành trong kỳ của nhà thầu. Hãy tải hóa đơn đầu ra '
             'và kiểm tra mã số thuế trong hồ sơ người mua.', code='issued_invoice_scope_empty', status=404)

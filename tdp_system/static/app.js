@@ -3310,7 +3310,8 @@
       }).join('') + '</select></label>' +
       '<label>Từ ngày<input name="from" type="date" value="' + esc(filters.from) + '" required></label>' +
       '<label>Đến ngày<input name="to" type="date" value="' + esc(filters.to) + '" required></label>' +
-      '<button class="btn btn-primary" type="submit">Xem đề nghị thanh toán</button></form>' + buyerProfileFormHtml();
+      '<button class="btn btn-primary" type="submit">Xem đề nghị thanh toán</button></form>' +
+      '<p class="muted">Chọn kỳ theo ngày phát hành hóa đơn, không phải ngày giao hàng.</p>' + buyerProfileFormHtml();
   }
 
   function invoiceUploadHtml() {

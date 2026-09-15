@@ -491,5 +491,84 @@ class InvoicePaymentScopeTests(unittest.TestCase):
             self.assertEqual(result.json['code'], code)
 
 
+    def test_empty_period_explains_dates_without_including_outside_invoices(self):
+        with server.db() as conn:
+            self.add_direct_source(conn, invoice_date='2026-09-12', invoice_number='801')
+            self.add_direct_source(conn, invoice_date='2026-09-13', invoice_number='806')
+            self.add_source(conn, buyer_tax_code='OTHER', invoice_date='2026-09-11', invoice_number='999')
+        empty = self.scope(date_to='2026-09-10')
+        self.assertEqual(empty.status_code, 404)
+        self.assertIn('12/09/2026, 13/09/2026', empty.json['error'])
+        self.assertNotIn('11/09/2026', empty.json['error'])
+        valid = self.scope(date_to='2026-09-13')
+        self.assertEqual(valid.status_code, 200)
+        self.assertEqual(len(valid.json['invoices']), 2)
+
+    def pdf_fixture(self):
+        from unittest.mock import Mock
+        from pypdf import PdfWriter
+        w = PdfWriter(); w.add_blank_page(width=100, height=100)
+        stream = io.BytesIO(); w.write(stream)
+        client = Mock(); client.get_issued_invoice_pdf.return_value = stream.getvalue()
+        previous = server.app.config.get('MINVOICE_CLIENT_FACTORY')
+        server.app.config['MINVOICE_CLIENT_FACTORY'] = lambda: client
+        self.addCleanup(lambda: server.app.config.__setitem__('MINVOICE_CLIENT_FACTORY', previous))
+        return client, stream.getvalue()
+
+    def pdf_download(self, scope_id):
+        return self.client.get('/api/export/invoice-pdfs/NT-A?from=2026-09-01&to=2026-09-30&scope_id=' + scope_id)
+
+    def test_original_pdfs_scope_required_and_bundle_preserves_provider_bytes(self):
+        client, content = self.pdf_fixture()
+        with server.db() as conn:
+            self.add_direct_source(conn, invoice_number='801')
+            self.add_direct_source(conn, invoice_number='806')
+            self.add_source(conn, buyer_tax_code='OTHER', invoice_number='999')
+            self.add_source(conn, invoice_date='2026-10-01', invoice_number='900')
+        scope = self.scope().json
+        self.assertEqual(self.pdf_download('').status_code, 409)
+        self.assertEqual(self.pdf_download('stale').status_code, 409)
+        client.get_issued_invoice_pdf.assert_not_called()
+        response = self.pdf_download(scope['scope_id'])
+        self.assertEqual(response.status_code, 200, response.data[:100])
+        with zipfile.ZipFile(io.BytesIO(response.data)) as z:
+            self.assertEqual(len(z.namelist()), 2)
+            self.assertTrue(all(z.read(n) == content for n in z.namelist()))
+        calls = client.get_issued_invoice_pdf.call_args_list
+        self.assertEqual({c.kwargs['number'] for c in calls}, {'801', '806'})
+        self.assertTrue(all(c.kwargs['buyer_tax_code'] == '0200000001' for c in calls))
+
+    def test_one_invoice_downloads_pdf_and_provider_failure_never_returns_partial_bundle(self):
+        client, content = self.pdf_fixture()
+        with server.db() as conn:
+            self.add_direct_source(conn, invoice_number='801')
+        response = self.pdf_download(self.scope().json['scope_id'])
+        self.assertEqual(response.mimetype, 'application/pdf')
+        self.assertEqual(response.data, content)
+        with server.db() as conn:
+            self.add_direct_source(conn, invoice_number='806')
+        error_type = server.app.view_functions['api_invoice_original_pdfs'].__globals__['MinvoiceError']
+        client.get_issued_invoice_pdf.side_effect = [content, error_type('PDF unavailable')]
+        failed = self.pdf_download(self.scope().json['scope_id'])
+        self.assertEqual(failed.status_code, 502)
+        self.assertEqual(failed.json['code'], 'invoice_pdf_download_failed')
+
+    def test_pdf_rechecks_scope_after_remote_download_and_requires_linked_source(self):
+        client, content = self.pdf_fixture()
+        with server.db() as conn:
+            source = self.add_direct_source(conn)
+        def changed(**kwargs):
+            with server.db() as conn:
+                conn.execute("UPDATE outgoing_source_invoices SET invoice_number='changed' WHERE id=?", (source,))
+            return content
+        client.get_issued_invoice_pdf.side_effect = changed
+        response = self.pdf_download(self.scope().json['scope_id'])
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json['code'], 'stale_invoice_payment_scope')
+        with server.db() as conn:
+            conn.execute("UPDATE outgoing_source_invoices SET remote_id='' WHERE id=?", (source,))
+        response = self.pdf_download(self.scope().json['scope_id'])
+        self.assertEqual(response.json['code'], 'invoice_pdf_source_missing')
+
 if __name__ == "__main__":
     unittest.main()
