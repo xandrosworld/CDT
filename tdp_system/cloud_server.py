@@ -76,11 +76,15 @@ def main():
     # Exporters still need MASTER_SOURCE as their verified print template.
     server.init_database(sync_master=False)
     stop, worker = server.start_backup_worker(server.auto_backup)
+    from .automatic_input_sync import start_worker
+    sync_stop, sync_worker = start_worker(server)
     print('TDP hosted application ready; persistent database initialized', flush=True)
     try:
         serve(server.app, host='0.0.0.0', port=int(os.environ.get('PORT', '8080')),
               threads=4, **PROXY_OPTIONS)
     finally:
+        sync_stop.set()
+        sync_worker.join(timeout=2)
         stop.set()
         worker.join(timeout=2)
 

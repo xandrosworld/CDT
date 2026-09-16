@@ -3750,6 +3750,12 @@
     if (state.invoiceDirection === 'input' && state.invoiceWorkbench.undated_source_count) {
       content.insertAdjacentHTML('afterbegin', '<div class="code-note warning-summary input-source-warning" role="status"><strong>mSMI còn ' + num(state.invoiceWorkbench.undated_source_count) + ' bản ghi chưa có ngày hóa đơn hợp lệ.</strong><p>Chưa xác định được các bản ghi này thuộc kỳ nào nên chưa thể đưa vào danh sách theo ngày. Nếu thiếu hóa đơn mới: vào mSMI → Chức năng → Đồng bộ ngay, chọn khoảng ngày cần lấy và đồng bộ danh sách cùng chi tiết. Xong quay lại đây bấm Tải/tiếp tục đầu vào.</p><a href="https://hdsd.minvoice.com.vn/msmi/dong-bo-chi-tiet-hoa-don/" target="_blank" rel="noopener noreferrer">Hướng dẫn Đồng bộ ngay của mSMI</a></div>');
     }
+    var autoInput = state.invoiceWorkbench.automatic_input_sync;
+    if (state.invoiceDirection === 'input' && autoInput && autoInput.enabled) {
+      var autoTime = function(value) { return value ? new Date(value).toLocaleString('vi-VN', {timeZone:'Asia/Ho_Chi_Minh'}) : 'Chưa có'; };
+      var autoLabel = autoInput.attention ? 'Tự cập nhật hóa đơn: cần kiểm tra' : autoInput.state === 'running' ? 'Đang tự cập nhật hóa đơn từ mSMI…' : 'Tự cập nhật hóa đơn đã bật';
+      content.insertAdjacentHTML('afterbegin', '<div class="code-note automatic-input-status ' + (autoInput.attention ? 'warning-summary' : '') + '" role="status"><strong>' + esc(autoLabel) + '</strong><div>02:30 và 06:00 hằng ngày · Rà lại 7 ngày trước · Tự tải cả danh sách và chi tiết.</div><small>Lần thành công: ' + esc(autoTime(autoInput.last_success)) + ' · Lần tiếp theo: ' + esc(autoTime(autoInput.next_attempt)) + '</small>' + (autoInput.message ? '<p>' + esc(autoInput.message) + '</p>' : autoInput.attention ? '<p>Lượt cập nhật đã quá giờ. Dữ liệu hiện có vẫn được giữ; hãy kiểm tra kết nối mSMI hoặc bấm Tải/tiếp tục đầu vào.</p>' : '') + '<div><small>Hóa đơn mới được tải về để kiểm tra; nhập kho vẫn cần bạn xác nhận.</small></div></div>');
+    }
     invoiceVirtual = window.TdpInvoiceVirtualTable(content.querySelector('.invoice-lines-card .invoice-lines-scroll'), state.invoiceListing.lines || [], window.TdpInvoiceRenderRow);
   }
 

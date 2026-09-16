@@ -394,6 +394,14 @@ def prepare_sync_batch(
     return _batch_dict(row), created
 
 
+def _automatic_input_status(conn, tenant):
+    try:
+        from .automatic_input_sync import status
+    except ImportError:
+        from automatic_input_sync import status
+    return status(conn, tenant)
+
+
 def list_sync_batches(
     conn,
     *,
@@ -445,6 +453,7 @@ def list_sync_batches(
         ).fetchone()[0]
     return {
         "undated_source_count": undated_source_count,
+        "automatic_input_sync": _automatic_input_status(conn, parameters[0]) if safe_type == INPUT_INVOICE else None,
         "filters": {
             "invoice_type": safe_type,
             "direction": "input" if safe_type == INPUT_INVOICE else "output",
