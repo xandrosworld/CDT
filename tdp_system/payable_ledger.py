@@ -822,6 +822,9 @@ def payable_ledger_payload(
     ]
     status_counts = Counter(row["status"] for row in base_rows)
     selected = [row for row in base_rows if row["status"] in selected_statuses]
+    # Replaced sources remain visible for audit, but never contribute to
+    # financial totals, even when the user selects all/reversed statuses.
+    selected_active = [row for row in selected if row["status"] != "reversed"]
     page = selected[safe_offset:safe_offset + safe_limit]
     rows = []
     for row in page:
@@ -875,7 +878,7 @@ def payable_ledger_payload(
             "source_rows": len(base_rows),
             "active_rows": len(active_rows),
             "quantities_by_unit": quantity_totals(active_rows, "actual_qty"),
-            "filtered_quantities_by_unit": quantity_totals(selected, "actual_qty"),
+            "filtered_quantities_by_unit": quantity_totals(selected_active, "actual_qty"),
             "status_counts": {status: int(status_counts.get(status, 0)) for status in PAYABLE_STATUSES},
             "quantity": sum(
                 _number(row["actual_qty"], "Số lượng thực tế") for row in active_rows
@@ -886,14 +889,13 @@ def payable_ledger_payload(
                 _vnd(row["amount"] - row["paid_amount"]) for row in active_rows
             ),
             "filtered_quantity": sum(
-                _number(row["actual_qty"], "Số lượng thực tế") for row in selected
+                _number(row["actual_qty"], "Số lượng thực tế") for row in selected_active
             ),
-            "filtered_amount": sum(_vnd(row["amount"]) for row in selected),
-            "filtered_paid_amount": sum(_vnd(row["paid_amount"]) for row in selected),
+            "filtered_amount": sum(_vnd(row["amount"]) for row in selected_active),
+            "filtered_paid_amount": sum(_vnd(row["paid_amount"]) for row in selected_active),
             "filtered_remaining_amount": sum(
-                0 if row["status"] == "reversed"
-                else _vnd(row["amount"] - row["paid_amount"])
-                for row in selected
+                _vnd(row["amount"] - row["paid_amount"])
+                for row in selected_active
             ),
         },
         "historical_through_date": _historical_cutoff(conn) or None,

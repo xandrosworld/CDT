@@ -1674,8 +1674,10 @@
       '<div class="totals-strip fade-in" id="orderVisibleTotals"><div><span>Tổng số đặt</span><strong>', stockQty(visibleTotals.ordered),
       '</strong></div><div><span>Tổng thực nhận</span><strong>', stockQty(visibleTotals.received),
       '</strong></div><div><span>Tổng thực giao</span><strong>', stockQty(visibleTotals.delivered),
-      '</strong></div><div><span>Tổng tiền mua</span><strong>', stockMoney(visibleTotals.cost),
-      '</strong></div><div><span>Tổng tiền bán</span><strong>', stockMoney(visibleTotals.total), '</strong></div></div>',
+      '</strong></div><div><span>Tiền mua theo sheet đơn hàng</span><strong>', stockMoney(visibleTotals.cost),
+      '</strong></div><div><span>Tiền bán gồm VAT</span><strong>', stockMoney(visibleTotals.total), '</strong></div></div>',
+      '<div class="code-note order-payable-explanation">Các tổng trên tính theo những dòng đơn hàng đang xem. Công nợ phải trả nhà cung cấp lấy từ sheet <b>Đặt hàng</b>. ',
+      '<button class="btn btn-outline" data-action="view-order-payable">Xem phải trả ngày ', dateVN(d.batch.work_date), '</button></div>',
       '<div class="card fade-in"><div class="card-head"><div><h3>Đơn hàng đã kiểm tra</h3>',
       '<p>Lưu đơn là trừ kho thực tế theo số đặt, kể cả chưa giao. Chốt lượng đã giao để chuyển sang số giao ròng, không trừ lần hai.</p></div><span class="tag ',
       approved ? "tag-ok" : "tag-warn", '">', approved ? "Đã duyệt" : "Bản nháp", "</span></div>",
@@ -1701,8 +1703,8 @@
     if (totals) totals.innerHTML = '<div><span>Số dòng đang xem</span><strong>' + visible.length + ' / ' + state.data.orders.length + '</strong></div>' +
       [['Tổng số đặt', stockQuantitySummary(visible, 'qty')],
        ['Tổng giao ròng', stockQuantitySummary(visible.map(function (item) { return { unit: item.unit, qty: Math.max(n(item.actual_delivered) - n(item.customer_return_qty), 0) }; }), 'qty')],
-       ['Tổng tiền mua', stockMoney(visible.reduce(function (sum, item) { return sum + n(item.cost); }, 0))],
-       ['Tổng tiền bán', stockMoney(visible.reduce(function (sum, item) { return sum + n(item.total); }, 0))]].map(function (pair) {
+       ['Tiền mua theo sheet đơn hàng', stockMoney(visible.reduce(function (sum, item) { return sum + n(item.cost); }, 0))],
+       ['Tiền bán gồm VAT', stockMoney(visible.reduce(function (sum, item) { return sum + n(item.total); }, 0))]].map(function (pair) {
         return '<div><span>' + pair[0] + '</span><strong>' + esc(pair[1]) + '</strong></div>';
       }).join('');
     var empty = document.getElementById('orderNoMatches');
@@ -7174,6 +7176,13 @@
     var button = event.target.closest("[data-action]");
     if (!button) return;
     var action = button.dataset.action;
+    if (action === 'view-order-payable') {
+      state.debtFrom = state.debtTo = state.data.batch.work_date;
+      state.debtSection = 'payable'; state.payableSupplier = ''; state.payableStatus = 'all';
+      invalidateDebtPeriod(); invalidatePayableWorkspace(true); persistPayableFilters();
+      navigate('debts');
+      return;
+    }
     if (action === 'repair-payable-source') {
       var item = ((state.payableLedger || {}).pending_purchase_sheets || []).find(function (entry) { return entry.batch_id === Number(button.dataset.batchId); });
       if (!item) { showToast('Tải lại công nợ để kiểm tra ngày cần bổ sung.', true); return; }

@@ -234,9 +234,9 @@ class PayableLedgerTests(unittest.TestCase):
             "remaining_amount": 400,
             "quantity": 80,
             "quantities_by_unit": [{"unit": "kg", "quantity": 80}],
-            "filtered_quantities_by_unit": [{"unit": "kg", "quantity": 120}],
-            "filtered_quantity": 120,
-            "filtered_amount": 600,
+            "filtered_quantities_by_unit": [{"unit": "kg", "quantity": 80}],
+            "filtered_quantity": 80,
+            "filtered_amount": 400,
             "filtered_paid_amount": 0,
             "filtered_remaining_amount": 400,
         })
@@ -378,6 +378,17 @@ class PayableLedgerTests(unittest.TestCase):
         self.assertEqual(all_rows["summary"]["status_counts"], {
             "open": 1, "partially_paid": 1, "paid": 1, "reversed": 1,
         })
+        self.assertEqual(all_rows["pagination"]["total"], 4)
+        self.assertEqual(all_rows["summary"]["filtered_amount"], 300)
+        self.assertEqual(all_rows["summary"]["filtered_paid_amount"], 130)
+        self.assertEqual(all_rows["summary"]["filtered_remaining_amount"], 170)
+        self.assertEqual(all_rows["summary"]["filtered_quantity"], 60)
+        audit = self._ledger(status="reversed")
+        self.assertEqual(len(audit["rows"]), 1)
+        self.assertEqual(audit["rows"][0]["amount"], 100)
+        for key in ("filtered_amount", "filtered_paid_amount", "filtered_remaining_amount", "filtered_quantity"):
+            self.assertEqual(audit["summary"][key], 0)
+        self.assertEqual(audit["summary"]["filtered_quantities_by_unit"], [])
 
     def test_replacing_historical_snapshot_appends_revisions_and_reverses_removed_row(self):
         with server.db() as conn:
