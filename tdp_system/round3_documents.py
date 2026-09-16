@@ -131,15 +131,15 @@ def register_round3_routes(app, ctx):
                 headers = ["Ngày", "Nhà thầu", "Tên bếp", "Hàng", "Số đặt",
                            "ĐVT", "Giá bán", "Trước thuế", "Thuế", "Phải thu"]
                 ws.append(headers)
-                for row in sorted(rows, key=lambda row: (row["work_date"], row["id"])):
+                for excel_row, row in enumerate(sorted(rows, key=lambda row: (row["work_date"], row["id"])), 2):
                     ws.append([date.fromisoformat(row["work_date"]), row["contractor"]["code"], row["kitchen"]["name"],
                                row["product_name"], row["ordered_qty"], row["unit"], row["sell_price"],
                                row["subtotal"], row["tax_amount"], row["amount"]])
                     if row["status"] == "reversed":
                         # Retain history without a customer-facing status column.
-                        ws.cell(ws.max_row, 10).comment = Comment("Dòng đã đảo, chỉ để tra cứu.", "Thành Đạt Phát")
-                        for cell in ws[ws.max_row]:
-                            cell.fill = PatternFill("solid", fgColor="FEE2E2")
+                        ws.cell(excel_row, 10).comment = Comment("Dòng đã đảo, chỉ để tra cứu.", "Thành Đạt Phát")
+                        for column in range(1, len(headers) + 1):
+                            ws.cell(excel_row, column).fill = PatternFill("solid", fgColor="FEE2E2")
                 summary = payload["summary"]
                 ws.append(["TỔNG THEO BỘ LỌC", "", "", "", "", "", "",
                            summary["filtered_subtotal"], summary["filtered_tax_amount"], summary["filtered_amount"]])

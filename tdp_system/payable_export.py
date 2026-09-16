@@ -504,7 +504,7 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
 
     def detail_sheet(ws, items, title, *, history=False):
         ws.append(PAYABLE_HEADERS)
-        for line in items:
+        for excel_row, line in enumerate(items, 2):
             work_date = _excel_date(line["work_date"])
             ws.append([
                 work_date.strftime("%m/%Y") if isinstance(work_date, date) else "",
@@ -513,7 +513,7 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
                 *[_number(line[f]) for f in fields[1:]], _vnd(line["amount"]),
             ])
             if line.get('rounding_adjustment'):
-                ws.cell(ws.max_row, 14).comment = Comment(
+                ws.cell(excel_row, 14).comment = Comment(
                     f"Điều chỉnh làm tròn tổng ngày: {line['rounding_adjustment']:+d}đ. Số lượng và giá mua giữ nguyên.",
                     'Thành Đạt Phát',
                 )
@@ -533,8 +533,8 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
         ws.auto_filter.ref = f"A3:N{data_end}"
         for row_number, line in enumerate(items, 4):
             if line["status"] == "reversed":
-                for cell in ws[row_number]:
-                    cell.fill = REVERSED_FILL
+                for column in range(1, len(PAYABLE_HEADERS) + 1):
+                    ws.cell(row_number, column).fill = REVERSED_FILL
         for cell in ws[total_row]:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
         ws.row_dimensions[total_row].height = 26
