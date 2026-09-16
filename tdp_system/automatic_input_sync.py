@@ -89,6 +89,29 @@ class Snapshot:
         return {'items':part,'has_more':(page+1)*size<len(self.rows)}
 
 
+def preserve_newer_revisions(conn, tenant, rows):
+    """A manual import may finish while the worker is fetching older pages."""
+    def revision(raw):
+        try:
+            value=datetime.fromisoformat(str(raw.get('last_updated_date','')).replace('Z','+00:00'))
+            return value if value.tzinfo else None
+        except ValueError:
+            return None
+    result=[]
+    for incoming in rows:
+        key=str(first_value(incoming,'_id','id','invoiceId',default=''))
+        stored=conn.execute('SELECT raw_json FROM msmi_invoices WHERE tenant=? AND remote_id=?',
+                            (tenant,key)).fetchone()
+        if stored:
+            try: current=json.loads(stored['raw_json'])
+            except (TypeError,ValueError): current={}
+            old,new=revision(incoming),revision(current)
+            if old and new and old < new:
+                incoming=current
+        result.append(incoming)
+    return result
+
+
 def fetch_snapshot(client, start, end, tax_code, *, clock=time.monotonic):
     """Scan completely: mSMI ignores dates and may sort by update time."""
     deadline=clock()+600
@@ -129,6 +152,7 @@ def run_due(db, tenant, client_factory, refresher_factory, tax_code, *, now_fn=v
             stamp=lambda:now_fn().astimezone(VN).strftime('%Y-%m-%d %H:%M:%S')
             batch,_=prepare_sync_batch(c,tenant=tenant,source='msmi',invoice_type='input',
                 date_from=start,date_to=end,now_iso=stamp)
+            rows=preserve_newer_revisions(c,tenant,rows)
             # The complete in-memory snapshot has a different paging space.
             c.execute("UPDATE invoice_sync_batches SET source_cursor='{}' WHERE id=?",(batch['id'],))
             result=sync_input_batch(c,Snapshot(rows),batch['id'],stamp,max_pages=50,page_size=199)

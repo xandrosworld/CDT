@@ -111,6 +111,19 @@ class AutoInputTests(unittest.TestCase):
         rows=fetch_snapshot(Client(),'2026-09-09','2026-09-16','0202265016')
         self.assertEqual(['yes'],[r['_id'] for r in rows])
 
+    def test_older_background_snapshot_cannot_overwrite_newer_manual_source(self):
+        item=remote_invoice(20649)
+        item.update(_id='latest',tdlap='2026-09-15',nmmst='0202265016',nbten='Current supplier name',last_updated_date='2026-09-16T03:00:00Z')
+        self.assertTrue(self.execute([item])['ok'])
+        stale=deepcopy(item);stale['last_updated_date']='2026-09-16T02:00:00Z'
+        stale['nbten']='Old supplier name'
+        self.now=self.now.replace(hour=6)
+        self.assertTrue(self.execute([stale])['ok'])
+        with self.db() as c:
+            raw=json.loads(c.execute("SELECT raw_json FROM msmi_invoices WHERE remote_id='latest'").fetchone()[0])
+            self.assertEqual(item['nbten'],raw['nbten'])
+            self.assertEqual(item['last_updated_date'],raw['last_updated_date'])
+
 
 class RefreshTests(unittest.TestCase):
     def test_portal_refresh_runs_both_purchase_types_then_repairs_details_and_verifies(self):
