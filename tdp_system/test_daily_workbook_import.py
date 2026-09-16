@@ -69,6 +69,35 @@ class DailyWorkbookImportTests(unittest.TestCase):
             conn.execute("DELETE FROM batches")
             conn.execute("UPDATE products SET buy_price=10000 WHERE code='P1'")
 
+    def test_daily_bk_seller_imported_separately_from_ordering_supplier(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = '15.09'
+        ws.append(['Mã hàng', 'Mã bếp', 'Tên hàng', 'Số lượng', 'ĐVT',
+                   'Chọn NCC', 'NCC', 'Giá mua', 'Giá bán', 'Bảng kê',
+                   'Nhà cung cấp', 'CCCD'])
+        ws.append(['P1', 'K1', 'Product 1', 4.5, 'kg', 'Chọn NCC', 'S1',
+                   40000, 48000, 'bk', 'Seller from workbook', '031165012566'])
+        path = Path(self.temp.name) / 'bk-seller.xlsx'
+        wb.save(path)
+        wb.close()
+        rows, _ = server.parse_workbook(path, '2026-09-15', ['15.09'])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['seller'], 'Seller from workbook')
+        self.assertEqual(rows[0]['supplier'], 'S1')
+        self.assertEqual(rows[0]['cccd'], '031165012566')
+        self.assertEqual(rows[0]['purchase_list'], 1)
+        self.assertEqual(server.order_totals(rows[0])[:2], (216000, 180000))
+
+    def test_single_supplier_header_is_not_reclassified_as_bk_seller(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(['Mã hàng', 'Mã bếp', 'Số lượng', 'Bảng kê', 'Nhà cung cấp', 'CCCD'])
+        _, mapping = server.detect_header(ws)
+        self.assertEqual(mapping['supplier'], 5)
+        self.assertNotIn('seller', mapping)
+        wb.close()
+
     @staticmethod
     def workbook_bytes(*, quantities=(2, 3), secret="CCCD-NEVER-EXPOSE") -> bytes:
         workbook = Workbook()

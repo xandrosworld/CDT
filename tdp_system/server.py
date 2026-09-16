@@ -1162,6 +1162,15 @@ def detect_header(ws):
                 and slug(ws.cell(row, col).value) in {'ncc', 'nhacungcap'}
             )):
                 mapping[field] = col
+        # Daily templates use two different identities: NCC is the ordering
+        # supplier, while "Bảng kê | Nhà cung cấp | CCCD" names the BK seller.
+        # Recognize that complete group only; a lone Nhà cung cấp remains NCC.
+        bk_col = mapping.get('purchase_list')
+        if (bk_col and 'seller' not in mapping
+                and mapping.get('cccd') == bk_col + 2
+                and slug(ws.cell(row, bk_col + 1).value) == 'nhacungcap'
+                and mapping.get('supplier', bk_col + 1) < bk_col):
+            mapping['seller'] = bk_col + 1
         score = sum(key in mapping for key in ("product_name", "qty", "kitchen", "product_code"))
         score += min(len(mapping), 8) / 10
         if best is None or score > best[0]:
