@@ -177,45 +177,32 @@ class ReceivableExportTests(unittest.TestCase):
             response.headers["Content-Disposition"],
         )
         workbook = load_workbook(io.BytesIO(response.data), data_only=False, keep_links=False)
-        self.assertEqual(workbook.sheetnames[0], "Tổng nhà thầu")
-        self.assertEqual(len(workbook.sheetnames), 3)
-        self.assertEqual(len({name.casefold() for name in workbook.sheetnames}), 3)
+        self.assertNotIn("Tổng nhà thầu", workbook.sheetnames)
+        self.assertEqual(len(workbook.sheetnames), 2)
+        self.assertEqual(len({name.casefold() for name in workbook.sheetnames}), 2)
         for name in workbook.sheetnames:
             self.assertLessEqual(len(name), 31)
             self.assertFalse(any(character in name for character in "\\/*?:[]"))
 
-        summary = workbook["Tổng nhà thầu"]
-        self.assertEqual([summary.cell(4, column).value for column in range(1, 6)], [
-            100_000, 116_000, -5_000, 30_000, 181_000,
-        ])
-        self.assertEqual(summary["F4"].value, "Thực giao đã duyệt (không phải hóa đơn đỏ)")
-        self.assertIsNone(summary["I4"].border.left)
-        self.assertIsNone(summary["J4"].border.right)
-        self.assertTrue(all(cell.border.left is None for cell in summary[5][:10]))
-        self.assertEqual([cell.value for cell in summary[6]][:3], ["Mã bếp", "Tên bếp", "Số dòng"])
-        total_row = summary.max_row
-        self.assertEqual(summary.cell(total_row, 1).value, "TỔNG")
-        self.assertEqual(summary.cell(total_row, 10).value, 116_000)
-
         child_totals = []
-        child_codes = set()
-        for name in workbook.sheetnames[1:]:
-            sheet = workbook[name]
-            self.assertEqual(sheet.cell(3, 1).value, "Ngày")
-            self.assertEqual(sheet.cell(3, 15).value, "Phát sinh phải thu")
-            self.assertEqual(sheet.cell(3, 17).value, "Lần cập nhật")
-            child_codes.add(sheet.cell(sheet.max_row, 2).value)
-            child_totals.append(sheet.cell(sheet.max_row, 15).value)
+        for sheet in workbook:
+            self.assertEqual([cell.value for cell in sheet[3]], [
+                "Ngày", "Tên bếp", "Tên hàng", "SL đặt", "ĐVT", "Giá bán giao dịch",
+                "Thuế suất (%)", "Tiền trước thuế", "Tiền thuế", "Phát sinh phải thu",
+            ])
+            child_totals.append(sheet.cell(sheet.max_row, 10).value)
             self.assertEqual(sheet.freeze_panes, "A4")
             self.assertEqual(sheet.page_setup.orientation, "landscape")
             self.assertEqual(sheet.page_setup.paperSize, 9)
             self.assertEqual(sheet.page_setup.fitToWidth, 1)
             self.assertEqual(sheet.print_title_rows, "$3:$3")
-            self.assertTrue(str(sheet.print_area).endswith(f"$O${sheet.max_row}"))
-        self.assertEqual(len(child_codes), 2)
+            self.assertTrue(str(sheet.print_area).endswith(f"$J${sheet.max_row}"))
+            dates = [sheet.cell(r, 1).value for r in range(4, sheet.max_row)]
+            self.assertEqual(dates, sorted(dates))
+        # 8 delivered - 2 returned = 6, at 10,000 + 10% VAT: hiding
+        # quantity columns must not change net-delivery accounting.
         self.assertEqual(sorted(child_totals), [50_000, 66_000])
-        self.assertEqual(sum(child_totals), summary.cell(total_row, 10).value)
-        self.assertEqual(sum(child_totals), summary["B4"].value)
+        self.assertEqual(sum(child_totals), 116_000)
 
         formulas = [
             cell.coordinate
@@ -244,11 +231,11 @@ class ReceivableExportTests(unittest.TestCase):
             seen = {}
             for name in names:
                 workbook = load_workbook(io.BytesIO(archive.read(name)), data_only=False)
-                self.assertEqual(workbook.sheetnames[0], "Tổng nhà thầu")
-                contractor_code = workbook["Tổng nhà thầu"]["A1"].value.rsplit("–", 1)[-1].strip()
+                self.assertNotIn("Tổng nhà thầu", workbook.sheetnames)
+                contractor_code = workbook.active["A2"].value.split(" · ")[0]
                 child_total = sum(
-                    sheet.cell(sheet.max_row, 15).value
-                    for sheet in workbook.worksheets[1:]
+                    sheet.cell(sheet.max_row, 10).value
+                    for sheet in workbook.worksheets
                 )
                 seen[contractor_code] = child_total
                 workbook.close()
@@ -264,9 +251,8 @@ class ReceivableExportTests(unittest.TestCase):
         )
         self.assertEqual(empty.status_code, 200, empty.get_json(silent=True))
         workbook = load_workbook(io.BytesIO(empty.data), data_only=False)
-        self.assertEqual(workbook.sheetnames, ["Tổng nhà thầu"])
-        self.assertEqual([workbook.active.cell(4, column).value for column in range(1, 6)], [0, 0, 0, 0, 0])
-        self.assertEqual(workbook.active.max_row, 6)
+        self.assertEqual(workbook.sheetnames, ["Không phát sinh"])
+        self.assertIn("Không có dòng phải thu", workbook.active["A2"].value)
         workbook.close()
 
         empty_bundle = self.client.get(

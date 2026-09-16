@@ -31,6 +31,13 @@ def seed_round3(conn, count=2):
                         VALUES(?,'2026-09-05','C1','K1',?,?,?,?,?,?,?,1000,152000.994706,'0',0,'Đơn hàng',?,'[]','[]',?)""",
                      (batch, f'P{index}', 'Tên hàng dài để kiểm tra căn dòng '+str(index), qty, qty, qty, unit,
                       'S1' if index % 2 == 0 else 'S2', index+1, stamp))
+    # Current payable accounting requires a confirmed purchase-sheet source.
+    conn.execute("""INSERT INTO purchase_workbook_lines(
+        batch_id,row_key,work_date,product_code,kitchen,product_name,base_qty,actual_qty,
+        unit,supplier,buy_price,amount,source_sheet,source_row,source_hash,created_at,updated_at)
+        SELECT batch_id,'fixture:'||id,work_date,product_code,kitchen,product_name,qty,actual_received,
+               unit,supplier,buy_price,ROUND(actual_received*buy_price),'đặt hàng',source_row,'fixture:'||id,?,?
+        FROM orders WHERE batch_id=?""", (stamp, stamp, batch))
     sync_receivable_ledger(conn, timestamp=stamp)
     sync_payable_ledger(conn, timestamp=stamp)
     return batch
@@ -85,15 +92,15 @@ class Round3DocumentsTests(unittest.TestCase):
         summary = data['summary']
         self.assertEqual({i['unit']:i['quantity'] for i in summary['quantities_by_unit']}, {'kg':.855,'cái':2})
         book = self.export('/api/debts/receivables/lines/export'+base)
-        self.assertEqual(book.active.cell(book.active.max_row,13).value, summary['filtered_amount'])
-        total = book.active.cell(book.active.max_row,8).value
-        self.assertIn('kg',total); self.assertIn('cái',total)
+        self.assertEqual(book.active.cell(book.active.max_row,10).value, summary['filtered_amount'])
+        self.assertIsNone(book.active.cell(book.active.max_row,5).value)
         self.assertEqual(book.active['E4'].value,.855)
         book.close()
         book = self.export('/api/debts/receivables/export?from=2026-09-01&to=2026-09-30&contractor=C1')
-        total_sheet = book['Tổng nhà thầu']
-        self.assertIn('kg',str(total_sheet.cell(total_sheet.max_row,7).value))
-        self.assertIn('cái',str(total_sheet.cell(total_sheet.max_row,7).value))
+        self.assertNotIn('Tổng nhà thầu', book.sheetnames)
+        forbidden = {'Mã bếp', 'Mã hàng', 'Thực giao', 'Khách trả', 'Giao ròng', 'Mã dòng', 'Lần cập nhật', 'Nguồn', 'Trạng thái'}
+        for sheet in book:
+            self.assertFalse(forbidden.intersection(cell.value for cell in sheet[3]))
         book.close()
 
     def assert_preview_matches_export(self, root, query):
@@ -241,6 +248,7 @@ class Round3DocumentsTests(unittest.TestCase):
     def test_formula_like_names_stay_text_in_all_debt_exports(self):
         with server.db() as conn:
             conn.execute("UPDATE orders SET product_name='=1+1'")
+            conn.execute("UPDATE purchase_workbook_lines SET product_name='=1+1'")
             sync_payable_ledger(conn,timestamp=server.now_iso())
             sync_receivable_ledger(conn,timestamp=server.now_iso())
         for url in (

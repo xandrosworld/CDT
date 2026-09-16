@@ -175,7 +175,7 @@ class PayableExportTests(unittest.TestCase):
         self.assertEqual(sheet.max_row, 7)
         self.assertEqual(
             [sheet.cell(7, column).value for column in range(1, 15)],
-            ["TỔNG", None, None, None, 60, None, None, None, 1, 2, 0, 1, 60, 600],
+            ["TỔNG", *([None] * 12), 600],
         )
         self.assertNotIn("Hàng S2-REVERSED", [sheet.cell(row, 4).value for row in range(4, 8)])
 
@@ -242,7 +242,7 @@ class PayableExportTests(unittest.TestCase):
         self.assertEqual(workbook.sheetnames, ["Công nợ phải trả", "Tổng NCC"])
         sheet = workbook.active
         self.assertEqual(sheet.max_row, 4)
-        self.assertEqual([sheet.cell(4, column).value for column in (1, 5, 13, 14)], ["TỔNG", 0, 0, 0])
+        self.assertEqual([sheet.cell(4, column).value for column in (1, 5, 13, 14)], ["TỔNG", None, None, 0])
 
     def test_signed_historical_adjustment_is_preserved_not_misread_as_overpayment(self):
         timestamp = server.now_iso()
@@ -264,7 +264,7 @@ class PayableExportTests(unittest.TestCase):
         workbook = load_workbook(io.BytesIO(response.data), data_only=False)
         detail = workbook.active
         self.assertEqual([detail.cell(4, column).value for column in (5, 13, 14)], [-10, -10, -100])
-        self.assertEqual([detail.cell(5, column).value for column in (5, 13, 14)], [-10, -10, -100])
+        self.assertEqual([detail.cell(5, column).value for column in (5, 13, 14)], [None, None, -100])
 
     def test_reversed_source_is_kept_in_audit_database_but_omitted_from_customer_sheet(self):
         lines = self._lines()
@@ -291,6 +291,36 @@ class PayableExportTests(unittest.TestCase):
                 (lines["S1-A"]["id"],),
             ).fetchone()
         self.assertEqual(tuple(reversed_line), ("reversed", 100))
+
+    def test_range_totals_exclude_reimport_history_and_sort_dates_before_suppliers(self):
+        lines = self._lines()
+        with server.db() as conn:
+            # Earlier day deliberately belongs to a supplier sorted after S1.
+            conn.execute("UPDATE payable_ledger_lines SET work_date='2026-09-02' WHERE supplier_code='S1'")
+            conn.execute("UPDATE payable_ledger_lines SET status='reversed' WHERE id=?", (lines['S1-A']['id'],))
+        for status, expected in [('all', 500), ('open,partially_paid,paid', 500), ('reversed', 0)]:
+            with self.subTest(status=status):
+                response = self._export(status=status)
+                book = load_workbook(io.BytesIO(response.data))
+                sheet = book.active
+                self.assertEqual(sheet.cell(sheet.max_row, 14).value, expected)
+                self.assertEqual(sum(sheet.cell(r, 14).value for r in range(4, sheet.max_row)), expected)
+                dates = [sheet.cell(r, 3).value for r in range(4, sheet.max_row)]
+                self.assertEqual(dates, sorted(dates))
+                self.assertTrue(all(sheet.cell(sheet.max_row, c).value is None for c in (5, 9, 10, 11, 12, 13)))
+                self.assertNotIn('Lượng', sheet['A2'].value)
+                self.assertLessEqual(sheet.row_dimensions[sheet.max_row].height, 32)
+                if status in ('all', 'reversed'):
+                    self.assertIn('Lịch sử đã đảo', book.sheetnames)
+                    history = book['Lịch sử đã đảo']
+                    self.assertEqual(history.cell(history.max_row, 14).value, 140)
+                for day, total in [('2026-09-01', 300), ('2026-09-02', 200)]:
+                    if status != 'reversed':
+                        daily = self._export(**{'from':day, 'to':day, 'status':status})
+                        daily_book = load_workbook(io.BytesIO(daily.data))
+                        self.assertEqual(daily_book.active.cell(daily_book.active.max_row, 14).value, total)
+                        daily_book.close()
+                book.close()
 
 
 if __name__ == "__main__":

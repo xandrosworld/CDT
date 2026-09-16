@@ -7,6 +7,8 @@ from decimal import Decimal, InvalidOperation
 
 from flask import jsonify, request
 from openpyxl import Workbook
+from openpyxl.comments import Comment
+from openpyxl.styles import PatternFill
 
 try:
     from document_totals import quantity_totals, quantity_text
@@ -126,26 +128,28 @@ def register_round3_routes(app, ctx):
                     rows.extend(page["rows"])
                 ws = (book := Workbook()).active
                 ws.title = "Chi tiết phải thu"
-                headers = ["Ngày", "Nhà thầu", "Bếp", "Hàng", "Số đặt", "Thực giao", "Khách trả",
-                           "Giao ròng", "ĐVT", "Giá bán", "Trước thuế", "Thuế", "Phải thu", "Trạng thái", "Mã dòng"]
+                headers = ["Ngày", "Nhà thầu", "Tên bếp", "Hàng", "Số đặt",
+                           "ĐVT", "Giá bán", "Trước thuế", "Thuế", "Phải thu"]
                 ws.append(headers)
-                for row in rows:
-                    ws.append([date.fromisoformat(row["work_date"]), row["contractor"]["code"], row["kitchen"]["code"],
-                               row["product_name"], row["ordered_qty"], row["actual_delivered"], row["customer_return_qty"],
-                               row["delivered_qty"], row["unit"], row["sell_price"], row["subtotal"], row["tax_amount"],
-                               row["amount"], "Hiệu lực" if row["status"] == "active" else "Đã đảo", row["id"]])
+                for row in sorted(rows, key=lambda row: (row["work_date"], row["id"])):
+                    ws.append([date.fromisoformat(row["work_date"]), row["contractor"]["code"], row["kitchen"]["name"],
+                               row["product_name"], row["ordered_qty"], row["unit"], row["sell_price"],
+                               row["subtotal"], row["tax_amount"], row["amount"]])
+                    if row["status"] == "reversed":
+                        # Retain history without a customer-facing status column.
+                        ws.cell(ws.max_row, 10).comment = Comment("Dòng đã đảo, chỉ để tra cứu.", "Thành Đạt Phát")
+                        for cell in ws[ws.max_row]:
+                            cell.fill = PatternFill("solid", fgColor="FEE2E2")
                 summary = payload["summary"]
                 ws.append(["TỔNG THEO BỘ LỌC", "", "", "", "", "", "",
-                           quantity_text(summary["filtered_quantities_by_unit"]), "", "",
                            summary["filtered_subtotal"], summary["filtered_tax_amount"], summary["filtered_amount"]])
                 _style_sheet(ws, title="CHI TIẾT PHẢI THU THEO BỘ LỌC",
                              subtitle=f"{payload['date_from']} – {payload['date_to']} · Dòng đã đảo chỉ để tra cứu, không tính số dư còn thu.",
-                             headers=headers, widths=[14, 16, 16, 38, 16, 16, 16, 25, 10, 18, 20, 20, 20, 16, 12],
-                             money_columns=(10, 11, 12, 13), quantity_columns=(5, 6, 7, 8), date_columns=(1,), total_row=ws.max_row + 2)
+                             headers=headers, widths=[14, 16, 28, 38, 16, 10, 18, 20, 20, 20],
+                             money_columns=(7, 8, 9, 10), quantity_columns=(5,), date_columns=(1,), total_row=ws.max_row + 2)
                 for cells in ws.iter_rows(min_row=4):
-                    for cell in cells[4:8]:
-                        cell.number_format = "#,##0.######"
-                ws.auto_filter.ref = f"A3:O{max(3, ws.max_row - 1)}"
+                    cells[4].number_format = "#,##0.######"
+                ws.auto_filter.ref = f"A3:J{max(3, ws.max_row - 1)}"
             try:
                 if request.path.endswith("/preview"):
                     return jsonify(ok=True, read_only=True, date_from=payload["date_from"],

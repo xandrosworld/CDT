@@ -2216,7 +2216,7 @@
         esc(history.source_ref || item.source.ref) + '</strong><ol>' +
         (revisions || '<li>Chưa có lịch sử.</li>') + '</ol></div>';
     }
-    return '<tr class="receivable-history-row"><td colspan="15">' + body + '</td></tr>';
+    return '<tr class="receivable-history-row"><td colspan="11">' + body + '</td></tr>';
   }
 
   function receivableWorkspaceHtml() {
@@ -2233,23 +2233,17 @@
     var rows = (ledger.rows || []).map(function (item) {
       var key = String(item.id);
       var expanded = Boolean(state.receivableExpanded[key]);
-      var statusClass = item.status === "active" ? "tag-ok" : "tag-red";
       return '<tr class="receivable-line-' + esc(item.status) + '"><td>' + dateVN(item.work_date) +
         '</td><td><strong>' + esc(item.contractor.code) + '</strong><div class="muted">' +
-        esc(item.contractor.name) + '</div></td><td><strong>' + esc(item.kitchen.code || "—") +
-        '</strong><div class="muted">' + esc(item.kitchen.name) + '</div></td><td><strong>' +
-        esc(item.product_name) + '</strong><div class="muted">' + esc(item.product_code || "Không có mã") +
-        '</div></td><td class="num-cell">' + stockQty(item.ordered_qty) + '</td><td class="num-cell">' +
-        stockQty(item.actual_delivered) + '</td><td class="num-cell">' + stockQty(item.customer_return_qty) +
-        '</td><td class="num-cell"><strong>' + stockQty(item.delivered_qty) + '</strong></td><td>' +
+        esc(item.contractor.name) + '</div></td><td>' + esc(item.kitchen.name) +
+        '</td><td><strong>' + esc(item.product_name) + '</strong>' +
+        (item.status === "reversed" ? '<div class="muted">Đã đảo · chỉ tra cứu</div>' : '') +
+        '</td><td class="num-cell">' + stockQty(item.ordered_qty) + '</td><td>' +
         esc(item.unit) + '</td><td class="num-cell">' + money(item.sell_price) +
         '</td><td class="num-cell">' + money(item.subtotal) + '</td><td class="num-cell">' +
         (n(item.tax_percent) ? num(item.tax_percent) + "% · " : "") + money(item.tax_amount) +
-        '</td><td class="num-cell"><strong>' + money(item.amount) + '</strong></td><td><span class="tag ' +
-        statusClass + '">' + esc(receivableStatusText(item.status)) + '</span>' +
-        (item.reversal_reason ? '<div class="muted">' + esc(item.reversal_reason) + '</div>' : '') +
-        '</td><td><div class="muted">Mã dòng ' + item.id + ' · lần sửa ' + item.ledger_revision +
-        '</div><button class="btn btn-small btn-outline" data-action="toggle-receivable-history" data-id="' +
+        '</td><td class="num-cell"><strong>' + money(item.amount) + '</strong></td><td>' +
+        '<button class="btn btn-small btn-outline" data-action="toggle-receivable-history" data-id="' +
         item.id + '" aria-expanded="' + (expanded ? "true" : "false") + '">' +
         (expanded ? "Ẩn lịch sử" : "Xem lịch sử") + '</button></td></tr>' + receivableHistoryRows(item);
     }).join("");
@@ -2274,12 +2268,11 @@
       '<div class="card"><div class="card-head"><div><h3>Sổ phải thu vận hành chi tiết</h3>',
       '<p>Nguồn duy nhất: lượng thực giao ròng đã duyệt × giá bán giao dịch + thuế; không phải đề nghị thanh toán/hóa đơn đỏ</p></div><span class="tag">',
       num(pagination.returned || 0), ' dòng đang hiển thị</span></div>',
-      '<div class="table-wrap round3-table receivable-ledger-table"><table><thead><tr><th>Ngày</th><th>Nhà thầu</th><th>Bếp</th><th>Hàng</th><th>Số đặt</th><th>Thực giao</th><th>Khách trả</th><th>Giao ròng</th><th>Đơn vị</th><th>Giá bán giao dịch</th><th>Trước thuế</th><th>Thuế</th><th>Phải thu vận hành</th><th>Trạng thái</th><th>Nguồn / lịch sử</th></tr></thead><tbody>',
-      rows || '<tr><td colspan="15"><div class="empty">Không có dòng phải thu theo bộ lọc này.</div></td></tr>',
-      '</tbody><tfoot><tr class="table-total-row"><td colspan="4">TỔNG THEO BỘ LỌC</td><td colspan="3"></td><td class="num-cell">',
-      esc(quantityGroups(summary.filtered_quantities_by_unit)), '</td><td colspan="2"></td><td class="num-cell">',
+      '<div class="table-wrap round3-table receivable-ledger-table"><table><thead><tr><th>Ngày</th><th>Nhà thầu</th><th>Bếp</th><th>Hàng</th><th>Số đặt</th><th>Đơn vị</th><th>Giá bán giao dịch</th><th>Trước thuế</th><th>Thuế</th><th>Phải thu vận hành</th><th>Lịch sử</th></tr></thead><tbody>',
+      rows || '<tr><td colspan="11"><div class="empty">Không có dòng phải thu theo bộ lọc này.</div></td></tr>',
+      '</tbody><tfoot><tr class="table-total-row"><td colspan="7">TỔNG THEO BỘ LỌC</td><td class="num-cell">',
       money(summary.filtered_subtotal), '</td><td class="num-cell">', money(summary.filtered_tax_amount),
-      '</td><td class="num-cell">', money(summary.filtered_amount), '</td><td colspan="2"></td></tr></tfoot></table></div></div></div>'
+      '</td><td class="num-cell">', money(summary.filtered_amount), '</td><td></td></tr></tfoot></table></div></div></div>'
     ]);
   }
 

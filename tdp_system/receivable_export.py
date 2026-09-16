@@ -13,10 +13,6 @@ try:
 except ImportError:
     from document_preview import white_print_style
 
-try:
-    from document_totals import quantity_totals, quantity_text, quantity_cell
-except ImportError:
-    from .document_totals import quantity_totals, quantity_text, quantity_cell
 
 import io
 import re
@@ -391,134 +387,48 @@ def receivable_workbook(data: dict[str, Any]) -> Workbook:
     workbook.properties.subject = "Công nợ vận hành theo lượng thực giao và giá bán giao dịch"
     workbook.properties.creator = "Thành Đạt Phát"
 
-    ws = workbook.active
-    ws.title = "Tổng nhà thầu"
-    account_headers = [
-        "Số dư đầu kỳ", "Phát sinh phải thu", "Điều chỉnh", "Đã thu", "Số dư cuối kỳ",
-        "Nguồn", "Từ ngày", "Đến ngày",
-    ]
-    ws.append([])
-    ws.append([])
-    ws.append(account_headers)
-    ws.append([
-        account["opening"], account["period_charge"], account["period_adjustment"],
-        account["period_paid"], account["closing"], "Thực giao đã duyệt (không phải hóa đơn đỏ)",
-        _excel_date(data["date_from"]), _excel_date(data["date_to"]),
-    ])
-    ws.append([])
-    kitchen_headers = [
-        "Mã bếp", "Tên bếp", "Số dòng", "SL đặt", "Thực giao", "Khách trả",
-        "Giao ròng", "Tiền trước thuế", "Tiền thuế", "Phát sinh phải thu",
-    ]
-    ws.append(kitchen_headers)
-    for kitchen in data["kitchens"]:
-        ws.append([
-            kitchen["code"], kitchen["name"], kitchen["line_count"], quantity_cell(kitchen["rows"], "ordered_qty"),
-            quantity_cell(kitchen["rows"], "actual_delivered"), quantity_cell(kitchen["rows"], "customer_return_qty"), quantity_cell(kitchen["rows"], "delivered_qty"),
-            kitchen["subtotal"], kitchen["tax_amount"], kitchen["amount"],
-        ])
-    total_row = ws.max_row + 1
-    if data["kitchens"]:
-        ws.append([
-            "TỔNG", data["contractor_name"], sum(item["line_count"] for item in data["kitchens"]),
-            quantity_cell([row for item in data["kitchens"] for row in item["rows"]], "ordered_qty"),
-            quantity_cell([row for item in data["kitchens"] for row in item["rows"]], "actual_delivered"),
-            quantity_cell([row for item in data["kitchens"] for row in item["rows"]], "customer_return_qty"),
-            quantity_cell([row for item in data["kitchens"] for row in item["rows"]], "delivered_qty"),
-            sum(item["subtotal"] for item in data["kitchens"]),
-            sum(item["tax_amount"] for item in data["kitchens"]),
-            sum(item["amount"] for item in data["kitchens"]),
-        ])
-    _style_title(
-        ws,
-        title=f"CÔNG NỢ PHẢI THU – {data['contractor_code']}",
-        subtitle=(
-            f"{data['contractor_name']} · {period} · Công nợ vận hành; "
-            "không phải đề nghị thanh toán/hóa đơn đỏ"
-        ),
-        end_col=len(kitchen_headers),
-    )
-    _style_body(ws, start_row=4, end_col=len(kitchen_headers))
-    _style_header(ws, 3, len(account_headers))
-    _style_header(ws, 6, len(kitchen_headers))
-    # The account block has eight columns while the kitchen table below has
-    # ten.  Do not draw two empty cells (or a fully boxed spacer row) beside
-    # the account balance; they looked like missing fields in the printout.
-    for column in range(9, len(kitchen_headers) + 1):
-        ws.cell(4, column).border = Border()
-    for column in range(1, len(kitchen_headers) + 1):
-        ws.cell(5, column).border = Border()
-    for column in (1, 2, 3, 4, 5):
-        ws.cell(4, column).number_format = "#,##0"
-    for column in (7, 8):
-        ws.cell(4, column).number_format = "dd/mm/yyyy"
-    for row_number in range(7, ws.max_row + 1):
-        for column in (4, 5, 6, 7):
-            ws.cell(row_number, column).number_format = "#,##0.######"
-        for column in (8, 9, 10):
-            ws.cell(row_number, column).number_format = "#,##0"
-    if data["kitchens"]:
-        for cell in ws[total_row]:
-            cell.font = Font(name="Times New Roman", size=11, bold=True)
-            cell.fill = TOTAL_FILL
-    for index, width in enumerate([16, 28, 12, 14, 14, 14, 14, 18, 16, 20], 1):
-        ws.column_dimensions[get_column_letter(index)].width = width
-    ws.freeze_panes = "A7"
-    _print_setup(ws, header_row=6, end_col=len(kitchen_headers))
-
-    used_names = {"tổng nhà thầu"}
+    workbook.remove(workbook.active)
+    used_names = set()
     detail_headers = [
-        "Ngày", "Mã bếp", "Tên bếp", "Mã hàng", "Tên hàng", "SL đặt", "Thực giao",
-        "Khách trả", "Giao ròng", "ĐVT", "Giá bán giao dịch", "Thuế suất (%)",
-        "Tiền trước thuế", "Tiền thuế", "Phát sinh phải thu", "Mã dòng", "Lần cập nhật", "Nguồn",
+        "Ngày", "Tên bếp", "Tên hàng", "SL đặt", "ĐVT", "Giá bán giao dịch",
+        "Thuế suất (%)", "Tiền trước thuế", "Tiền thuế", "Phát sinh phải thu",
     ]
     for kitchen in data["kitchens"]:
         ws = workbook.create_sheet(_sheet_name(kitchen, used_names))
         ws.append(detail_headers)
-        for row in kitchen["rows"]:
+        for row in sorted(kitchen["rows"], key=lambda row: (row["work_date"], row["id"])):
             ws.append([
-                _excel_date(row["work_date"]), row["kitchen_code"] or "CHƯA XÁC ĐỊNH",
-                row["kitchen_name"], row["product_code"], row["product_name"],
-                row["ordered_qty"], row["actual_delivered"], row["customer_return_qty"],
-                row["delivered_qty"], row["unit"], row["sell_price"], row["tax_percent"],
-                row["subtotal"], row["tax_amount"], row["amount"], row["id"],
-                row["revision"], row["source_ref"],
+                _excel_date(row["work_date"]), row["kitchen_name"], row["product_name"],
+                row["ordered_qty"], row["unit"], row["sell_price"], row["tax_percent"],
+                row["subtotal"], row["tax_amount"], row["amount"],
             ])
-        total_row = ws.max_row + 1
-        ws.append([
-            "TỔNG", kitchen["code"], kitchen["name"], "", "", quantity_cell(kitchen["rows"], "ordered_qty"),
-            quantity_cell(kitchen["rows"], "actual_delivered"), quantity_cell(kitchen["rows"], "customer_return_qty"), quantity_cell(kitchen["rows"], "delivered_qty"),
-            "", "", "", kitchen["subtotal"], kitchen["tax_amount"], kitchen["amount"], "", "", "",
-        ])
+        ws.append(["TỔNG", "", "", "", "", "", "", kitchen["subtotal"], kitchen["tax_amount"], kitchen["amount"]])
         ws.insert_rows(1, 2)
-        total_row += 2
-        _style_title(
-            ws,
-            title=f"CHI TIẾT PHẢI THU – {kitchen['code']}",
-            subtitle=(
-                f"{data['contractor_code']} · {kitchen['name']} · {period} · "
-                f"Phát sinh {kitchen['amount']:,} VND"
-            ),
-            end_col=len(detail_headers),
-        )
+        total_row = ws.max_row
+        _style_title(ws, title=f"CHI TIẾT PHẢI THU – {kitchen['code']}",
+                     subtitle=f"{data['contractor_code']} · {kitchen['name']} · {period} · Phát sinh {kitchen['amount']:,} VND",
+                     end_col=len(detail_headers))
         _style_header(ws, 3, len(detail_headers))
         _style_body(ws, start_row=4, end_col=len(detail_headers))
         for row_number in range(4, ws.max_row + 1):
             ws.cell(row_number, 1).number_format = "dd/mm/yyyy"
-            for column in (6, 7, 8, 9):
-                ws.cell(row_number, column).number_format = "#,##0.######"
-            for column in (11, 13, 14, 15):
+            ws.cell(row_number, 4).number_format = "#,##0.######"
+            for column in (6, 8, 9, 10):
                 ws.cell(row_number, column).number_format = "#,##0"
-            ws.cell(row_number, 12).number_format = "0.###"
+            ws.cell(row_number, 7).number_format = "0.###"
         for cell in ws[total_row]:
             cell.font = Font(name="Times New Roman", size=11, bold=True)
             cell.fill = TOTAL_FILL
-        for index, width in enumerate(
-            [13, 15, 26, 14, 30, 12, 12, 12, 12, 9, 18, 15, 18, 16, 20, 12, 11, 28], 1,
-        ):
+        for index, width in enumerate([13, 28, 34, 12, 9, 18, 15, 18, 16, 20], 1):
             ws.column_dimensions[get_column_letter(index)].width = width
         ws.freeze_panes = "A4"
-        _print_setup(ws, header_row=3, end_col=len(detail_headers), print_end_col=15)
+        _print_setup(ws, header_row=3, end_col=len(detail_headers))
+        ws.auto_filter.ref = f"A3:J{max(3, total_row - 1)}"
+    if not workbook.sheetnames:
+        ws = workbook.create_sheet("Không phát sinh")
+        ws.append([f"{data['contractor_code']} · {period}"])
+        ws.append(["Không có dòng phải thu phát sinh trong kỳ."])
+        ws.column_dimensions['A'].width = 100
 
     workbook.active = 0
     return workbook

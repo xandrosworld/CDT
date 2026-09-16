@@ -19,10 +19,6 @@ except ImportError:
     from document_preview import white_print_style
     from inventory_preview import workbook_preview
 
-try:
-    from document_totals import quantity_totals, quantity_text, quantity_cell
-except ImportError:
-    from .document_totals import quantity_totals, quantity_text, quantity_cell
 
 import io
 import re
@@ -235,7 +231,7 @@ def payable_export_data(
               FROM payable_ledger_lines l
               LEFT JOIN suppliers s ON s.code=l.supplier_code
              WHERE l.work_date>=? AND l.work_date<=?
-             ORDER BY l.supplier_code,l.work_date,l.kitchen,l.product_name,l.id""",
+             ORDER BY l.work_date,l.supplier_code,l.kitchen,l.product_name,l.id""",
         params,
     ) if not supplier_code or _clean(row["supplier_code"]).casefold() == supplier_code.casefold()]
     details = _source_details(conn, lines)
@@ -498,10 +494,15 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
     workbook = Workbook()
     workbook.properties.creator = "Thành Đạt Phát"
     selected = set(data.get("statuses") or ("open", "partially_paid", "paid"))
-    lines = [line for line in data["lines"] if line["status"] in selected]
+    selected_lines = sorted(
+        (line for line in data["lines"] if line["status"] in selected),
+        key=lambda line: (line["work_date"], line["supplier_code"].casefold(), line["kitchen"], line["product_name"], line["id"]),
+    )
+    lines = [line for line in selected_lines if line["status"] != "reversed"]
+    reversed_lines = [line for line in selected_lines if line["status"] == "reversed"]
     fields = ("base_qty", "damaged_qty", "added_qty", "reduced_qty", "missing_qty", "actual_qty")
 
-    def detail_sheet(ws, items, title):
+    def detail_sheet(ws, items, title, *, history=False):
         ws.append(PAYABLE_HEADERS)
         for line in items:
             work_date = _excel_date(line["work_date"])
@@ -517,16 +518,13 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
                     'Thành Đạt Phát',
                 )
         data_end = ws.max_row + 2
-        sums = {f: quantity_cell(items, f) for f in fields}
         amount = sum(_vnd(line["amount"]) for line in items)
-        ws.append(["TỔNG", "", "", "", sums["base_qty"], "", "", "",
-                   *[sums[f] for f in fields[1:]], amount])
+        ws.append(["TỔNG TIỀN LỊCH SỬ" if history else "TỔNG", *([""] * 12), amount])
         total_row = ws.max_row + 2
-        note = " · Có dòng đã đảo: tiền dòng để tra cứu, không phải số còn nợ." if any(
-            line["status"] == "reversed" for line in items) else ""
+        note = " · Lịch sử đã đảo, không tính vào công nợ phải trả." if history else ""
         _style_sheet(
             ws, title=title,
-            subtitle=f"{period} · Lượng {quantity_text(quantity_totals(items, 'actual_qty'))} · Tổng tiền {amount:,} VND{note}",
+            subtitle=f"{period} · Tổng tiền {amount:,} VND{note}",
             headers=PAYABLE_HEADERS,
             widths=[10, 15, 13, 34, 18, 9, 14, 15, 18, 18, 18, 18, 20, 17],
             money_columns=(8, 14), quantity_columns=(5, 9, 10, 11, 12, 13),
@@ -539,7 +537,7 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
                     cell.fill = REVERSED_FILL
         for cell in ws[total_row]:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
-        ws.row_dimensions[total_row].height = max(32, 18 * len(quantity_totals(items, "actual_qty")))
+        ws.row_dimensions[total_row].height = 26
         for row_number in range(4, ws.max_row + 1):
             for column in (5, 9, 10, 11, 12, 13):
                 ws.cell(row_number, column).number_format = "#,##0.######"
@@ -549,25 +547,27 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
     detail_sheet(ws, lines, "CÔNG NỢ PHẢI TRẢ")
     if not data["supplier"]:
         ws = workbook.create_sheet("Tổng NCC")
-        headers = ["NCC", "Tên NCC", "Tổng lượng theo ĐVT", "Thành tiền", "Đã trả", "Còn trả"]
+        headers = ["NCC", "Tên NCC", "Thành tiền", "Đã trả", "Còn trả"]
         ws.append(headers)
         used = {name.casefold() for name in workbook.sheetnames}
         for code in sorted({line["supplier_code"] for line in lines}):
             items = [line for line in lines if line["supplier_code"] == code]
             active = [line for line in items if line["status"] != "reversed"]
             ws.append([code, items[0].get("supplier_name") or code,
-                       quantity_text(quantity_totals(active, "actual_qty")),
                        sum(line["amount"] for line in active),
                        sum(line["paid_amount"] for line in active),
                        sum(line["remaining_amount"] for line in active)])
             detail_sheet(workbook.create_sheet(_sheet_name(code, used)), items, f"CÔNG NỢ PHẢI TRẢ – {code}")
         active = [line for line in lines if line["status"] != "reversed"]
-        ws.append(["TỔNG", "", quantity_text(quantity_totals(active, "actual_qty")),
+        ws.append(["TỔNG", "",
                    sum(line["amount"] for line in active), sum(line["paid_amount"] for line in active),
                    sum(line["remaining_amount"] for line in active)])
         _style_sheet(ws, title="TỔNG CÔNG NỢ THEO NCC", subtitle=period + " · Theo bộ lọc; không cộng dòng đã đảo.",
-                     headers=headers, widths=[16, 35, 35, 22, 22, 22],
-                     money_columns=(4, 5, 6), total_row=ws.max_row + 2)
+                     headers=headers, widths=[16, 35, 22, 22, 22],
+                     money_columns=(3, 4, 5), total_row=ws.max_row + 2)
+    if reversed_lines:
+        detail_sheet(workbook.create_sheet("Lịch sử đã đảo"), reversed_lines,
+                     "LỊCH SỬ ĐÃ ĐẢO – KHÔNG TÍNH CÔNG NỢ", history=True)
     workbook.active = 0
     pending = data.get('pending_purchase_sheets') or []
     if pending:

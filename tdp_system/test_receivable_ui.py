@@ -34,7 +34,7 @@ class ReceivableUiStaticContractTests(unittest.TestCase):
         ):
             self.assertIn(required, css)
         self.assertRegex(page, r'/static/app\.js\?v=\d{8}-\d+')
-        self.assertRegex(page, r'/static/real\.css\?v=\d{8}-\d+')
+        self.assertRegex(page, r'/static/real\.css\?v=\d{8}-[A-Za-z0-9-]+')
 
 
 if __name__ == "__main__":
