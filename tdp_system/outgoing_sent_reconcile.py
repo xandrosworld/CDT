@@ -10,9 +10,13 @@ from decimal import Decimal, InvalidOperation
 try:
     from .outgoing_weights import invoice_rows
     from .minvoice_portal import portal_date
+    from .minvoice_portal_drafts import ordered_draft_lines
+    from .minvoice_client import MinvoiceError
 except ImportError:
     from outgoing_weights import invoice_rows
     from minvoice_portal import portal_date
+    from minvoice_portal_drafts import ordered_draft_lines
+    from minvoice_client import MinvoiceError
 
 
 def text(v):return str(v or '').strip()
@@ -50,7 +54,7 @@ def reconcile_sent(conn,timestamp):
             s,raw=matches[0]
             base=[dict(r) for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(d['id'],))]
             try:
-                expected=invoice_rows(conn,base);actual=raw.get('invoiceDetail',[])
+                expected=invoice_rows(conn,base);actual=ordered_draft_lines(raw.get('invoiceDetail',[]))
                 if (raw.get('orderNumber')!=d['minvoice_key_api']
                         or (d['minvoice_remote_id'] and s['remote_id']!=d['minvoice_remote_id'])
                         or s['invoice_series']!=d['minvoice_series'] or portal_date(raw.get('invoiceDate'))!=d['invoice_date']
@@ -79,7 +83,7 @@ def reconcile_sent(conn,timestamp):
                 duplicate=conn.execute("""SELECT id FROM outgoing_invoice_drafts WHERE id<>? AND status='issued'
                     AND issued_invoice_series=? AND issued_invoice_number=?""",(d['id'],s['invoice_series'],s['invoice_number'])).fetchone()
                 if duplicate:reason='Hóa đơn này đã liên kết với bảng kê khác.'
-            except (ValueError,KeyError,TypeError) as exc:
+            except (ValueError,KeyError,TypeError,MinvoiceError) as exc:
                 reason='Chưa đối chiếu đủ bản nháp với hóa đơn đã ký: '+str(exc)
         if reason:
             blocked.append({'draft_id':d['id'],'contractor':d['contractor'],'error':reason});continue

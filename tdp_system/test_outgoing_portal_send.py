@@ -126,6 +126,17 @@ class PortalSendTests(unittest.TestCase):
         r=self.send(item,False);self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(self.remote.posts,1)
 
+    def test_signed_source_invalid_ordinal_is_reported_without_linking(self):
+        item=self.prepare()
+        self.assertEqual(self.send(item,False).status_code,200)
+        self.remote.documents[0].update(invoiceNumber=88,sendTaxStatus=4,
+                                       dateSign='2026-09-14T13:00:00',taxAuthorityCode='fixture')
+        self.remote.documents[0]['invoiceDetail'][0]['ordinalNumber']='2'
+        report=refresh_sources(server.db,lambda:self.remote,server.now_iso,'2026-09-01','2026-09-14')
+        self.assertEqual(len(report['blocked']),1,report)
+        with server.db() as c:
+            self.assertEqual(c.execute('SELECT status FROM outgoing_invoice_drafts WHERE id=?',(item['id'],)).fetchone()[0],'draft')
+
     def test_unsigned_source_with_bad_total_still_requires_review(self):
         item=self.prepare();self.assertEqual(self.send(item,False).status_code,200)
         self.remote.documents[0]['totalAmount']+=10

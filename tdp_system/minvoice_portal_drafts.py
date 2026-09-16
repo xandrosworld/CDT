@@ -13,6 +13,25 @@ except ImportError:
     from minvoice_client import MinvoiceError, MinvoiceOutcomeUnknown
 
 
+def ordered_draft_lines(lines):
+    """The portal detail array is unordered; ordinalNumber is the sent position.
+
+    Only reorder a complete, unique 1..N sequence. Preserve legacy responses
+    without ordinals; never guess by product code or collapse duplicate lines.
+    """
+    if not isinstance(lines, list) or not all(isinstance(line, dict) for line in lines):
+        raise MinvoiceError('Chi tiết bản nháp M-Invoice không hợp lệ.')
+    values = [line.get('ordinalNumber') for line in lines]
+    if all(value in (None, '') for value in values):
+        return lines
+    if any(not re.fullmatch(r'[1-9][0-9]*', str(value)) for value in values):
+        raise MinvoiceError('Số thứ tự dòng bản nháp M-Invoice không hợp lệ.')
+    positions = [int(value) for value in values]
+    if sorted(positions) != list(range(1, len(lines) + 1)):
+        raise MinvoiceError('Số thứ tự dòng bản nháp M-Invoice bị trùng hoặc thiếu.')
+    return [line for _, line in sorted(zip(positions, lines), key=lambda item: item[0])]
+
+
 class PortalDrafts:
     @staticmethod
     def _guard_unsigned_payload(p):
@@ -125,6 +144,9 @@ class PortalDrafts:
             from .minvoice_portal import normalize_portal_document
         except ImportError:
             from minvoice_portal import normalize_portal_document
+        # Only draft reconciliation is normalized here. Leave ordinary source
+        # sync payloads unchanged so historical source hashes remain stable.
+        detail = {**detail, 'invoiceDetail': ordered_draft_lines(detail['invoiceDetail'])}
         return {'found': True, 'data': normalize_portal_document(detail)}
 
     def create_draft(self, draft, *, dry_run=True, confirm_remote_write=False):
@@ -158,8 +180,9 @@ class PortalDrafts:
                     or type(detail.get('sendTaxStatus')) is not int or detail['sendTaxStatus'] not in (0,1)
                     or detail.get('invoiceNumber') is not None or detail.get('dateSign') or detail.get('taxAuthorityCode')):
                 raise ValueError('Saved draft needs reconciliation')
+            returned_lines = ordered_draft_lines(detail.get('invoiceDetail', []))
             for key in ('productCode', 'productName', 'unitCode', 'quantity', 'unitPrice', 'amountWithoutVAT', 'vatCode', 'property'):
-                if [r.get(key) for r in detail.get('invoiceDetail', [])] != [r.get(key) for r in payload['invoiceDetail']]:
+                if [r.get(key) for r in returned_lines] != [r.get(key) for r in payload['invoiceDetail']]:
                     raise ValueError('Saved draft lines changed')
         except Exception as exc:
             raise MinvoiceOutcomeUnknown('Chưa xác nhận kết quả gửi bản nháp. Cần đối soát trước khi thử lại.') from exc
