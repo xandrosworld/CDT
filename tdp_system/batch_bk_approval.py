@@ -46,6 +46,16 @@ def _number(value, label):
         raise ValueError(label + ' không hợp lệ') from None
 
 
+def source_state_hash(batch, orders, canonical):
+    """Hash the immutable financial source plus its reviewed seller metadata."""
+    fields = ('id', 'order_id', 'source_row', 'source_sheet', 'work_date', 'product_code',
+              'product_name', 'unit', 'supplier', 'purchase_list', 'actual_qty', 'actual_received',
+              'damaged_qty', 'supplier_return_qty', 'buy_price', 'sell_price', 'seller', 'cccd', 'status')
+    return bk._hash_json({'date': batch['work_date'], 'canonical': bool(canonical),
+        'rows': [{k: r.get(k) for k in fields} for r in (canonical or list(orders.values()))],
+        'orders': [{k: r.get(k) for k in fields} for r in orders.values()]})
+
+
 def prepare(conn, batch_id):
     batch = conn.execute('SELECT * FROM batches WHERE id=?', (batch_id,)).fetchone()
     if not batch:
@@ -61,24 +71,19 @@ def prepare(conn, batch_id):
     if previous and previous['status'] == 'reversed':
         reference += f'-AFTER-{previous["id"]}'
     # Capture all source rows, including flags becoming false or quantities becoming zero.
-    fields = ('id', 'order_id', 'source_row', 'source_sheet', 'work_date', 'product_code',
-              'product_name', 'unit', 'supplier', 'purchase_list', 'actual_qty', 'actual_received',
-              'damaged_qty', 'supplier_return_qty', 'buy_price', 'sell_price', 'seller', 'cccd', 'status')
-    source_state_hash = bk._hash_json({'date': batch['work_date'], 'canonical': bool(canonical),
-        'rows': [{k: r.get(k) for k in fields} for r in sources],
-        'orders': [{k: r.get(k) for k in fields} for r in orders.values()]})
+    source_hash = source_state_hash(batch, orders, canonical)
     prior_bk = [dict(r) for r in conn.execute('''SELECT l.product_code,l.document_id,l.source_key,l.snapshot_hash,l.source_reference
         FROM bk_import_lines l JOIN bk_import_documents d ON d.id=l.document_id
         WHERE d.status='posted' AND l.document_date=? ORDER BY l.id''', (batch['work_date'],))]
-    fingerprint = bk._hash_json({'source': source_state_hash, 'rate': str(rate),
+    fingerprint = bk._hash_json({'source': source_hash, 'rate': str(rate),
         'products': {r.get('product_code'): products.get(r.get('product_code')) for r in sources},
         'people': people, 'prior_bk': prior_bk})
     result = {'rows': [], 'issues': [], 'overlaps': [], 'excludedRows': 0, 'sourceHash': fingerprint,
               'alreadyPosted': False, 'documentId': None, 'amount': 0, 'ratePercent': float(rate * 100),
               'purchasePricedRows': 0, 'purchasePricedAmount': 0,
-              '_source_state_hash': source_state_hash}
+              '_source_state_hash': source_hash}
     if previous and previous['status'] == 'posted':
-        if previous['batch_source_hash'] != source_state_hash:
+        if previous['batch_source_hash'] != source_hash:
             raise bk.BKImportError('Đơn đã đổi sau khi ghi bảng kê; cần đối chiếu, không ghi thêm kho.', status=409)
         count = bk._verify_posted_document(conn, previous)
         result.update(alreadyPosted=True, documentId=previous['id'], rowCount=count,
