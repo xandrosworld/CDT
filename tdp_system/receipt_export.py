@@ -499,6 +499,12 @@ def configure_receipt_paper(sheet: Any, paper: str = "A5") -> None:
                 if sum(compact.values()) <= 620:
                     for r, h in compact.items():
                         sheet.row_dimensions[r].height = h
+        # Keep the saved selection reconciliation visible when switching paper
+        # sizes or printing an individual receipt without its annex.
+        selection_footer = next((r for r in range(signature_row + 1, sheet.max_row + 1)
+                                 if str(sheet.cell(r, 3).value or '').startswith('Lựa chọn ngày ')), None)
+        if selection_footer:
+            signature_row = selection_footer
         sheet.print_area = f"$C$1:$G${signature_row}"
     sheet.row_breaks = RowBreak()
     sheet.page_setup.paperSize = sheet.PAPERSIZE_A5 if paper == "A5" else sheet.PAPERSIZE_A4

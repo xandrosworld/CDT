@@ -196,6 +196,9 @@ class PurchaseSummaryExportTests(unittest.TestCase):
                 actual_qty REAL, amount REAL, status TEXT
             );
             CREATE TABLE receivable_ledger_lines(id INTEGER, amount REAL);
+            CREATE TABLE batches(id INTEGER, work_date TEXT, status TEXT);
+            INSERT INTO batches VALUES(7,'2026-09-02','approved');
+            ALTER TABLE orders ADD COLUMN batch_id INTEGER;
             """
         )
         connection.execute(
@@ -224,6 +227,9 @@ class PurchaseSummaryExportTests(unittest.TestCase):
             ],
         )
         connection.execute("INSERT INTO receivable_ledger_lines VALUES(1,999999999)")
+        for order in orders:
+            connection.execute('INSERT INTO orders(id,batch_id,purchase_list,seller,cccd,kitchen,source_row) VALUES(?,7,?,?,?,?,?)',
+                               (order['id'],order['purchase_list'],order['seller'],order['cccd'],order['kitchen'],order['source_row']))
         traced = []
         connection.set_trace_callback(traced.append)
         try:

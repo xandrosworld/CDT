@@ -333,6 +333,8 @@ def collect_purchase_summary_rows(
             "supplier": supplier,
             "kitchen": _plain(line.get("kitchen") or (order or {}).get("kitchen")),
             "source_ref": source_ref,
+            "batch_id": batch_id,
+            "selection_key": f"{batch_id}:{'purchase_workbook_lines' if canonical else 'orders'}:{line['id']}",
         })
 
     if invalid:

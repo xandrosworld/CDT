@@ -907,6 +907,11 @@ def init_database(*, sync_master=True):
         init_inventory_period_close_schema(conn)
         init_bk_import_schema(conn)
         batch_bk_approval.init_schema(conn)
+        try:
+            from .purchase_document_selection import init_schema as init_document_selection
+        except ImportError:
+            from purchase_document_selection import init_schema as init_document_selection
+        init_document_selection(conn)
         init_payable_ledger_schema(conn)
         init_payable_payment_schema(conn)
         init_receivable_ledger_schema(conn)
@@ -3995,6 +4000,15 @@ def export_purchase_documents(conn, batch, orders):
     excluded = []
     rows = collect_purchase_summary_rows(conn, batch, orders, excluded_rows=excluded)
     receipt_rows = enrich_receipt_identity_rows(conn, rows)
+    try:
+        from .purchase_document_selection import export_scope, annotate_workbook
+    except ImportError:
+        from purchase_document_selection import export_scope, annotate_workbook
+    receipt_rows, pending_rows, selection = export_scope(conn, dict(batch), receipt_rows)
+    if selection and not receipt_rows:
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        return annotate_workbook(workbook, selection, pending_rows)
     workbook = build_purchase_documents_workbook(
         receipt_rows,
         template_path=MASTER_SOURCE,
@@ -4006,6 +4020,7 @@ def export_purchase_documents(conn, batch, orders):
         company_address=setting_get(conn, "company_address", ""),
         location=setting_get(conn, "purchase_receipt_location", "Hải Phòng"),
     )
+    annotate_workbook(workbook, selection, pending_rows)
     if excluded:
         from openpyxl.comments import Comment
         names = ", ".join(sorted({row["seller"] for row in excluded}))
@@ -5725,6 +5740,12 @@ try:
 except ImportError:
     from .round4_documents import register_document_routes
 register_document_routes(app, lambda: globals())
+
+try:
+    from .purchase_document_selection import register_routes as register_purchase_document_selection
+except ImportError:
+    from purchase_document_selection import register_routes as register_purchase_document_selection
+register_purchase_document_selection(app, globals())
 order_worksheet.register(app, globals())
 
 register_physical_inventory_routes(app, {

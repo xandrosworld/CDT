@@ -76,6 +76,13 @@ def _supplier_purchase_value(
 def _header_row(worksheet, *, allow_wide: bool = False) -> tuple[int, int]:
     """Locate the first styled application table header and its last column."""
 
+    selection_headers = {
+        'Đối chiếu lựa chọn': ['Ngày', 'Người bán', 'Tổng mua trong ngày', 'Phần đã chọn', 'Chờ bổ sung chứng từ'],
+        'Chờ bổ sung chứng từ': ['Ngày mua', 'Người bán', 'Tên hàng', 'ĐVT', 'Số lượng chờ', 'Giá mua BK', 'Tiền chờ', 'Bếp', 'Dòng nguồn'],
+    }
+    expected = selection_headers.get(worksheet.title)
+    if expected and [worksheet.cell(1, c).value for c in range(1, len(expected) + 1)] == expected:
+        return 1, len(expected)
     for row_index in range(1, min(worksheet.max_row, 30) + 1):
         values = [_cell_text(worksheet.cell(row_index, column).value) for column in range(1, worksheet.max_column + 1)]
         last_column = max((index for index, value in enumerate(values, 1) if value), default=0)
@@ -463,11 +470,17 @@ def workbook_sections(document_type: str, workbook: Workbook) -> list[dict[str, 
         if document_type == "purchases":
             purchase_headers = _purchase_summary_header_rows(worksheet)
             if purchase_headers is not None:
-                sections.append(_purchase_summary_section(worksheet, *purchase_headers))
+                section = _purchase_summary_section(worksheet, *purchase_headers)
+                section['notes'].extend(str(row[0].value) for row in worksheet
+                                        if str(row[0].value or '').startswith('Lựa chọn ngày '))
+                sections.append(section)
                 continue
             receipt_header = _receipt_header_row(worksheet)
             if receipt_header is not None:
-                sections.append(_receipt_section(worksheet, receipt_header))
+                section = _receipt_section(worksheet, receipt_header)
+                section['notes'].extend(str(row[2].value) for row in worksheet
+                                        if len(row) > 2 and str(row[2].value or '').startswith('Lựa chọn ngày '))
+                sections.append(section)
                 continue
         if document_type == "report":
             report_header = _monthly_report_header_row(worksheet)
