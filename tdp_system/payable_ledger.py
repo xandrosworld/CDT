@@ -30,6 +30,11 @@ from typing import Any, Callable
 from flask import jsonify, request
 
 try:
+    from .purchase_rounding import rounded_purchase_amounts, line_rounding_adjustment
+except ImportError:
+    from purchase_rounding import rounded_purchase_amounts, line_rounding_adjustment
+
+try:
     from .purchase_money_adjustments import DEDUCTION_KIND, DEDUCTION_LABEL
     from .purchase_returns import RETURN_KIND
 except ImportError:
@@ -567,6 +572,14 @@ def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]
             supplier_catalog=catalog,
             existing=existing_by_key.get(source_key),
         ))
+    purchase_groups = defaultdict(list)
+    for candidate in candidates:
+        if candidate['source_type'] == 'current_purchase' and not candidate['reversal_reason']:
+            purchase_groups[(candidate['batch_id'], candidate['work_date'])].append(candidate)
+    for group in purchase_groups.values():
+        for candidate, amount in zip(group, rounded_purchase_amounts(group)):
+            candidate['amount'] = amount
+            candidate['snapshot_hash'] = _candidate_hash(candidate)
     return candidates
 
 
@@ -841,6 +854,7 @@ def payable_ledger_payload(
             "unit": row["unit"],
             "buy_price": row["buy_price"],
             "amount": row["amount"],
+            "rounding_adjustment": line_rounding_adjustment(row),
             "paid_amount": row["paid_amount"],
             "remaining_amount": remaining,
             "status": row["status"],

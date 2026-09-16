@@ -85,7 +85,8 @@ class PurchaseMoneyAdjustmentTests(unittest.TestCase):
             workbook = payable_workbook(data)
             sheet = workbook['Công nợ phải trả']
             self.assertEqual(sheet.max_column, 14)
-            self.assertEqual(sheet.cell(sheet.max_row,14).value, 293000)
+            # The complete sheet also includes the fixture's 14,040đ kho row.
+            self.assertEqual(sheet.cell(sheet.max_row,14).value, 307040)
             deductions = [r for r in sheet.iter_rows(min_row=4) if str(r[3].value).startswith(DEDUCTION_LABEL)]
             self.assertEqual(sum(r[13].value for r in deductions), -207000)
             workbook.close()

@@ -33,6 +33,11 @@ from typing import Any, Callable
 
 from flask import jsonify, request, send_file
 from openpyxl import Workbook
+from openpyxl.comments import Comment
+try:
+    from .purchase_rounding import line_rounding_adjustment
+except ImportError:
+    from purchase_rounding import line_rounding_adjustment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
@@ -245,6 +250,7 @@ def payable_export_data(
         line["missing_qty"] = source_detail.get("missing_qty")
         line["note"] = _clean(source_detail.get("note"))
         line["amount"] = _vnd(line["amount"])
+        line['rounding_adjustment'] = line_rounding_adjustment(line)
         line["paid_amount"] = _vnd(line["paid_amount"])
         line["remaining_amount"] = (
             0 if line["status"] == "reversed"
@@ -505,6 +511,11 @@ def payable_workbook(data: dict[str, Any]) -> Workbook:
                 line["unit"], line["supplier_code"], line["buy_price"],
                 *[_number(line[f]) for f in fields[1:]], _vnd(line["amount"]),
             ])
+            if line.get('rounding_adjustment'):
+                ws.cell(ws.max_row, 14).comment = Comment(
+                    f"Điều chỉnh làm tròn tổng ngày: {line['rounding_adjustment']:+d}đ. Số lượng và giá mua giữ nguyên.",
+                    'Thành Đạt Phát',
+                )
         data_end = ws.max_row + 2
         sums = {f: quantity_cell(items, f) for f in fields}
         amount = sum(_vnd(line["amount"]) for line in items)

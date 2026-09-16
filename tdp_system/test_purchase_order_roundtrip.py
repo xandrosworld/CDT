@@ -238,7 +238,7 @@ class PurchaseOrderRoundtripTests(unittest.TestCase):
         self.assertEqual(preview_response.status_code, 200, preview_response.get_data(as_text=True))
         preview = preview_response.get_json()
         self.assertEqual((preview["error_rows"], preview["total_qty"], preview["total_amount"]),
-                         (0, 43, 453))
+                         (0, 43, 452))  # Round 43 × 10.5 once for the sheet.
         confirmed = self.client.post(
             "/api/purchase-orders/import/confirm",
             json={"token": preview["token"], "confirmed": True},

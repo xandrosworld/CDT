@@ -4490,6 +4490,14 @@ def parse_canonical_purchase_workbook(
             f"File thiếu {len(missing_existing)} dòng mua đã có; hãy tải lại sheet đặt hàng mới nhất"
         )
     error_rows = sum(bool(item["errors"]) for item in parsed)
+    try:
+        from .purchase_rounding import rounded_purchase_amounts
+    except ImportError:
+        from purchase_rounding import rounded_purchase_amounts
+    valid_items = [item for item in parsed if not item['errors']]
+    for item, payable_amount in zip(valid_items, rounded_purchase_amounts(valid_items)):
+        item['payable_amount'] = payable_amount
+        item['rounding_adjustment'] = payable_amount - item['amount']
     return {
         "format": "customer_canonical", "sheet": worksheet.title,
         "items": parsed, "rows": parsed[:200], "count": len(parsed),
@@ -4498,7 +4506,8 @@ def parse_canonical_purchase_workbook(
         "error_rows": error_rows, "can_confirm": error_rows == 0,
         "warning_rows": sum(bool(item["warnings"]) for item in parsed),
         "total_qty": sum(item["actual_qty"] for item in parsed if not item["errors"]),
-        "total_amount": sum(item["amount"] for item in parsed if not item["errors"]),
+        "total_amount": sum(item['payable_amount'] for item in valid_items),
+        "rounding_adjustment": sum(item['rounding_adjustment'] for item in valid_items),
         "content_hash": purchase_scope_hash(parsed),
     }
 

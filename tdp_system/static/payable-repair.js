@@ -56,7 +56,7 @@
         }
         preview = result;
         target.innerHTML = '<h3>3. Kiểm tra tổng tiền rồi bấm Lưu</h3><div class="repair-total"><span>Ngày ' + esc(options.dateText) + ' · ' + result.count + ' dòng Đặt hàng</span><strong>' + money(result.total_amount) + '</strong></div>';
-        say('File đã đủ dữ liệu. Chưa thay đổi công nợ cho đến khi bấm Lưu.'); save.disabled = false;
+        say('File đã đủ dữ liệu. Chưa thay đổi công nợ cho đến khi bấm Lưu.' + (result.rounding_adjustment ? ' Tổng đã phân bổ làm tròn ' + money(result.rounding_adjustment) + ' theo Excel.' : '')); save.disabled = false;
       } catch (error) { if (current === serial) say(error.message, true); }
     };
     save.onclick = async function () {

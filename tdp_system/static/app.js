@@ -1779,6 +1779,7 @@
       '<button class="btn btn-small btn-outline" data-action="cancel-purchase-order-import">Bỏ file này</button></div>',
       '<div class="card-body"><div class="status-bar">', totalRows, ' dòng · Đặt nhà cung cấp ', num(preview.total_qty),
       ' · Thành tiền ', money(preview.total_amount), ' · ', errorRows, ' dòng lỗi · ', warningRows, ' cảnh báo</div></div>',
+      preview.rounding_adjustment ? '<div class="code-note">Đã phân bổ làm tròn ' + money(preview.rounding_adjustment) + ' để tổng phải trả khớp tổng Excel. Số lượng và giá mua giữ nguyên.</div>' : '',
       '<div class="table-wrap"><table><thead><tr><th>Vị trí</th><th>Hàng / bếp</th><th>Số lượng</th>',
       '<th>Hỏng / thêm / giảm / thiếu</th><th>Số thực tế</th><th>Nhà cung cấp</th><th>Giá mua</th><th>Kiểm tra</th></tr></thead><tbody>',
       rows || '<tr><td colspan="8"><div class="empty">File không có dòng để nhập.</div></td></tr>',
@@ -2359,7 +2360,7 @@
         (item.source && item.source.sheet ? ' · ' + esc(item.source.sheet) + ' · dòng ' + esc(item.source.row) : '') +
         '</div></td><td class="num-cell">' + stockQty(item.actual_qty) + ' ' + esc(item.unit) +
         '</td><td class="num-cell">' + money(item.buy_price) + '</td><td class="num-cell"><strong>' +
-        money(item.amount) + '</strong></td><td class="num-cell">' + money(item.paid_amount) +
+        money(item.amount) + '</strong>' + (item.rounding_adjustment ? '<div class="muted">Làm tròn tổng ngày: ' + money(item.rounding_adjustment) + '</div>' : '') + '</td><td class="num-cell">' + money(item.paid_amount) +
         '</td><td class="num-cell"><strong>' + money(item.remaining_amount) + '</strong></td><td><span class="tag ' +
         payableStatusClass(item.status) + '">' + esc(payableStatusText(item.status)) +
         '</span><div class="muted">Lần sửa ' + item.ledger_revision + '</div></td><td><input class="payable-allocation-input" inputmode="numeric" type="number" min="1" max="' +

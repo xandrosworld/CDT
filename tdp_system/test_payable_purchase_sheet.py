@@ -9,6 +9,41 @@ from .payable_export import payable_export_data
 
 
 class PayablePurchaseSheetTests(fixtures.SupplierPlanSourceTests):
+    def setUp(self):
+        with server.db() as conn:
+            conn.execute('DELETE FROM payable_payment_allocations')
+            conn.execute('DELETE FROM payable_payment_revisions')
+            conn.execute('DELETE FROM payments')
+            conn.execute('DELETE FROM payable_ledger_revisions')
+            conn.execute('DELETE FROM payable_ledger_lines')
+        super().setUp()
+
+    def test_sheet_rounding_preview_ledger_export_and_payment_remain_consistent(self):
+        wb=load_workbook(io.BytesIO(self.file(1,10.5)));ws=wb['đặt hàng']
+        for cell in list(ws[3]):ws.cell(4,cell.column,cell.value)
+        ws.cell(4,8,20.5);ws.cell(4,14,20.5)
+        stream=io.BytesIO();wb.save(stream);wb.close();raw=stream.getvalue()
+        bid=self.daily(raw)
+        preview=self.preview(bid,raw)
+        self.assertEqual((preview['total_amount'],preview['rounding_adjustment']),(31,-1))
+        self.approve_for_payable(bid)
+        rows=sorted(self.active(),key=lambda r:r['source_row'])
+        self.assertEqual([r['amount'] for r in rows],[10,21])
+        with server.db() as conn:
+            from .payable_ledger import set_payable_allocation_total, payable_ledger_payload
+            from .payable_export import payable_workbook
+            repeat=sync_payable_ledger(conn,timestamp=server.now_iso())
+            self.assertEqual(repeat['updated'],0)
+            data=payable_export_data(conn,date_from='2026-09-01',date_to='2026-09-01',supplier='',canonical_party_code=lambda conn,kind,code:code)
+            self.assertEqual(sum(r['amount'] for r in data['lines']),31)
+            book=payable_workbook(data)
+            self.assertTrue(any(c.comment and '-1đ' in c.comment.text for sh in book for line in sh for c in line))
+            book.close()
+            set_payable_allocation_total(conn,ledger_line_id=rows[0]['id'],paid_amount=10,timestamp=server.now_iso())
+            ledger=payable_ledger_payload(conn,date_from='2026-09-01',date_to='2026-09-01',statuses='all')
+            self.assertEqual((ledger['summary']['charge_amount'],ledger['summary']['paid_amount'],ledger['summary']['remaining_amount']),(31,10,21))
+            self.assertEqual(sync_payable_ledger(conn,timestamp=server.now_iso())['updated'],0)
+
     def approve_for_payable(self, bid):
         with server.db() as conn:
             conn.execute("UPDATE batches SET status='approved' WHERE id=?", (bid,))
