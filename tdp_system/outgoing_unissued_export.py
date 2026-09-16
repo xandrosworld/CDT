@@ -183,6 +183,41 @@ def _contractor_workbook(archive, names, party, details, payload, tax_percent):
                 for cell in row:
                     if isinstance(cell.value,(int,float)):
                         cell.number_format='#,##0' if float(cell.value).is_integer() else '#,##0.######'
+        all_warnings = payload.get('warnings') or []
+        scoped_warnings = [w for w in all_warnings if not w.get('contractor') or w.get('contractor') == party]
+        incomplete = bool(scoped_warnings) or payload.get('reconciliation_complete') is False
+        status_text = ('CHƯA ĐỐI CHIẾU XONG – không dùng tổng này để xuất hóa đơn bổ sung' if incomplete
+                      else 'Đã đối chiếu lượng theo dữ liệu đồng bộ; chưa xác nhận đối chiếu tiền hóa đơn')
+        policy_text = 'Hóa đơn đã ký có thể đang chờ ghép với đơn. Đây là báo cáo đối chiếu, không phải file hóa đơn đã ký.'
+        sheet.merge_cells(start_row=footer+2,start_column=2,end_row=footer+2,end_column=13)
+        notice = sheet.cell(footer+2,2,_literal(status_text))
+        notice.alignment = copy(notice.alignment)
+        notice.alignment = notice.alignment.copy(wrap_text=True)
+        sheet.row_dimensions[footer+2].height = 32
+        summary.append(['Trạng thái đối chiếu',_literal(status_text)])
+        summary.append(['Ghi chú',_literal(policy_text)])
+        for row in summary.iter_rows(min_row=summary.max_row-1):
+            for cell in row:
+                cell.alignment = cell.alignment.copy(wrap_text=True)
+            summary.row_dimensions[row[0].row].height = 42
+        warning_sheet = workbook.create_sheet('Canh bao doi chieu')
+        warning_sheet.append(['Nội dung','Chi tiết'])
+        warning_sheet.append(['Nhà thầu',_literal(party)])
+        warning_sheet.append(['Ngày đơn',_literal(dates)])
+        warning_sheet.append(['Trạng thái',_literal(status_text)])
+        warning_sheet.append(['Lưu ý',_literal(policy_text)])
+        for warning in scoped_warnings:
+            warning_sheet.append([_literal(warning.get('code') or 'Cảnh báo'),_literal(warning.get('message') or '')])
+        if incomplete and not scoped_warnings:
+            warning_sheet.append(['Cần kiểm tra','Báo cáo nguồn chưa xác nhận hoàn tất đối chiếu. Kiểm tra cảnh báo trên hệ thống trước khi xuất bổ sung.'])
+        warning_sheet.column_dimensions['A'].width=24
+        warning_sheet.column_dimensions['B'].width=65
+        warning_sheet.freeze_panes='A2'
+        for row in warning_sheet.iter_rows():
+            for cell in row:
+                cell.alignment=cell.alignment.copy(wrap_text=True,vertical='top')
+            warning_sheet.row_dimensions[row[0].row].height=45
+
         return safe_workbook_bytes(workbook,apply_print_style=False)
     finally:
         if workbook is not None:workbook.close()
