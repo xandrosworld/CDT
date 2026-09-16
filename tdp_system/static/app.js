@@ -5303,7 +5303,7 @@
     var requestSerial = ++state.receivableRequestSerial;
     var query = "from=" + encodeURIComponent(state.debtFrom) +
       "&to=" + encodeURIComponent(state.debtTo) +
-      "&status=" + encodeURIComponent(state.receivableStatus || "active") + "&limit=5000&offset=" + state.receivableOffset;
+      "&status=" + encodeURIComponent(state.receivableStatus || "active") + "&limit=200&offset=" + state.receivableOffset;
     if (state.receivableContractor) {
       query += "&contractor=" + encodeURIComponent(state.receivableContractor);
     }
@@ -5336,7 +5336,7 @@
     var supplier = state.payableSupplier;
     var status = state.payableStatus === "outstanding" ? "open,partially_paid" : state.payableStatus;
     var query = "from=" + encodeURIComponent(dateFrom) + "&to=" + encodeURIComponent(dateTo) +
-      "&status=" + encodeURIComponent(status || "outstanding") + "&limit=5000&offset=" + state.payableOffset;
+      "&status=" + encodeURIComponent(status || "outstanding") + "&limit=200&offset=" + state.payableOffset;
     if (supplier) query += "&supplier=" + encodeURIComponent(supplier);
     state.payableLoading = true;
     state.payableError = "";
