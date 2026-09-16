@@ -61,6 +61,13 @@ class AutoInputTests(unittest.TestCase):
         self.assertIsNone(claim(self.db,'TDP',self.now+timedelta(minutes=10)))
         self.assertNotEqual(first,claim(self.db,'TDP',self.now+timedelta(minutes=41)))
 
+    def test_healthy_catchup_is_running_without_false_stale_alarm(self):
+        self.now=self.now.replace(hour=23)
+        self.assertIsNotNone(claim(self.db,'TDP',self.now))
+        self.assertFalse(self.state()['attention'])
+        self.now+=timedelta(minutes=41)
+        self.assertTrue(self.state()['attention'])
+
     def test_source_failure_retries_and_preserves_last_good_data(self):
         self.refresh.refresh.side_effect=RefreshError('mSMI chưa kết nối')
         self.assertFalse(self.execute()['ok'])

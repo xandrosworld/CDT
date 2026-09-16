@@ -57,9 +57,13 @@ def status(conn, tenant, now=None):
              result=result, stock_changed=False)
     lease = datetime.fromisoformat(r['lease_until']) if r['lease_until'] else None
     due,_ = schedule(now)
-    r['attention'] = bool(r['enabled'] and (r['state']=='error' or
-        (r['state']=='running' and (not lease or lease <= now)) or
-        (now > due+timedelta(minutes=45) and (not r['last_success'] or datetime.fromisoformat(r['last_success']) < due))))
+    first_due = datetime.fromisoformat(r['next_attempt']) if r['next_attempt'] and not r['last_attempt'] else due
+    if r['state'] == 'running':
+        attention = not lease or lease <= now
+    else:
+        attention = r['state']=='error' or (now > max(due,first_due)+timedelta(minutes=45)
+            and (not r['last_success'] or datetime.fromisoformat(r['last_success']) < due))
+    r['attention'] = bool(r['enabled'] and attention)
     return r
 
 
@@ -163,7 +167,8 @@ def start_worker(server, *, interval=60):
     with server.db() as c:
         init_schema(c)
         tenant=server.setting_get(c,'tenant_code','TDP')
-        c.execute('INSERT OR IGNORE INTO automatic_input_sync(tenant) VALUES(?)',(tenant,))
+        c.execute('INSERT OR IGNORE INTO automatic_input_sync(tenant,next_attempt) VALUES(?,?)',
+                  (tenant,(vn_now()+timedelta(seconds=interval)).isoformat()))
         c.execute('UPDATE automatic_input_sync SET enabled=? WHERE tenant=?',(int(enabled),tenant))
     stop=threading.Event()
     def loop():
