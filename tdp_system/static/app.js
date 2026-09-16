@@ -3747,6 +3747,9 @@
     if (!state.invoiceWorkbench || !state.invoiceListing) { loadInvoiceWorkbench(); return; }
     invoiceVirtual?.dispose();
     content.innerHTML = (state.stockResolutionReturn ? '<div class="warning-summary">Đang đối chiếu nguồn tồn cho phiên đơn. <button class="btn btn-primary" data-action="return-stock-resolution">Quay lại bảng kê · Kiểm tra lại</button></div>' : '') + '<div class="secondary-action-row"><button class="btn btn-outline" data-view="invoice-tools">Dự thảo hóa đơn từ đơn hàng</button></div>' + window.TdpInvoiceWorkbench(state, {esc:esc, num:stockQty, money:stockMoney, dateVN:dateVN});
+    if (state.invoiceDirection === 'input' && state.invoiceWorkbench.undated_source_count) {
+      content.insertAdjacentHTML('afterbegin', '<div class="code-note warning-summary input-source-warning" role="status"><strong>mSMI còn ' + num(state.invoiceWorkbench.undated_source_count) + ' bản ghi chưa có ngày hóa đơn hợp lệ.</strong><p>Chưa xác định được các bản ghi này thuộc kỳ nào nên chưa thể đưa vào danh sách theo ngày. Nếu thiếu hóa đơn mới: vào mSMI → Chức năng → Đồng bộ ngay, chọn khoảng ngày cần lấy và đồng bộ danh sách cùng chi tiết. Xong quay lại đây bấm Tải/tiếp tục đầu vào.</p><a href="https://hdsd.minvoice.com.vn/msmi/dong-bo-chi-tiet-hoa-don/" target="_blank" rel="noopener noreferrer">Hướng dẫn Đồng bộ ngay của mSMI</a></div>');
+    }
     invoiceVirtual = window.TdpInvoiceVirtualTable(content.querySelector('.invoice-lines-card .invoice-lines-scroll'), state.invoiceListing.lines || [], window.TdpInvoiceRenderRow);
   }
 

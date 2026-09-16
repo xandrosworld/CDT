@@ -432,7 +432,19 @@ def list_sync_batches(
     ).fetchall()
     for row in count_rows:
         counts[row["status"]] = row["count"]
+    # Undated source stubs cannot pass any date filter. Keep their count
+    # visible without pretending they belong to the selected period.
+    undated_source_count = 0
+    if safe_type == INPUT_INVOICE and conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='msmi_invoices'"
+    ).fetchone():
+        undated_source_count = conn.execute(
+            """SELECT COUNT(*) FROM msmi_invoices WHERE tenant=? AND invoice_type=?
+               AND COALESCE(invoice_date,'')='' AND sync_status='review_required'""",
+            (parameters[0], INPUT_INVOICE),
+        ).fetchone()[0]
     return {
+        "undated_source_count": undated_source_count,
         "filters": {
             "invoice_type": safe_type,
             "direction": "input" if safe_type == INPUT_INVOICE else "output",

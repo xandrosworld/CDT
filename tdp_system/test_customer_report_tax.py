@@ -16,6 +16,23 @@ from .invoice_output_register import output_sales_workbook
 
 
 class LineTaxTests(unittest.TestCase):
+    def test_msmi_fractional_rate_matches_pdf_without_changing_header_or_source(self):
+        invoice = dict(tax_amount=369334, total_amount=4986000, items=[
+            dict(line_index=1, amount=983333, tax_rate='0.08'),
+            dict(line_index=2, amount=3633333, tax_rate='0.08'),
+        ])
+        raw = json.dumps({'hdhhdvu': [{'tsuat':0.08,'tthue':None}, {'tsuat':0.08,'tthue':None}]})
+        annotate_invoice_tax(invoice, raw)
+        self.assertEqual(['8%', '8%'], [r['tax_rate'] for r in invoice['items']])
+        self.assertEqual([78667, 290667], [r['line_tax_amount'] for r in invoice['items']])
+        self.assertEqual(['0.08', '0.08'], [r['source_tax_rate'] for r in invoice['items']])
+        self.assertEqual(0, invoice['detail_tax_difference'])
+        self.assertEqual(4986000, invoice['total_amount'])
+        self.assertEqual(123, tax_fields(dict(amount=983333,tax_rate='0.08'), {'tsuat':0.08,'tthue':123})['line_tax_amount'])
+        for raw_line in ({}, {'taxRate':0.08}, {'tsuat':'0.08%'}):
+            self.assertEqual(80, tax_fields(dict(amount=100000,tax_rate='0.08'),raw_line)['line_tax_amount'])
+        self.assertEqual(80, tax_fields(dict(amount=100000,tax_rate='0.08%'), {'tsuat':0.08})['line_tax_amount'])
+
     def test_minvoice_category_codes_display_as_labels_without_negative_tax(self):
         for code, label in [('-2', 'KKKNT'), (-2, 'KKKNT'), ('-2.0', 'KKKNT'), ('-1', 'KCT'), ('-1%', 'KCT')]:
             line = dict(amount=100000, tax_rate=code)

@@ -27,6 +27,12 @@ def tax_rate_label(value):
 def tax_fields(line, raw_line=None):
     raw_line = raw_line if isinstance(raw_line, dict) else {}
     rate = tax_rate_label(line.get('tax_rate'))
+    # mSMI can return tsuat as a ratio (0.08), while other sources use
+    # percentage points (8). Only reinterpret the matching source field;
+    # an explicit percent label or a different provider keeps its meaning.
+    source_rate = number(raw_line.get('tsuat'))
+    if source_rate is not None and 0 < source_rate < 1 and number(rate) == source_rate:
+        rate = format((source_rate * 100).normalize(), 'f') + '%'
     tax, note = None, 'Chưa có tiền thuế nguồn'
     for key in ('vatAmount', 'inv_vatAmount', 'tthue', 'taxAmount', 'tax_amount'):
         if key in raw_line and raw_line[key] is not None and raw_line[key] != '':

@@ -42,6 +42,21 @@ def now_iso() -> str:
 
 
 class InvoiceWorkbenchDomainTests(unittest.TestCase):
+    def test_undated_input_sources_stay_visible_without_claiming_period_or_other_tenant(self):
+        c=self.connection
+        c.execute('CREATE TABLE msmi_invoices(tenant TEXT,invoice_type TEXT,invoice_date TEXT,sync_status TEXT)')
+        c.executemany('INSERT INTO msmi_invoices VALUES(?,?,?,?)',[
+            ('TDP',INPUT_INVOICE,'','review_required'),
+            ('TDP',INPUT_INVOICE,'2026-09-15','synced'),
+            ('OTHER',INPUT_INVOICE,'','review_required'),
+            ('TDP',OUTPUT_INVOICE,'','review_required'),
+        ])
+        args=dict(tenant='TDP',invoice_type='input',date_from='2026-09-14',date_to='2026-09-16')
+        self.assertEqual(list_sync_batches(c,**args)['undated_source_count'],1)
+        self.assertEqual(list_sync_batches(c,**{**args,'invoice_type':'output'})['undated_source_count'],0)
+        c.execute("UPDATE msmi_invoices SET invoice_date='2026-09-15',sync_status='synced' WHERE tenant='TDP' AND invoice_type=?",(INPUT_INVOICE,))
+        self.assertEqual(list_sync_batches(c,**args)['undated_source_count'],0)
+
     def setUp(self):
         self.connection = sqlite3.connect(":memory:")
         self.connection.row_factory = sqlite3.Row
