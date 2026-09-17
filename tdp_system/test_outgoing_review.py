@@ -159,5 +159,42 @@ class InvoiceReviewTests(unittest.TestCase):
         # Five units settle the older 01/09 order; only two settle 05/09.
         self.assertEqual({r['order_id']:r['unissued_qty'] for r in data['details']},{self.ids[0]:1,self.ids[1]:4})
 
+    def test_source_network_does_not_hold_database_write_lock(self):
+        raw=documented_minvoice_invoice(1);raw['inv_invoiceIssuedDate']='2026-09-08'
+        remote=OutputFixtureMsmi([raw])
+        original=remote.get_outgoing_invoices
+        def fetch(*args,**kwargs):
+            with server.db() as c:
+                c.execute('PRAGMA busy_timeout=100')
+                c.execute('BEGIN IMMEDIATE')
+                c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('network-lock-test','ok')")
+            return original(*args,**kwargs)
+        remote.get_outgoing_invoices=fetch
+        refresh_sources(server.db,lambda:remote,server.now_iso,'2026-09-01','2026-09-08')
+        with server.db() as c:self.assertEqual('ok',c.execute("SELECT value FROM settings WHERE key='network-lock-test'").fetchone()[0])
+
+    def test_concurrent_source_update_rejects_older_network_snapshot(self):
+        from .outgoing_source_refresh import SourceSnapshot
+        remote=OutputFixtureMsmi([])
+        def capture(*args):
+            snapshot=SourceSnapshot(*args)
+            with server.db() as c:
+                c.execute("""INSERT INTO outgoing_source_invoices(tenant,source,identity_key,invoice_number,invoice_series,invoice_date,
+                    source_status_class,sync_status,stock_status,synced_at,created_at,updated_at)
+                    VALUES('TDP','minvoice','concurrent','99','1C26TDP','2026-09-08','draft','synced','ready','now','now','now')""")
+            return snapshot
+        with patch('tdp_system.outgoing_source_refresh.SourceSnapshot',side_effect=capture):
+            with self.assertRaisesRegex(ValueError,'lượt khác'):
+                refresh_sources(server.db,lambda:remote,server.now_iso,'2026-09-01','2026-09-08')
+        with server.db() as c:self.assertEqual(1,c.execute("SELECT COUNT(*) FROM outgoing_source_invoices WHERE identity_key='concurrent'").fetchone()[0])
+
+    def test_missing_previously_signed_source_is_not_a_successful_refresh(self):
+        raw=documented_minvoice_invoice(1);raw['inv_invoiceIssuedDate']='2026-09-08'
+        refresh_sources(server.db,lambda:OutputFixtureMsmi([raw]),server.now_iso,'2026-09-01','2026-09-08')
+        before=self.business()
+        with self.assertRaisesRegex(ValueError,'chưa trả đủ'):
+            refresh_sources(server.db,lambda:OutputFixtureMsmi([]),server.now_iso,'2026-09-01','2026-09-08')
+        self.assertEqual(before,self.business())
+
 
 if __name__=='__main__':unittest.main()

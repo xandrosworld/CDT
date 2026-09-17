@@ -2985,6 +2985,7 @@
     var f=pendingScope(),key=JSON.stringify(f),serial=(state.unissuedSerial || 0)+1;
     state.unissuedSerial=serial;state.unissuedLoadKey=key;state.unissuedLoading=true;state.unissuedError='';
     try {
+      state.outputSyncStatus=await api('/api/outgoing-invoices/automatic-sync');
       var choices=await api('/api/outgoing-invoices/contractor-choices');
       if(serial!==state.unissuedSerial)return;
       state.invoiceContractorChoices=choices;
@@ -2998,6 +2999,7 @@
       if(preparedList.items.length && !(state.minvoiceSeries||[]).length){state.minvoiceSeries=(await api('/api/minvoice/series')).items||[];}
       if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope())){
         state.unissued=d;state.invoiceReviewNotes=notes;
+        state.outputSyncApplied=(state.outputSyncStatus||{}).last_checked;
         state.preparedInvoices=preparedList;state.preparedStatus={};
       }
     } catch(error) {
@@ -3005,6 +3007,35 @@
     } finally {
       if(serial===state.unissuedSerial){state.unissuedLoading=false;renderDocuments();}
     }
+  }
+
+  function outputSyncText(s) {
+    if(!s)return 'Đang kiểm tra lịch cập nhật hóa đơn đã ký…';
+    if(!s.enabled)return 'Tự cập nhật nền chưa bật. Khi tải bảng, web vẫn cập nhật hóa đơn đã ký trước.';
+    var checked=s.last_checked?new Date(s.last_checked).toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'}):'chưa có lượt hoàn tất';
+    return 'Tự cập nhật M-Invoice mỗi 5 phút · Lần kiểm tra gần nhất: '+checked+'. '+
+      (s.state==='running'?'Đang cập nhật; số đang xem có thể thay đổi.':s.message||'Đang chờ cập nhật.')+
+      (s.attention?' Cần kiểm tra trạng thái đồng bộ; chưa coi số đang xem là đã đối chiếu xong.':'');
+  }
+
+  async function pollOutputSync() {
+    if(state.view!=='documents'||document.hidden||state.outputSyncPolling)return;
+    state.outputSyncPolling=true;
+    try {
+      var next=await api('/api/outgoing-invoices/automatic-sync');
+      var changed=next.last_checked && next.last_checked!==state.outputSyncApplied;
+      state.outputSyncStatus=next;
+      var note=document.getElementById('outputSyncStatus');
+      if(note){note.textContent=outputSyncText(next);note.className=next.attention?'warning-summary':'muted';}
+      if(changed&&!state.unissuedLoading&&!state.invoiceExportBusy&&!state.unissuedBusy&&!state.preparedBusy&&
+          !state.invoiceReviewBusy&&!state.invoiceReviewOpen&&!state.invoiceReviewPreview&&!exportChoicesDirty()&&
+          !Object.keys(state.invoiceNoteDrafts||{}).length&&!document.activeElement.matches('input,select,textarea')) {
+        await loadUnissuedScope(false);
+      }
+    } catch(error) {
+      var warning=document.getElementById('outputSyncStatus');
+      if(warning){warning.textContent='Chưa lấy được trạng thái cập nhật M-Invoice. Không coi số đang xem là số mới nhất.';warning.className='warning-summary';}
+    } finally {state.outputSyncPolling=false;}
   }
 
   function invoiceChoicesDirty() {
@@ -3241,6 +3272,7 @@
     return '<section class="card" id="unissuedReconciliation" data-loaded="'+(d?'true':'false')+'"><div class="card-head"><div><h3>Excel toàn bộ phần chưa xuất</h3><p>Đơn đã duyệt trong khoảng ngày chọn − phần hóa đơn đã ký được đối chiếu.</p></div></div><div class="card-body"><p class="code-note"><strong>Phạm vi file: '+esc(invoiceScopeLabel())+'</strong>'+' · '+esc(dateVN(f.from)+' → '+dateVN(f.to))+'</p>'+
       '<form id="unissuedForm"><button class="btn btn-primary" type="submit" value="all-template"'+(!all.length||state.unissuedBusy||state.invoiceExportBusy||exportChoicesDirty()||state.invoiceReviewPreview?' disabled':'')+'>Tải Excel chưa xuất · '+esc(f.contractor||'tất cả nhà thầu đã tích')+'</button></form>'+(f.contractor?'<p>Đang lọc '+esc(f.contractor)+', nên file chỉ có nhà thầu này. <button type="button" class="btn btn-outline" data-invoice-all-parties'+(exportChoicesDirty()||state.unissuedBusy||state.invoiceExportBusy?' disabled':'')+'>Chuyển sang tất cả nhà thầu đã tích</button></p>':'')+'<p>Mỗi nhà thầu có hàng chưa xuất trong phạm vi chọn được một file, cùng mẫu 13 cột, gộp các thuế suất và có tổng tiền sẵn. Số lượng, đơn giá theo đơn gốc để chị kiểm tra trước khi lập hóa đơn.</p>'+
       (d?'<p><strong>Nhà thầu có dữ liệu trong file ('+fileParties.length+'):</strong> '+esc(fileParties.join(', ')||'Chưa có dòng trong phạm vi này')+'.</p>':'')+
+      '<p id="outputSyncStatus" role="status" class="'+((state.outputSyncStatus||{}).attention?'warning-summary':'muted')+'">'+esc(outputSyncText(state.outputSyncStatus))+'</p>'+
       (state.unissuedExportResult?'<p role="status">'+esc(state.unissuedExportResult)+'</p>':'')+
       (d&&d.warnings.length?'<details><summary>'+d.warnings.length+' thông tin cần đối chiếu hóa đơn đã ký</summary>'+d.warnings.map(function(w){return '<p>'+esc(w.message)+'</p>';}).join('')+'</details>':'')+
       '<details'+(state.invoiceUnissuedOpen?' open':'')+' id="invoiceUnissuedDetails"><summary>Xem danh sách chưa xuất · '+all.length+' dòng</summary><div class="compact-controls"><input id="unissuedSearch" value="'+esc(state.unissuedSearch||'')+'" placeholder="Tìm nhà thầu / mã / tên hàng"><button type="button" class="btn btn-outline" data-unissued="search">Tìm</button></div><div class="table-wrap invoice-unissued-table"><table><thead><tr><th>Ngày / Nhà thầu</th><th>Mã / Tên hóa đơn</th><th>ĐVT đơn</th><th>Chưa xuất</th><th>Đơn giá</th><th>Thuế</th><th>Tiền hàng</th><th>Sửa</th></tr></thead><tbody>'+rows.slice(page*50,page*50+50).map(function(r){return '<tr><td>'+esc(dateVN(r.work_date)+' · '+r.contractor)+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'</td><td>'+esc(r.unit)+'</td><td>'+stockQty(r.unissued_qty)+'</td><td>'+stockQty(r.unit_price)+'</td><td>'+esc(taxText(r.tax))+'</td><td>'+money(r.unissued_amount)+'</td><td>'+invoiceUnitButton(r.product_code,r.order_id)+'</td></tr>';}).join('')+'</tbody></table></div><div class="compact-controls"><span>'+rows.length+' dòng · Trang '+(page+1)+'/'+Math.max(1,Math.ceil(rows.length/50))+'</span><button type="button" class="btn btn-outline" data-unissued="prev"'+(!page?' disabled':'')+'>Trang trước</button><button type="button" class="btn btn-outline" data-unissued="next"'+((page+1)*50>=rows.length?' disabled':'')+'>Trang sau</button></div></details></div></section>';
@@ -8619,5 +8651,7 @@
     var button=event.target.closest('[data-action="bulk-edit-orders"]');
     if(button && window.TDPWorksheet) {event.preventDefault();event.stopImmediatePropagation();openOrderWorksheet();}
   },true);
+  window.addEventListener('focus',pollOutputSync);
+  setInterval(pollOutputSync,30000);
   loadData(null);
 })();

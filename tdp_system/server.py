@@ -4663,6 +4663,16 @@ def api_outgoing_unissued():
         return jsonify(ok=False,error=str(exc)),400
 
 
+@app.get('/api/outgoing-invoices/automatic-sync')
+def api_output_automatic_sync():
+    try:
+        from .automatic_output_sync import status
+    except ImportError:
+        from automatic_output_sync import status
+    with db() as conn:
+        return jsonify(ok=True,**status(conn,setting_get(conn,'tenant_code','TDP')))
+
+
 @app.post('/api/outgoing-invoices/sync-issued')
 def api_sync_issued_orders():
     try:
