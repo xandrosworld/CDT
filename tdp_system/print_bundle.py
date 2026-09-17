@@ -478,8 +478,6 @@ def workbook_sections(document_type: str, workbook: Workbook) -> list[dict[str, 
             receipt_header = _receipt_header_row(worksheet)
             if receipt_header is not None:
                 section = _receipt_section(worksheet, receipt_header)
-                section['notes'].extend(str(row[2].value) for row in worksheet
-                                        if len(row) > 2 and str(row[2].value or '').startswith('Lựa chọn ngày '))
                 sections.append(section)
                 continue
         if document_type == "report":

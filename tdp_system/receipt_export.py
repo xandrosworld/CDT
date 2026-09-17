@@ -421,10 +421,15 @@ def configure_receipt_paper(sheet: Any, paper: str = "A5") -> None:
 
     A5 needs narrower columns and wrapped prose at a readable font size; merely
     setting PaperSize on the A4 form reduced its 12pt body to less than 8pt.
-    This only changes formatting, never the seller identity or purchase values.
+    Seller identity and purchase values remain unchanged. Internal selection
+    notes from older preview snapshots are omitted from the customer copy.
     """
     if paper not in {"A4", "A5"}:
         raise ValueError("Biên nhận chỉ hỗ trợ khổ A4 hoặc A5")
+    for row in sheet:
+        for cell in row:
+            if str(cell.value or '').startswith('Lựa chọn ngày '):
+                cell.value = None
     total_row = next((r for r in range(ITEM_FIRST_ROW, sheet.max_row + 1)
                       if sheet.cell(r, 3).value == "TỔNG"), None)
     if total_row is not None:
@@ -499,10 +504,10 @@ def configure_receipt_paper(sheet: Any, paper: str = "A5") -> None:
                 if sum(compact.values()) <= 620:
                     for r, h in compact.items():
                         sheet.row_dimensions[r].height = h
-        # Keep the saved selection reconciliation visible when switching paper
-        # sizes or printing an individual receipt without its annex.
+        # Supplementary document identifiers remain separate from the removed
+        # internal selection note.
         selection_footer = next((r for r in range(signature_row + 1, sheet.max_row + 1)
-                                 if str(sheet.cell(r, 3).value or '').startswith(('Lựa chọn ngày ', 'Bảng kê bổ sung số '))), None)
+                                 if str(sheet.cell(r, 3).value or '').startswith('Bảng kê bổ sung số ')), None)
         if selection_footer:
             signature_row = selection_footer
         sheet.print_area = f"$C$1:$G${signature_row}"

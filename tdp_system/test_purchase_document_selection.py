@@ -66,25 +66,28 @@ class PurchaseDocumentSelectionTests(unittest.TestCase):
         result = self.save(self.body({}))
         self.assertEqual(6000000, result['days'][0]['groups'][0]['pending'])
 
-    def test_individual_receipt_keeps_full_day_total_and_does_not_infer_cash_payment(self):
+    def test_individual_receipt_omits_internal_note_but_keeps_reconciliation_and_payment_field(self):
         self.save(self.body({'1': '10', '2': '5'}))
         selected, pending, plan = selection.export_scope(self.conn,
             {'id': 1, 'work_date': '2026-09-14', 'status': 'approved'}, self.rows[:1])
         book = selection.annotate_workbook(build_purchase_documents_workbook(selected, template_path=GOLDEN), plan, pending)
         receipt = book['biên nhận']
+        self.assertFalse(any(str(c.value or '').startswith('Lựa chọn ngày ') for row in receipt for c in row))
         for paper in ('A4', 'A5'):
+            # Older immutable preview workbooks may still carry the old note.
+            footer = receipt.max_row + 2
+            receipt.cell(footer, 3, 'Lựa chọn ngày 2026-09-14 · Tổng mua cả ngày: 6,000,000đ')
             configure_receipt_paper(receipt, paper)
-            footer = next(r for r in range(1, receipt.max_row + 1)
-                          if str(receipt.cell(r, 3).value or '').startswith('Lựa chọn ngày '))
-            self.assertIn('6,000,000', receipt.cell(footer, 3).value)
-            self.assertIn('1,500,000', receipt.cell(footer, 3).value)
-            self.assertTrue(str(receipt.print_area).endswith('$G$' + str(footer)))
+            self.assertIsNone(receipt.cell(footer, 3).value)
+            self.assertFalse(str(receipt.print_area).endswith('$G$' + str(footer)))
+        self.assertEqual(6000000, book['Đối chiếu lựa chọn']['C2'].value)
+        self.assertEqual(1500000, book['Đối chiếu lựa chọn']['E2'].value)
         values = [str(c.value or '') for r in receipt for c in r]
         self.assertFalse(any('thanh toán tiền mặt' in s for s in values))
         self.assertTrue(any('Hình thức / ngày thanh toán' in s for s in values))
         sections = workbook_sections('purchases', book)
         self.assertEqual(4, len(sections))
-        self.assertTrue(any('6,000,000' in str(n) for n in sections[1]['notes']))
+        self.assertFalse(any('Lựa chọn ngày ' in str(n) for n in sections[1]['notes']))
         book.close()
 
     def test_retries_revisions_and_concurrency(self):

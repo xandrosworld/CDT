@@ -282,7 +282,7 @@ def export_scope(conn, batch, rows):
 
 
 def annotate_workbook(book, selection, pending):
-    """Visible full-day reconciliation accompanies every partial document."""
+    """Keep selection reconciliation in its annex, off individual receipts."""
     if not selection:
         return book
     note = (f"Lựa chọn ngày {selection['date']} · bản {selection['revision']} (thay thế bản lựa chọn trước). "
@@ -298,18 +298,15 @@ def annotate_workbook(book, selection, pending):
                 for cell in row:
                     if str(cell.value or '').strip() == 'Bên mua thanh toán tiền mặt ngay sau khi nhận đủ hàng':
                         cell.value = 'Hình thức / ngày thanh toán: ........................................'
-        identity = str(ws['D10'].value or '').strip() if receipt else ''
-        # Receipt identity cells are filled by the golden exporter. Include the
-        # actual full-day amount even if the user prints this sheet on its own.
-        if receipt and identity not in all_groups:
-            seller = str(ws['D8'].value or '').strip()
-            identity = next((key for key, g in all_groups.items() if g['seller'] == seller), '')
-        full = all_groups[identity]['amount'] if identity in all_groups else sum(g['amount'] for g in all_groups.values())
-        part = chosen.get(identity, {}).get('amount', Decimal(0)) if identity in all_groups else sum((g['amount'] for g in chosen.values()), Decimal(0))
+            # Customer-facing receipts end at the signatures. Full-day totals,
+            # revisions and pending amounts remain in the reconciliation sheets.
+            continue
+        full = sum(g['amount'] for g in all_groups.values())
+        part = sum((g['amount'] for g in chosen.values()), Decimal(0))
         visible_note = (f"Lựa chọn ngày {selection['date']} · bản {selection['revision']} (thay thế bản trước). "
                         f"Tổng mua cả ngày: {full:,.2f}đ; đã chọn cả ngày: {part:,.2f}đ; "
                         f"chờ bổ sung: {full - part:,.2f}đ.")
-        bottom, left, right = ws.max_row + 2, 3 if receipt else 1, 7 if receipt else ws.max_column
+        bottom, left, right = ws.max_row + 2, 1, ws.max_column
         ws.cell(bottom, left, visible_note)
         ws.merge_cells(start_row=bottom, start_column=left, end_row=bottom, end_column=right)
         ws.cell(bottom, left).alignment = Alignment(wrap_text=True, vertical='center')
