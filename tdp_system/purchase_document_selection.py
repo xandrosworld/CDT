@@ -2,7 +2,7 @@
 import hashlib
 import json
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from flask import jsonify, request
@@ -203,6 +203,58 @@ def save(conn, body, timestamp, audit):
     return {**scope(conn, body['from'], body['to']), 'ok': True}
 
 
+def pending_queue(conn, through, after=''):
+    """Read current remainders without creating another purchase or daily allowance.
+
+    Paginate source dates, not just pending dates: even invalid/stale days remain
+    visible, and a quiet page must not imply that older/later pages are settled.
+    """
+    try:
+        date.fromisoformat(through)
+        if after:
+            date.fromisoformat(after)
+            if after > through:
+                raise ValueError()
+    except (ValueError, TypeError):
+        raise SelectionError('Ngày theo dõi phần chờ không hợp lệ') from None
+    dates = {r[0] for r in conn.execute(
+        "SELECT DISTINCT work_date FROM batches WHERE status='approved' AND work_date>? AND work_date<=?",
+        (after, through))}
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='purchase_document_selections'").fetchone():
+        dates.update(r[0] for r in conn.execute(
+            'SELECT work_date FROM purchase_document_selections WHERE work_date>? AND work_date<=?',
+            (after, through)))
+    dates = sorted(dates)
+    page, entries = dates[:20], []
+    for work_date in page:
+        try:
+            state = scope(conn, work_date, work_date)
+            if not state['days']:
+                if saved_plan(conn, work_date):
+                    raise SelectionError('Nguồn của lựa chọn đã lưu không còn; cần đối chiếu bản đã lập')
+                continue
+            day = state['days'][0]
+            if day['stale']:
+                raise SelectionError('Nguồn đã đổi sau khi lưu; cần đối chiếu bản đã lập, chưa xác định lại phần chờ')
+            rows, _ = day_source(conn, work_date)
+            _, pending = split_rows(rows, {r['selection_key']: r['selected_quantity'] for r in day['rows']})
+            if not pending:
+                continue
+            groups = []
+            for group in day['groups']:
+                remainder = [r for r in pending if r['cccd'] == group['identity']]
+                if remainder:
+                    groups.append({**group, 'remaining_capacity': max(0, state['limit'] - group['selected']),
+                                   'rows': remainder})
+            entries.append({'date': work_date, 'revision': day['revision'], 'groups': groups,
+                            'pending': float(sum((Decimal(str(r['amount'])) for r in pending), Decimal(0))),
+                            'status': 'saved' if day['revision'] else 'needs_selection'})
+        except (ValueError, TypeError) as exc:
+            entries.append({'date': work_date, 'status': 'needs_review', 'error': str(exc)})
+    return {'through': through, 'entries': entries, 'scanned_dates': len(page),
+            'next_after': page[-1] if len(dates) > len(page) else None}
+
+
 def export_scope(conn, batch, rows):
     """A saved date-wide choice is shared by every export path and batch."""
     plan = saved_plan(conn, batch['work_date'])
@@ -307,6 +359,17 @@ def annotate_workbook(book, selection, pending):
 
 
 def register_routes(app, ctx):
+    @app.get('/api/purchase-document-selection/pending')
+    def purchase_document_pending():
+        try:
+            # Server business date, never the browser's date or the selected range.
+            through = datetime.now(timezone(timedelta(hours=7))).date().isoformat()
+            with ctx['db']() as conn:
+                conn.execute('BEGIN')
+                return jsonify(ok=True, **pending_queue(conn, through, request.args.get('after', '')))
+        except (ValueError, TypeError) as exc:
+            return jsonify(ok=False, error=str(exc)), 409
+
     @app.route('/api/purchase-document-selection', methods=['GET', 'POST'])
     def purchase_document_selection():
         try:

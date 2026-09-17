@@ -125,6 +125,75 @@ class PurchaseDocumentSelectionTests(unittest.TestCase):
         self.assertEqual(100.25, chosen[0]['amount'])
         self.assertFalse(pending)
 
+    def test_pending_survives_next_day_and_does_not_reset_allowance_or_write(self):
+        self.save(self.body({'1': '10', '2': '5'}))
+        before = self.conn.total_changes
+        today = selection.pending_queue(self.conn, '2026-09-14')
+        tomorrow = selection.pending_queue(self.conn, '2026-09-15')
+        self.assertEqual(today['entries'], tomorrow['entries'])
+        day = tomorrow['entries'][0]
+        self.assertEqual('2026-09-14', day['date'])
+        self.assertEqual('saved', day['status'])
+        self.assertEqual(1500000, day['pending'])
+        self.assertEqual(500000, day['groups'][0]['remaining_capacity'])
+        self.assertEqual(5, day['groups'][0]['rows'][0]['quantity'])
+        self.assertEqual('2026-09-14', day['groups'][0]['rows'][0]['work_date'])
+        self.assertEqual(before, self.conn.total_changes)
+        self.assertFalse(selection.pending_queue(self.conn, '2026-09-13')['entries'])
+
+    def test_pending_unsaved_overlimit_is_visible_and_completed_selection_disappears(self):
+        queue = selection.pending_queue(self.conn, '2026-09-15')
+        self.assertEqual('needs_selection', queue['entries'][0]['status'])
+        self.rows[0]['amount'] = 1000000
+        self.save(self.body({'1': '10'}))
+        self.assertEqual(3000000, selection.pending_queue(self.conn, '2026-09-15')['entries'][0]['pending'])
+        replacement = self.body({'1': '10', '2': '10'})
+        replacement['reason'] = 'Đã đối chiếu đủ hàng'
+        self.save(replacement)
+        self.assertFalse(selection.pending_queue(self.conn, '2026-09-15')['entries'])
+
+    def test_pending_keeps_stale_and_missing_sources_visible(self):
+        self.save(self.body({'1': '10'}))
+        self.rows[0]['quantity'] = 1  # Old saved quantity must never imply a negative remainder.
+        day = selection.pending_queue(self.conn, '2026-09-15')['entries'][0]
+        self.assertEqual('needs_review', day['status'])
+        self.assertNotIn('pending', day)
+        self.conn.execute("UPDATE batches SET status='draft'")
+        day = selection.pending_queue(self.conn, '2026-09-15')['entries'][0]
+        self.assertEqual('needs_review', day['status'])
+        self.assertIn('không còn', day['error'])
+
+    def test_pending_one_invalid_day_does_not_hide_other_days(self):
+        self.conn.execute("INSERT INTO batches VALUES(3,'2026-09-15','approved')")
+        def source(conn, work_date):
+            if work_date == '2026-09-14':
+                raise selection.SelectionError('Thiếu CCCD')
+            rows = [{**r, 'work_date': work_date} for r in self.rows]
+            return rows, selection.digest(rows)
+        with patch.object(selection, 'day_source', side_effect=source):
+            queue = selection.pending_queue(self.conn, '2026-09-15')
+        self.assertEqual(['needs_review', 'needs_selection'], [d['status'] for d in queue['entries']])
+
+    def test_pending_pagination_never_silently_truncates_old_days(self):
+        self.conn.execute('DELETE FROM batches')
+        self.conn.executemany('INSERT INTO batches VALUES(?,?,?)',
+            [(i, f'2026-08-{i:02}', 'approved') for i in range(1, 26)])
+        def source(conn, work_date):
+            rows = [{**r, 'work_date': work_date} for r in self.rows]
+            return rows, selection.digest(rows)
+        with patch.object(selection, 'day_source', side_effect=source):
+            first = selection.pending_queue(self.conn, '2026-09-15')
+            second = selection.pending_queue(self.conn, '2026-09-15', first['next_after'])
+        self.assertEqual(20, len(first['entries']))
+        self.assertEqual(5, len(second['entries']))
+        self.assertIsNone(second['next_after'])
+        self.assertEqual(25, len({d['date'] for d in first['entries'] + second['entries']}))
+
+    def test_pending_rejects_invalid_cursor(self):
+        for through, after in [('wrong', ''), ('2026-09-15', 'bad'), ('2026-09-15', '2026-09-16')]:
+            with self.subTest(through=through, after=after), self.assertRaises(selection.SelectionError):
+                selection.pending_queue(self.conn, through, after)
+
 
 if __name__ == '__main__':
     unittest.main()

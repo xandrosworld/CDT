@@ -3,3 +3,6 @@
 .purchase-selection-dialog .seller-update{padding:0 12px 12px}.seller-preview .seller-confirmation{display:flex;flex-direction:row;align-items:center;margin:12px 0}.seller-confirmation input{width:20px;height:20px;flex-shrink:0}.seller-preview .selection-controls{margin:12px 0}
 
 .purchase-selection-dialog footer[hidden]{display:none}
+
+.purchase-selection-dialog .pending-queue{padding:14px;background:#f0f7f6;border:1px solid #cadcdd;border-radius:8px}.pending-queue details{background:#fff;padding:0 12px 12px}.pending-queue .pending-days{max-height:380px;overflow:auto}.pending-queue li{margin:6px 0}
+.purchase-selection-dialog [hidden]{display:none!important}
