@@ -67,7 +67,7 @@
     }
     function errorIssues(message) {
       var target=null,label='Đến chỗ cần sửa';
-      if(/Số tham chiếu|Số bảng kê/.test(message)){target=field('reference');label='Điền số bảng kê';}
+      if(/Số tham chiếu|Số bảng kê/.test(message)){target=field('reference');label=/đã được ghi/.test(message)?'Kiểm tra số bảng kê':'Điền số bảng kê';}
       else if(/Ngày mua thực tế/.test(message)){target=field('document_date');label='Sửa ngày mua';}
       else if(/Từ ngày|Đến ngày/.test(message)){target=field('from');label='Sửa khoảng ngày';}
       else if(/Xem hàng tồn âm|xem hàng tồn âm/.test(message)){target=dialog.querySelector('[data-bk="load"]');label='Đến nút xem hàng tồn âm';}
@@ -145,6 +145,9 @@
           rows.forEach(function(r){r.selected=name==='all';});render();
         } else if(name==='excel') {
           await options.downloadFile('/api/bk-import/draft/excel',post(payload()));status('Đã tải bảng kê. Kho chưa thay đổi.');
+        } else if(name==='next') {
+          review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';field('reference').value='';
+          status('Lập bộ mới: điền Số bảng kê mới rồi chọn hàng còn thiếu. Bộ vừa nhập đã lưu trong lịch sử.');focusAfterAction=field('reference');
         } else if(name==='preview') {
           var draft=payload();validatePreview();
           status('Đang tạo bản in…');
@@ -159,13 +162,16 @@
         } else if(name==='confirm') {
           if(!review || !field('confirm_actual').checked || !field('confirm_actor').value.trim())throw new Error('Điền tên và xác nhận đã kiểm tra hàng mua thực tế.');
           var saved=await options.api('/api/bk-import/draft/confirm',post({token:review.import_token,confirmed:true,actor:field('confirm_actor').value}));
-          rows.forEach(function(r){var current=saved.stock.find(function(s){return s.product_code===r.product_code;});if(current){r.closing_qty=current.closing_qty;r.selected=false;r.qty=Math.max(0,-Number(current.closing_qty));}});render();
-          dialog.querySelector('.bk-supplement-confirm').innerHTML='<p><strong>'+ (saved.idempotent?'Bộ này đã nhập trước đó; không cộng thêm kho.':'Đã nhập kho thành công.')+'</strong></p><p>Tồn cuối ngày '+esc(saved.stock_date)+': '+saved.stock.map(function(r){return esc(r.product_code)+': '+options.quantity(r.closing_qty);}).join(' · ')+'</p><p>Chỉ mã đã bổ sung đủ phần thiếu mới hết âm. Có thể in lại bộ bảng kê phía trên.</p>';
-          status('Đã ghi nhận bộ bảng kê #'+saved.documentId+'. Không phát sinh đơn bán hoặc hóa đơn bán ra.');
+          rows.forEach(function(r){var current=saved.stock.find(function(s){return s.product_code===r.product_code;});if(current){r.closing_qty=current.closing_qty;r.selected=false;r.qty=Math.max(0,-Number(current.closing_qty));}});
+          var cleared=saved.stock.filter(function(s){return Number(s.closing_qty)>=-0.000001;}).map(function(s){return s.product_code;});
+          rows=rows.filter(function(r){return cleared.indexOf(r.product_code)<0;});render();
+          dialog.querySelector('.bk-supplement-confirm').innerHTML='<p><strong>'+ (saved.idempotent?'Bộ này đã nhập trước đó; không cộng thêm kho.':'Đã nhập kho thành công.')+'</strong></p><p>Tồn cuối ngày '+esc(saved.stock_date)+': '+saved.stock.map(function(r){return esc(r.product_code)+': '+options.quantity(r.closing_qty);}).join(' · ')+'</p><p>Đã ẩn '+cleared.length+' mã hết âm khỏi danh sách. Mã vẫn còn thiếu được giữ lại với lượng còn thiếu mới. Có thể in lại bộ vừa nhập ở phía trên.</p><button class="btn btn-primary" data-bk="next">Lập bảng kê tiếp theo</button>';
+          status('Đã ghi nhận bộ bảng kê #'+saved.documentId+'. Đã ẩn '+cleared.length+' mã hết âm. Muốn lập bộ mới, bấm “Lập bảng kê tiếp theo” ở dưới.');
           if(options.onSaved)options.onSaved();
         }
       } catch(error) {
-        var message=error.message.replace(/Số tham chiếu/g,'Số bảng kê');
+        var message=error.message.replace(/Số tham chiếu/gi,'Số bảng kê');
+        if(message.indexOf('đã thuộc một bộ BK khác')>=0)message='Số bảng kê này có dòng đã được ghi trong bộ khác. Kiểm tra lại bộ đã nhập; chỉ dùng số mới khi lập bộ khác cho hàng chưa nhập.';
         status(message,true);var items=error.issues||errorIssues(message);if(items.length)showIssues(items);
       }
       finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});var confirm=dialog.querySelector('[data-bk="confirm"]');if(confirm)confirm.disabled=!field('confirm_actual').checked;if(focusAfterAction){focusIssue(focusAfterAction);focusAfterAction=null;}}
