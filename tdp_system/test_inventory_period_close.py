@@ -318,7 +318,7 @@ class InventoryPeriodCloseUiContractTests(unittest.TestCase):
         self.assertIn('data-action="reopen-inventory-month"', app_js)
         self.assertIn(".inventory-month-close", styles)
         for asset in ['app.js', 'real.css', 'invoice-workbench.js']:
-            self.assertRegex(index, asset.replace('.', r'\.') + r'\?v=\d{8}-\d+')
+            self.assertRegex(index, asset.replace('.', r'\.') + r'\?v=\d{8}-[A-Za-z0-9-]+')
 
 
 if __name__ == "__main__":

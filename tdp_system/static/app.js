@@ -7659,7 +7659,8 @@
     if (action === "open-bk-draft") {
       window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,
         from:state.view === 'printing' ? state.printingFrom : state.inventoryFrom,
-        to:state.view === 'printing' ? state.printingTo : state.inventoryTo});
+        to:state.view === 'printing' ? state.printingTo : state.inventoryTo,
+        onSaved:function(){loadBkDocuments(true);}});
     }
     if (action === "choose-bk-workbook") {
       state.bkImportPreview = null;

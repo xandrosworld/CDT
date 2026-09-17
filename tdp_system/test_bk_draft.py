@@ -22,7 +22,7 @@ class BkDraftTests(unittest.TestCase):
                 'rows':[{'product_code':'BK-P1','qty':2,'unit_cost':100 if complete else '',
                          'source_party':'BK-S1' if complete else '', 'note':'Hàng mua bổ sung'}]}
 
-    def test_incomplete_draft_downloads_and_prints_but_cannot_post(self):
+    def test_incomplete_draft_downloads_but_cannot_print_final_receipts_or_post(self):
         before = self.counts()
         response = self.client.post('/api/bk-import/draft/excel',json=self.body())
         self.assertEqual(response.status_code,200,response.get_json())
@@ -33,12 +33,7 @@ class BkDraftTests(unittest.TestCase):
         self.assertEqual(wb['BK_IMPORT']['H4'].value,2)
         wb.close()
         snapshot=self.client.post('/api/bk-import/draft/preview',json=self.body())
-        self.assertEqual(snapshot.status_code,200,snapshot.get_json())
-        data=snapshot.get_json()
-        self.assertIn('BẢNG KÊ MUA VÀO',data['sheets'][0]['html'])
-        self.assertIn('Vũ Thị Thụy',data['sheets'][0]['html'])
-        excel=self.client.get('/api/documents/'+data['token']+'/excel')
-        self.assertEqual(excel.status_code,200)
+        self.assertEqual(snapshot.status_code,400,snapshot.get_json())
         self.assertEqual(self.counts(),before)
         preview=self.preview(response.data).get_json()
         self.assertFalse(preview['canConfirm'])

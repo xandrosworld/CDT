@@ -478,7 +478,7 @@ def _database_state_hash(conn, rows: Iterable[Mapping[str, Any]]) -> str:
     return _hash_json({"products": products, "sources": source_state})
 
 
-def parse_bk_preview(conn, payload: bytes) -> dict[str, Any]:
+def parse_bk_preview(conn, payload: bytes, *, allow_generated_rebuild: bool = False) -> dict[str, Any]:
     _validate_archive(payload)
     workbook = None
     try:
@@ -681,7 +681,7 @@ def parse_bk_preview(conn, payload: bytes) -> dict[str, Any]:
                     WHERE source_type='OPENING' AND status='posted' AND txn_date>? LIMIT 1""",
                 (earliest_date,),
             ).fetchone()
-            if newer_opening:
+            if newer_opening and not allow_generated_rebuild:
                 for item in rows:
                     item["errors"].append(
                         "Ngày BK nằm trước một kỳ tồn đầu đã chốt; cần rebuild kỳ sau"

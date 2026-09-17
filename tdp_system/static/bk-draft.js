@@ -1,11 +1,11 @@
 (function (root) {
   'use strict';
   root.TdpBkDraft = function (options) {
-    var esc = options.esc, dialog = document.createElement('dialog'), rows = [], loadedPeriod = null;
+    var esc = options.esc, dialog = document.createElement('dialog'), rows = [], loadedPeriod = null, review = null;
     dialog.className = 'bk-draft-dialog';
     dialog.setAttribute('aria-label', 'Lập bảng kê bổ sung');
     dialog.innerHTML = '<div class="bk-draft-head"><h2>Lập bảng kê bổ sung</h2><button class="btn btn-outline" data-bk="close" aria-label="Đóng">Đóng</button></div>' +
-      '<p>Chọn hàng thực mua chưa có hóa đơn để lập bảng kê. Tải và in chưa ghi nhập kho.</p>' +
+      '<p>1. Chọn hàng và điền thông tin mua → 2. Xem bảng kê tổng, biên nhận → 3. Xác nhận nhập kho. Tải và in chưa cộng kho.</p>' +
       '<div class="bk-draft-controls"><label>Từ ngày<input name="from" type="date" value="' + esc(options.from) + '"></label>' +
       '<label>Đến ngày<input name="to" type="date" value="' + esc(options.to) + '"></label>' +
       '<label>Nhóm hàng<select name="tax"><option value="KKKNT">KKKNT</option><option value="all">Tất cả hàng tồn âm</option></select></label>' +
@@ -13,7 +13,8 @@
       '<p class="muted">Có thể chọn lại tháng 8 hoặc kỳ trước. Lượng tồn âm chỉ để đối chiếu; sửa số lượng theo hàng thực mua. Đơn giá gợi ý bằng 95% giá bán gần nhất của đơn đã duyệt đến ngày đối chiếu, cùng ĐVT. Nếu chưa có đơn, dùng giá hóa đơn bán đã ký và ghi kho cùng ĐVT. Nguồn giá hiện dưới mỗi ô; có thể sửa trước khi tải.</p>' +
       '<div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label>' +
       '<label>Số bảng kê<input name="reference" maxlength="100" placeholder="Điền theo chứng từ"></label>' +
-      '<label>Người bán / NCC chung<input name="source_party" maxlength="150" placeholder="Có thể điền riêng từng dòng"></label></div>' +
+      '<label>Người bán chung<input name="source_party" list="bk-supplement-sellers" maxlength="150" placeholder="Chọn tên trong danh mục"></label><datalist id="bk-supplement-sellers"></datalist></div>' +
+      '<details><summary>Đã sửa file Excel: mở lại tại đây</summary><input name="import_file" type="file" accept=".xlsx" aria-label="File bảng kê bổ sung đã sửa"><button class="btn btn-outline" data-bk="file">Đọc file đã sửa</button><p>Đọc file chưa ghi kho. Xem bộ bảng kê rồi xác nhận bên dưới.</p></details>' +
       '<div class="bk-draft-controls"><label>Thêm hàng ngoài danh sách tồn âm<input name="search" placeholder="Tìm theo mã hoặc tên hàng"></label>' +
       '<button class="btn btn-outline" data-bk="search">Tìm hàng</button><select name="product" aria-label="Kết quả tìm hàng"></select>' +
       '<button class="btn btn-outline" data-bk="add">Thêm dòng</button></div>' +
@@ -21,8 +22,8 @@
       '<div class="bk-draft-controls"><button class="btn btn-outline" data-bk="all">Chọn tất cả</button>' +
       '<button class="btn btn-outline" data-bk="none">Bỏ chọn</button>' +
       '<button class="btn btn-primary" data-bk="excel">Tải Excel để nhập lại</button>' +
-      '<button class="btn btn-primary" data-bk="preview">Xem và in bảng kê</button></div>' +
-      '<p class="muted">Chưa đủ thông tin vẫn tải được để điền tiếp. Sau khi điền đủ, dùng “Nhập bảng kê bổ sung” trên web để kiểm tra rồi xác nhận nhập kho.</p>' +
+      '<button class="btn btn-primary" data-bk="preview">Xem bảng kê tổng & biên nhận</button></div>' +
+      '<p class="muted">Thiếu thông tin vẫn tải Excel để điền tiếp. Để in bộ bảng kê, cần đủ ngày mua thực tế, số bảng kê, người bán trong danh mục, lượng và giá. Hạn mức cộng chung 5.000.000đ/người/ngày với các bảng kê đã ghi kho.</p>' +
       '<div class="bk-draft-preview"></div>';
     document.body.appendChild(dialog); dialog.showModal();
     var products = [], busy = false;
@@ -38,7 +39,7 @@
       dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Tồn cuối kỳ</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
         return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'</td><td>'+esc(r.unit)+'</td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
-          return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?1000:150)+'"')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'">'+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
+          return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'">'+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
         }).join('')+'</tr>';
       }).join('')+'</tbody></table>';
     }
@@ -48,7 +49,7 @@
       var selected=rows.filter(function(r){return r.selected;});
       if (!selected.length) throw new Error('Chọn ít nhất một dòng để lập bảng kê.');
       return {from:loadedPeriod.from,to:loadedPeriod.to,document_date:field('document_date').value,reference:field('reference').value,
-        rows:selected.map(function(r){return {product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||field('source_party').value,note:r.note};})};
+        rows:selected.map(function(r){return {product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||field('source_party').value,note:r.note,source_line:r.source_line};})};
     }
     function post(body) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}; }
     async function action(name) {
@@ -58,6 +59,7 @@
       dialog.querySelectorAll('input,select').forEach(function(el){el.disabled=true;});
       try {
         collect();
+        if(['load','file','add','all','none','preview'].indexOf(name)>=0){review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';}
         if (name==='load') {
           if(rows.some(function(r){return r.selected;}) && !root.confirm('Nạp lại danh sách sẽ thay các dòng đang chọn. Tiếp tục?')) return;
           status('Đang đối chiếu sổ kho…');
@@ -67,6 +69,13 @@
           rows=result.items.map(function(r){return Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:'',note:''});});
           render(); status(rows.length+' mã đang âm cuối kỳ. Chọn những hàng đã mua cần bổ sung chứng từ.');
           dialog.querySelector('.bk-draft-preview').innerHTML='';
+        } else if(name==='file') {
+          if(!field('import_file').files.length)throw new Error('Chọn file Excel đã sửa trước.');
+          var form=new FormData();form.append('file',field('import_file').files[0]);
+          var imported=await options.api('/api/bk-import/draft/file',{method:'POST',body:form});
+          if(!loadedPeriod)throw new Error('Chọn kỳ và xem hàng tồn âm trước khi đọc file.');
+          rows=imported.rows;field('document_date').value=imported.document_date;field('reference').value=imported.reference;
+          render();status('Đã đọc '+rows.length+' dòng. Bấm Xem bảng kê tổng & biên nhận để kiểm tra. Kho chưa thay đổi.');
         } else if(name==='search') {
           if(!field('search').value.trim())throw new Error('Nhập mã hoặc tên hàng cần tìm.');
           var catalog=await options.api('/api/catalog/products?q='+encodeURIComponent(field('search').value)+'&all=1');
@@ -88,16 +97,30 @@
           status('Đang tạo bản in…');
           var preview=await options.api('/api/bk-import/draft/preview',post(payload()));
           if(!dialog.isConnected)return;
+          review=preview;
           var base='/api/documents/'+encodeURIComponent(preview.token);
-          dialog.querySelector('.bk-draft-preview').innerHTML='<div class="bk-draft-controls"><a class="btn btn-primary" target="_blank" rel="noopener" href="'+base+'/pdf?paper=A4&sides=simplex">Mở PDF để in</a><a class="btn btn-outline" href="'+base+'/excel">Tải Excel bản in</a></div>'+preview.sheets.map(function(s){return '<div class="bk-draft-paper">'+s.html+'</div>';}).join('');
-          status('Bản in đã sẵn sàng. Kho chưa thay đổi.');
+          dialog.querySelector('.bk-draft-preview').innerHTML='<div class="bk-draft-controls"><a class="btn btn-primary" target="_blank" rel="noopener" href="'+base+'/pdf?paper=A4&sides=simplex">In bộ bảng kê & biên nhận</a><a class="btn btn-outline" href="'+base+'/excel">Tải Excel bản in</a></div>'+preview.sheets.map(function(s){return '<details class="bk-supplement-paper" open><summary>'+esc(s.name)+'</summary><div class="bk-draft-paper">'+s.html+'</div></details>';}).join('')+
+            (preview.already_posted?'<p>Bộ này đã ghi kho. In hoặc tải lại không cộng thêm kho.</p>':'<div class="bk-supplement-confirm"><p>Tổng tiền mua bổ sung: <strong>'+Number(preview.totals.amount).toLocaleString('vi-VN')+'đ</strong>.</p>'+(preview.rebuild_periods.length?'<p>Tháng '+esc(preview.rebuild_periods.join(', '))+' đã chốt. Khi xác nhận, hệ thống sẽ tính lại tồn chuyển sang tháng sau; nếu không đạt kiểm tra thì không ghi thay đổi nào.</p>':'')+'<label>Người xác nhận<input name="confirm_actor" maxlength="100" placeholder="Họ tên người kiểm tra"></label><label><input name="confirm_actual" type="checkbox"> Tôi đã kiểm tra hàng mua thực tế, ngày mua, người bán và đồng ý nhập kho'+(preview.rebuild_periods.length?', cập nhật tồn chuyển kỳ':'')+'.</label><button class="btn btn-primary" data-bk="confirm" disabled>Xác nhận nhập kho một lần</button></div>');
+          status(preview.already_posted?'Bộ bảng kê này đã ghi kho.':'Đã tạo bảng kê tổng và biên nhận. Kiểm tra bản in, rồi xác nhận nhập kho ở dưới.');
+          dialog.querySelector('.bk-draft-preview').scrollIntoView({block:'start'});
+        } else if(name==='confirm') {
+          if(!review || !field('confirm_actual').checked || !field('confirm_actor').value.trim())throw new Error('Điền tên và xác nhận đã kiểm tra hàng mua thực tế.');
+          var saved=await options.api('/api/bk-import/draft/confirm',post({token:review.import_token,confirmed:true,actor:field('confirm_actor').value}));
+          rows.forEach(function(r){var current=saved.stock.find(function(s){return s.product_code===r.product_code;});if(current){r.closing_qty=current.closing_qty;r.selected=false;r.qty=Math.max(0,-Number(current.closing_qty));}});render();
+          dialog.querySelector('.bk-supplement-confirm').innerHTML='<p><strong>'+ (saved.idempotent?'Bộ này đã nhập trước đó; không cộng thêm kho.':'Đã nhập kho thành công.')+'</strong></p><p>Tồn cuối ngày '+esc(saved.stock_date)+': '+saved.stock.map(function(r){return esc(r.product_code)+': '+options.quantity(r.closing_qty);}).join(' · ')+'</p><p>Chỉ mã đã bổ sung đủ phần thiếu mới hết âm. Có thể in lại bộ bảng kê phía trên.</p>';
+          status('Đã ghi nhận bộ bảng kê #'+saved.documentId+'. Không phát sinh đơn bán hoặc hóa đơn bán ra.');
+          if(options.onSaved)options.onSaved();
         }
       } catch(error) {status(error.message,true);}
-      finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});}
+      finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});var confirm=dialog.querySelector('[data-bk="confirm"]');if(confirm)confirm.disabled=!field('confirm_actual').checked;}
     }
     dialog.addEventListener('click',function(e){var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
-    dialog.addEventListener('input',function(){dialog.querySelector('.bk-draft-preview').innerHTML='';});
+    dialog.addEventListener('input',function(e){
+      if(e.target.name==='confirm_actor'||e.target.name==='confirm_actual'){var button=dialog.querySelector('[data-bk="confirm"]');if(button)button.disabled=!field('confirm_actual').checked;return;}
+      review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';
+    });
     dialog.addEventListener('close',function(){dialog.remove();});
+    options.api('/api/bk-import/draft/sellers').then(function(p){if(dialog.isConnected)dialog.querySelector('#bk-supplement-sellers').innerHTML=p.names.map(function(n){return '<option value="'+esc(n)+'"></option>';}).join('');}).catch(function(){});
     render(); action('load');
   };
 })(window);

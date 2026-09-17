@@ -1,23 +1,28 @@
 """Prepare supplementary BK files and printouts without posting inventory."""
 import io
 import math
+import threading
+import time
+import uuid
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from flask import jsonify, request, send_file
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Side, Font
-from openpyxl.worksheet.page import PageMargins
+from openpyxl.styles import Alignment, Border, Font
+from openpyxl.utils import get_column_letter, range_boundaries
+
+REVIEW_PENDING = {}
+REVIEW_LOCK = threading.Lock()
 
 try:
     from .bk_import import build_bk_import_template, BK_IMPORT_SOURCE_TYPE
-    from .document_preview import create_snapshot, white_print_style
+    from .document_preview import create_snapshot
     from .invoice_inventory import invoice_stock_rows, InvoiceInventoryError
     from .stock_tax_policy import is_kkknt
     from .contract_modules import mapping_key
 except ImportError:
     from bk_import import build_bk_import_template, BK_IMPORT_SOURCE_TYPE
-    from document_preview import create_snapshot, white_print_style
+    from document_preview import create_snapshot
     from invoice_inventory import invoice_stock_rows, InvoiceInventoryError
     from stock_tax_policy import is_kkknt
     from contract_modules import mapping_key
@@ -149,7 +154,7 @@ def draft_rows(conn, body):
         except InvalidOperation:
             raise ValueError(f'Dòng {index}: lượng hoặc giá quá lớn.') from None
         result.append({'document_date': document_date, 'source_type': BK_IMPORT_SOURCE_TYPE,
-            'source_reference': reference, 'source_line': index, 'product_code': code,
+            'source_reference': reference, 'source_line': item.get('source_line',index), 'product_code': code,
             'product_name': product['name'], 'unit': product['unit'],
             'qty': float(qty) if qty is not None else '', 'unit_cost': float(cost) if cost is not None else '',
             'amount': float(amount) if amount is not None else '',
@@ -158,55 +163,53 @@ def draft_rows(conn, body):
     return start, end, result
 
 
-def print_workbook(rows, start, end):
-    wb = Workbook(); ws = wb.active; ws.title = 'Bảng kê bổ sung'
-    ws.append(['BẢNG KÊ MUA VÀO KHÔNG CÓ HÓA ĐƠN']); ws.merge_cells('A1:H1')
-    ws.append([f"Kỳ đối chiếu: {date.fromisoformat(start):%d/%m/%Y} – {date.fromisoformat(end):%d/%m/%Y}"]); ws.merge_cells('A2:H2')
-    ws.append(['Số bảng kê: ' + rows[0]['source_reference'] + '    Ngày chứng từ: ' + rows[0]['document_date']]); ws.merge_cells('A3:H3')
-    ws.append(['Bản lập để kiểm tra; tải và in chưa ghi nhập kho.']); ws.merge_cells('A4:H4')
-    ws.append(['STT', 'Mã hàng / Tên hàng', 'ĐVT', 'Số lượng', 'Đơn giá', 'Thành tiền', 'NCC', 'Ghi chú'])
-    for index, row in enumerate(rows, 1):
-        ws.append([index, row['product_code'] + ' · ' + row['product_name'], row['unit'], row['qty'],
-                   row['unit_cost'], row['amount'], row['source_party'], row['note']])
-    total_row = ws.max_row + 1
-    total = sum(Decimal(str(r['amount'])) for r in rows if r['amount'] != '')
-    complete = all(r['amount'] != '' for r in rows)
-    ws.append(['TỔNG', None, None, None, None, float(total) if complete else None]); ws.merge_cells(start_row=total_row,start_column=1,end_row=total_row,end_column=5)
-    if any(r['amount'] == '' for r in rows):
-        ws.cell(total_row, 7, 'Còn dòng chưa đủ lượng/giá')
-    ws.cell(total_row+2, 7, 'Người lập bảng')
-    ws.cell(total_row+5, 7, 'Vũ Thị Thụy')
-    widths = [6, 40, 8, 13, 16, 18, 23, 29]
-    for i, width in enumerate(widths, 1):
-        ws.column_dimensions[chr(64+i)].width = width
-    border = Border(**{side: Side(style='hair',color='000000') for side in ('left','right','top','bottom')})
-    for cells in ws:
-        for cell in cells:
-            cell.font = Font(name='Times New Roman',size=12)
-            cell.alignment = Alignment(vertical='center',wrap_text=True)
-            if 5 <= cell.row <= total_row:
-                cell.border = border
-                if cell.column in (4,5,6):
-                    cell.number_format = '#,##0.######' if cell.column == 4 else '#,##0.00'
-                    cell.alignment = Alignment(horizontal='right',vertical='center')
-            if cell.data_type == 'f':
-                cell.data_type = 's'
-    for r in range(6,total_row):
-        row = rows[r-6]
-        lines = max((len(row['product_name'])+30)//31,(len(row['note'])+24)//25,
-                    (len(row['source_party'])+17)//18,1)
-        ws.row_dimensions[r].height = max(30,lines*16)
-    for r in range(1,6): ws.row_dimensions[r].height=25
-    ws['A1'].font=Font(name='Times New Roman',size=16)
-    ws['A1'].alignment=Alignment(horizontal='center')
-    ws.print_area=f'A1:H{ws.max_row}';ws.print_title_rows='1:5';ws.sheet_view.showGridLines=False
-    ws.page_setup.orientation='landscape';ws.page_setup.paperSize=ws.PAPERSIZE_A4
-    ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=0;ws.sheet_properties.pageSetUpPr.fitToPage=True
-    ws.page_margins=PageMargins(left=.25,right=.25,top=.3,bottom=.3)
-    return white_print_style(wb)
-
-
 def register_bk_draft_routes(app, ctx):
+    try:
+        from . import bk_supplement as supplement
+        from . import bk_import as bk
+        from .receipt_export import build_purchase_documents_workbook
+    except ImportError:
+        import bk_supplement as supplement
+        import bk_import as bk
+        from receipt_export import build_purchase_documents_workbook
+
+    @app.get('/api/bk-import/draft/sellers')
+    def supplement_sellers():
+        with ctx['db']() as conn:
+            return jsonify(ok=True,names=[r['name'] for r in conn.execute('SELECT name FROM people ORDER BY name')])
+
+    @app.post('/api/bk-import/draft/file')
+    def supplement_file():
+        try:
+            upload=request.files.get('file')
+            if not upload or not upload.filename.lower().endswith('.xlsx'):raise ValueError('Chọn file Excel bảng kê bổ sung .xlsx.')
+            blob=upload.read(bk.BK_IMPORT_MAX_BYTES+1)
+            if len(blob)>bk.BK_IMPORT_MAX_BYTES:raise ValueError('File vượt giới hạn 10 MB.')
+            with ctx['db']() as conn:
+                parsed=bk.parse_bk_preview(conn,blob,allow_generated_rebuild=True)
+            if not parsed['canConfirm']:
+                raise ValueError(' | '.join('Dòng '+str(r['sourceRow'])+': '+'; '.join(r['errors']) for r in parsed['rows'] if r['errors']))
+            dates={r['documentDate'] for r in parsed['rows']};refs={r['sourceReference'] for r in parsed['rows']}
+            if len(dates)!=1 or len(refs)!=1:raise ValueError('Mỗi lần nhập bổ sung chọn một ngày mua và một số bảng kê.')
+            return jsonify(ok=True,document_date=next(iter(dates)),reference=next(iter(refs)),
+                rows=[{'product_code':r['productCode'],'product_name':r['productName'],'unit':r['unit'],
+                       'qty':r['qty'],'unit_cost':r['unitCost'],'source_party':r['sourceParty'],
+                       'source_line':r['sourceLine'],'note':r['note'],'selected':True} for r in parsed['rows']])
+        except ValueError as exc:return jsonify(ok=False,error=str(exc)),400
+
+    @app.post('/api/bk-import/draft/confirm')
+    def supplement_confirm():
+        try:
+            body=request.get_json(silent=True) or {}
+            if not isinstance(body,dict) or body.get('confirmed') is not True:raise ValueError('Xác nhận hàng mua thực tế và nhập kho trước khi lưu.')
+            with REVIEW_LOCK:pending=REVIEW_PENDING.get(str(body.get('token') or ''))
+            if not pending or pending['expires']<time.time():raise ValueError('Bản xem trước hết hạn; bấm xem và kiểm tra lại.')
+            with ctx['db']() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                result=supplement.post(conn,pending['prepared'],body.get('actor'),ctx['now_iso'](),ctx['audit_event'])
+            return jsonify(ok=True,**result)
+        except ValueError as exc:return jsonify(ok=False,error=str(exc),code=getattr(exc,'code','invalid_supplement')),409
+
     @app.get('/api/bk-import/suggested-price')
     def get_suggested_price():
         try:
@@ -237,12 +240,46 @@ def register_bk_draft_routes(app, ctx):
             with ctx['db']() as conn:
                 conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
                 start,end,rows=draft_rows(conn,request.get_json(silent=True))
+                blob=build_bk_import_template(rows,draft=True)
+                if output=='preview':
+                    prepared=supplement.prepare(conn,blob,start,end)
+                    workbook=build_purchase_documents_workbook(prepared['receipts'],template_path=ctx['template_path'](),
+                        date_from=min(r['work_date'] for r in prepared['receipts']),
+                        date_to=max(r['work_date'] for r in prepared['receipts']),
+                        buyer_name=ctx['setting_get'](conn,'purchase_receipt_buyer_name',''),
+                        buyer_title=ctx['setting_get'](conn,'purchase_receipt_buyer_title',''),
+                        company_name=ctx['setting_get'](conn,'company',''),
+                        company_address=ctx['setting_get'](conn,'company_address',''),
+                        location=ctx['setting_get'](conn,'purchase_receipt_location','Hải Phòng'))
             if output=='excel':
-                return send_file(io.BytesIO(build_bk_import_template(rows, draft=True)),as_attachment=True,
+                return send_file(io.BytesIO(blob),as_attachment=True,
                     download_name=f'BK_BO_SUNG_{start}_{end}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            workbook=print_workbook(rows,start,end)
             try:
-                return jsonify(create_snapshot(ctx['data_dir']()/'document_previews',[(f'BK_BO_SUNG_{start}_{end}.xlsx',workbook)]))
+                for ws in workbook:
+                    for line in ws:
+                        for cell in line:
+                            if str(cell.value or '').strip()=='Bên mua thanh toán tiền mặt ngay sau khi nhận đủ hàng':
+                                cell.value='Hình thức / ngày thanh toán: ........................................'
+                    left,top,right,bottom=range_boundaries(str(ws.print_area).split('!')[-1])
+                    bottom+=2
+                    for rr in range(bottom-1,bottom+1):
+                        for cc in range(left,right+1):ws.cell(rr,cc).border=Border()
+                    ws.row_dimensions[bottom-1].height=6
+                    ws.cell(bottom,left,'Bảng kê bổ sung số '+rows[0]['source_reference']+' · '+('Đã ghi kho; in lại không cộng thêm kho.' if prepared['parsed']['alreadyPosted'] else 'Bản kiểm tra. Chỉ ghi kho sau khi xác nhận trên web.'))
+                    ws.cell(bottom,left).data_type='s';ws.cell(bottom,left).alignment=Alignment(wrap_text=True)
+                    ws.cell(bottom,left).font=Font(name='Times New Roman',size=9,italic=True)
+                    ws.merge_cells(start_row=bottom,start_column=left,end_row=bottom,end_column=right)
+                    ws.row_dimensions[bottom].height=32
+                    ws.print_area=f'{get_column_letter(left)}{top}:{get_column_letter(right)}{bottom}'
+                result=create_snapshot(ctx['data_dir']()/'document_previews',[(f'BO_BANG_KE_{start}_{end}.xlsx',workbook)])
+                token=uuid.uuid4().hex
+                with REVIEW_LOCK:
+                    for key in list(REVIEW_PENDING):
+                        if REVIEW_PENDING[key]['expires']<time.time():REVIEW_PENDING.pop(key)
+                    if len(REVIEW_PENDING)>=20:raise ValueError('Có nhiều bản xem trước đang mở; thử lại sau ít phút.')
+                    REVIEW_PENDING[token]={'expires':time.time()+1800,'prepared':prepared}
+                return jsonify(**result,import_token=token,already_posted=prepared['parsed']['alreadyPosted'],
+                    totals=prepared['parsed']['totals'],rebuild_periods=[r['period'] for r in prepared['periods']])
             finally:
                 workbook.close()
         except (ValueError, InvoiceInventoryError) as error:

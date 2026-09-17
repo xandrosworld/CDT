@@ -5692,7 +5692,9 @@ try:
     from .bk_draft import register_bk_draft_routes
 except ImportError:
     from bk_draft import register_bk_draft_routes
-register_bk_draft_routes(app, {"db": db, "data_dir": lambda: DATA_DIR})
+register_bk_draft_routes(app, {"db": db, "data_dir": lambda: DATA_DIR,
+    "template_path": lambda: MASTER_SOURCE, "setting_get": setting_get,
+    "now_iso": now_iso, "audit_event": audit_event})
 
 register_payable_ledger_routes(app, {
     "db": db,

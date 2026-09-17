@@ -191,6 +191,9 @@ def register_waiting_hooks(app,db_factory,now_iso):
     @app.after_request
     def update_waiting_after_stock_change(response):
         path=request.path
+        # Supplementary historical purchases update stock only. They must not
+        # generate or replace any outgoing invoice drafts as a side effect.
+        if path=='/api/bk-import/draft/confirm':return response
         affects_stock=(path.startswith('/api/invoice-workbench/') and path.endswith(('/sync','/input-receipts','/output-postings')))
         affects_stock=affects_stock or (path.startswith('/api/outgoing-invoices/') and path.endswith('/confirm-issued'))
         affects_stock=affects_stock or (path.startswith('/api/bk-import/') and path.endswith(('/confirm','/reversal')))
