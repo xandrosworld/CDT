@@ -6599,15 +6599,17 @@
       state.unissuedBusy=true;
       event.target.querySelectorAll('button,input,select').forEach(function(el){el.disabled=true;});
       content.querySelectorAll('#orderInvoiceExportForm button,#orderInvoiceExportForm input,#orderInvoiceExportForm select,[form=unissuedForm]').forEach(function(el){el.disabled=true;});
-      if(event.submitter)event.submitter.textContent='Đang kiểm tra phần còn chờ…';
+      if(event.submitter)event.submitter.textContent='Đang cập nhật hóa đơn đã ký và tính phần còn lại…';
       try {
         state.unissuedError='';state.unissuedExportResult='';
         if(action==='template' || action==='all-template') {
-          await downloadFile('/api/outgoing-invoices/unissued-template.zip'+params+'&portion='+(action==='template'?'waiting':'all'));
+          await downloadFile('/api/outgoing-invoices/unissued-template.zip'+params+'&portion='+(action==='template'?'waiting':'all'),{method:'POST'});
           state.unissuedExportResult=action==='template'?'Đã tải phần còn chờ: mỗi nhà thầu một file, có tổng tiền và chi tiết lý do. File này để đối chiếu, không đưa lên M-Invoice.':'Đã tải phần chưa xuất · '+invoiceScopeLabel()+' · '+dateVN(f.from)+' → '+dateVN(f.to)+'. Mỗi nhà thầu có dữ liệu một file, gộp thuế suất và có tổng tiền.';
         } else if(action==='excel' || action==='all-excel') {
-          await downloadFile('/api/outgoing-invoices/unissued.xlsx'+params+'&portion='+(action==='excel'?'waiting':'all'));
-          state.unissuedExportResult='Đã tải đối chiếu từng dòng và lý do còn chờ. Kho, doanh thu và công nợ không thay đổi.';
+          await downloadFile('/api/outgoing-invoices/unissued.xlsx'+params+'&portion='+(action==='excel'?'waiting':'all'),{method:'POST'});
+          state.unissuedExportResult='Đã cập nhật hóa đơn đã ký và tải đối chiếu từng dòng. Không thay đổi đơn hàng, doanh thu hay công nợ.';
+        } else if(action==='view') {
+          await api('/api/outgoing-invoices/sync-issued',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});
         }
         await loadUnissuedScope(action==='view');
       } catch(error) {state.unissuedError=error.message;showToast(error.message,true);}

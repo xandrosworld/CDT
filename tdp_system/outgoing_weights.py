@@ -254,6 +254,32 @@ def signed_stock_snapshot(conn, item_id):
         AND UPPER(TRIM(issued_invoice_series))=UPPER(TRIM(?)) AND TRIM(issued_invoice_number)=TRIM(?)
         AND COALESCE(issued_invoice_date,invoice_date)=?''',
         (source['invoice_series'],source['invoice_number'],source['invoice_date'])).fetchall()
+    raw = json.loads(source['raw_json'] or '{}')
+    if not drafts and raw.get('_tdp_source_contract') == 'minvoice_portal_v1':
+        # A signed portal draft must first post its measured stock quantities,
+        # then reconcile_sent marks it issued. Requiring issued here deadlocks
+        # those two operations. Accept only the original, fully matched draft.
+        reference = raw.get('orderNumber')
+        if reference and raw.get('keyApi') in (None, '', reference):
+            candidates = conn.execute("""SELECT * FROM outgoing_invoice_drafts
+                WHERE status='draft' AND minvoice_status IN ('saved','unknown')
+                AND minvoice_key_api=?""", (reference,)).fetchall()
+            if len(candidates) == 1:
+                d = candidates[0]
+                try:
+                    from .minvoice_portal import portal_date
+                except ImportError:
+                    from minvoice_portal import portal_date
+                if (d['minvoice_series'] == source['invoice_series']
+                        and (not d['minvoice_remote_id'] or d['minvoice_remote_id'] == source['remote_id'])
+                        and portal_date(raw.get('invoiceDate')) == d['invoice_date']
+                        and key(raw.get('sellerTaxCode')) == key(d['company_tax_code_snapshot'])
+                        and key(raw.get('buyerTaxCode')) == key(d['buyer_tax_code_snapshot'])
+                        and key(raw.get('buyerLegalName') or raw.get('buyerDisplayName')) == key(d['buyer_name_snapshot'])
+                        and key(raw.get('buyerAddress')) == key(d['buyer_address_snapshot'])
+                        and all(abs(dec(source[k])-dec(d[k])) <= Decimal('.000001')
+                                for k in ('subtotal','tax_amount','total_amount'))):
+                    drafts = candidates
     if len(drafts) != 1 or not source['buyer_tax_code'] or key(drafts[0]['buyer_tax_code_snapshot']) != key(source['buyer_tax_code']):
         raise blocked()
     local = [dict(r) for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id', (drafts[0]['id'],))]
@@ -263,6 +289,22 @@ def signed_stock_snapshot(conn, item_id):
         saved = conn.execute('SELECT * FROM outgoing_weight_exports WHERE line_id=?', (row['id'],)).fetchone()
         expected.append((row, {**row, **json.loads(saved['output_json'])} if saved else row, saved))
     actual = conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index', (source['id'],)).fetchall()
+    if raw.get('_tdp_source_contract') == 'minvoice_portal_v1':
+        try:
+            from .minvoice_portal_drafts import ordered_draft_lines
+            from .minvoice_client import MinvoiceError
+        except ImportError:
+            from minvoice_portal_drafts import ordered_draft_lines
+            from minvoice_client import MinvoiceError
+        originals = raw.get('invoiceDetail', [])
+        try:
+            ordered = ordered_draft_lines(originals)
+        except MinvoiceError:
+            raise blocked() from None
+        if len(originals) != len(actual) or [r['line_index'] for r in actual] != list(range(1,len(actual)+1)):
+            raise blocked()
+        positions = {id(line): index for index, line in enumerate(originals)}
+        actual = [actual[positions[id(line)]] for line in ordered]
     if len(actual) != len(expected):
         raise blocked()
     answer = None

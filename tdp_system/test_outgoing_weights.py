@@ -1,4 +1,5 @@
 import io
+import json
 import unittest
 import zipfile
 from openpyxl import load_workbook
@@ -259,6 +260,67 @@ class ActualWeightTests(unittest.TestCase):
         with server.db() as conn:
             conn.execute("UPDATE outgoing_invoice_drafts SET issued_invoice_number='002' WHERE id=?",(did,))
             with self.assertRaises(InvoiceMappingError):validated_output_stock_snapshot(conn,item)
+
+    def saved_portal_source(self):
+        sid,item,did=self.signed()
+        with server.db() as conn:
+            conn.execute("""UPDATE outgoing_invoice_drafts SET status='draft',minvoice_status='saved',
+                minvoice_key_api='weight-key',minvoice_series='1C26TDP',invoice_date='2026-09-13',
+                company_tax_code_snapshot='SELLER',buyer_name_snapshot='Buyer',buyer_address_snapshot='Address',
+                issued_invoice_number=NULL,issued_invoice_series=NULL,issued_invoice_date=NULL WHERE id=?""",(did,))
+            conn.execute("UPDATE inventory_transactions SET status='reserved' WHERE source_type='OUTGOING_DRAFT'")
+            raw={'_tdp_source_contract':'minvoice_portal_v1','orderNumber':'weight-key',
+                 'invoiceDate':'2026-09-13','sellerTaxCode':'SELLER','buyerTaxCode':'MST-A',
+                 'buyerLegalName':'Buyer','buyerAddress':'Address',
+                 'invoiceDetail':[{'ordinalNumber':1,'productCode':'HH-01','productName':'Nấm kim châm',
+                    'unitCode':'Kg','quantity':2.8,'unitPrice':40000,'vatCode':'KKKNT','property':1}]}
+            conn.execute("UPDATE outgoing_source_invoices SET raw_json=?,subtotal=112000,total_amount=112000,tax_amount=0 WHERE id=?",(json.dumps(raw),sid))
+        return sid,item,did,raw
+
+    def test_signed_saved_weight_draft_posts_then_links_without_double_stock(self):
+        from .outgoing_sent_reconcile import reconcile_sent
+        sid,item,did,raw=self.saved_portal_source()
+        with server.db() as conn:
+            self.assertEqual(14,validated_output_stock_snapshot(conn,item)['stock_qty'])
+            self.assertEqual(1,post_output_invoice(conn,sid,confirmed=True,now_iso=server.now_iso)['new_inventory_lines'])
+            result=reconcile_sent(conn,server.now_iso())
+            self.assertEqual([{'draft_id':did,'source_invoice_id':sid}],result['linked'])
+            self.assertEqual([],result['blocked'])
+            self.assertEqual(6,canonical_available_stock(conn)['HH-01']['available_qty'])
+            self.assertTrue(post_output_invoice(conn,sid,confirmed=True,now_iso=server.now_iso)['idempotent'])
+            self.assertEqual([],reconcile_sent(conn,server.now_iso())['linked'])
+
+    def test_saved_weight_source_requires_original_header_and_valid_ordinals(self):
+        sid,item,did,raw=self.saved_portal_source()
+        changes=[('orderNumber','other'),('buyerTaxCode','other'),('buyerLegalName','other'),
+                 ('buyerAddress','other'),('sellerTaxCode','other'),('invoiceDate','2026-09-14'),
+                 ('invoiceDetail',[{**raw['invoiceDetail'][0],'ordinalNumber':2}])]
+        with server.db() as conn:
+            for field,value in changes:
+                with self.subTest(field=field):
+                    conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',(json.dumps({**raw,field:value}),sid))
+                    with self.assertRaises(InvoiceMappingError):validated_output_stock_snapshot(conn,item)
+            conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',(json.dumps(raw),sid))
+            conn.execute('UPDATE outgoing_source_invoices SET total_amount=112001 WHERE id=?',(sid,))
+            with self.assertRaises(InvoiceMappingError):validated_output_stock_snapshot(conn,item)
+
+    def test_signed_weight_source_matches_provider_ordinals_not_array_order(self):
+        sid,item,did,raw=self.saved_portal_source()
+        with server.db() as conn:
+            # A second ordinary line makes an array reversal observable.
+            original=dict(conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=?',(did,)).fetchone())
+            _, extra=support.OutgoingReadinessTests.add_batch(conn,'2026-09-02',[{'qty':1,'sell_price':8000}])
+            original.pop('id'); original.update(order_id=extra[0],qty=1,unit='Gói',unit_price=8000,amount=8000)
+            columns=list(original)
+            conn.execute('INSERT INTO outgoing_invoice_lines ('+','.join(columns)+') VALUES ('+','.join('?' for _ in columns)+')',list(original.values()))
+            conn.execute('UPDATE outgoing_invoice_drafts SET subtotal=120000,total_amount=120000 WHERE id=?',(did,))
+            conn.execute('UPDATE outgoing_source_invoice_items SET line_index=2 WHERE id=?',(item,))
+            conn.execute("""INSERT INTO outgoing_source_invoice_items(invoice_id,line_index,source_item_code,source_item_name,source_unit,qty,unit_price,
+                amount,tax_rate,product_code,mapping_status,stock_qty,stock_unit_price,conversion_factor,inventory_eligible)
+                VALUES(?,1,'HH-01','Nấm kim châm','Gói',1,8000,8000,'KKKNT','HH-01','mapped',1,8000,1,1)""",(sid,))
+            raw['invoiceDetail']=[{**raw['invoiceDetail'][0],'ordinalNumber':2,'unitCode':'Gói','quantity':1,'unitPrice':8000},raw['invoiceDetail'][0]]
+            conn.execute('UPDATE outgoing_source_invoices SET subtotal=120000,total_amount=120000,raw_json=? WHERE id=?',(json.dumps(raw),sid))
+            self.assertEqual(14,validated_output_stock_snapshot(conn,item)['stock_qty'])
 
 
 if __name__=='__main__':unittest.main()

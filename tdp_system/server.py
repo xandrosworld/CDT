@@ -4582,6 +4582,8 @@ def api_outgoing_actual_weights(order_id=None):
 @app.get('/api/outgoing-invoices/unissued')
 @app.get('/api/outgoing-invoices/unissued.xlsx')
 @app.get('/api/outgoing-invoices/unissued-template.zip')
+@app.post('/api/outgoing-invoices/unissued.xlsx')
+@app.post('/api/outgoing-invoices/unissued-template.zip')
 @app.post('/api/outgoing-invoices/unissued/refresh')
 def api_outgoing_unissued():
     try:
@@ -4595,20 +4597,39 @@ def api_outgoing_unissued():
         party=clean_text(request.args.get('contractor')).upper()
         portion=request.args.get('portion','all')
         if portion not in ('all','waiting'):raise ValueError('Phạm vi hàng chưa xuất không hợp lệ.')
+        fresh_download=request.method=='POST' and not request.path.endswith('/refresh')
+        checked_at=''
+        if fresh_download:
+            try:
+                from .outgoing_source_refresh import refresh_sources
+                from .order_export_scope import business_today
+            except ImportError:
+                from outgoing_source_refresh import refresh_sources
+                from order_export_scope import business_today
+            with db() as conn:
+                if party and not conn.execute('SELECT 1 FROM contractors WHERE code=?',(party,)).fetchone():
+                    raise ValueError('Không tìm thấy nhà thầu đã chọn')
+                first=conn.execute("SELECT MIN(work_date) FROM batches WHERE status='approved'").fetchone()[0]
+            try:
+                refreshed_source=refresh_sources(db,create_minvoice_client,now_iso,start or first or cutoff,max(cutoff,business_today()))
+            except (ValueError,MinvoiceError) as exc:
+                return jsonify(ok=False,error='Chưa cập nhật đủ hóa đơn đã ký nên chưa tải bảng chưa xuất. '+str(exc)),409
+            checked_at=refreshed_source.get('checked_at') or now_iso()
         with db() as conn:
-            if request.method=='POST':conn.execute('BEGIN IMMEDIATE')
+            if request.method=='POST' and not fresh_download:conn.execute('BEGIN IMMEDIATE')
             else:
                 conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
             if party and not conn.execute('SELECT 1 FROM contractors WHERE code=?',(party,)).fetchone():
                 raise ValueError('Không tìm thấy nhà thầu đã chọn')
             refreshed=None
-            if request.method=='POST':
+            if request.method=='POST' and not fresh_download:
                 try:
                     from .outgoing_waiting import refresh_waiting
                 except ImportError:
                     from outgoing_waiting import refresh_waiting
                 refreshed=refresh_waiting(conn,now_iso())
             payload=unissued_payload(conn,cutoff,party,respect_export_choices=True,start=start)
+            payload['source_checked_at']=checked_at
             if refreshed:
                 for warning in refreshed['warnings']:
                     if (not party or not warning['contractor'] or warning['contractor']==party) and warning not in payload['warnings']:

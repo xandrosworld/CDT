@@ -158,6 +158,12 @@ def _contractor_workbook(archive, names, party, details, payload, tax_percent):
         summary.append(['TỔNG CỘNG',*grand])
         summary.append(['Cách tính','Cùng mã, ĐVT, giá, thuế và tính chất cộng lượng; khác giá/thuế giữ dòng riêng.'])
         summary.append(['Đơn vị','Số lượng và đơn giá theo đơn gốc. Dòng đỏ cần kiểm tra ĐVT; chưa tự thay số lượng.'])
+        summary.append(['Đối chiếu tiền','Tiền trong bảng = lượng chưa xuất × giá trên đơn. Nếu giá trên hóa đơn đã ký khác giá đơn, cần đối chiếu khoản chênh riêng; không tự sửa giá hoặc lượng để bù tiền.'])
+        summary.append(['Cập nhật hóa đơn đã ký',payload.get('source_checked_at') or 'Bản dữ liệu đã lưu; chưa cập nhật M-Invoice trong lần tải này.'])
+        warnings=[w['message'] for w in payload.get('warnings',[]) if not w.get('contractor') or w['contractor']==party]
+        if warnings:
+            sheet.cell(footer+2,2,'CHƯA ĐỐI CHIẾU XONG — tổng tiền có thể thay đổi. Xem sheet Tong hop.')
+            for warning in warnings:summary.append(['CẦN ĐỐI CHIẾU',_literal(warning)])
 
         detail=workbook.create_sheet('Chi tiet don')
         detail.append(['Dòng đơn','Ngày đơn','Mã hàng','Tên xuất hóa đơn','ĐVT đơn',
@@ -218,7 +224,7 @@ def unissued_template_zip(payload, template_dir, tax_percent):
             'Dòng đỏ cần kiểm tra ĐVT; không phải mọi dòng đều cần nhập kg. Số lượng và đơn giá giữ theo đơn gốc.',
             'Lượng chưa xuất = đơn đã duyệt sau trả hàng trừ phần hóa đơn đã ký được đối chiếu; tải file chưa làm giảm lượng chưa xuất.',
             'File này để đối chiếu, gồm cả dòng chưa đủ điều kiện. Muốn xuất: dùng Tải bảng kê để up M-Invoice trên web để kiểm tra tồn và hóa đơn đã ký.',
-            'Tải bảng không ghi kho hay ghi thêm doanh thu/công nợ. Dòng xóa riêng trong Excel trước khi ký vẫn chưa xuất trên web.',
+            'Web cập nhật hóa đơn đã ký trước khi tải bảng; hóa đơn mới được đối chiếu và ghi kho một lần. Không ghi thêm doanh thu/công nợ. Dòng xóa riêng trong Excel trước khi ký vẫn chưa xuất trên web.',
         ]
         if waiting:guide.append('File CON_CHO chỉ lấy lượng còn chờ; không lấy phần đã đủ điều kiện đang giữ để xuất.')
         guide.extend('Cần đối chiếu: '+w['message'] for w in payload['warnings'])

@@ -123,6 +123,31 @@ class InvoiceReviewTests(unittest.TestCase):
             self.assertEqual(r.status_code,200,r.json)
             self.assertEqual(refresh.call_args.args[3],'2026-09-01')
 
+    def test_unissued_download_stops_when_signed_source_refresh_fails(self):
+        for path in ('unissued-template.zip','unissued.xlsx'):
+            with patch('tdp_system.outgoing_source_refresh.refresh_sources',side_effect=ValueError('offline')):
+                r=self.client.post('/api/outgoing-invoices/'+path,query_string=self.period)
+            self.assertEqual(r.status_code,409,r.get_json(silent=True))
+            self.assertIn('chưa tải bảng chưa xuất',r.json['error'])
+
+    def test_unissued_download_refreshes_later_signed_invoice_before_export(self):
+        with server.db() as c:
+            c.execute("INSERT INTO outgoing_buyer_profiles(contractor,legal_name,tax_code,address,updated_at) VALUES('NT-A','Khách kiểm thử','0209999999','Địa chỉ','now')")
+        raw=documented_minvoice_invoice(3)
+        raw.update(inv_invoiceIssuedDate='2026-09-08',tgtcthue=140,tgtthue=0,tgtttbso=140,inv_buyerAddressLine='Địa chỉ')
+        raw['details'][0].update(inv_itemCode='HH-01',inv_itemName='Hàng hóa 01',inv_unitCode='kg',inv_quantity=7,inv_unitPrice=20,inv_TotalAmountWithoutVat=140,inv_vatAmount=0,inv_TotalAmount=140,ma_thue='0')
+        before=self.client.get('/api/outgoing-invoices/unissued',query_string=self.period).json
+        self.assertEqual(7,sum(r['unissued_qty'] for r in before['details']))
+        with patch.object(server,'create_minvoice_client',return_value=OutputFixtureMsmi([raw])):
+            response=self.client.post('/api/outgoing-invoices/unissued-template.zip',query_string=self.period)
+        self.assertEqual(response.status_code,200,response.get_json(silent=True))
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            book=load_workbook(io.BytesIO(archive.read(next(n for n in archive.namelist() if n.endswith('.xlsx')))))
+            self.assertEqual(5,book.active['D2'].value)
+            checked=next(row[1] for row in book['Tong hop'].values if row[0]=='Cập nhật hóa đơn đã ký')
+            self.assertNotIn('chưa cập nhật',checked)
+            book.close()
+
     def test_signed_fifo_is_computed_before_filtering_order_dates(self):
         with server.db() as c:
             c.execute("INSERT INTO outgoing_buyer_profiles(contractor,legal_name,tax_code,address,updated_at) VALUES('NT-A','Khách kiểm thử','0209999999','Địa chỉ','now')")
