@@ -3750,7 +3750,7 @@ def batch_mutation_blocker(conn, batch_id: int) -> str:
     """Explain why an order batch is immutable once downstream documents exist."""
     bk_blocked = batch_bk_approval.mutation_blocker(conn, batch_id)
     if bk_blocked:
-        return bk_blocked
+        return bk_blocked + ' Nếu chỉ sửa người bán/tách lượng giữa người bán, vào Chọn hàng lập bảng kê / phần chờ → Cập nhật người bán từ Excel; không cần tải đè đơn.'
     draft = conn.execute(
         """SELECT status,minvoice_status FROM outgoing_invoice_drafts
            WHERE (batch_id=? OR id IN (SELECT draft_id FROM outgoing_consolidated_days WHERE batch_id=?)) AND status!='cancelled'
@@ -5777,6 +5777,11 @@ try:
 except ImportError:
     from purchase_document_selection import register_routes as register_purchase_document_selection
 register_purchase_document_selection(app, globals())
+try:
+    from .purchase_seller_revision import register_routes as register_purchase_sellers
+except ImportError:
+    from purchase_seller_revision import register_routes as register_purchase_sellers
+register_purchase_sellers(app, globals())
 order_worksheet.register(app, globals())
 
 register_physical_inventory_routes(app, {

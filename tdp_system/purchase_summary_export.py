@@ -192,7 +192,7 @@ def _resolved_identity(
 
 def collect_purchase_summary_rows(
     conn: Any, batch: Mapping[str, Any], orders: Iterable[Mapping[str, Any]],
-    *, excluded_rows: list | None = None,
+    *, excluded_rows: list | None = None, apply_seller_updates: bool = True,
 ) -> list[dict[str, Any]]:
     """Project confirmed BK purchase rows without reading a receivable table.
 
@@ -355,6 +355,12 @@ def collect_purchase_summary_rows(
             "Không có dòng mua/BK đã chốt, có số lượng dương và người bán hợp lệ",
             code="no_purchase_summary_rows",
         )
+    if apply_seller_updates:
+        try:
+            from .purchase_seller_revision import apply_revision
+        except ImportError:
+            from purchase_seller_revision import apply_revision
+        return apply_revision(conn,batch,candidates)
     return candidates
 
 
