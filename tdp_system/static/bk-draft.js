@@ -12,13 +12,13 @@
       '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div>' +
       '<p class="muted">Có thể chọn lại tháng 8 hoặc kỳ trước. Lượng tồn âm chỉ để đối chiếu; sửa số lượng theo hàng thực mua. Đơn giá gợi ý bằng 95% giá bán gần nhất của đơn đã duyệt đến ngày đối chiếu, cùng ĐVT. Nếu chưa có đơn, dùng giá hóa đơn bán đã ký và ghi kho cùng ĐVT. Nguồn giá hiện dưới mỗi ô; có thể sửa trước khi tải.</p>' +
       '<div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label>' +
-      '<label>Số bảng kê<input name="reference" maxlength="100" placeholder="Điền theo chứng từ"></label>' +
+      '<label>Số bảng kê<input name="reference" maxlength="100" placeholder="Nhập số của bảng kê đang lập" aria-describedby="bk-reference-help"><small id="bk-reference-help">Số để nhận biết bảng kê này; nhập theo cách đánh số chị đang dùng.</small></label>' +
       '<label>Người bán chung<input name="source_party" list="bk-supplement-sellers" maxlength="150" placeholder="Chọn tên trong danh mục"></label><datalist id="bk-supplement-sellers"></datalist></div>' +
       '<details><summary>Đã sửa file Excel: mở lại tại đây</summary><input name="import_file" type="file" accept=".xlsx" aria-label="File bảng kê bổ sung đã sửa"><button class="btn btn-outline" data-bk="file">Đọc file đã sửa</button><p>Đọc file chưa ghi kho. Xem bộ bảng kê rồi xác nhận bên dưới.</p></details>' +
       '<div class="bk-draft-controls"><label>Thêm hàng ngoài danh sách tồn âm<input name="search" placeholder="Tìm theo mã hoặc tên hàng"></label>' +
       '<button class="btn btn-outline" data-bk="search">Tìm hàng</button><select name="product" aria-label="Kết quả tìm hàng"></select>' +
       '<button class="btn btn-outline" data-bk="add">Thêm dòng</button></div>' +
-      '<p class="bk-draft-status" role="status"></p><div class="bk-draft-table"></div>' +
+      '<p class="bk-draft-status" role="status"></p><div class="bk-draft-issues" role="alert" hidden></div><div class="bk-draft-table"></div>' +
       '<div class="bk-draft-controls"><button class="btn btn-outline" data-bk="all">Chọn tất cả</button>' +
       '<button class="btn btn-outline" data-bk="none">Bỏ chọn</button>' +
       '<button class="btn btn-primary" data-bk="excel">Tải Excel để nhập lại</button>' +
@@ -26,9 +26,60 @@
       '<p class="muted">Thiếu thông tin vẫn tải Excel để điền tiếp. Để in bộ bảng kê, cần đủ ngày mua thực tế, số bảng kê, người bán trong danh mục, lượng và giá. Hạn mức cộng chung 5.000.000đ/người/ngày với các bảng kê đã ghi kho.</p>' +
       '<div class="bk-draft-preview"></div>';
     document.body.appendChild(dialog); dialog.showModal();
-    var products = [], busy = false;
+    var products = [], busy = false, issues = [], focusAfterAction = null;
     function field(name) { return dialog.querySelector('[name="' + name + '"]'); }
     function status(text, error) { var el=dialog.querySelector('.bk-draft-status');el.textContent=text;el.style.color=error?'#ad2424':''; }
+    function focusIssue(target) {
+      if (!target || !target.isConnected) return;
+      var details=target.closest('details');if(details)details.open=true;
+      target.scrollIntoView({block:'center',inline:'center'});target.focus({preventScroll:true});
+    }
+    function clearIssues() {
+      issues=[];
+      dialog.querySelectorAll('[aria-invalid="true"]').forEach(function(el){el.removeAttribute('aria-invalid');});
+      var box=dialog.querySelector('.bk-draft-issues');box.hidden=true;box.innerHTML='';
+    }
+    function showIssues(items) {
+      clearIssues();issues=items;
+      var box=dialog.querySelector('.bk-draft-issues');box.hidden=false;
+      box.innerHTML='<strong>Cần bổ sung hoặc sửa '+items.length+' mục:</strong><ul>'+items.map(function(item,i){
+        if(item.target)item.target.setAttribute('aria-invalid','true');
+        return '<li><span>'+esc(item.message)+'</span><button type="button" class="btn btn-outline" data-bk-fix="'+i+'">'+esc(item.label)+'</button></li>';
+      }).join('')+'</ul>';
+      focusAfterAction=items[0].target;
+    }
+    function rowField(i,key) {return dialog.querySelector('tr[data-row="'+i+'"] [data-field="'+key+'"]');}
+    function validatePreview() {
+      var missing=[];
+      function add(message,target,label){missing.push({message:message,target:target,label:label});}
+      if(!field('document_date').value)add('Chưa điền Ngày mua thực tế.',field('document_date'),'Điền ngày mua');
+      else if(loadedPeriod && (field('document_date').value<loadedPeriod.from || field('document_date').value>loadedPeriod.to))add('Ngày mua thực tế phải nằm trong khoảng Từ ngày – Đến ngày đang chọn.',field('document_date'),'Sửa ngày mua');
+      if(!field('reference').value.trim())add('Chưa điền Số bảng kê. Đây là số của bảng kê đang lập, không phải tìm ở bảng khác.',field('reference'),'Điền số bảng kê');
+      var noSeller=rows.filter(function(r){return r.selected&&!String(r.source_party||'').trim()&&!field('source_party').value.trim();});
+      if(noSeller.length)add(noSeller.length+' mặt hàng chưa có Người bán / NCC. Điền Người bán chung hoặc điền riêng từng dòng.',field('source_party'),'Điền người bán chung');
+      rows.forEach(function(r,i){
+        if(!r.selected)return;
+        var title=r.product_name+' ('+r.product_code+')';
+        if(!String(r.qty==null?'':r.qty).trim() || !Number.isFinite(Number(r.qty)) || Number(r.qty)<=0)add(title+': Lượng mua bổ sung phải lớn hơn 0.',rowField(i,'qty'),'Sửa lượng mua');
+        if(!String(r.unit_cost==null?'':r.unit_cost).trim() || !Number.isFinite(Number(r.unit_cost)) || Number(r.unit_cost)<=0)add(title+': Đơn giá phải lớn hơn 0.',rowField(i,'unit_cost'),'Sửa đơn giá');
+      });
+      if(missing.length){var error=new Error('Chưa thể xem bảng kê. Bấm nút bên dưới để đến đúng ô cần sửa.');error.issues=missing;throw error;}
+    }
+    function errorIssues(message) {
+      var target=null,label='Đến chỗ cần sửa';
+      if(/Số tham chiếu|Số bảng kê/.test(message)){target=field('reference');label='Điền số bảng kê';}
+      else if(/Ngày mua thực tế/.test(message)){target=field('document_date');label='Sửa ngày mua';}
+      else if(/Từ ngày|Đến ngày/.test(message)){target=field('from');label='Sửa khoảng ngày';}
+      else if(/Xem hàng tồn âm|xem hàng tồn âm/.test(message)){target=dialog.querySelector('[data-bk="load"]');label='Đến nút xem hàng tồn âm';}
+      else if(/Chọn ít nhất một dòng/.test(message)){target=rowField(0,'selected');label='Đến danh sách chọn hàng';}
+      else if(/Chọn file Excel/.test(message)){target=field('import_file');label='Chọn file Excel';}
+      else if(/Nhập mã hoặc tên hàng|Tìm và chọn hàng/.test(message)){target=field('search');label='Tìm hàng';}
+      else if(/Người bán|hạn mức/.test(message)){
+        var i=rows.findIndex(function(r){var seller=String(r.source_party||field('source_party').value).trim();return r.selected&&seller&&message.indexOf(seller)>=0;});
+        if(i>=0){target=rowField(i,/hạn mức/.test(message)?'qty':'source_party');label=/hạn mức/.test(message)?'Sửa lượng hàng của người bán':'Sửa người bán';}
+      }
+      return target?[{message:message,target:target,label:label}]:[];
+    }
     function collect() {
       dialog.querySelectorAll('tr[data-row]').forEach(function(tr) {
         var row=rows[Number(tr.dataset.row)]; row.selected=tr.querySelector('[data-field="selected"]').checked;
@@ -55,6 +106,7 @@
     async function action(name) {
       if (name==='close') {dialog.close();return;}
       if (busy) return;
+      clearIssues();focusAfterAction=null;
       busy=true; dialog.querySelectorAll('button').forEach(function(b){if(b.dataset.bk!=='close')b.disabled=true;});
       dialog.querySelectorAll('input,select').forEach(function(el){el.disabled=true;});
       try {
@@ -94,8 +146,9 @@
         } else if(name==='excel') {
           await options.downloadFile('/api/bk-import/draft/excel',post(payload()));status('Đã tải bảng kê. Kho chưa thay đổi.');
         } else if(name==='preview') {
+          var draft=payload();validatePreview();
           status('Đang tạo bản in…');
-          var preview=await options.api('/api/bk-import/draft/preview',post(payload()));
+          var preview=await options.api('/api/bk-import/draft/preview',post(draft));
           if(!dialog.isConnected)return;
           review=preview;
           var base='/api/documents/'+encodeURIComponent(preview.token);
@@ -111,12 +164,16 @@
           status('Đã ghi nhận bộ bảng kê #'+saved.documentId+'. Không phát sinh đơn bán hoặc hóa đơn bán ra.');
           if(options.onSaved)options.onSaved();
         }
-      } catch(error) {status(error.message,true);}
-      finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});var confirm=dialog.querySelector('[data-bk="confirm"]');if(confirm)confirm.disabled=!field('confirm_actual').checked;}
+      } catch(error) {
+        var message=error.message.replace(/Số tham chiếu/g,'Số bảng kê');
+        status(message,true);var items=error.issues||errorIssues(message);if(items.length)showIssues(items);
+      }
+      finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});var confirm=dialog.querySelector('[data-bk="confirm"]');if(confirm)confirm.disabled=!field('confirm_actual').checked;if(focusAfterAction){focusIssue(focusAfterAction);focusAfterAction=null;}}
     }
-    dialog.addEventListener('click',function(e){var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
+    dialog.addEventListener('click',function(e){var fix=e.target.closest('[data-bk-fix]');if(fix){focusIssue(issues[Number(fix.dataset.bkFix)].target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
     dialog.addEventListener('input',function(e){
       if(e.target.name==='confirm_actor'||e.target.name==='confirm_actual'){var button=dialog.querySelector('[data-bk="confirm"]');if(button)button.disabled=!field('confirm_actual').checked;return;}
+      if(issues.length){clearIssues();status('Đã thay đổi thông tin. Bấm Xem bảng kê tổng & biên nhận để kiểm tra lại.');}
       review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';
     });
     dialog.addEventListener('close',function(){dialog.remove();});

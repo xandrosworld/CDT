@@ -10,3 +10,9 @@
 @media(max-width:650px){.bk-draft-dialog{padding:12px}.bk-draft-controls label{flex:1 1 140px}.bk-draft-controls select[name=product]{max-width:100%}.bk-draft-dialog p{font-size:14px}}
 
 .bk-supplement-confirm{padding:18px;border:1px solid #b8c8cf;background:#f0f6f5;border-radius:8px}.bk-supplement-confirm label{display:block;margin:12px 0}.bk-supplement-confirm input[type=checkbox]{vertical-align:middle}.bk-supplement-paper>summary{padding:12px;font-weight:bold;cursor:pointer}
+.bk-draft-controls small{max-width:260px;font-size:12px;font-weight:normal;color:#526773}
+.bk-draft-issues{border:1px solid #c45b4f;background:#fff6f3;padding:12px;border-radius:6px;margin-bottom:16px}
+.bk-draft-issues[hidden]{display:none!important}.bk-draft-issues ul{margin:8px 0 0;padding-left:20px}
+.bk-draft-issues li{margin:8px 0}.bk-draft-issues li .btn{margin-left:10px;white-space:normal}
+.bk-draft-dialog [aria-invalid=true]{border:2px solid #ad2424;background:#fff6f3}
+.bk-draft-dialog input:focus-visible,.bk-draft-dialog button:focus-visible{outline:3px solid #007f78;outline-offset:3px}
