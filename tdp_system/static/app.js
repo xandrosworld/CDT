@@ -4106,8 +4106,8 @@
       '<button class="btn btn-outline" data-action="preview-selected-documents" ', selectedCount ? '' : 'disabled', '>Xem phần đã chọn</button>',
       '<button class="btn btn-primary" data-action="print-selected-documents" ', selectedCount ? '' : 'disabled', '>In phần đã chọn</button>',
       '<button class="btn btn-outline" data-action="download-selected-documents" ', selectedCount ? '' : 'disabled', '>Tải file đã chọn</button>',
-      state.printingDocument === "purchases" ? '<button class="btn btn-outline" data-action="open-purchase-selection">Chọn hàng lập bảng kê / phần chờ</button><button class="btn btn-outline" data-action="open-bk-draft">Lập bảng kê bổ sung từ tồn âm</button><button class="btn btn-outline" data-action="choose-bk-workbook">Nhập bảng kê bổ sung</button>' : '',
       '</div>',
+      state.printingDocument === "purchases" ? '<div class="compact-controls"><button class="btn btn-primary" data-action="open-purchase-selection">Cập nhật người bán / chọn hàng lập bảng kê</button><button class="btn btn-outline" data-action="open-bk-draft">Lập bảng kê bổ sung từ tồn âm</button><button class="btn btn-outline" data-action="choose-bk-workbook">Nhập bảng kê bổ sung</button></div>' : '',
       state.printingDocument === "purchases" ? '<p class="muted">Để tải bảng kê đầu vào đã ghi kho, quay lại Đơn hàng - bảng kê và chọn Tải bảng kê đầu vào.</p>' : '',
       state.printingDocument === 'deliveries' ? '<label class="print-customer-filter">Khách hàng / bếp <select id="printingCustomer"><option value="">Tất cả bếp</option>' + state.data.master.kitchens.map(function(k) { return '<option value="' + esc(k.code) + '" ' + (state.printingCustomer === k.code ? 'selected' : '') + '>' + esc(k.name || k.code) + '</option>'; }).join('') + '</select></label>' : '', '</div>',
       '<div class="table-wrap print-batch-table"><table><thead><tr><th>Chọn</th><th>',
@@ -7658,10 +7658,14 @@
       openingWorkbookInput.click();
     }
     if (action === "open-purchase-selection") {
+      var purchaseBatchIds=(button.dataset.purchaseBatches||'').split(',').filter(Boolean).map(Number);
+      var purchaseDates=(state.data.batches||[]).filter(function(b){return purchaseBatchIds.includes(Number(b.id));}).map(function(b){return b.work_date;}).sort();
+      var purchaseRetryHost=button.dataset.purchaseRetryHost, purchaseSaved=false;
       await window.TdpPurchaseDocumentSelection({api:api,esc:esc,
-        from:state.view === 'printing' ? state.printingFrom : state.inventoryFrom,
-        to:state.view === 'printing' ? state.printingTo : state.inventoryTo,
-        onSaved:function(){['printingPreview','purchaseDocumentPreview'].forEach(function(id){var el=document.getElementById(id);if(el)el.innerHTML='Lựa chọn đã thay đổi. Bấm xem lại để lấy bản mới.';});}});
+        from:purchaseDates[0] || (state.view === 'printing' ? state.printingFrom : state.inventoryFrom),
+        to:purchaseDates[purchaseDates.length-1] || (state.view === 'printing' ? state.printingTo : state.inventoryTo),
+        onSaved:function(){purchaseSaved=true;['printingPreview','purchaseDocumentPreview'].forEach(function(id){var el=document.getElementById(id);if(el)el.innerHTML='Lựa chọn đã thay đổi. Đóng cửa sổ chọn hàng rồi xem lại bản in.';});},
+        onClosed:function(){if(purchaseSaved&&purchaseRetryHost&&purchaseBatchIds.length)window.TDPDocuments.open({kind:'purchases',selections:purchaseBatchIds.map(function(id){return {batch_id:id};})},purchaseRetryHost);}});
       return;
     }
     if (action === "open-bk-draft") {

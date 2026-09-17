@@ -5,7 +5,9 @@
   async function checked(response) {
     if (!response.ok) {
       var error = await response.json().catch(function () { return {}; });
-      throw new Error(error.error || 'Không lấy được chứng từ; hãy thử lại.');
+      var failure = new Error(error.error || 'Không lấy được chứng từ; hãy thử lại.');
+      failure.code = error.code || '';
+      throw failure;
     }
     return response;
   }
@@ -184,6 +186,11 @@
     } catch (error) {
       if (isCurrent()) {
         host.innerHTML = '<div class="document-error" role="alert">' + esc(error.message) + '</div>';
+        if (body.kind === 'purchases' && ['purchase_document_selection_required','receipt_daily_limit_exceeded'].includes(error.code)) {
+          var batchIds = (body.selections || []).map(function (s) { return Number(s.batch_id); }).filter(Number.isFinite);
+          host.innerHTML += '<p>Mở tại đây để kiểm tra người bán và lượng hàng được chọn. Nếu đã sửa người bán trong Excel, cập nhật file ở mục “Cập nhật người bán từ Excel” rồi lưu để bản in dùng thông tin mới.</p>' +
+            '<button type="button" class="btn btn-primary" data-action="open-purchase-selection" data-purchase-batches="' + esc(batchIds.join(',')) + '" data-purchase-retry-host="' + esc(hostId) + '">Xử lý người bán / chọn hàng để in</button>';
+        }
       }
     }
   }

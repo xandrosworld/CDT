@@ -163,7 +163,7 @@
     dialog.addEventListener('click', function (event) { var button = event.target.closest('[data-select-action]'); if (button) action(button.dataset.selectAction, button.dataset.pendingDate); });
     dialog.addEventListener('cancel', function (event) { event.preventDefault(); action('close'); });
     var refreshTimer = window.setInterval(function () { if (dialog.open && !busy && !dirty && !sellerPreview && !document.hidden) action('pending-refresh'); }, 60000);
-    dialog.addEventListener('close', function () { window.clearInterval(refreshTimer); dialog.remove(); });
+    dialog.addEventListener('close', function () { window.clearInterval(refreshTimer); dialog.remove(); if(options.onClosed)options.onClosed(); });
     await action('load');
   };
 })();
