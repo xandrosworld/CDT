@@ -817,6 +817,11 @@ def init_contract_schema(conn, opening_template_path=None):
     except ImportError:
         from outgoing_contractors import SCHEMA as CONTRACTOR_CHOICE_SCHEMA
     conn.executescript(CONTRACTOR_CHOICE_SCHEMA)
+    try:
+        from .outgoing_amount_settlement import SCHEMA as AMOUNT_SETTLEMENT_SCHEMA
+    except ImportError:
+        from outgoing_amount_settlement import SCHEMA as AMOUNT_SETTLEMENT_SCHEMA
+    conn.executescript(AMOUNT_SETTLEMENT_SCHEMA)
     conn.execute(
         "INSERT OR IGNORE INTO settings(key,value) VALUES('installation_uuid',?)",
         (uuid.uuid4().hex.upper(),),

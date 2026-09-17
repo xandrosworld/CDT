@@ -5784,6 +5784,11 @@ try:
 except ImportError:
     from purchase_seller_revision import register_routes as register_purchase_sellers
 register_purchase_sellers(app, globals())
+try:
+    from .outgoing_amount_settlement import register_routes as register_amount_settlement
+except ImportError:
+    from outgoing_amount_settlement import register_routes as register_amount_settlement
+register_amount_settlement(app, globals())
 order_worksheet.register(app, globals())
 
 register_physical_inventory_routes(app, {

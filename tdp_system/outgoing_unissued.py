@@ -65,16 +65,24 @@ def _remap_review_warning(invoice,contractor):
             'chưa tự đối trừ theo mã kho mới.'}
 
 
-def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
+def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_order_allocations=None):
     """Prefer explicit order links; otherwise allocate mapped M-Invoice FIFO once."""
     orders=[dict(r) for r in conn.execute("SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id WHERE b.status='approved' AND o.work_date<=? ORDER BY o.work_date,o.id",(asof,))]
-    quantities=defaultdict(float);warnings=[];linked=set()
+    try:
+        from .outgoing_amount_settlement import coverage
+    except ImportError:
+        from outgoing_amount_settlement import coverage
+    money_orders, money_invoices, money_warnings = coverage(conn)
+    orders = [o for o in orders if o['id'] not in money_orders]
+    quantities=defaultdict(float);warnings=list(money_warnings);linked=set(money_invoices)
     remapped_sources=_stock_only_remap_sources(conn)
     sources=[dict(r) for r in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND invoice_date<=? ORDER BY invoice_date,id",(asof,))]
     by_identity=defaultdict(list)
     for s in sources:by_identity[_identity(s)].append(s)
     for d in conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE status='issued' AND COALESCE(issued_invoice_date,invoice_date)<=?",(asof,)):
         matching=by_identity.get(_identity(d,True),[])
+        if matching and all(s['id'] in money_invoices for s in matching):
+            continue
         if matching and any(s['source_status_class'] in ('cancelled','replaced','adjusted') for s in matching):
             warnings.append({'contractor':d['contractor'],'message':'Hóa đơn '+str(d['issued_invoice_number'])+' đã thay đổi trạng thái trên M-Invoice; cần đối chiếu.'})
             linked.update(s['id'] for s in matching);continue
@@ -91,7 +99,12 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
                 if s['source_status_class']!='issued' or s['sync_status']!='synced' or set(local)!=set(posted) or any(abs(q-posted.get(code,0))>1e-8 for code,q in local.items()):
                     warnings.append({'contractor':d['contractor'],'message':'Hóa đơn '+str(d['issued_invoice_number'])+' chưa khớp trạng thái/lượng giữa xác nhận và M-Invoice; số chưa xuất cần đối chiếu.'})
         linked.update(s['id'] for s in matching)
-        for r in conn.execute('SELECT order_id,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):quantities[r['order_id']]+=r['qty']
+        for r in conn.execute('SELECT order_id,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
+            quantities[r['order_id']]+=r['qty']
+            if source_order_allocations is not None:
+                for s in matching:
+                    target=source_order_allocations.setdefault(s['id'],{})
+                    target[r['order_id']]=target.get(r['order_id'],0)+r['qty']
     profiles=defaultdict(list)
     for r in conn.execute("SELECT contractor,tax_code FROM outgoing_buyer_profiles WHERE TRIM(COALESCE(tax_code,''))!=''"):
         profiles[r['tax_code'].strip().upper()].append(r['contractor'])
@@ -126,6 +139,9 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None):
                 if o['work_date']>s['invoice_date']:continue
                 need=max(o['actual_delivered']-o['customer_return_qty']-quantities[o['id']],0)
                 take=min(need,remaining);quantities[o['id']]+=take;remaining-=take
+                if take and source_order_allocations is not None:
+                    target=source_order_allocations.setdefault(s['id'],{})
+                    target[o['id']]=target.get(o['id'],0)+take
                 if external_quantities is not None:external_quantities[o['id']]=external_quantities.get(o['id'],0)+take
                 if remaining<=1e-8:break
             if remaining>1e-8:
@@ -138,6 +154,12 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
     issued,warnings=issued_allocations(conn)
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
         WHERE b.status='approved' AND o.work_date<=? AND o.work_date>=? AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(asof,start,contractor,contractor))]
+    try:
+        from .outgoing_amount_settlement import coverage, history
+    except ImportError:
+        from outgoing_amount_settlement import coverage, history
+    money_orders, _, _ = coverage(conn)
+    orders = [o for o in orders if o['id'] not in money_orders]
     excluded=set()
     line_choices=[]
     if respect_export_choices:
@@ -199,6 +221,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
     except ImportError:
         from outgoing_signed_stock_review import signed_stock_issues
     return {'from':start,'asof':asof,'contractor':contractor,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
+            'amount_settlements': [r for r in history(conn, contractor) if r['date_from'] <= asof and r['date_to'] >= start],
             'line_choices':line_choices,
             'pending_rows':pending,'pending_order_rows':sum(r['waiting_qty']>1e-8 for r in details),
             'signed_stock_issues':signed_stock_issues(conn,contractor),
@@ -232,6 +255,13 @@ def unissued_workbook(payload):
         review=w.create_sheet('Hoa don da ky can doi chieu')
         review.append(['Hóa đơn','Ngày hóa đơn','Thời điểm ký','Nhà thầu','Mã hàng','Tên hàng','ĐVT','Lượng hóa đơn đã ký','Tồn đầu','Đầu vào','Tồn hiện tại','Cần xử lý'])
         for r in payload['signed_stock_issues']:review.append([r[k] for k in ('invoice_number','invoice_date','signed_at','contractor','product_code','product_name','unit','signed_qty','opening_qty','input_qty','closing_qty','message')])
+    if payload.get('amount_settlements'):
+        settled = w.create_sheet('Da doi tru theo tien')
+        settled.append(['Bản đối trừ', 'Nhà thầu', 'Từ ngày đơn', 'Đến ngày đơn', 'Tổng tiền gồm thuế', 'Hóa đơn đã ký', 'Người xác nhận', 'Trạng thái'])
+        for r in payload['amount_settlements']:
+            settled.append([r['id'], r['contractor'], r['date_from'], r['date_to'], r['amount'],
+                            ', '.join(i['invoice_series']+'/'+i['invoice_number'] for i in r['invoices']),
+                            r['actor'], 'Cần đối chiếu lại' if r['needs_review'] else 'Đã đối trừ theo tiền; không xác nhận khớp mặt hàng'])
     for s in w:
         s.freeze_panes='A2';s.auto_filter.ref=s.dimensions
         for cell in s[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='163247')

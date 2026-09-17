@@ -35,9 +35,14 @@ def selected_orders(conn, rows):
 
 
 def excluded_order_ids(conn):
+    try:
+        from .outgoing_amount_settlement import coverage
+    except ImportError:
+        from outgoing_amount_settlement import coverage
+    settled, _, _ = coverage(conn)
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='outgoing_order_choices'").fetchone():
-        return set()
-    return {r[0] for r in conn.execute('SELECT order_id FROM outgoing_order_choices WHERE enabled=0')}
+        return settled
+    return settled | {r[0] for r in conn.execute('SELECT order_id FROM outgoing_order_choices WHERE enabled=0')}
 
 
 def assert_draft_lines_enabled(conn, draft_id):
@@ -138,6 +143,11 @@ def save_choices(conn, body, timestamp):
 
 def line_choices_payload(conn, cutoff, contractor='', *, orders=None, issued=None):
     try:
+        from .outgoing_amount_settlement import coverage
+    except ImportError:
+        from outgoing_amount_settlement import coverage
+    money_settled, _, _ = coverage(conn)
+    try:
         from .outgoing_unissued import issued_allocations
     except ImportError:
         from outgoing_unissued import issued_allocations
@@ -156,6 +166,8 @@ def line_choices_payload(conn, cutoff, contractor='', *, orders=None, issued=Non
         WHERE d.status='draft' AND d.minvoice_status IN ('saved','saving','unknown')""")}
     result=[]
     for o in orders:
+        if o['id'] in money_settled:
+            continue
         remaining=max(float(o['actual_delivered'] or 0)-float(o['customer_return_qty'] or 0)-issued.get(o['id'],0),0)
         if o['contractor'] in excluded or remaining<=1e-8:
             continue

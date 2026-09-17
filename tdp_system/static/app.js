@@ -3270,6 +3270,8 @@
     var rows=all.filter(function(r){return !search||[r.contractor,r.product_code,r.invoice_name].join(' ').toLocaleLowerCase().includes(search);});
     var page=Math.min(state.unissuedPage||0,Math.max(0,Math.ceil(rows.length/50)-1));state.unissuedPage=page;
     return '<section class="card" id="unissuedReconciliation" data-loaded="'+(d?'true':'false')+'"><div class="card-head"><div><h3>Excel toàn bộ phần chưa xuất</h3><p>Đơn đã duyệt trong khoảng ngày chọn − phần hóa đơn đã ký được đối chiếu.</p></div></div><div class="card-body"><p class="code-note"><strong>Phạm vi file: '+esc(invoiceScopeLabel())+'</strong>'+' · '+esc(dateVN(f.from)+' → '+dateVN(f.to))+'</p>'+
+      '<p><button class="btn btn-outline" type="button" data-money-settlement>Đã ký trực tiếp trên M-Invoice: đối trừ theo tiền</button></p>'+
+      (d&&(d.amount_settlements||[]).length?'<p><strong>Đối trừ theo tiền:</strong> '+d.amount_settlements.map(function(r){return esc(r.contractor+' · '+r.date_from+' → '+r.date_to)+' · '+money(r.amount)+' · '+(r.needs_review?'Cần đối chiếu lại':'Đã xuất đủ theo tiền');}).join('<br>')+'</p>':'')+
       '<form id="unissuedForm"><button class="btn btn-primary" type="submit" value="all-template"'+(!all.length||state.unissuedBusy||state.invoiceExportBusy||exportChoicesDirty()||state.invoiceReviewPreview?' disabled':'')+'>Tải Excel chưa xuất · '+esc(f.contractor||'tất cả nhà thầu đã tích')+'</button></form>'+(f.contractor?'<p>Đang lọc '+esc(f.contractor)+', nên file chỉ có nhà thầu này. <button type="button" class="btn btn-outline" data-invoice-all-parties'+(exportChoicesDirty()||state.unissuedBusy||state.invoiceExportBusy?' disabled':'')+'>Chuyển sang tất cả nhà thầu đã tích</button></p>':'')+'<p>Mỗi nhà thầu có hàng chưa xuất trong phạm vi chọn được một file, cùng mẫu 13 cột, gộp các thuế suất và có tổng tiền sẵn. Số lượng, đơn giá theo đơn gốc để chị kiểm tra trước khi lập hóa đơn.</p>'+
       (d?'<p><strong>Nhà thầu có dữ liệu trong file ('+fileParties.length+'):</strong> '+esc(fileParties.join(', ')||'Chưa có dòng trong phạm vi này')+'.</p>':'')+
       '<p id="outputSyncStatus" role="status" class="'+((state.outputSyncStatus||{}).attention?'warning-summary':'muted')+'">'+esc(outputSyncText(state.outputSyncStatus))+'</p>'+
@@ -7001,6 +7003,12 @@
     if (event.target.closest('.invoice-mapping-input')) closeMsmiProductOptions();
   });
   content.addEventListener("click", function (event) {
+    if(event.target.closest('[data-money-settlement]')){
+      if(exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy){showToast('Lưu lựa chọn đang sửa trước khi đối trừ tiền.',true);return;}
+      var amountScope=pendingScope();
+      if(!amountScope.contractor){showToast('Chọn một nhà thầu và khoảng ngày đơn cần đối trừ trước.',true);return;}
+      window.TdpAmountSettlement({api:api,esc:esc,scope:amountScope,onSaved:function(){state.preparedInvoices=null;return loadUnissuedScope(false);}});return;
+    }
     if(event.target.closest('[data-invoice-next]')){openInvoiceNextStep();return;}
     var unitAction=event.target.closest('[data-invoice-unit]');
     if(unitAction){openInvoiceUnitEditor(unitAction.dataset.invoiceUnit,Number(unitAction.dataset.orderId)||0);return;}

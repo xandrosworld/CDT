@@ -488,6 +488,16 @@ def validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, in
 
 
 def validate_demand_orders(conn, orders: list[dict[str, Any]]) -> None:
+    try:
+        from .outgoing_amount_settlement import coverage
+    except ImportError:
+        from outgoing_amount_settlement import coverage
+    money_orders, _, reviews = coverage(conn)
+    if any((r.get('order_id') or r.get('id')) in money_orders for r in orders):
+        raise OutgoingReadinessError('Đơn đã được xác nhận xuất đủ theo tiền; không được tạo hóa đơn lần nữa.', code='amount_already_settled')
+    parties = {r.get('contractor') for r in orders}
+    if any(r['contractor'] in parties for r in reviews):
+        raise OutgoingReadinessError('Đối trừ tiền đã thay đổi nguồn; kiểm tra lại trước khi lập tiếp.', code='amount_settlement_changed')
     known_codes = {
         str(row["code"] or "").strip()
         for row in conn.execute("SELECT code FROM products")
