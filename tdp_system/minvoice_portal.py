@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from http.cookiejar import Cookie, CookieJar
@@ -253,6 +254,10 @@ class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
             if not isinstance(remote_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", remote_id) or remote_id in seen:
                 raise MinvoiceError("Portal M-Invoice trả định danh trùng hoặc không hợp lệ")
             seen.add(remote_id)
+        # Fetch complete details with bounded read-only concurrency. Keep list
+        # order and every identity/status check; never accept a partial page.
+        def read_row(row):
+            remote_id = row['id']
             if include_details:
                 detail = self._portal_json("GET", "app/invoice/" + quote(remote_id, safe="") + "/detail")
                 if detail.get("id") != remote_id or any(detail.get(k) != row.get(k) for k in (
@@ -266,7 +271,12 @@ class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
                 raise MinvoiceError("Portal M-Invoice trả hóa đơn khác công ty, ký hiệu hoặc khoảng ngày đã chọn")
             if include_details and not isinstance(detail.get("invoiceDetail"), list):
                 raise MinvoiceError("Portal M-Invoice thiếu chi tiết hóa đơn")
-            output.append(normalize_portal_document(detail))
+            return normalize_portal_document(detail)
+        if include_details and len(rows) > 1:
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix='minvoice-read') as pool:
+                output = list(pool.map(read_row, rows))
+        else:
+            output = [read_row(row) for row in rows]
         return {"ok": True, "code": "00", "data": output, "total": total}
 
 

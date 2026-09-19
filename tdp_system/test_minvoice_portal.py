@@ -104,6 +104,31 @@ class PortalTests(unittest.TestCase):
         self.assertEqual(params['SkipCount'],2)
         self.assertEqual(params['fromDate'],'2026-08-01')
 
+    def test_parallel_detail_reads_keep_order_and_reject_partial_or_changed_page(self):
+        import threading
+        c=client();c._token='fixture'
+        docs=[dict(document(),id=f'00000000-0000-0000-0000-{n:012d}',invoiceNumber=n) for n in range(1,9)]
+        barrier=threading.Barrier(4,timeout=5)
+        active=0;peak=0;lock=threading.Lock()
+        def read(method,path,**kw):
+            nonlocal active,peak
+            self.assertEqual(method,'GET')
+            if path=='app/invoice':return {'items':docs,'totalCount':len(docs)}
+            with lock:active+=1;peak=max(peak,active)
+            barrier.wait()
+            with lock:active-=1
+            return next(d for d in docs if d['id'] in path)
+        c._portal_json=read
+        result=c.get_outgoing_invoices('2026-08-01','2026-08-31','1C26TYY')
+        self.assertEqual([r['invoiceNumber'] for r in result['data']],list(range(1,9)))
+        self.assertEqual(peak,4)
+        def changed(method,path,**kw):
+            if path=='app/invoice':return {'items':docs,'totalCount':len(docs)}
+            d=next(d for d in docs if d['id'] in path)
+            return dict(d,totalAmount=0) if d['invoiceNumber']==5 else d
+        c._portal_json=changed
+        with self.assertRaises(MinvoiceError):c.get_outgoing_invoices('2026-08-01','2026-08-31','1C26TYY')
+
     def test_rejects_other_company_date_serial_and_changed_totals(self):
         for key,val in [('sellerTaxCode','different'),('invoiceDate','2026-09-01'),('invoiceSerial','1C25TYY'),('totalAmount',123)]:
             c=client(); c._token='fixture'; d=document(); changed=dict(d,**{key:val})

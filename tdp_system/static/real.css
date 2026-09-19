@@ -969,6 +969,13 @@ body { min-width: 320px; }
 #unitReviewSection td{white-space:normal;vertical-align:top}
 
 .invoice-workflow-actions{grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.invoice-six-steps{grid-column:1/-1;width:100%;padding:12px;background:#f0f7f6;border:1px solid #cbdedb;border-radius:8px;box-sizing:border-box}
+.invoice-six-steps .invoice-workflow-actions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.invoice-six-steps .btn{white-space:normal;min-height:48px;height:auto;line-height:1.4}
+.prepared-picker{display:flex;gap:12px;align-items:center;margin-top:12px;max-width:800px}
+.prepared-picker select{flex:1;min-width:0}
+@media(max-width:1100px){.invoice-six-steps .invoice-workflow-actions{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:600px){.invoice-six-steps .invoice-workflow-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.prepared-picker{display:block}}
 .invoice-workflow #orderInvoiceExportForm{display:grid;grid-template-columns:minmax(200px,1fr) repeat(2,180px);align-items:end}
 .invoice-workflow #orderInvoiceExportForm label{min-width:0;flex:initial}
 .invoice-workflow #orderInvoiceExportForm input{box-sizing:border-box;width:100%}

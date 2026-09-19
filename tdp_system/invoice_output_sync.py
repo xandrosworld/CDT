@@ -1048,9 +1048,15 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
         invoice['can_edit_mapping'] = output_mapping_allowed(invoice)
         invoice['quantity_policy'] = 'source_quantity'
         invoice['amount_review'] = output_amount_review(invoice)
+        invoice['source_created_at'] = ''
+        invoice['source_signed_at'] = ''
         try:
             raw = json.loads(invoice['raw_json'])
             invoice['source_document_role'] = portal_document_role(raw) if raw.get('_tdp_source_contract') == 'minvoice_portal_v1' else ''
+            if raw.get('_tdp_source_contract') == 'minvoice_portal_v1':
+                for field, source in [('source_created_at', 'creationTime'), ('source_signed_at', 'dateSign')]:
+                    if isinstance(raw.get(source), str):
+                        invoice[field] = raw[source]
         except (TypeError,ValueError,AttributeError):
             invoice['source_document_role'] = ''
         for key in ("identity_key", "remote_id", "business_key", "raw_json"):

@@ -149,6 +149,19 @@ class InvoiceInventoryLedgerTests(unittest.TestCase):
                 )
         return invoice_id, remote, client, batch, item_ids
 
+    def test_bulk_dated_stock_keeps_future_receipts_and_lowest_balance_rule(self):
+        from .invoice_inventory import minimum_balances_from, _minimum_balance_from
+        self._input(qty=5)
+        self.conn.execute("UPDATE invoice_inventory_ledger SET txn_date='2026-08-31' WHERE direction='input'")
+        invoice_id, *_ = self._output(qty=4)
+        self.conn.execute("UPDATE outgoing_source_invoices SET invoice_date='2026-08-20' WHERE id=?", (invoice_id,))
+        post_output_invoice(self.conn, invoice_id, confirmed=True, now_iso=now_iso)
+        for day, expected in [('2026-08-01', 6), ('2026-08-20', 6), ('2026-08-31', 11)]:
+            values = minimum_balances_from(self.conn, ['P-INV', 'NO-EVENT'], day)
+            self.assertEqual(values, {'P-INV': expected, 'NO-EVENT': 0})
+            self.assertEqual(values['P-INV'], _minimum_balance_from(self.conn, 'P-INV', day))
+        self.assertEqual(minimum_balances_from(self.conn, [], '2026-08-01'), {})
+
     def test_equation_idempotence_and_traceability_ignore_operational_projection(self):
         input_id = self._input()
         # Both rows belong to the operational/compatibility ledger and must not

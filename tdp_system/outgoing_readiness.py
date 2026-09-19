@@ -280,8 +280,13 @@ def canonical_available_stock(conn, as_of: str = "") -> dict[str, dict[str, Any]
                 "Ngày hóa đơn nằm trước kỳ tồn đầu đã chốt; cần kiểm tra và mở lại kỳ trước khi lập tiếp",
                 code="backdated_before_opening_snapshot",
             )
+        try:
+            from .invoice_inventory import minimum_balances_from
+        except ImportError:
+            from invoice_inventory import minimum_balances_from
+        dated_balances = minimum_balances_from(conn, stock, safe_date)
         for code, item in stock.items():
-            item["canonical_qty"] = _minimum_balance_from(conn, code, safe_date)
+            item["canonical_qty"] = dated_balances[code]
 
     for row in conn.execute(
         """SELECT product_code,SUM(qty_out) qty

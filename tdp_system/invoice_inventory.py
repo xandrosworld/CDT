@@ -311,6 +311,34 @@ def _minimum_balance_from(conn, product_code: str, txn_date: str) -> float:
     return min(candidates)
 
 
+def minimum_balances_from(conn, product_codes, txn_date: str) -> dict[str, float]:
+    """Same dated stock rule as _minimum_balance_from, in two set queries."""
+    codes = set(product_codes)
+    if not codes:
+        return {}
+    opening = selected_opening_snapshot(conn, txn_date)
+    source, start = opening if opening else ('', '0001-01-01')
+    balances = dict.fromkeys(codes, 0.0)
+    for row in conn.execute("""SELECT product_code,SUM(qty_in-qty_out) qty
+        FROM inventory_transactions WHERE source_type='OPENING' AND status='posted'
+        AND source_id=? GROUP BY product_code""", (source,)):
+        if row['product_code'] in codes:
+            balances[row['product_code']] = float(row['qty'] or 0)
+    minima = {}
+    for row in conn.execute("""SELECT product_code,txn_date,SUM(qty_delta) delta
+        FROM invoice_inventory_effective_ledger WHERE status='posted' AND txn_date>=?
+        GROUP BY product_code,txn_date ORDER BY product_code,txn_date""", (start,)):
+        code = row['product_code']
+        if code not in codes:
+            continue
+        if row['txn_date'] > txn_date:
+            minima.setdefault(code, balances[code])
+        balances[code] += float(row['delta'] or 0)
+        if row['txn_date'] > txn_date:
+            minima[code] = min(minima[code], balances[code])
+    return {code: minima.get(code, balance) for code, balance in balances.items()}
+
+
 def _audit(conn, *, event_type: str, invoice_id: int, timestamp: str, metadata: dict[str, Any]) -> None:
     if not conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_log'"

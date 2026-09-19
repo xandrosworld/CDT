@@ -63,8 +63,12 @@ except ImportError:
 
 
 def refresh_sources(db_factory, client_factory, now_iso, start, end):
-    with REFRESH_LOCK:
+    if not REFRESH_LOCK.acquire(timeout=3):
+        raise ValueError('Đang có lượt cập nhật M-Invoice khác. Chờ lượt đó hoàn tất rồi bấm lại “4. Kiểm tra tồn và tạo file”; chưa gửi thêm bản nháp.')
+    try:
         return _refresh_sources(db_factory, client_factory, now_iso, start, end)
+    finally:
+        REFRESH_LOCK.release()
 
 
 def _refresh_sources(db_factory, client_factory, now_iso, start, end):
