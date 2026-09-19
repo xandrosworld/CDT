@@ -3105,6 +3105,7 @@
     content.querySelectorAll('.invoice-review-savebar button').forEach(function(el){el.disabled=busy||!((state.unissued||{}).line_choices||[]).length;});
     var groupCount=content.querySelector('[data-invoice-group-count]');if(groupCount){var groupRows=invoiceGroupRows();groupCount.textContent=groupRows.filter(invoiceChoiceEnabled).length+'/'+groupRows.length+' dòng đang chọn · áp dụng trên mọi trang của tờ này';}
     var groupPicker=content.querySelector('#invoiceTaxGroupPick');if(groupPicker)groupPicker.disabled=!!busy;
+    var editGroup=content.querySelector('[data-invoice-edit-group]');if(editGroup)editGroup.disabled=!!busy||!state.unissued;
     var saveLines=content.querySelector('[data-workflow-save]');if(saveLines)saveLines.disabled=busy||!state.invoiceReviewOpen||!((state.unissued||{}).line_choices||[]).length;
   }
 
@@ -3152,6 +3153,13 @@
     var draft=drafts.find(function(r){return r.minvoice_status!=='saved';})||drafts[0];
     state.preparedActiveId=draft?draft.id:null;state.invoiceLinePage=0;state.invoiceLineSearch='';state.invoiceLinesSkipped=false;
   }
+  function openInvoiceGroupChoices() {
+    state.invoiceReviewOpen=true;state.invoiceExcelOpen=false;
+    renderDocuments();
+    var target=content.querySelector('#invoiceLineChoices');
+    if(target){target.setAttribute('tabindex','-1');target.scrollIntoView({block:'start'});target.focus({preventScroll:true});}
+  }
+
   function invoiceLineState(row) {
     if(row.reason)return row.reason;
     var checked=invoiceChoiceEnabled(row),dirty=Object.prototype.hasOwnProperty.call(state.invoiceLineEdits||{},row.order_id);
@@ -3276,7 +3284,7 @@
       '<button type="submit" value="prepare" class="btn btn-primary" aria-describedby="invoicePrepareHelp"'+(disabled||(!invoiceReviewReady()?' disabled':''))+'>4. Kiểm tra tồn và tạo file</button>'+
       '<button type="submit" form="preparedSend'+(r?r.id:'None')+'" value="check" class="btn btn-outline"'+(unavailable||!(state.minvoiceSeries||[]).length?' disabled':'')+'>5. Kiểm tra M-Invoice</button>'+
       '<button type="submit" form="preparedSend'+(r?r.id:'None')+'" value="send" class="btn btn-primary"'+(unavailable||!status||!status.checked||!status.confirmed?' disabled':'')+'>6. Gửi bản nháp lên M-Invoice</button></div>'+
-      (invoiceLineGroups().length?'<label class="prepared-picker">Tờ hóa đơn đang chọn<select id="invoiceTaxGroupPick"'+(busy?' disabled':'')+'>'+invoiceLineGroups().map(function(g){return '<option value="'+esc(g.key)+'"'+(g.key===invoiceSelectedGroup().key?' selected':'')+'>'+esc(g.label)+'</option>';}).join('')+'</select></label><p class="muted">Bảng chọn hàng và bản nháp hiển thị theo đúng nhà thầu, nhóm thuế này. Đổi tờ vẫn giữ các lựa chọn đang sửa.</p>':'')+'</div>';
+      (invoiceLineGroups().length?'<label class="prepared-picker">Tờ hóa đơn đang chọn<select id="invoiceTaxGroupPick"'+(busy?' disabled':'')+'>'+invoiceLineGroups().map(function(g){return '<option value="'+esc(g.key)+'"'+(g.key===invoiceSelectedGroup().key?' selected':'')+'>'+esc(g.label)+'</option>';}).join('')+'</select></label><button type="button" class="btn btn-outline" data-invoice-edit-group'+(busy?' disabled':'')+'>Chọn / bỏ dòng của tờ này</button><p class="muted">Chọn tờ hóa đơn để mở đúng danh sách hàng. Tích giữ hoặc bỏ từng dòng, rồi bấm “2. Lưu lựa chọn mặt hàng”. Đổi tờ vẫn giữ các lựa chọn đang sửa.</p>':'')+'</div>';
   }
 
   function invoiceExportDiagnosticHtml() {
@@ -6897,7 +6905,7 @@
   });
 
   content.addEventListener("change", function (event) {
-    if(event.target.id==='invoiceTaxGroupPick'){selectInvoiceGroup(event.target.value);renderDocuments();return;}
+    if(event.target.id==='invoiceTaxGroupPick'){selectInvoiceGroup(event.target.value);openInvoiceGroupChoices();return;}
     if(event.target.form&&event.target.form.classList.contains('preparedSendForm')){
       var did=Number(event.target.form.dataset.id);state.preparedActiveId=did;state.preparedStatus=state.preparedStatus||{};
       var ps=Object.assign({},state.preparedStatus[did]||{});
@@ -7126,6 +7134,7 @@
     if (event.target.closest('.invoice-mapping-input')) closeMsmiProductOptions();
   });
   content.addEventListener("click", function (event) {
+    if(event.target.closest('[data-invoice-edit-group]')){openInvoiceGroupChoices();return;}
     if(event.target.closest('[data-invoice-go-save]')){var save=content.querySelector('[data-workflow-save]');if(save){save.scrollIntoView({block:'center'});save.focus();}return;}
     var groupChoice=event.target.closest('[data-invoice-group-choice]');
     if(groupChoice){
