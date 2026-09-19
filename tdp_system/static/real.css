@@ -1025,3 +1025,9 @@ body { min-width: 320px; }
 .invoice-review-savebar { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 0; }
 .invoice-review-savebar span { color:#475569; font-size:13px; }
 .invoice-scope-help { grid-column:1 / -1; width:100%; margin:0; color:#475569; }
+
+.invoice-send-controls{margin-top:12px;padding-top:10px;border-top:1px solid #cbdedb}
+.invoice-send-controls p{margin:6px 0}
+.invoice-send-controls .compact-controls{align-items:center;gap:16px}
+.invoice-workflow #orderInvoiceExportForm .invoice-send-controls label{display:flex;flex-direction:row;align-items:center;gap:8px}
+.invoice-workflow #orderInvoiceExportForm .invoice-send-controls input[type=checkbox]{width:auto;flex:none}
