@@ -59,6 +59,32 @@ class MonthlyValuationTests(unittest.TestCase):
         item = next(r for r in self.report()['items'] if r['product_code']=='P1')
         self.assertEqual((0,0,100),tuple(item[k] for k in ('closing_qty','closing_value','average_unit_cost')))
 
+    def test_partial_replenishment_of_unpriced_negative_opening_uses_receipt_price(self):
+        self.conn.execute("ALTER TABLE products ADD COLUMN tax TEXT DEFAULT ''")
+        self.conn.execute("UPDATE products SET tax='KKKNT' WHERE code='P1'")
+        self.conn.execute("UPDATE inventory_transactions SET qty_in=0,qty_out=3,unit_cost=0 WHERE source_id='2026-08' AND product_code='P1'")
+        self.fixture._event('IN','input','2026-08-12',1,20000)
+        before=list(self.conn.iterdump())
+        item=next(r for r in self.report()['items'] if r['product_code']=='P1')
+        self.assertEqual((-2,-40000,20000),tuple(item[k] for k in ('closing_qty','closing_value','average_unit_cost')))
+        self.assertEqual(before,list(self.conn.iterdump()))
+
+    def test_priced_negative_opening_is_not_replaced_by_receipt_price(self):
+        self.conn.execute("ALTER TABLE products ADD COLUMN tax TEXT DEFAULT ''")
+        self.conn.execute("UPDATE products SET tax='KKKNT' WHERE code='P1'")
+        self.conn.execute("UPDATE inventory_transactions SET qty_in=0,qty_out=3,unit_cost=100 WHERE source_id='2026-08' AND product_code='P1'")
+        self.fixture._event('IN','input','2026-08-12',1,120)
+        item=next(r for r in self.report()['items'] if r['product_code']=='P1')
+        self.assertEqual((-2,-180,90),tuple(item[k] for k in ('closing_qty','closing_value','average_unit_cost')))
+
+    def test_replenishment_above_unpriced_shortage_values_only_remaining_stock(self):
+        self.conn.execute("ALTER TABLE products ADD COLUMN tax TEXT DEFAULT ''")
+        self.conn.execute("UPDATE products SET tax='KKKNT' WHERE code='P1'")
+        self.conn.execute("UPDATE inventory_transactions SET qty_in=0,qty_out=3,unit_cost=0 WHERE source_id='2026-08' AND product_code='P1'")
+        self.fixture._event('IN','input','2026-08-12',4,20000)
+        item=next(r for r in self.report()['items'] if r['product_code']=='P1')
+        self.assertEqual((1,20000,20000,60000),tuple(item[k] for k in ('closing_qty','closing_value','average_unit_cost','output_value')))
+
 
 class CustomerTemplateTests(unittest.TestCase):
     def test_exact_customer_groups_no_extra_tax_columns_and_invoice_revenue(self):

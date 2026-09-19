@@ -112,6 +112,13 @@ def post(conn, prepared, actor, timestamp, audit_event):
     result=bk._post_pending(conn,pending,timestamp,audit_event)
     for period in periods:
         preview=close.inventory_period_close_preview(conn,period['period'])
+        if not preview['can_close']:
+            names=', '.join(r['product_code']+' · '+r['product_name'] for r in preview['blocking_items'])
+            error=ValueError('Chưa nhập kho: chưa cập nhật được tồn chuyển tháng '+period['period']+'. '+
+                             (('Cần đối chiếu '+names+'. ') if names else '')+'; '.join(preview['issues'])+
+                             '. Dữ liệu của bộ này chưa được ghi; các ô đã nhập vẫn được giữ lại.')
+            error.stock_review={'period':period['period'],'items':preview['blocking_items']}
+            raise error
         close.close_inventory_period(conn,period['period'],expected_source_hash=preview['source_hash'],
             expected_target_hash=preview['target_hash'],timestamp=timestamp,actor=actor+' · BK bổ sung')
     codes={r['productCode'] for r in p['rows']}

@@ -113,6 +113,23 @@ class SupplementTests(unittest.TestCase):
             self.assertEqual(0,c.execute('SELECT COUNT(*) FROM bk_import_documents').fetchone()[0])
             self.assertEqual('closed',c.execute("SELECT status FROM inventory_period_closures WHERE period='2026-08'").fetchone()[0])
 
+    def test_unpriced_negative_opening_fully_replenished_has_no_stranded_value(self):
+        with server.db() as c:
+            c.execute("INSERT INTO inventory_transactions(txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,status,created_at,updated_at) VALUES('2026-08-01','BK-P1',0,2,0,'OPENING','2026-08','BK-P1','posted',?,?)",(fixture.NOW,fixture.NOW))
+            p=closing.inventory_period_close_preview(c,'2026-08',today=date(2026,9,17))
+            closing.close_inventory_period(c,'2026-08',expected_source_hash=p['source_hash'],expected_target_hash=p['target_hash'],timestamp=fixture.NOW,today=date(2026,9,17),actor='Test')
+        before=self.snapshot()
+        result=self.confirm(self.preview(self.body(cost=20000)))
+        self.assertEqual(200,result.status_code,result.get_json())
+        self.assertEqual(0,result.get_json()['stock'][0]['closing_qty'])
+        with server.db() as c:
+            from .invoice_monthly_valuation import monthly_average_report
+            item=next(r for r in monthly_average_report(c,date_from='2026-08-01',date_to='2026-08-31',include_zero=True)['items'] if r['product_code']=='BK-P1')
+            self.assertEqual((0,0,20000,40000),tuple(item[k] for k in ('closing_qty','closing_value','average_unit_cost','output_value')))
+            opening=c.execute("SELECT qty_out,unit_cost FROM inventory_transactions WHERE source_id='2026-08' AND product_code='BK-P1'").fetchone()
+            self.assertEqual((2,0),tuple(opening))
+        self.assertEqual(before,self.snapshot())
+
     def test_manual_opening_cannot_be_overwritten(self):
         self.create_closed_deficit()
         with server.db() as c:c.execute("UPDATE inventory_transactions SET qty_out=9 WHERE source_type='OPENING' AND source_id='2026-09' AND product_code='BK-P1'")

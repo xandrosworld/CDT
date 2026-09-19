@@ -208,7 +208,7 @@ def register_bk_draft_routes(app, ctx):
                 conn.execute('BEGIN IMMEDIATE')
                 result=supplement.post(conn,pending['prepared'],body.get('actor'),ctx['now_iso'](),ctx['audit_event'])
             return jsonify(ok=True,**result)
-        except ValueError as exc:return jsonify(ok=False,error=str(exc),code=getattr(exc,'code','invalid_supplement')),409
+        except ValueError as exc:return jsonify(ok=False,error=str(exc),code=getattr(exc,'code','invalid_supplement'),stock_review=getattr(exc,'stock_review',None)),409
 
     @app.get('/api/bk-import/suggested-price')
     def get_suggested_price():

@@ -178,6 +178,11 @@
         var message=error.message.replace(/Số tham chiếu/gi,'Số bảng kê');
         if(message.indexOf('đã thuộc một bộ BK khác')>=0)message='Số bảng kê này có dòng đã được ghi trong bộ khác. Kiểm tra lại bộ đã nhập; chỉ dùng số mới khi lập bộ khác cho hàng chưa nhập.';
         status(message,true);var items=error.issues||errorIssues(message);if(items.length)showIssues(items);
+        if(error.payload&&error.payload.stock_review){
+          var stockReview=error.payload.stock_review,box=dialog.querySelector('.bk-draft-issues');
+          box.hidden=false;box.innerHTML='<strong>Chưa nhập kho. Kiểm tra tồn chuyển kỳ:</strong><ul>'+stockReview.items.map(function(r){return '<li>'+esc(r.product_code+' · '+r.product_name)+': tồn '+options.quantity(r.closing_qty)+' '+esc(r.unit)+', giá trị '+Number(r.closing_value).toLocaleString('vi-VN')+'đ.</li>';}).join('')+'</ul><button type="button" class="btn btn-outline" data-bk-stock-review>Mở đối chiếu tháng '+esc(stockReview.period)+'</button><p>Các ô đang nhập được giữ lại. Đối chiếu xong, quay lại xem bộ bảng kê rồi xác nhận.</p>';
+          box.querySelector('[data-bk-stock-review]').onclick=function(){if(options.onStockReview)options.onStockReview(stockReview.period);};
+        }
       }
       finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});var confirm=dialog.querySelector('[data-bk="confirm"]');if(confirm)confirm.disabled=!field('confirm_actual').checked;if(focusAfterAction){focusIssue(focusAfterAction);focusAfterAction=null;}}
     }

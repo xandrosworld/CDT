@@ -323,6 +323,8 @@ def inventory_period_close_preview(
         "unposted_input_count": unposted_input_count,
         "unposted_output_count": unposted_output_count,
         "issues": issues,
+        "blocking_items": [{key: item.get(key) for key in ('product_code', 'product_name', 'unit', 'closing_qty', 'closing_value', 'valuation_status')}
+                           for item in report['items'] if item in invalid_items or item in blocked_negative_items],
         "kkknt_negative_count": sum(item['product_code'] in exempt for item in negative_items),
         "problem_items": [{key: item.get(key) for key in ('product_code', 'product_name', 'unit', 'closing_qty', 'closing_value', 'valuation_status', 'negative_stock_allowed')}
                           for item in report['items'] if item in invalid_items or item in negative_items],

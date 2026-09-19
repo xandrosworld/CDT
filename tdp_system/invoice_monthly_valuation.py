@@ -38,6 +38,14 @@ def monthly_average_report(conn, *, date_from, date_to, include_zero=False, incl
         # A return after month close can restore an item whose opening balance
         # is zero. Its saved reversal cost is the only valuation basis then.
         basis_qty, basis_value = available_qty, available_value
+        # A carried shortage may have had no purchase price yet. When actual
+        # receipts replenish it, netting that unpriced shortage out of the price
+        # denominator gives a wrong cost. Use the documented receipt price for the remaining
+        # quantity; do not strand purchase value on zero physical stock.
+        if (number(item['opening_qty']) < 0 and number(item['opening_value']) == 0
+                and number(item['input_qty']) > 0):
+            basis_qty, basis_value = number(item['input_qty']), number(item['input_value'])
+            item['valuation_note'] = 'Giá nhập bổ sung dùng để tính phần tồn âm đầu kỳ chưa có giá.'
         if basis_qty == 0 and number(item['reversal_qty']) > 0:
             basis_qty = number(item['reversal_qty'])
             basis_value += number(item['reversal_value'])
