@@ -1,0 +1,13 @@
+.output-stock-web { width: min(1080px, 95vw); max-height: 92vh; overflow: auto; }
+.output-stock-web [data-list] .table-wrap { max-height: 230px; overflow: auto; }
+.output-stock-web section.card { margin-top: 18px; padding: 18px; }
+.output-stock-web [data-edit] { display: grid; gap: 12px; }
+.output-stock-web label { display: block; margin: 10px 0; }
+.output-stock-web label input:not([type=checkbox]),
+.output-stock-web label select { display: block; width: 100%; padding: 9px; margin-top: 5px; }
+.output-stock-web [data-edit] button { justify-self: start; }
+.output-stock-web .error-summary { padding: 12px; border: 1px solid #b94b45; background: #fff7f5; }
+.output-stock-web input:focus, .output-stock-web select:focus { outline: 3px solid #008577; outline-offset: 2px; }
+.output-stock-web .stock-cause-totals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.output-stock-web .stock-cause-totals strong { display: block; }
+@media(max-width: 640px) { .output-stock-web .stock-cause-totals { grid-template-columns: repeat(2, 1fr); } }

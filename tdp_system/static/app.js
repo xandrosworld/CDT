@@ -3600,12 +3600,13 @@
       (close && !close.error && (close.unposted_input_count || close.unposted_output_count) ? '<div class="compact-controls">' +
         (close.unposted_input_count ? '<button class="btn btn-primary" data-bulk-direction="input">Ghi kho đầu vào hàng loạt</button><button class="btn btn-outline" data-pending-direction="input">Xem đầu vào còn chờ</button>' : '') +
         (close.unposted_output_count ? '<button class="btn btn-primary" data-bulk-direction="output">Ghi kho đầu ra hàng loạt</button><button class="btn btn-outline" data-pending-direction="output">Xem đầu ra còn chờ</button>' : '') + '</div>' : '') +
-      (close && close.problem_items && close.problem_items.length ? '<div class="form-actions"><button class="btn btn-primary" data-close-remap>Xuất · Sửa mã nội bộ bằng Excel</button><button class="btn btn-outline" data-close-bk>Bảng kê mua vào bổ sung</button></div><div class="table-wrap"><table><thead><tr><th>Mã cần kiểm tra</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th><th>Xử lý</th></tr></thead><tbody>' + close.problem_items.map(function(item) {
-        return '<tr class="invoice-row-issue"><td>' + esc(item.product_code) + '</td><td>' + esc(item.product_name) + '</td><td>' + esc(item.unit) + '</td><td>' + stockQty(item.closing_qty) + '</td><td>' + stockMoney(item.closing_value) + '</td><td>' + (item.negative_stock_allowed ? 'KKKNT · được chuyển tồn âm' : 'Đối chiếu tồn đầu hoặc sửa mã xuất') + '</td></tr>';
+      (close && close.problem_items && close.problem_items.length ? '<div class="form-actions"><button class="btn btn-primary" data-close-remap>Xử lý hàng âm ngay trên web</button><button class="btn btn-outline" data-close-bk>Bảng kê mua vào bổ sung</button></div><div class="table-wrap"><table><thead><tr><th>Mã cần kiểm tra</th><th>Tên hàng</th><th>ĐVT</th><th>Tồn cuối</th><th>Giá trị tồn cuối</th><th>Xử lý</th></tr></thead><tbody>' + close.problem_items.map(function(item) {
+        return '<tr class="invoice-row-issue"><td>' + esc(item.product_code) + '</td><td>' + esc(item.product_name) + '</td><td>' + esc(item.unit) + '</td><td>' + stockQty(item.closing_qty) + '</td><td>' + stockMoney(item.closing_value) + '</td><td>' + (item.negative_stock_allowed ? 'KKKNT · được chuyển tồn âm<br>' : '') + (item.closing_qty < 0 ? '<button class="btn btn-outline" data-shortage-code="' + esc(item.product_code) + '">Xem nguyên nhân và xử lý</button>' : 'Đối chiếu giá trị tồn đầu và giá nhập') + '</td></tr>';
       }).join('') + '</tbody></table></div>' : '');
     dialog.querySelector('.close-period-dialog').onclick = function() { if (!state.inventoryCloseBusy) dialog.close(); };
     var remapButton = dialog.querySelector('[data-close-remap]');
-    if (remapButton) remapButton.onclick = function() { dialog.close(); openOutputStockRemap(close.date_from, close.date_to); };
+    if (remapButton) remapButton.onclick = function() { dialog.close(); openOutputStockWeb(close.date_from, close.date_to); };
+    dialog.querySelectorAll('[data-shortage-code]').forEach(function(button) { button.onclick = function() { dialog.close(); openOutputStockWeb(close.date_from, close.date_to, button.dataset.shortageCode); }; });
     var bkButton = dialog.querySelector('[data-close-bk]');
     if (bkButton) bkButton.onclick = function() { dialog.close(); state.inventoryDataToolsOpen = true; navigate('inventory'); document.getElementById('inventoryDataTools')?.scrollIntoView(); };
     dialog.querySelector('#inventoryClosePeriod').onchange = async function(event) {
@@ -3743,7 +3744,7 @@
         return '<button class="btn ' + (item[0] === 'output' ? 'btn-primary' : 'btn-outline') + '" data-action="preview-inventory-report" data-kind="' + item[0] + '"' + (valid ? '' : ' disabled') + '>' + item[1] + '</button>';
       }).join(''),
       '<button class="btn btn-outline" data-action="download-document" data-url="/api/invoice-valuation/export/closing', exportQuery, '"', valid ? '' : ' disabled', '>Tải Excel tồn trong kỳ</button>',
-      '<button class="btn btn-primary" data-action="open-output-stock-remap"', valid ? '' : ' disabled', '>Xuất · Đổi mã nội bộ qua Excel</button>',
+      '<button class="btn btn-primary" data-action="open-output-stock-remap"', valid ? '' : ' disabled', '>Xử lý hàng âm ngay trên web</button>',
       '</div>', valid ? '' : '<p class="error-summary">Chọn đủ ngày; Từ ngày không được lớn hơn Đến ngày.</p>', '</div>',
       inventoryDataToolsHtml()
     ]);
@@ -3783,11 +3784,35 @@
   }
 
   var inventoryPreviewSerial = 0;
-  function openOutputStockRemap(from, to) {
+  function openOutputStockWeb(from, to, code) {
+    window.TdpOutputStockWeb({api:api, esc:esc, from:from, to:to, code:code,
+      onDates:function(){var field=document.getElementById('inventoryFrom');if(field){field.scrollIntoView({block:'center'});field.focus();}},
+      onExcel:function(refresh) { openOutputStockRemap(from, to, refresh); },
+      onPeriod:async function() { state.inventoryClosePeriod=from.slice(0,7); state.inventoryCloseOpen=true; state.inventoryMonthClose=null; renderInventoryCloseDialog(); await loadInventoryMonthClose(); },
+      onSupplement:function(productCode,refresh) { window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,from:from,to:to,productCode:productCode,onSaved:function(){loadBkDocuments(true);refresh();}}); },
+      onInput:async function(productCode) {
+        state.invoiceDirection='input'; state.invoiceFrom=from; state.invoiceTo=to;
+        state.invoiceStatus='all'; state.invoiceLineFilter='all'; state.invoicePending=false;
+        state.invoiceWorkbench=null; state.invoiceListing=null;
+        await loadInvoiceWorkbench(true);
+        if (state.invoiceListing?.error) throw new Error(state.invoiceListing.error);
+        if (!state.operations) await loadOperations(true);
+        navigate('msmi');
+        var row=(state.invoiceListing?.lines || []).find(function(line){return line.product_code===productCode;});
+        var target=row && (invoiceVirtual?.reveal(row.id) || document.getElementById('invoice-line-input-'+row.id));
+        if(target){target.classList.add('invoice-just-saved');target.scrollIntoView({block:'center'});}
+        showToast('Đang kiểm tra đầu vào của '+productCode+' trong kỳ đã chọn. '+(row?'Đã mở dòng hàng liên quan.':'Chưa tìm thấy dòng đã khớp mã; kiểm tra hóa đơn chưa khớp mã hoặc chưa tải về.'));
+      },
+      onApplied:async function() { state.inventoryValuation=null; state.inventoryMonthClose=null; state.invoiceWorkbench=null; state.invoiceListing=null; state.outgoingReadiness=null; await loadData(); }
+    });
+  }
+
+  function openOutputStockRemap(from, to, refresh) {
     window.TdpOutputStockRemap({api:api, downloadFile:downloadFile, esc:esc, from:from, to:to, onApplied:async function() {
       state.inventoryValuation = null; state.inventoryMonthClose = null;
       state.invoiceWorkbench = null; state.invoiceListing = null;
       await loadData();
+      if(refresh) await refresh();
     }});
   }
 
@@ -7318,7 +7343,7 @@
       return;
     }
     if (action === 'preview-inventory-report') { await previewInventoryReport(button); return; }
-    if (action === 'open-output-stock-remap') { openOutputStockRemap(state.inventoryFrom, state.inventoryTo); return; }
+    if (action === 'open-output-stock-remap') { openOutputStockWeb(state.inventoryFrom, state.inventoryTo); return; }
     if (action === 'show-all-output-invoices') {
       state.invoiceDirection = 'output'; state.invoiceStatus = 'all';
       state.invoiceLineFilter = 'all'; state.invoicePending = false;

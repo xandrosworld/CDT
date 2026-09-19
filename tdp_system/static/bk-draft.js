@@ -121,6 +121,11 @@
           rows=result.items.map(function(r){return Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:'',note:''});});
           render(); status(rows.length+' mã đang âm cuối kỳ. Chọn những hàng đã mua cần bổ sung chứng từ.');
           dialog.querySelector('.bk-draft-preview').innerHTML='';
+          if(options.productCode){
+            var index=rows.findIndex(function(r){return r.product_code===options.productCode;});
+            if(index>=0){var target=dialog.querySelector('[data-row="'+index+'"]');target.scrollIntoView({block:'center'});focusAfterAction=rowField(index,'selected');}
+            options.productCode=null;
+          }
         } else if(name==='file') {
           if(!field('import_file').files.length)throw new Error('Chọn file Excel đã sửa trước.');
           var form=new FormData();form.append('file',field('import_file').files[0]);

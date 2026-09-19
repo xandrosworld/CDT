@@ -204,7 +204,7 @@ def _store(conn, kind, payload):
 def _load(conn, token, kind, ttl):
     row = conn.execute('SELECT * FROM output_stock_excel_sessions WHERE token=? AND kind=?', (token, kind)).fetchone()
     if not row or time.time() - row['created'] > ttl:
-        raise RemapError('File hoặc lượt xem trước đã hết hạn. Tải Excel mới và kiểm tra lại.')
+        raise RemapError('Lượt xem trước đã hết hạn. Cập nhật số liệu rồi xem trước lại trước khi xác nhận.' if kind == 'preview' else 'File hoặc lượt xem trước đã hết hạn. Tải Excel mới và kiểm tra lại.')
     return row, json.loads(row['payload'])
 
 
@@ -506,7 +506,7 @@ def confirm_preview(conn, token, actor, timestamp):
     if preview['errors'] or not preview['changes']: raise RemapError('File còn lỗi hoặc chưa có thay đổi.')
     snapshot, changes = preview['snapshot'], preview['changes']
     if _source_hash(_snapshot(conn, snapshot['from'], snapshot['to'])) != _source_hash(snapshot):
-        raise RemapError('Dữ liệu đã thay đổi sau khi xem trước. Tải Excel mới để đối chiếu.')
+        raise RemapError('Dữ liệu đã thay đổi sau khi xem trước. ' + ('Bấm Cập nhật số liệu rồi xem trước lại; thông tin đang nhập được giữ lại.' if preview.get('origin') == 'web' else 'Tải Excel mới để đối chiếu.'))
     errors = _evaluate(conn, snapshot, changes)
     if errors: raise RemapError('; '.join(errors))
     conn.execute('SAVEPOINT apply_stock_remap')
@@ -520,8 +520,8 @@ def confirm_preview(conn, token, actor, timestamp):
             if c['ledger_id'] > 0 and not conn.execute('SELECT 1 FROM output_stock_remap_parts WHERE ledger_id=?',(c['ledger_id'],)).fetchone():
                 conn.execute('UPDATE outgoing_source_invoice_items SET product_code=? WHERE id=? AND invoice_id=?',
                              (c['new_code'], c['line_id'], c['invoice_id']))
-        conn.execute("INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at) VALUES('inventory.output.remap','excel',?,'ok',?,?,?)",
-                     (token, 'Đổi mã nội bộ theo Excel', _json({'actor': actor, 'from': snapshot['from'], 'to': snapshot['to'], 'changes': changes,
+        conn.execute("INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at) VALUES('inventory.output.remap',?,?,'ok',?,?,?)",
+                     (preview.get('origin', 'excel'), token, 'Đổi mã nội bộ trên web' if preview.get('origin') == 'web' else 'Đổi mã nội bộ theo Excel', _json({'actor': actor, 'from': snapshot['from'], 'to': snapshot['to'], 'changes': changes,
                          'name_corrections':preview.get('name_corrections',[]), 'catalog_names_applied':preview.get('catalog_names_applied',False)}), timestamp))
         result = {'changed_lines': len(changes), 'idempotent': False}
         conn.execute('UPDATE output_stock_excel_sessions SET result=? WHERE token=?', (_json(result), token))
@@ -532,6 +532,11 @@ def confirm_preview(conn, token, actor, timestamp):
 
 
 def register_routes(app, ctx):
+    try:
+        from .output_stock_web import register_routes as register_web
+    except ImportError:
+        from output_stock_web import register_routes as register_web
+    register_web(app, ctx)
     @app.get('/api/inventory/output-remap/export')
     def output_remap_export():
         try:
