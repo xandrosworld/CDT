@@ -49,7 +49,7 @@
         (data.warnings || []).map(function (warning) { return '<p class="document-note tag-warn" role="alert">' + esc(warning) + '</p>'; }).join('') +
         '<div class="document-sheet-list" role="group" aria-label="Chọn từng chứng từ">' +
         data.sheets.map(function (sheet, i) { return '<div><input type="checkbox" checked data-sheet="' + i + '" aria-label="Chọn ' + esc(sheet.name) + '"><button type="button" class="btn btn-small btn-outline" data-open-sheet="' + i + '">' + esc(sheet.name) + '</button></div>'; }).join('') +
-        (body.kind === 'payment' ? '<button type="button" class="btn btn-small btn-primary" data-doc="invoice-pdfs" title="Tải PDF gốc của các hóa đơn đã phát hành trong kỳ của nhà thầu đang xem. Nhiều hóa đơn được đóng chung file ZIP.">Tải PDF hóa đơn</button>' : '') +
+        (body.kind === 'payment' ? '<button type="button" class="btn btn-small btn-primary" data-doc="invoice-pdfs" title="Tải PDF gốc của các hóa đơn đã phát hành trong kỳ của nhà thầu đang xem. Nhiều hóa đơn được đóng chung file ZIP.">Tải PDF hóa đơn</button><button type="button" class="btn btn-small btn-primary" data-doc="invoice-print" title="In các hóa đơn gốc thuộc đúng nhà thầu và kỳ đề nghị thanh toán đang xem.">In tất cả hóa đơn</button>' : '') +
         '</div><div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false, paperTouched = false;
       function invalidatePrint() {
@@ -90,7 +90,7 @@
         host.querySelector('.document-print-help').textContent = printHelp();
         host.querySelector('.document-count').textContent = data.sheet_count + ' phiếu · Đã chọn ' + selected.size;
         host.querySelectorAll('[data-doc="excel"],[data-doc="pdf"],[data-doc="print"],[data-doc="view-pdf"]').forEach(function (b) { b.disabled = busy || !selected.size; });
-        host.querySelectorAll('[data-doc="invoice-pdfs"]').forEach(function (b) { b.disabled = busy; });
+        host.querySelectorAll('[data-doc="invoice-pdfs"],[data-doc="invoice-print"]').forEach(function (b) { b.disabled = busy; });
         host.querySelectorAll('[data-sheet]').forEach(function (c) { c.checked = selected.has(Number(c.dataset.sheet)); });
         host.querySelectorAll('[data-sheet],[data-doc="all"],[data-doc="none"],[data-doc="refresh"],[data-doc="receipts"],[data-doc="summary"]').forEach(function(c) { c.disabled=busy; });
       }
@@ -107,19 +107,20 @@
         });
       }
       async function output(type) {
-        var originalInvoices = type === 'invoice-pdfs';
+        var originalInvoices = type === 'invoice-pdfs' || type === 'invoice-print';
+        var invoicePrint = type === 'invoice-print';
         if (busy || (!originalInvoices && !selected.size)) return;
         resolvedSides='';
         busy = true; update();
         var errorBox = host.querySelector('.document-error');
         var progressBox = host.querySelector('.document-progress');
-        var isPdf = type === 'print' || type === 'pdf' || type === 'view-pdf';
+        var isPdf = invoicePrint || type === 'print' || type === 'pdf' || type === 'view-pdf';
         errorBox.textContent = '';
         var started = Date.now();
         function progress() {
           if (!isCurrent()) return;
           var seconds = Math.floor((Date.now()-started)/1000);
-          progressBox.textContent = (originalInvoices ? 'Đang tải PDF hóa đơn gốc từ M-Invoice · Nhiều hóa đơn sẽ nằm trong một file ZIP' : 'Đang tạo '+(isPdf?'PDF':'Excel')+' cho '+selected.size+' phiếu')+(seconds?' · Đã chờ '+seconds+' giây':'')+'. Các nút sẽ mở lại khi hoàn tất.';
+          progressBox.textContent = (originalInvoices ? (invoicePrint?'Đang lấy hóa đơn gốc và ghép thành một bản in cho kỳ ĐNTT đang xem':'Đang tải PDF hóa đơn gốc từ M-Invoice · Nhiều hóa đơn sẽ nằm trong một file ZIP') : 'Đang tạo '+(isPdf?'PDF':'Excel')+' cho '+selected.size+' phiếu')+(seconds?' · Đã chờ '+seconds+' giây':'')+'. Các nút sẽ mở lại khi hoàn tất.';
         }
         progress();
         var progressTimer = setInterval(progress, 1000);
@@ -127,19 +128,26 @@
         url += '&paper=' + host.querySelector('.document-paper').value;
         if(isPdf) url += '&sides=' + host.querySelector('.document-sides').value;
         if(originalInvoices) url = '/api/export/invoice-pdfs/' + encodeURIComponent(body.contractor) + '?from=' + encodeURIComponent(body.from) + '&to=' + encodeURIComponent(body.to) + '&scope_id=' + encodeURIComponent(body.scope_id || '');
+        if(invoicePrint)url += '&format=pdf';
+        var controller=new AbortController(),requestTimer=setTimeout(function(){controller.abort();},180000);
         try {
-          var response = await checked(await fetch(url));
+          var response = await checked(await fetch(url,{signal:controller.signal}));
           if(isPdf)resolvedSides=response.headers.get('X-Print-Sides')||'';
           var blob = await response.blob();
           if (!isCurrent()) return;
           var blobUrl = URL.createObjectURL(blob);
           errorBox.textContent = '';
-          if (type === 'print' || type === 'view-pdf') {
+          if (invoicePrint || type === 'print' || type === 'view-pdf') {
             var panel = host.querySelector('.document-pdf');
             panel.innerHTML = '<p>Đã mở bản in của phần đã chọn. Nếu hộp thoại chưa bật, bấm nút máy in trong khung PDF.</p><iframe title="Bản in các phiếu đã chọn"></iframe>';
             panel.querySelector('p').textContent = (type === 'print' ? 'Đã mở bản in. Nếu hộp thoại chưa bật, bấm nút máy in trong khung PDF. ' : 'Bản in đúng khổ giấy của phần đã chọn. ') + printHelp();
+            if(invoicePrint){
+              panel.querySelector('p').textContent='Bản in gồm '+(response.headers.get('X-Invoice-Count')||'')+' hóa đơn gốc của '+body.contractor+' trong kỳ ĐNTT đang xem. Chọn in tất cả trang. Nếu hộp thoại chưa bật, bấm nút máy in trong khung PDF.';
+              var openPdf=document.createElement('a');openPdf.href=blobUrl;openPdf.target='_blank';openPdf.rel='noopener';openPdf.className='btn btn-outline';openPdf.textContent='Mở bản in hóa đơn ở tab mới';panel.insertBefore(openPdf,panel.querySelector('iframe'));
+              panel.querySelector('iframe').title='Bản in tất cả hóa đơn';
+            }
             var frame = panel.querySelector('iframe');
-            if(type === 'print') frame.onload = function () { setTimeout(function () { if (!isCurrent() || !frame.isConnected) return; try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (_) {} }, 700); };
+            if(invoicePrint || type === 'print') frame.onload = function () { setTimeout(function () { if (!isCurrent() || !frame.isConnected) return; try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (_) {} }, 700); };
             frame.src = blobUrl;
             panel.scrollIntoView({block:'nearest'});
             setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 600000);
@@ -150,8 +158,11 @@
             anchor.download = name ? decodeURIComponent(name[1]) : (blob.type.indexOf('zip') >= 0 ? 'Chung_tu.zip' : 'Chung_tu.xlsx');
             anchor.click(); setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 30000);
           }
-        } catch (error) { if (isCurrent()) errorBox.textContent = error.message; }
-        finally { clearInterval(progressTimer); progressBox.textContent=''; busy = false; if (isCurrent()) update(); }
+        } catch (error) { if (isCurrent()) {
+          errorBox.textContent = error.name==='AbortError'?(invoicePrint?'Lấy bản in quá lâu. Bấm Thử lại in hóa đơn; lựa chọn và dữ liệu vẫn được giữ.':'Tạo chứng từ quá lâu. Hãy bấm tải hoặc in để thử lại; lựa chọn vẫn được giữ.'):error.message;
+          if(invoicePrint){var retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.dataset.doc=error.code==='stale_invoice_payment_scope'?'payment-refresh':'invoice-print';retry.textContent=error.code==='stale_invoice_payment_scope'?'Đọc lại dữ liệu mới':'Thử lại in hóa đơn';errorBox.appendChild(retry);}
+        } }
+        finally { clearTimeout(requestTimer);clearInterval(progressTimer); progressBox.textContent=''; busy = false; if (isCurrent()) update(); }
       }
       host.onclick = function (event) {
         var sheet = event.target.closest('[data-open-sheet]');
@@ -159,6 +170,7 @@
         var action = event.target.closest('[data-doc]');
         if (!action) return;
         if (busy) return;
+        if(action.dataset.doc==='payment-refresh'){var form=document.getElementById('paymentRequestForm');if(form)form.requestSubmit();return;}
         if (action.dataset.doc === 'refresh') { if (!busy) open(body, hostId, false); }
         if (action.dataset.doc === 'all') { invalidatePrint();paperTouched=false;data.sheets.forEach(function (_,i) { selected.add(i); }); update(); }
         if (action.dataset.doc === 'none') { invalidatePrint();selected.clear(); update(); }
@@ -167,7 +179,7 @@
           data.sheets.forEach(function(_,i){if(action.dataset.doc === 'receipts' ? receiptAt(i) : summaryAt(i)) selected.add(i);});
           update();if(selected.size)show(selected.values().next().value);
         }
-        if (['excel', 'pdf', 'print', 'view-pdf', 'invoice-pdfs'].includes(action.dataset.doc)) output(action.dataset.doc);
+        if (['excel', 'pdf', 'print', 'view-pdf', 'invoice-pdfs', 'invoice-print'].includes(action.dataset.doc)) output(action.dataset.doc);
       };
       host.onchange = function(event) {
         if(busy && event.target.matches('[data-sheet]')) { update(); return; }

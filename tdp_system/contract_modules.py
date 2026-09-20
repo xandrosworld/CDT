@@ -10659,12 +10659,24 @@ def register_contract_routes(app, ctx):
                 if latest['scope_id'] != expected:
                     raise InvoicePaymentScopeError('Dữ liệu đã thay đổi trong lúc tải PDF; hãy xem lại đề nghị thanh toán.',
                                                    code='stale_invoice_payment_scope', status=409)
+            merged_content, merged_pages = None, 0
+            if request.args.get('format') == 'pdf':
+                try:
+                    try:
+                        from .invoice_print_bundle import combined_invoice_pdf
+                    except ImportError:
+                        from invoice_print_bundle import combined_invoice_pdf
+                    merged_content, merged_pages = combined_invoice_pdf(files)
+                except ValueError as exc:
+                    raise MinvoiceError(str(exc)) from exc
         except InvoicePaymentScopeError as exc:
             return jsonify(ok=False, error=str(exc), code=exc.code), exc.status
         except MinvoiceError as exc:
             return jsonify(ok=False, error=str(exc), code='invoice_pdf_download_failed'), 502
         safe_code = re.sub(r'[^A-Z0-9_-]', '_', scope['contractor'])[:40]
-        if len(files) == 1:
+        if merged_content is not None:
+            stream, mimetype, name = io.BytesIO(merged_content), 'application/pdf', f"In_tat_ca_hoa_don_{safe_code}_{scope['date_from']}_{scope['date_to']}.pdf"
+        elif len(files) == 1:
             stream, mimetype, name = io.BytesIO(files[0][1]), 'application/pdf', safe_code + '_' + files[0][0]
         else:
             stream = io.BytesIO()
@@ -10675,6 +10687,9 @@ def register_contract_routes(app, ctx):
             mimetype, name = 'application/zip', f"Hoa_don_PDF_{safe_code}_{scope['date_from']}_{scope['date_to']}.zip"
         response = send_file(stream, as_attachment=True, download_name=name, mimetype=mimetype)
         response.headers['X-TDP-Invoice-Scope'] = expected
+        response.headers['X-Invoice-Count'] = str(len(files))
+        if merged_pages:
+            response.headers['X-Invoice-Pages'] = str(merged_pages)
         response.headers['Cache-Control'] = 'no-store'
         return response
 

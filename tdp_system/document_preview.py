@@ -26,6 +26,8 @@ SNAPSHOT_TTL = 24 * 60 * 60
 def white_print_style(workbook):
     """Only generated copies: no template/source writes or numeric changes."""
     for sheet in workbook:
+        if sheet.title == 'Đề nghị thanh toán' and workbook.properties.subject == 'Đề nghị thanh toán từ hóa đơn đỏ đã phát hành':
+            continue  # Preserve the explicitly supplied customer template artwork.
         receipt = bool(re.fullmatch(r'biên nhận(?:\s+\d+)?', sheet.title.strip().casefold()))
         sheet.conditional_formatting._cf_rules.clear()
         for row in sheet:

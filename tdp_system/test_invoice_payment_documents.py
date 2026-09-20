@@ -94,15 +94,15 @@ class InvoicePaymentDocumentTests(unittest.TestCase):
         try:
             self.assertEqual(["Đề nghị thanh toán", "Đối chiếu hóa đơn"], loaded.sheetnames)
             sheet = loaded["Đề nghị thanh toán"]
-            self.assertEqual("ĐỀ NGHỊ THANH TOÁN", sheet["A6"].value)
-            self.assertIn("CÔNG TY QC BUYER", sheet["A7"].value)
-            self.assertEqual("STT", sheet["A14"].value)
-            self.assertEqual("Tổng tiền thanh toán", sheet["F14"].value)
+            self.assertEqual("ĐỀ NGHỊ THANH TOÁN", sheet["A5"].value)
+            self.assertIn("CÔNG TY QC BUYER", sheet["A6"].value)
+            self.assertEqual("STT", sheet["B10"].value)
+            self.assertEqual("Tổng tiền thanh toán", sheet["G10"].value.strip())
             self.assertTrue(all(
-                sheet.cell(14, column).fill.fill_type is None for column in range(1, 7)
+                sheet.cell(10, column).fill.fill_type is None for column in range(1, 7)
             ))
-            self.assertEqual("00001234", sheet["C15"].value)
-            self.assertEqual(216, sheet["F15"].value)
+            self.assertEqual("00001234", sheet["D11"].value)
+            self.assertEqual(216, sheet["G11"].value)
             all_text = "\n".join(
                 str(cell.value or "") for ws in loaded.worksheets
                 for row in ws.iter_rows() for cell in row
@@ -126,6 +126,42 @@ class InvoicePaymentDocumentTests(unittest.TestCase):
         with self.assertRaises(InvoicePaymentDocumentError) as mismatch:
             invoice_payment_request_workbook(self.payment_scope(total=218))
         self.assertEqual("payment_document_total_mismatch", mismatch.exception.code)
+
+    def test_customer_template_layout_and_variable_invoice_count(self):
+        from copy import deepcopy, copy
+        from .document_preview import white_print_style
+        scope = self.payment_scope()
+        for count in (1, 6, 40):
+            current = deepcopy(scope)
+            current['invoices'] = [{**scope['invoices'][0], 'invoice_number': str(100 + i)} for i in range(count)]
+            current['totals'] = {key: value * count for key, value in scope['totals'].items()}
+            book = invoice_payment_request_workbook(current, contract_no='HD-2026', contract_date='2026-06-01')
+            ws = book.active
+            self.assertIn('Độc lập', ws['E1'].value)
+            self.assertIn('HD-2026', ws['A7'].value)
+            self.assertEqual('STT', ws['B10'].value)
+            self.assertEqual('Tổng cộng', ws.cell(11 + count, 2).value)
+            self.assertEqual(216 * count, ws.cell(11 + count, 7).value)
+            self.assertIn('1052787580', ws.cell(15 + count, 1).value)
+            self.assertIn('ĐẠI DIỆN CÔNG TY', ws.cell(19 + count, 5).value)
+            title_font = copy(ws['A5'].font)
+            white_print_style(book)
+            self.assertEqual(title_font, copy(ws['A5'].font))
+            self.assertFalse(any(c.data_type=='f' for row in ws for c in row))
+            book.close()
+
+    def test_payment_statement_displays_special_tax_without_changing_source(self):
+        from copy import deepcopy, copy
+        from .invoice_payment_documents import synced_invoice_statement_workbook
+        scope = self.payment_scope()
+        scope.update(warning='', source_lines=[dict(invoice_date='2026-08-29', invoice_series='1C26TDP',
+            invoice_number='00001234', source_item_name='Hàng', source_unit='Kg', qty=1,
+            unit_price=100, amount=100, tax_rate=rate, validation_note='') for rate in ('-2','-2.0','KKKNT','8%','-1')])
+        before = deepcopy(scope)
+        book = synced_invoice_statement_workbook(scope)
+        self.assertEqual(['KKKNT','KKKNT','KKKNT','8%','KCT'], [book['Chi tiết hóa đơn'].cell(r,8).value for r in range(4,9)])
+        self.assertEqual(before, scope)
+        book.close()
 
     def test_delivery_statement_reconciles_and_blocks_mismatch(self):
         workbook = invoice_delivery_statement_workbook(self.lines(), self.drafts(), lambda _: 1.08)

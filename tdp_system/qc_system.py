@@ -1862,9 +1862,9 @@ def main():
         assert "CHƯA PHẢI MẪU" not in manifest
         payment_book = load_workbook(io.BytesIO(archive.read(payment_name)), data_only=True, keep_links=False)
         assert payment_book.sheetnames == ["Đề nghị thanh toán", "Đối chiếu hóa đơn"]
-        assert payment_book["Đề nghị thanh toán"]["A6"].value == "ĐỀ NGHỊ THANH TOÁN"
-        assert payment_book["Đề nghị thanh toán"]["C15"].value == "00001234"
-        assert payment_book["Đề nghị thanh toán"]["F15"].value > 0
+        assert payment_book["Đề nghị thanh toán"]["A5"].value == "ĐỀ NGHỊ THANH TOÁN"
+        assert payment_book["Đề nghị thanh toán"]["D11"].value == "00001234"
+        assert payment_book["Đề nghị thanh toán"]["G11"].value > 0
         assert payment_book["Đối chiếu hóa đơn"].sheet_state == "hidden"
         payment_book.close()
         statement_book = load_workbook(io.BytesIO(archive.read(statement_name)), data_only=True)

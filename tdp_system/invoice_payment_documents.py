@@ -14,7 +14,14 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
+from copy import copy
+from pathlib import Path
+
+try:
+    from .invoice_line_tax import tax_rate_label
+except ImportError:
+    from invoice_line_tax import tax_rate_label
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
@@ -42,13 +49,13 @@ def synced_invoice_statement_workbook(scope):
         details.append([_strict_date(item['invoice_date'], 'Ngày hóa đơn'),
                         _excel_text(item['invoice_series'] + ' / ' + item['invoice_number']),
                         _excel_text(item['source_item_name']), _excel_text(item['source_unit']),
-                        item['qty'], item['unit_price'], item['amount'], _excel_text(item['tax_rate']),
+                        item['qty'], item['unit_price'], item['amount'], _excel_text(tax_rate_label(item['tax_rate'])),
                         _excel_text(item['validation_note'])])
     for item in scope.get('lines', []):
         details.append([_strict_date(item['issued_invoice_date'], 'Ngày hóa đơn'),
                         _excel_text(item['issued_invoice_series'] + ' / ' + item['issued_invoice_number']),
                         _excel_text(item['product_name']), _excel_text(item['unit']), item['qty'],
-                        item['unit_price'], item['amount'], _excel_text(item['tax']), ''])
+                        item['unit_price'], item['amount'], _excel_text(tax_rate_label(item['tax'])), ''])
     from collections import defaultdict
     try:
         from .document_totals import quantity_text
@@ -267,140 +274,82 @@ def invoice_payment_request_workbook(
     workbook.calculation.fullCalcOnLoad = False
     workbook.calculation.forceFullCalc = False
     workbook.calculation.calcMode = "manual"
+    # Use the customer's print sheet artwork, with only current scoped values.
+    template_book = load_workbook(Path(__file__).parent / 'templates' / 'invoice_payment_customer_20260920.xlsx')
+    template = template_book.active
     ws = workbook.active
     ws.title = "Đề nghị thanh toán"
     ws.sheet_view.showGridLines = False
-    widths = (8, 16, 14, 19, 18, 21)
-    for index, width in enumerate(widths, 1):
-        ws.column_dimensions[get_column_letter(index)].width = width
+    for letter, dimension in template.column_dimensions.items():
+        ws.column_dimensions[letter].width = dimension.width
+    count = len(invoices)
+    row_pairs = [(r, r) for r in range(1, 11)]
+    row_pairs += [(11, 11 + i) for i in range(count)]
+    row_pairs += [(r, r + count - 1) for r in range(12, 23)]
+    for source_row, target_row in row_pairs:
+        ws.row_dimensions[target_row].height = template.row_dimensions[source_row].height
+        for column in range(1, 9):
+            source, target = template.cell(source_row, column), ws.cell(target_row, column)
+            for attribute in ('font', 'fill', 'border', 'alignment', 'protection', 'number_format'):
+                setattr(target, attribute, copy(getattr(source, attribute)))
+            font = copy(target.font)
+            font.color = '000000'  # Keep the customer's established black print output.
+            target.font = font
+            target.value = source.value
+    for merged in template.merged_cells.ranges:
+        offset = count - 1 if merged.min_row >= 12 else 0
+        ws.merge_cells(start_row=merged.min_row + offset, end_row=merged.max_row + offset,
+                       start_column=merged.min_col, end_column=merged.max_col)
+    ws.page_margins = copy(template.page_margins)
+    template_book.close()
 
-    _merge_write(ws, "A1:C1", snapshot["company_name_snapshot"].upper(), size=12, bold=True, horizontal="center")
-    _merge_write(ws, "D1:F1", "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", size=12, bold=True, horizontal="center")
-    _merge_write(ws, "A2:C2", request_number, size=12, horizontal="center")
-    _merge_write(ws, "D2:F2", "Độc lập – Tự do – Hạnh phúc", size=12, bold=True, horizontal="center")
-    _merge_write(ws, "A3:C3", "V/v: Đề nghị thanh toán", size=12, italic=True, horizontal="center")
-    _merge_write(ws, "D3:F3", "----------------", size=12, horizontal="center")
-    ws.row_dimensions[1].height = 34
-    ws.row_dimensions[2].height = 22
-    ws.row_dimensions[3].height = 22
-    _merge_write(
-        ws, "D4:F4",
-        f"Hải Phòng, ngày {issued_on.day:02d} tháng {issued_on.month:02d} năm {issued_on.year}",
-        size=12, italic=True, color="FF0000", horizontal="center",
-    )
-    _merge_write(ws, "A6:F6", "ĐỀ NGHỊ THANH TOÁN", size=16, bold=True, horizontal="center")
-    _merge_write(
-        ws, "A7:F7", f"Kính gửi: {snapshot['buyer_name_snapshot'].upper()}",
-        size=12, bold=True, horizontal="center",
-    )
+    def write(cell, value):
+        # Literal data, never formula expressions from names or request fields.
+        ws[cell] = "'" + value if isinstance(value, str) and value.startswith(('=', '+', '-', '@')) else value
+
+    write('A1', snapshot['company_name_snapshot'].upper())
+    write('A2', _plain(request_number))
+    write('E3', f"Hải Phòng, ngày {issued_on.day:02d} tháng {issued_on.month:02d} năm {issued_on.year}")
+    write('A6', f"Kính gửi: {snapshot['buyer_name_snapshot'].upper()}")
     if safe_contract_no:
         contract_text = f"Căn cứ vào hợp đồng mua bán số: {safe_contract_no}"
         if safe_contract_date:
-            contract_text += (
-                f" ngày {safe_contract_date.day:02d} tháng {safe_contract_date.month:02d} "
-                f"năm {safe_contract_date.year}"
-            )
-        contract_text += (
-            f" giữa {snapshot['buyer_name_snapshot']} và {snapshot['company_name_snapshot']}."
-        )
+            contract_text += f" ngày {safe_contract_date.day:02d} tháng {safe_contract_date.month:02d} năm {safe_contract_date.year}"
+        contract_text += f" giữa {snapshot['buyer_name_snapshot']} và {snapshot['company_name_snapshot']}."
     else:
-        contract_text = (
-            f"Căn cứ hàng hóa đã cung cấp giữa {snapshot['buyer_name_snapshot']} "
-            f"và {snapshot['company_name_snapshot']}."
-        )
-    _merge_write(ws, "A9:F9", contract_text, size=12, color="FF0000", horizontal="left")
-    ws.row_dimensions[9].height = 34
-    narrative = (
-        f"Thời gian từ ngày {period_from.strftime('%d/%m/%Y')} – {period_to.strftime('%d/%m/%Y')} "
-        f"chúng tôi đã cung cấp hàng hóa cho {snapshot['buyer_name_snapshot']}, dựa theo số lượng "
-        "bàn giao chúng tôi đã xuất hóa đơn như sau:"
-    )
-    if scope.get('statement_kind') == 'invoices':
-        narrative = (f"Đề nghị thanh toán các hóa đơn VAT đã phát hành trong thời gian "
-                     f"{period_from.strftime('%d/%m/%Y')} – {period_to.strftime('%d/%m/%Y')} như sau:")
-    _merge_write(ws, "A11:F12", narrative, size=12, horizontal="left", vertical="top")
-    ws.row_dimensions[11].height = 24
-    ws.row_dimensions[12].height = 24
-
-    header_row = 14
-    headers = (
-        "STT", "Ngày hóa đơn", "Số hóa đơn", "Tổng tiền trước thuế",
-        "Tổng tiền thuế", "Tổng tiền thanh toán",
-    )
-    for column, value in enumerate(headers, 1):
-        cell = ws.cell(header_row, column, value)
-        cell.font = _font(size=11, bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = TABLE_BORDER
-    ws.row_dimensions[header_row].height = 36
-    for index, item in enumerate(invoices, start=1):
-        row = header_row + index
-        invoice_date = _strict_date(item.get("invoice_date"), "Ngày hóa đơn")
-        values = (
-            index, invoice_date, _excel_text(item.get("invoice_number")),
-            _vnd(item.get("subtotal")), _vnd(item.get("tax_amount")),
-            _vnd(item.get("total_amount")),
-        )
-        for column, value in enumerate(values, 1):
-            cell = ws.cell(row, column, value)
-            cell.font = _font(size=11)
-            cell.border = TABLE_BORDER
-            cell.alignment = Alignment(
-                horizontal="right" if column >= 4 else "center", vertical="center",
-            )
-        ws.cell(row, 2).number_format = "dd/mm/yyyy"
-        for column in (4, 5, 6):
-            ws.cell(row, column).number_format = '#,##0;[Red]-#,##0;"-"'
-        ws.row_dimensions[row].height = 22
-
-    total_row = header_row + len(invoices) + 1
-    ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=3)
-    ws.cell(total_row, 1, "Tổng cộng")
-    ws.cell(total_row, 1).font = _font(size=11, bold=True)
-    ws.cell(total_row, 1).alignment = Alignment(horizontal="center", vertical="center")
-    for column, key in zip((4, 5, 6), ("subtotal", "tax_amount", "total_amount")):
-        ws.cell(total_row, column, totals[key])
-        ws.cell(total_row, column).number_format = '#,##0;[Red]-#,##0;"-"'
-    for column in range(1, 7):
-        ws.cell(total_row, column).border = TABLE_BORDER
-        ws.cell(total_row, column).font = _font(size=11, bold=True)
-    ws.row_dimensions[total_row].height = 24
-
-    words_row = total_row + 2
-    _merge_write(
-        ws, f"A{words_row}:F{words_row}",
-        "Bằng chữ:    " + number_to_vietnamese(totals["total_amount"]) + "./.",
-        size=11, bold=True, italic=True,
-    )
-    payment_rows = (
-        "Vậy kính mong quý Công ty thanh toán cho chúng tôi bằng chuyển khoản theo thông tin tài khoản sau:",
-        f"Tên tài khoản: {snapshot['company_name_snapshot'].upper()}",
-        f"Số tài khoản: {snapshot['payment_bank_account_snapshot']}  Tại {snapshot['payment_bank_name_snapshot']}",
-        "Rất mong nhận được sự hợp tác từ quý công ty!",
-        "Trân trọng cảm ơn!",
-    )
-    for offset, text in enumerate(payment_rows, start=2):
-        row = words_row + offset
-        _merge_write(ws, f"A{row}:F{row}", text, size=11, bold=offset in (3, 4))
-        ws.row_dimensions[row].height = 20
-
-    signature_row = words_row + 8
-    _merge_write(ws, f"A{signature_row}:C{signature_row}", "Nơi nhận", size=11, italic=True, horizontal="center")
-    _merge_write(ws, f"D{signature_row}:F{signature_row}", "ĐẠI DIỆN CÔNG TY", size=11, bold=True, horizontal="center")
-    _merge_write(ws, f"A{signature_row + 1}:C{signature_row + 2}", "- Như trên;\n- Lưu VP;", size=11, italic=True, horizontal="center", vertical="top")
-    _merge_write(ws, f"D{signature_row + 1}:F{signature_row + 2}", "(Ký, họ tên, đóng dấu)", size=11, italic=True, horizontal="center", vertical="top")
-
-    ws.print_area = f"A1:F{signature_row + 7}"
-    ws.print_title_rows = f"{header_row}:{header_row}"
+        contract_text = f"Căn cứ hàng hóa đã cung cấp giữa {snapshot['buyer_name_snapshot']} và {snapshot['company_name_snapshot']}."
+    write('A7', '          ' + contract_text)
+    write('A8', f"         Thời gian từ ngày {period_from.strftime('%d/%m/%Y')} – {period_to.strftime('%d/%m/%Y')} "
+          f"chúng tôi đã cung cấp hàng hoá cho {snapshot['buyer_name_snapshot']}, dựa theo số lượng "
+          "bàn giao chúng tôi đã xuất hóa đơn như sau:")
+    for index, item in enumerate(invoices, 1):
+        row = 10 + index
+        values = (index, _strict_date(item['invoice_date'], 'Ngày hóa đơn'),
+                  _excel_text(item['invoice_number']), _vnd(item['subtotal']),
+                  _vnd(item['tax_amount']), _vnd(item['total_amount']))
+        for column, value in enumerate(values, 2):
+            ws.cell(row, column, value)
+        ws.cell(row, 3).number_format = 'dd/mm/yyyy'
+        for column in (5, 6, 7):
+            ws.cell(row, column).number_format = '#,##0'
+    total_row = 11 + count
+    for column, key in zip((5, 6, 7), ('subtotal', 'tax_amount', 'total_amount')):
+        ws.cell(total_row, column, totals[key]).number_format = '#,##0'
+    write(f'C{total_row + 1}', number_to_vietnamese(totals['total_amount']) + './.')
+    write(f'A{total_row + 3}', f"        Tên tài khoản: {snapshot['company_name_snapshot'].upper()}")
+    write(f'A{total_row + 4}', f"        Số tài khoản: {snapshot['payment_bank_account_snapshot']} Tại {snapshot['payment_bank_name_snapshot']}")
+    # Grow narrative rows for long customer names; keep the invoice table compact.
+    for row in (7, 8):
+        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0,
+                                            math.ceil(len(ws.cell(row, 1).value or '') / 110) * 15)
+    ws.print_area = f'A1:H{total_row + 14}'
+    ws.print_title_rows = '10:10'
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.page_setup.orientation = "portrait"
+    ws.page_setup.orientation = 'portrait'
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
-    ws.page_setup.scale = None
-    ws.page_margins = PageMargins(left=0.55, right=0.45, top=0.45, bottom=0.45, header=0.15, footer=0.15)
     ws.print_options.horizontalCentered = True
-    ws.oddFooter.center.text = "Trang &P / &N"
 
     proof = workbook.create_sheet("Đối chiếu hóa đơn")
     proof.append([

@@ -199,9 +199,9 @@ class InvoicePaymentScopeTests(unittest.TestCase):
             payment_name = next(name for name in names if name.startswith("De_nghi_thanh_toan"))
             payment = load_workbook(io.BytesIO(archive.read(payment_name)), data_only=True, keep_links=False)
             try:
-                self.assertEqual("ĐỀ NGHỊ THANH TOÁN", payment["Đề nghị thanh toán"]["A6"].value)
-                self.assertEqual("0000001", payment["Đề nghị thanh toán"]["C15"].value)
-                self.assertEqual(216, payment["Đề nghị thanh toán"]["F15"].value)
+                self.assertEqual("ĐỀ NGHỊ THANH TOÁN", payment["Đề nghị thanh toán"]["A5"].value)
+                self.assertEqual("0000001", payment["Đề nghị thanh toán"]["D11"].value)
+                self.assertEqual(216, payment["Đề nghị thanh toán"]["G11"].value)
             finally:
                 payment.close()
             statement_name = next(name for name in names if name.startswith("Bang_tong_hop_giao_nhan"))
@@ -537,6 +537,26 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         calls = client.get_issued_invoice_pdf.call_args_list
         self.assertEqual({c.kwargs['number'] for c in calls}, {'801', '806'})
         self.assertTrue(all(c.kwargs['buyer_tax_code'] == '0200000001' for c in calls))
+
+    def test_print_all_merges_only_scoped_invoice_pages_and_blocks_partial_result(self):
+        from pypdf import PdfReader
+        client, content = self.pdf_fixture()
+        with server.db() as conn:
+            self.add_direct_source(conn, invoice_number='801')
+            self.add_direct_source(conn, invoice_number='806')
+            self.add_source(conn, buyer_tax_code='OTHER', invoice_number='999')
+        scope = self.scope().json
+        url = '/api/export/invoice-pdfs/NT-A?from=2026-09-01&to=2026-09-30&format=pdf&scope_id=' + scope['scope_id']
+        response = self.client.get(url)
+        self.assertEqual(200, response.status_code)
+        self.assertEqual('application/pdf', response.mimetype)
+        self.assertEqual('2', response.headers['X-Invoice-Count'])
+        self.assertEqual(2, len(PdfReader(io.BytesIO(response.data)).pages))
+        self.assertEqual({'801','806'}, {call.kwargs['number'] for call in client.get_issued_invoice_pdf.call_args_list})
+        client.get_issued_invoice_pdf.side_effect = [content, b'not a pdf']
+        failed = self.client.get(url)
+        self.assertEqual(502, failed.status_code)
+        self.assertEqual('invoice_pdf_download_failed', failed.json['code'])
 
     def test_one_invoice_downloads_pdf_and_provider_failure_never_returns_partial_bundle(self):
         client, content = self.pdf_fixture()
