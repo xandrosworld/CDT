@@ -845,6 +845,10 @@ def sync_output_batch(
         series_index = 0
         series_offset = 0
     reconciliation = history_complete
+    # Only a full, consistent sweep in this call proves absence. A resumed
+    # tail, failed request, missing series or partial page must never hide data.
+    full_sweep = series_index == 0 and series_offset == 0
+    seen_ids, seen_keys, expected_totals = set(), set(), {}
     new_count = known_count = item_count = review_count = pages = 0
     savepoint = "invoice_output_batch_sync"
     conn.execute(f"SAVEPOINT {savepoint}")
@@ -866,6 +870,11 @@ def sync_output_batch(
                 status_fields=safe_fields,
                 reference_fields=safe_reference_fields,
             )
+            if invoice_id in seen_ids:
+                raise InvoiceOutputSyncError('M-Invoice trả trùng hóa đơn giữa các trang; hãy tải lại.')
+            seen_ids.add(invoice_id)
+            seen_keys.add(normalized['identity_key'])
+            conn.execute('DELETE FROM outgoing_missing_drafts WHERE invoice_id=?', (invoice_id,))
             apply_saved_mappings(conn, "output", invoice_id)
             try:
                 from .invoice_output_mapping import match_output_catalog_codes
@@ -901,6 +910,9 @@ def sync_output_batch(
                 size=safe_page_size,
             )
             pages += 1
+            if code in expected_totals and expected_totals[code] != total:
+                raise InvoiceOutputSyncError('Danh sách M-Invoice thay đổi trong lúc tải; hãy tải lại.')
+            expected_totals[code] = total
             for remote in page_items:
                 consume(remote)
             next_offset = series_offset + len(page_items)
@@ -925,6 +937,32 @@ def sync_output_batch(
             history_complete = True
             series_index = 0
             series_offset = 0
+
+        if portal_client and complete and full_sweep and series_codes:
+            # Do not mistake an incomplete provider response for deleted drafts.
+            known_issued = {r[0] for r in conn.execute(
+                """SELECT identity_key FROM outgoing_source_invoices
+                   WHERE tenant=? AND source='minvoice' AND source_status_class='issued'
+                     AND invoice_date BETWEEN ? AND ?
+                     AND invoice_series IN (SELECT value FROM json_each(?))""",
+                (tenant, date_from, date_to, json.dumps(series_codes)))}
+            if known_issued.issubset(seen_keys):
+                timestamp = now_iso()
+                conn.execute("""INSERT INTO outgoing_missing_drafts(invoice_id,first_missing_at,checked_at,batch_id)
+                    SELECT id,?,?,? FROM outgoing_source_invoices
+                    WHERE tenant=? AND source='minvoice' AND source_status_class='draft'
+                      AND stock_status='blocked' AND COALESCE(invoice_number,'')=''
+                      AND COALESCE(json_extract(raw_json,'$.dateSign'),'')=''
+                      AND json_extract(raw_json,'$._tdp_source_contract')='minvoice_portal_v1'
+                      AND invoice_date BETWEEN ? AND ?
+                      AND invoice_series IN (SELECT value FROM json_each(?))
+                      AND id NOT IN (SELECT value FROM json_each(?))
+                      AND NOT EXISTS (SELECT 1 FROM invoice_inventory_ledger l
+                        WHERE l.source_invoice_table='outgoing_source_invoices'
+                          AND l.source_invoice_id=outgoing_source_invoices.id)
+                    ON CONFLICT(invoice_id) DO UPDATE SET checked_at=excluded.checked_at,batch_id=excluded.batch_id""",
+                    (timestamp,timestamp,safe_batch_id,tenant,date_from,date_to,
+                     json.dumps(series_codes),json.dumps(sorted(seen_ids))))
 
         counts = _counts(conn, safe_batch_id)
         if not complete:
@@ -1038,9 +1076,17 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
         from invoice_output_adjustments import adjustment_reviews, annotate_adjustment
         from minvoice_portal import portal_document_role
     adjustments = {tenant:adjustment_reviews(conn,tenant) for tenant in {r['tenant'] for r in rows}}
+    missing = {r['invoice_id']: dict(r) for r in conn.execute('SELECT * FROM outgoing_missing_drafts')}
+    missing_drafts = []
     items = []
     for row in rows:
         invoice = dict(row)
+        if (row['id'] in missing and row['source_status_class'] == 'draft'
+                and row['stock_status'] == 'blocked' and not row['invoice_number']):
+            missing_drafts.append({k: invoice[k] for k in
+                ('id','invoice_date','invoice_series','buyer_name','total_amount')})
+            missing_drafts[-1]['checked_at'] = missing[row['id']]['checked_at']
+            continue
         try:
             from .invoice_output_editing import output_mapping_allowed, output_amount_review
         except ImportError:
@@ -1091,5 +1137,6 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
         "batch_id": int(batch_id) if batch_id is not None else None,
         "invoice_type": OUTPUT_INVOICE,
         "items": items,
+        "missing_drafts": missing_drafts,
         "read_only": True,
     }

@@ -164,7 +164,8 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
          str(tenant or "TDP").strip() or "TDP", source, safe_type, include_legacy),
     )]
     fetch = input_invoice_payload if direction == "input" else output_invoice_payload
-    invoices = fetch(conn, invoice_ids=ids)["items"]
+    fetched = fetch(conn, invoice_ids=ids)
+    invoices = fetched["items"]
     output_summary = None
     if direction == 'output':
         try:
@@ -252,6 +253,7 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
         "direction": direction, "source": source, "date_from": start, "date_to": end,
         "status": status, "line_filter": line_filter, "scope": scope, "items": visible_invoices,
         "lines": lines, "amount_reviews": amount_reviews, "output_summary": output_summary,
+        "missing_drafts": fetched.get('missing_drafts', []),
         "group_warnings":group_warnings,"source_line_count":source_line_count,
         "counts": counts, "status_labels": STATUS_LABELS, "line_labels": LINE_LABELS,
         "totals": {
