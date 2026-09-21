@@ -75,6 +75,51 @@ class PortalSendTests(unittest.TestCase):
         result.pop('invoice_inventory_ledger')
         return result
 
+    def test_partial_send_requires_confirmation_bound_to_current_remainder(self):
+        with server.db() as c:
+            c.execute("UPDATE inventory_transactions SET qty_in=5 WHERE source_type='OPENING'")
+        item=self.prepare(); coverage=item['coverage']
+        self.assertTrue(coverage['partial'])
+        self.assertEqual(coverage['selected_rows'],2)
+        self.assertEqual(sum(r['included_qty'] for r in coverage['rows']),5)
+        self.assertEqual(sum(r['remaining_qty'] for r in coverage['rows']),2)
+        self.assertEqual(self.send(item).status_code,200)
+        blocked=self.send(item,False)
+        self.assertEqual(blocked.status_code,409,blocked.json)
+        self.assertEqual(self.remote.posts,0)
+        body={'review_token':item['token'],'series':'1C26TYY','dry_run':False,'confirm_remote_write':True,
+              'confirm_partial':True,'coverage_token':'forged'}
+        url=f"/api/outgoing-invoices/prepared/{item['id']}/send"
+        self.assertEqual(self.client.post(url,json=body).status_code,409)
+        body['coverage_token']=coverage['token']
+        # A change to a row outside the prepared allocation must also invalidate consent.
+        with server.db() as c:
+            c.execute('UPDATE orders SET actual_delivered=actual_delivered+1 WHERE id=?',(self.ids[1],))
+        self.assertEqual(self.client.post(url,json=body).status_code,409)
+        self.assertEqual(self.remote.posts,0)
+        with server.db() as c:
+            c.execute('UPDATE orders SET actual_delivered=actual_delivered-1 WHERE id=?',(self.ids[1],))
+        sent=self.client.post(url,json=body)
+        self.assertEqual(sent.status_code,200,sent.json)
+        self.assertEqual(self.remote.posts,1)
+
+    def test_full_coverage_is_scoped_to_selected_tax_group_and_period(self):
+        with server.db() as c:
+            c.execute("UPDATE orders SET tax='8%' WHERE id=?",(self.ids[1],))
+        item=self.prepare()
+        self.assertFalse(item['coverage']['partial'])
+        self.assertEqual(item['coverage']['selected_rows'],1)
+        self.assertEqual(item['coverage']['remaining_rows'],0)
+        self.assertEqual(self.send(item,False).status_code,200)
+
+    def test_excluded_rows_are_separate_from_unfulfilled_selected_rows(self):
+        with server.db() as c:
+            c.execute("INSERT INTO outgoing_order_choices(order_id,enabled,revision,updated_at) VALUES(?,0,1,'now')",(self.ids[1],))
+        item=self.prepare()
+        self.assertFalse(item['coverage']['partial'])
+        self.assertEqual(item['coverage']['selected_rows'],1)
+        self.assertEqual(item['coverage']['skipped_rows'],1)
+
     def test_draft_send_signed_sync_preserves_exact_order_links_and_stock_once(self):
         before=self.business();item=self.prepare()
         self.assertEqual(item['invoice_date'],'2026-09-14')

@@ -47,14 +47,79 @@ def digest(data):
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def send_coverage(app, conn, draft_id, period, report=None):
+    """Compare this draft with selected, still-unissued order quantities, not invoice line counts."""
+    try:
+        from .outgoing_unissued import unissued_payload
+    except ImportError:
+        from outgoing_unissued import unissued_payload
+    from decimal import Decimal, InvalidOperation
+    def tax_key(value):
+        text = str(value).strip().upper()
+        try:
+            number = Decimal(text.rstrip('%'))
+            if number == -2: return 'KKKNT'
+            if number == -1: return 'KCT'
+            if text.endswith('%') or abs(number) > 1: number /= 100
+            return str(number.normalize())
+        except InvalidOperation:
+            return text
+    draft = conn.execute('SELECT contractor FROM outgoing_invoice_drafts WHERE id=?', (draft_id,)).fetchone()
+    taxes = {tax_key(r[0]) for r in conn.execute('SELECT tax FROM outgoing_invoice_lines WHERE draft_id=?', (draft_id,))}
+    if report is None:
+        report = unissued_payload(conn, period['to'], period['contractor'], respect_export_choices=True, start=period['from'])
+    allocations = {r['order_id']: r['qty'] for r in conn.execute(
+        'SELECT order_id,SUM(qty) qty FROM outgoing_order_allocations WHERE draft_id=? GROUP BY order_id', (draft_id,))}
+    rows = []; skipped = 0
+    for r in report['line_choices']:
+        if r['contractor'] != draft['contractor'] or tax_key(r['tax']) not in taxes: continue
+        if not r['enabled']:
+            skipped += 1
+            continue
+        included = min(max(allocations.get(r['order_id'], 0), 0), r['qty'])
+        remaining = max(r['qty'] - included, 0)
+        rows.append({k: r[k] for k in ('order_id', 'batch_id', 'product_code', 'invoice_name', 'unit')} |
+                    {'selected_qty': r['qty'], 'included_qty': included, 'remaining_qty': remaining,
+                     'pending_reason': r.get('pending_reason') or 'Phần này chưa nằm trong bản nháp đang gửi. Mở các dòng còn lại để kiểm tra.',
+                     'pending_codes': r.get('pending_codes', [])})
+    data = {'selected_rows': len(rows), 'included_rows': sum(r['included_qty'] > 1e-8 for r in rows),
+            'remaining_rows': sum(r['remaining_qty'] > 1e-8 for r in rows), 'skipped_rows': skipped,
+            'rows': rows, 'scope': period}
+    data['partial'] = data['remaining_rows'] > 0
+    data['token'] = signer(app).dumps({'coverage_id': draft_id, 'digest': digest(data)})
+    return data
+
+
+def validate_partial_send(app, conn, draft_id, body):
+    scope = conn.execute('SELECT * FROM outgoing_prepared_scopes WHERE draft_id=?', (draft_id,)).fetchone()
+    if not scope: return
+    coverage = send_coverage(app, conn, draft_id, {'from': scope['date_from'], 'to': scope['date_to'], 'contractor': scope['contractor']})
+    if not coverage['partial']: return
+    message = 'Bản nháp chỉ có một phần hàng đã chọn. Xem phần còn lại và tích “Tôi đồng ý chỉ gửi phần có trong bản nháp này”.'
+    if body.get('confirm_partial') is not True: raise ValueError(message)
+    try:
+        plan = signer(app).loads(body.get('coverage_token', ''), max_age=30*60)
+        current = {k: v for k, v in coverage.items() if k != 'token'}
+        if plan.get('coverage_id') != draft_id or plan.get('digest') != digest(current):
+            raise ValueError('Phần hàng còn lại đã thay đổi. Tải lại bảng kê, kiểm tra và xác nhận gửi một phần lần nữa.')
+    except (BadSignature, TypeError, AttributeError) as exc:
+        raise ValueError('Xác nhận gửi một phần đã hết hạn. Tải lại bảng kê và xác nhận lại.') from exc
+
+
 def prepared_payload(app, conn, draft_ids, period, pending, blocked):
     items = []
+    try:
+        from .outgoing_unissued import unissued_payload
+    except ImportError:
+        from outgoing_unissued import unissued_payload
+    report = unissued_payload(conn, period['to'], period['contractor'], respect_export_choices=True, start=period['from']) if draft_ids else None
     for did in draft_ids:
         data = snapshot(conn, did)
         token = signer(app).dumps({'id': did, 'digest': digest(data)})
         conn.execute('INSERT OR REPLACE INTO outgoing_prepared_scopes VALUES(?,?,?,?,?)',
                      (did,period['from'],period['to'],period['contractor'],digest(data)))
-        items.append({k: v for k, v in data.items() if k != 'sources'} | {'token': token})
+        items.append({k: v for k, v in data.items() if k != 'sources'} |
+                     {'token': token, 'coverage': send_coverage(app, conn, did, period, report)})
     return {'ok': True, 'scope': period, 'items': items, 'pending': pending, 'blocked': blocked,
             'remote_write': False, 'requires_user_sign_and_issue': True}
 
@@ -83,12 +148,18 @@ def register(app,ctx):
                     JOIN outgoing_invoice_drafts d ON d.id=s.draft_id WHERE s.date_from=? AND s.date_to=?
                     AND s.contractor=? AND d.status='draft' ORDER BY d.contractor,d.id''',
                     (period['from'],period['to'],period['contractor'])).fetchall()
+                try:
+                    from .outgoing_unissued import unissued_payload
+                except ImportError:
+                    from outgoing_unissued import unissued_payload
+                report = unissued_payload(conn, period['to'], period['contractor'], respect_export_choices=True, start=period['from']) if rows else None
                 for row in rows:
                     try:data=snapshot(conn,row['draft_id'])
                     except ValueError as exc:warnings.append(str(exc));continue
                     stale=digest(data)!=row['digest']
                     token=signer(app).dumps({'id':row['draft_id'],'digest':row['digest']})
                     items.append({k:v for k,v in data.items() if k!='sources'}|
-                                 {'token':token,'minvoice_status':row['minvoice_status'],'stale':stale})
+                                 {'token':token,'minvoice_status':row['minvoice_status'],'stale':stale,
+                                  'coverage':send_coverage(app,conn,row['draft_id'],period,report)})
             return jsonify(ok=True,scope=period,items=items,pending=warnings,blocked=[],remote_write=False)
         except ValueError as exc:return jsonify(ok=False,error=str(exc)),400

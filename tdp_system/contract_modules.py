@@ -8710,6 +8710,15 @@ def register_contract_routes(app, ctx):
                     validate_prepared(app,conn,draft_id,body.get('review_token'))
                 except ValueError as exc:
                     return jsonify(ok=False,error=str(exc)),409
+            if not dry_run:
+                try:
+                    from .outgoing_prepared import validate_partial_send
+                except ImportError:
+                    from outgoing_prepared import validate_partial_send
+                try:
+                    validate_partial_send(app, conn, draft_id, body)
+                except ValueError as exc:
+                    return jsonify(ok=False,error=str(exc),code='partial_invoice_confirmation_required'),409
             persisted_series = clean_text(draft["minvoice_series"]).upper()
             minvoice_status = clean_text(draft["minvoice_status"]) or "not_sent"
             if (
