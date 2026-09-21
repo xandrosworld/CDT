@@ -161,6 +161,11 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
         from outgoing_amount_settlement import coverage, history
     money_orders, _, _ = coverage(conn)
     orders = [o for o in orders if o['id'] not in money_orders]
+    try:
+        from .outgoing_contractors import excluded_order_ids
+    except ImportError:
+        from outgoing_contractors import excluded_order_ids
+    skipped_ids = excluded_order_ids(conn)
     reconciliation_groups = {}
     for o in orders:
         qty=max(o['actual_delivered']-o['customer_return_qty'],0)
@@ -230,11 +235,26 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
         for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty'):g[field]+=r[field]
         g['last_date']=o['work_date']
     pending=explain_pending(conn,orders,details,units,warnings,stock)
+    for r in details:
+        r['export_skipped'] = r['order_id'] in skipped_ids
+        if r['export_skipped']:
+            r['pending_reason'] = 'Đã bỏ chọn — chưa xuất. Giữ nguyên doanh thu và công nợ; có thể chọn lại khi cần.'
+            r['pending_codes'] = ['user_skipped']
     detail_by_id={r['order_id']:r for r in details}
     for r in line_choices:
         d=detail_by_id.get(r['order_id'],{})
         r.update(pending_reason=d.get('pending_reason',''),pending_codes=d.get('pending_codes',[]),
                  issued_invoices=invoice_refs.get(r['order_id'],[]))
+    skipped_details=[]
+    for r in line_choices:
+        if r['enabled'] or r['order_id'] in detail_by_id:continue
+        skipped_details.append({'order_id':r['order_id'],'batch_id':r['batch_id'],'contractor':r['contractor'],
+            'work_date':r['date'],'product_code':r['product_code'],'product_name':r['invoice_name'],'invoice_name':r['invoice_name'],
+            'unit':r['unit'],'tax':r['tax'],'unissued_qty':r['qty'],'unit_price':r['price'],
+            'approved_qty':r['approved_qty'],'issued_qty':r['issued_qty'],'drafted_qty':0,'ready_qty':0,'waiting_qty':r['qty'],
+            'unissued_amount':int((Decimal(str(r['qty']))*Decimal(str(r['price']))).quantize(Decimal('1'),rounding=ROUND_HALF_UP)),
+            'export_skipped':True,'pending_reason':'Đã bỏ chọn — chưa xuất. Giữ nguyên doanh thu và công nợ; có thể chọn lại khi cần.',
+            'pending_codes':['user_skipped']})
     for g in reconciliation_groups.values():
         g['invoices']=sorted(({k:v for k,v in r.items() if k!='qty'} for r in g['invoices'].values()),
                              key=lambda r:(r['date'],r['number']))
@@ -255,7 +275,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
         from outgoing_signed_stock_review import signed_stock_issues
     return {'from':start,'asof':asof,'contractor':contractor,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
             'amount_settlements': [r for r in history(conn, contractor) if r['date_from'] <= asof and r['date_to'] >= start],
-            'line_choices':line_choices,
+            'line_choices':line_choices,'skipped_details':skipped_details,
             'reconciliation_groups':list(reconciliation_groups.values()),
             'pending_rows':pending,'pending_order_rows':sum(r['waiting_qty']>1e-8 for r in details),
             'signed_stock_issues':signed_stock_issues(conn,contractor),
@@ -296,6 +316,9 @@ def unissued_workbook(payload):
             settled.append([r['id'], r['contractor'], r['date_from'], r['date_to'], r['amount'],
                             ', '.join(i['invoice_series']+'/'+i['invoice_number'] for i in r['invoices']),
                             r['actor'], 'Cần đối chiếu lại' if r['needs_review'] else 'Đã đối trừ theo tiền; không xác nhận khớp mặt hàng'])
+    if payload.get('skipped_details'):
+        skipped=w.create_sheet('Da bo chon chua xuat');skipped.append(['Ngày đơn','Nhà thầu','Mã hàng','Tên hàng','ĐVT','Lượng chưa xuất','Tiền hàng','Lý do'])
+        for r in payload['skipped_details']:skipped.append([r[k] for k in ('work_date','contractor','product_code','invoice_name','unit','unissued_qty','unissued_amount','pending_reason')])
     for s in w:
         s.freeze_panes='A2';s.auto_filter.ref=s.dimensions
         for cell in s[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='163247')

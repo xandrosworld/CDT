@@ -58,6 +58,16 @@ class InvoiceReviewTests(unittest.TestCase):
         w=load_workbook(io.BytesIO(self.download()));self.assertEqual(w[SHEET]['A2'].value,0);self.assertEqual(w[SHEET]['A3'].value,1);w.close()
         r=self.client.get('/api/outgoing-invoices/unissued',query_string=self.period).json
         self.assertEqual([x['order_id'] for x in r['details']],[self.ids[1]])
+        self.assertEqual([x['order_id'] for x in r['skipped_details']],[self.ids[0]])
+        self.assertTrue(r['skipped_details'][0]['export_skipped'])
+        download=self.client.get('/api/outgoing-invoices/unissued-template.zip',query_string=self.period)
+        self.assertEqual(download.status_code,200)
+        with zipfile.ZipFile(io.BytesIO(download.data)) as z:
+            w=load_workbook(io.BytesIO(z.read(next(n for n in z.namelist() if n.endswith('.xlsx')))),data_only=True)
+            details=list(w['Chi tiet don'].values)[1:]
+            self.assertEqual({row[0] for row in details},set(self.ids[:2]))
+            self.assertIn('Đã bỏ chọn',next(row[9] for row in details if row[0]==self.ids[0]))
+            w.close()
         with server.db() as c:
             self.assertEqual([tuple(r) for r in c.execute('SELECT order_id,enabled FROM outgoing_order_choices')],[(self.ids[0],0)])
         # A selected worksheet can restore the same order line without recreating a sale.

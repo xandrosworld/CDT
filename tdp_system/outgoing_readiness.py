@@ -22,10 +22,10 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.page import PageMargins
 
 try:
-    from .stock_tax_policy import exempt_order_codes
+    from .stock_tax_policy import exempt_order_codes, is_kkknt
     from .outgoing_line_policy import unit_issues, draft_policy_rows
 except ImportError:
-    from stock_tax_policy import exempt_order_codes
+    from stock_tax_policy import exempt_order_codes, is_kkknt
     from outgoing_line_policy import unit_issues, draft_policy_rows
 
 try:
@@ -301,6 +301,24 @@ def canonical_available_stock(conn, as_of: str = "") -> dict[str, dict[str, Any]
         })
         item["reserved_qty"] += max(_number(row["qty"]), 0)
 
+    # Authorized KKKNT holds can overdraw stock without making an existing
+    # taxable reservation inconsistent. Actual signed outflow remains deducted.
+    exempt_holds = defaultdict(float)
+    exempt_lines = defaultdict(float)
+    for line in conn.execute("""SELECT l.draft_id,l.product_code,l.qty,l.tax
+        FROM outgoing_invoice_lines l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id
+        WHERE d.status='draft'"""):
+        if is_kkknt(line['tax']):
+            exempt_lines[(str(line['draft_id']), line['product_code'])] += float(line['qty'])
+    for held in conn.execute("""SELECT t.source_id,t.product_code,SUM(t.qty_out) qty
+        FROM inventory_transactions t JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id
+        WHERE t.source_type='OUTGOING_DRAFT' AND t.status='reserved' AND d.status='draft'
+        GROUP BY t.source_id,t.product_code"""):
+        exempt_qty = exempt_lines.get((str(held['source_id']), held['product_code']), 0)
+        exempt_holds[held['product_code']] += min(max(float(held['qty']), 0), exempt_qty)
+    for code, item in stock.items():
+        item['kkknt_reserved_qty'] = exempt_holds.get(code, 0)
+
     canonicalized_drafts = _canonicalized_local_draft_ids(conn)
     for row in conn.execute(
         """SELECT d.id draft_id,l.product_code,SUM(l.qty) qty
@@ -437,7 +455,7 @@ def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     for code, qty in required.items():
         if code in exempt:
             continue
-        available = max(stock.get(code, {}).get("raw_available_qty", 0) + held[code], 0)
+        available = max(stock.get(code, {}).get("raw_available_qty", 0) + held[code] + stock.get(code, {}).get("kkknt_reserved_qty", 0), 0)
         if qty > available + EPSILON:
             raise OutgoingReadinessError(
                 f"Mã {code}: cần {qty:g}, có thể xuất {available:g}, thiếu {qty - available:g}; cần tính lại dự thảo",
@@ -598,7 +616,7 @@ def _project_rows(
         remaining = max(demand - drafted - issued, 0)
         code = str(item["product_code"]).strip()
         have = max(available.get(code, 0), 0)
-        invoiceable = 0 if item['id'] in units else remaining if code in exempt else min(remaining, have)
+        invoiceable = 0 if item['id'] in units else remaining if is_kkknt(item['tax']) or code in exempt else min(remaining, have)
         pending = max(remaining - invoiceable, 0)
         available[code] = max(have - invoiceable, 0)
         unit_price = _vnd(item.get("sell_price"))
@@ -624,7 +642,7 @@ def _project_rows(
                 if pending > EPSILON else ""
             ),
             "available_before": have,
-            "negative_stock_allowed": code in exempt,
+            "negative_stock_allowed": is_kkknt(item["tax"]) or code in exempt,
             "demand_value": _vnd(demand, unit_price),
             "drafted_value": _vnd(drafted, unit_price),
             "issued_value": _vnd(issued, unit_price),

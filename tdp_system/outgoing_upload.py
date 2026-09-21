@@ -20,7 +20,7 @@ try:
     from .outgoing_consolidation import _write_draft, decimal, export_quantity, money
     from .outgoing_weights import confirmed_weights, invoice_rows, order_snapshot
     from .outgoing_names import invoice_name
-    from .stock_tax_policy import exempt_order_codes
+    from .stock_tax_policy import exempt_order_codes, is_kkknt
     from .invoice_tax_export import build_invoice_workbook, _safe_name
     from .template_workbook import safe_workbook_bytes
 except ImportError:
@@ -31,7 +31,7 @@ except ImportError:
     from outgoing_consolidation import _write_draft, decimal, export_quantity, money
     from outgoing_weights import confirmed_weights, invoice_rows, order_snapshot
     from outgoing_names import invoice_name
-    from stock_tax_policy import exempt_order_codes
+    from stock_tax_policy import exempt_order_codes, is_kkknt
     from invoice_tax_export import build_invoice_workbook, _safe_name
     from template_workbook import safe_workbook_bytes
 
@@ -222,12 +222,12 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent):
     for group,rows in ordered_groups:
         code=group[1];want=sum((min(decimal(r['qty']),held[r['id']]) for r in rows),Decimal(0))
         have=max(capacity.get(code,Decimal(0)),Decimal(0))
-        keep=export_quantity(want if code in exempt[group[0]] else min(want,have),group[2])
+        keep=export_quantity(want if is_kkknt(group[3]) or code in exempt[group[0]] else min(want,have),group[2],group[3])
         planned[group]=keep;capacity[code]=have-keep
     for group,rows in ordered_groups:
         code=group[1];total=sum((decimal(r['qty']) for r in rows),Decimal(0))
         have=max(capacity.get(code,Decimal(0)),Decimal(0));keep=planned[group]
-        can=export_quantity(total if code in exempt[group[0]] else min(total,keep+have),group[2])
+        can=export_quantity(total if is_kkknt(group[3]) or code in exempt[group[0]] else min(total,keep+have),group[2],group[3])
         planned[group]=can;capacity[code]=have-(can-keep)
     by_id = {i['order_id']:i for i in items}; ready = []
     for group, rows in ordered_groups:

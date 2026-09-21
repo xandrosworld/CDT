@@ -43,7 +43,13 @@ def money(value):
     return decimal(value).quantize(Decimal('1'),rounding=ROUND_HALF_UP)
 
 
-def export_quantity(value, unit):
+def export_quantity(value, unit, tax=None):
+    try:
+        from .stock_tax_policy import is_kkknt
+    except ImportError:
+        from stock_tax_policy import is_kkknt
+    # KKKNT uses the actual remaining quantity, including fractional kg.
+    if is_kkknt(tax):return value
     unit=str(unit or '').strip().casefold()
     quantum=Decimal('.1') if unit=='kg' else Decimal('1') if unit in {'cái','quả','con','chiếc'} else None
     if quantum is None:return value
@@ -69,7 +75,7 @@ def replenishable_scopes(conn, orders, batch_ids):
     for key,rows in groups.items():
         held=sum((decimal(r['drafted_qty']) for r in rows),Decimal(0))
         extra=sum((decimal(r['invoiceable_qty']) for r in rows),Decimal(0))
-        increased=export_quantity(held+extra,key[2])>export_quantity(held,key[2])
+        increased=export_quantity(held+extra,key[2],key[3])>export_quantity(held,key[2],key[3])
         if increased:
             result.update((r['batch_id'],r['contractor']) for r in rows if r['invoiceable_qty']>1e-8)
     return result
@@ -85,7 +91,7 @@ def _groups(rows, floor_kg=True):
     for (code,unit,nature,price,weight_order),items in sorted(grouped.items()):
         units[code].add(unit)
         qty=sum((decimal(r['qty']) for r in items),Decimal(0))
-        if floor_kg:qty=export_quantity(qty,unit)
+        if floor_kg:qty=export_quantity(qty,unit,items[0]['tax'])
         if qty>0:result.append((code,unit,nature,price,qty,items))
     conflicts=[code+' ('+', '.join(sorted(values))+')' for code,values in units.items() if len(values)>1]
     if conflicts:

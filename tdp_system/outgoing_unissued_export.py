@@ -157,6 +157,7 @@ def _contractor_workbook(archive, names, party, details, payload, tax_percent):
         for row in totals:summary.append(row)
         summary.append(['TỔNG CỘNG',*grand])
         summary.append(['Cách tính','Cùng mã, ĐVT, giá, thuế và tính chất cộng lượng; khác giá/thuế giữ dòng riêng.'])
+        summary.append(['Hàng đã bỏ chọn','Vẫn nằm trong bảng chưa xuất; xem lý do ở sheet Chi tiet don. Không tự đưa lại vào bản nháp và không làm giảm doanh thu/công nợ.'])
         summary.append(['Đơn vị','Số lượng và đơn giá theo đơn gốc. Dòng đỏ cần kiểm tra ĐVT; chưa tự thay số lượng.'])
         summary.append(['Đối chiếu tiền','Tiền trong bảng = lượng chưa xuất × giá trên đơn. Nếu giá trên hóa đơn đã ký khác giá đơn, cần đối chiếu khoản chênh riêng; không tự sửa giá hoặc lượng để bù tiền.'])
         summary.append(['Cập nhật hóa đơn đã ký',payload.get('source_checked_at') or 'Bản dữ liệu đã lưu; chưa cập nhật M-Invoice trong lần tải này.'])
@@ -176,7 +177,7 @@ def _contractor_workbook(archive, names, party, details, payload, tax_percent):
             tax_label='KKKNT' if vat==-2 else 'KCT' if vat==-1 else f'{vat:g}%'
             detail.append([row['order_id'],row['work_date'],_literal(row['product_code']),
                            _literal(row.get('invoice_name') or row['product_name']),_literal(row['unit']),
-                           qty,row['unit_price'],tax_label,amount,_literal(row.get('pending_reason','')),
+                           qty,row['unit_price'],tax_label,amount,_literal(row.get('pending_reason') or ('Đã chuẩn bị — chờ gửi/ký, không phải bị chặn vì thiếu tồn.' if row.get('ready_qty',0)>0 else 'Chưa chuẩn bị bản nháp.')),
                            _literal(row.get('conversion_reason',''))])
             if row.get('needs_conversion'):
                 for cell in detail[detail.max_row]:
@@ -197,6 +198,8 @@ def _contractor_workbook(archive, names, party, details, payload, tax_percent):
 def unissued_template_zip(payload, template_dir, tax_percent):
     # Keep the ordinary M-Invoice export path and its tax-specific templates
     # unchanged. Only the read-only unissued report is combined by contractor.
+    if payload.get('portion')!='waiting':
+        payload={**payload,'details':payload['details']+payload.get('skipped_details',[])}
     split,_=_tax_split_zip(payload,template_dir,tax_percent)
     waiting=payload.get('portion')=='waiting'
     prefix='CON_CHO' if waiting else 'CHUA_XUAT'

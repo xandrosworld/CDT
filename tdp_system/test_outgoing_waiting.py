@@ -95,12 +95,12 @@ class WaitingTests(unittest.TestCase):
         self.assertEqual((r['issued_qty'],r['ready_qty'],r['waiting_qty']),(7,0,3))
         with server.db() as c:self.assertEqual(canonical_available_stock(c)['HH-01']['raw_available_qty'],0)
 
-    def test_bk_named_waiting_keeps_the_authorized_stock_exception(self):
+    def test_kkknt_waiting_needs_no_bk_marker(self):
         self.seed(stock=0)
         with server.db() as c:
             c.execute("UPDATE orders SET tax='KKKNT'")
             c.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
-        r=self.refresh()['rows'][0];self.assertEqual((r['ready_qty'],r['waiting_qty']),(0,10))
+        r=self.refresh()['rows'][0];self.assertEqual((r['ready_qty'],r['waiting_qty']),(10,0))
         with server.db() as c:c.execute("UPDATE orders SET product_name='Hàng thử BK'")
         r=self.refresh()['rows'][0];self.assertEqual((r['ready_qty'],r['waiting_qty']),(10,0))
 
@@ -110,21 +110,28 @@ class WaitingTests(unittest.TestCase):
         r=self.refresh();self.assertEqual(r['warnings'],[]);self.assertEqual(r['rows'][0]['ready_qty'],2)
         self.assertEqual(sum(r[3] for r in self.excel_rows(self.request())),2)
 
-    def test_old_kkknt_holds_are_removed_and_cannot_unlock_negative_stock(self):
-        from unittest.mock import patch
-        self.seed(stock=0)
+    def test_kkknt_fractional_quantity_survives_refresh_and_export_with_negative_stock(self):
+        self.seed(qty=10.038,stock=-2)
         with server.db() as c:
             c.execute("UPDATE orders SET tax='KKKNT'")
-            c.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
-            with patch('tdp_system.outgoing_waiting.exempt_order_codes',return_value={'HH-01'}):
-                refresh_waiting(c,server.now_iso())
-            self.assertEqual(c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],10)
-        report=self.refresh()
-        self.assertEqual(report['rows'][0]['ready_qty'],0)
-        self.assertEqual(report['rows'][0]['waiting_qty'],10)
+        for _ in range(2):
+            report=self.refresh()
+            self.assertEqual(report['warnings'],[])
+            self.assertAlmostEqual(report['rows'][0]['ready_qty'],10.038)
+            self.assertEqual(report['rows'][0]['waiting_qty'],0)
+        self.assertAlmostEqual(sum(r[3] for r in self.excel_rows(self.request())),10.038)
+
+    def test_kkknt_exception_does_not_release_taxable_rows_of_same_code(self):
+        self.seed(qty=3.02,stock=0)
         with server.db() as c:
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],0)
-        self.assertEqual(self.request().status_code,409)
+            c.execute("UPDATE orders SET tax='KKKNT'")
+            _,ids=self.add_batch(c,'2026-09-02',[{'qty':5}])
+            c.execute("UPDATE orders SET tax='8%' WHERE id=?",(ids[0],))
+        report=self.refresh()
+        by_tax={r['tax']:r for r in report['details']}
+        self.assertAlmostEqual(by_tax['KKKNT']['ready_qty'],3.02)
+        self.assertEqual(by_tax['8%']['ready_qty'],0)
+        self.assertAlmostEqual(sum(r[3] for r in self.excel_rows(self.request())),3.02)
 
     def test_locked_remote_hold_is_not_rewritten_after_stock_decreases(self):
         self.seed();self.refresh()
@@ -135,6 +142,21 @@ class WaitingTests(unittest.TestCase):
             result=refresh_waiting(c,server.now_iso())
             self.assertTrue(result['warnings'])
             self.assertEqual(c.serialize(),before)
+
+    def test_negative_kkknt_hold_preserves_existing_taxable_reservation(self):
+        self.seed(qty=5,stock=5)
+        self.refresh()
+        with server.db() as c:
+            _,ids=self.add_batch(c,'2026-09-02',[{'qty':3.02}])
+            c.execute("UPDATE orders SET tax='KKKNT' WHERE id=?",(ids[0],))
+        report=self.refresh()
+        self.assertEqual(report['warnings'],[])
+        self.assertAlmostEqual(sum(r['ready_qty'] for r in report['details']),8.02)
+        self.assertAlmostEqual(sum(r[3] for r in self.excel_rows(self.request())),8.02)
+        with server.db() as c:
+            stock=canonical_available_stock(c)['HH-01']
+            self.assertEqual(stock['canonical_qty'],5)
+            self.assertAlmostEqual(stock['raw_available_qty'],-3.02)
 
     def test_bk_exception_does_not_leak_to_unmarked_rows_of_same_code(self):
         self.seed(stock=0)

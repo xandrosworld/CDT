@@ -643,18 +643,11 @@ class OutputStockRemapTests(unittest.TestCase):
             self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM output_stock_remaps').fetchone()[0])
             self.assertEqual('HH-01',conn.execute('SELECT product_code FROM outgoing_source_invoice_items WHERE id=?',(self.line_id,)).fetchone()[0])
 
-    def test_negative_kkknt_requires_explicit_bk_before_allocate_export_and_issue(self):
+    def test_negative_kkknt_can_allocate_export_and_issue_without_bk_marker(self):
         with server.db() as conn:
             # August's unrelated source invoice is outside this order period.
             batch,orders=Seed.add_batch(conn,'2026-09-20',[{'product_code':'REMAP-C','qty':100}])
             conn.execute("UPDATE orders SET tax='KKKNT' WHERE batch_id=?",(batch,))
-        ready=self.client.get(f'/api/outgoing-invoices/readiness/{batch}').get_json()
-        self.assertTrue(ready['blocking_issues'])
-        self.assertEqual(0,ready['invoiceable_qty'])
-        self.assertNotEqual(200,self.client.post(f'/api/outgoing-invoices/draft/{batch}').status_code)
-        with server.db() as conn:
-            self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM outgoing_invoice_drafts WHERE batch_id=?',(batch,)).fetchone()[0])
-            conn.execute('UPDATE orders SET purchase_list=1 WHERE batch_id=?',(batch,))
         ready=self.client.get(f'/api/outgoing-invoices/readiness/{batch}').get_json()
         self.assertEqual([],ready['blocking_issues']); self.assertEqual(100,ready['invoiceable_qty'])
         self.assertEqual(1,len(ready['negative_stock_warnings']))

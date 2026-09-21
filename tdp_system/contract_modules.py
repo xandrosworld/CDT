@@ -4760,9 +4760,9 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
         for code in set(raw_available) | set(released)
     }
     try:
-        from .stock_tax_policy import exempt_order_codes
+        from .stock_tax_policy import exempt_order_codes, is_kkknt
     except ImportError:
-        from stock_tax_policy import exempt_order_codes
+        from stock_tax_policy import exempt_order_codes, is_kkknt
     exempt = exempt_order_codes(conn, orders)
     try:
         from .outgoing_line_policy import unit_issues
@@ -4773,7 +4773,7 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
     unresolved_holds = {
         code: -(raw_available.get(code, 0) + released.get(code, 0))
         for code in demand_codes
-        if raw_available.get(code, 0) + released.get(code, 0) < -1e-9
+        if raw_available.get(code, 0) + released.get(code, 0) + stock.get(code, {}).get('kkknt_reserved_qty', 0) < -1e-9
         and stock.get(code, {}).get('reserved_qty', 0) - released.get(code, 0) > 1e-9
     }
     if unresolved_holds:
@@ -4827,7 +4827,7 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
             )
         remaining = max(demand - locked, 0)
         have = available.get(item["product_code"], 0)
-        qty = 0 if item['id'] in units else remaining if item['product_code'] in exempt else min(remaining, have)
+        qty = 0 if item['id'] in units else remaining if is_kkknt(item['tax']) or item['product_code'] in exempt else min(remaining, have)
         available[item["product_code"]] = max(have - qty, 0)
         if qty > 1e-9:
             # Each tax workbook is imported and issued separately. Keep its

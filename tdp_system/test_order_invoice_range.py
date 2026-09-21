@@ -142,12 +142,12 @@ class OrderInvoiceRangeTests(unittest.TestCase):
         with server.db() as c:c.execute("UPDATE inventory_transactions SET qty_in=1 WHERE source_type='OPENING'")
         self.assertEqual(sum(r[3] for r in self.excel_rows(self.request())),1)
 
-    def test_only_bk_named_rows_export_without_stock(self):
+    def test_kkknt_rows_export_without_stock_or_bk_marker(self):
         self.seed(stock=0)
         with server.db() as c:
             c.execute("UPDATE products SET tax='KKKNT' WHERE code='HH-01'")
             c.execute("UPDATE orders SET tax='KKKNT'")
-        self.assertEqual(self.request().status_code,409)
+        self.assertEqual(self.request().status_code,200)
         with server.db() as c:c.execute("UPDATE orders SET product_name='Hàng thử BK'")
         r=self.request();self.assertEqual(r.status_code,200,r.get_json(silent=True))
         self.assertEqual(r.headers['X-Pending-Order-Lines'],'0')

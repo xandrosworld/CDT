@@ -5,11 +5,11 @@ from decimal import Decimal
 try:
     from .outgoing_consolidation import decimal, export_quantity
     from .outgoing_readiness import invoice_order_issues
-    from .stock_tax_policy import exempt_order_codes
+    from .stock_tax_policy import exempt_order_codes, is_kkknt
 except ImportError:
     from outgoing_consolidation import decimal, export_quantity
     from outgoing_readiness import invoice_order_issues
-    from stock_tax_policy import exempt_order_codes
+    from stock_tax_policy import exempt_order_codes, is_kkknt
 
 
 def explain_pending(conn, orders, details, units, warnings, stock):
@@ -29,7 +29,7 @@ def explain_pending(conn, orders, details, units, warnings, stock):
     for r in details:
         groups[key(r)] += decimal(r['unissued_qty'])
         held_groups[key(r)] += decimal(r['ready_qty'])
-        if r['product_code'] not in exempt[r['contractor']] and r['order_id'] not in units:
+        if not is_kkknt(r['tax']) and r['product_code'] not in exempt[r['contractor']] and r['order_id'] not in units:
             pending_by_code[r['product_code']] += r['waiting_qty']
     pending = {}
     for r in details:
@@ -56,17 +56,17 @@ def explain_pending(conn, orders, details, units, warnings, stock):
         if not reasons:
             code = r['product_code']
             available = stock.get(code, {}).get('available_qty', 0)
-            shortage = code not in exempt[r['contractor']] and available + 1e-8 < pending_by_code[code]
+            shortage = not is_kkknt(r['tax']) and code not in exempt[r['contractor']] and available + 1e-8 < pending_by_code[code]
             if shortage:
                 reasons.append('Chưa đủ tồn khả dụng cho phần còn chờ; cần bổ sung đầu vào hoặc kiểm tra lượng đang giữ ở bảng kê khác.')
                 codes.append('stock_shortage')
             total = groups[key(r)]
-            remainder = total - export_quantity(total, r['unit'])
+            remainder = total - export_quantity(total, r['unit'],r['tax'])
             if remainder > Decimal('0.00000001'):
                 step='0,1 kg' if r['unit'].strip().casefold()=='kg' else 'số nguyên '+r['unit']
                 reasons.append(f'Có phần lẻ chưa đủ {step}; giữ lại để cộng dồn.')
                 codes.append('rounding')
-            if not reasons or (not shortage and export_quantity(total,r['unit'])-held_groups[key(r)]>Decimal('0.00000001')):
+            if not reasons or (not shortage and export_quantity(total,r['unit'],r['tax'])-held_groups[key(r)]>Decimal('0.00000001')):
                 reasons.append('Chờ cập nhật phân bổ; kiểm tra lại bảng kê sau khi cập nhật hóa đơn đã ký. Chưa kết luận là thiếu đầu vào.')
                 codes.append('allocation_refresh')
         r['pending_reason'] = ' · '.join(dict.fromkeys(reasons))

@@ -6,13 +6,13 @@ try:
     from .outgoing_unissued import issued_allocations
     from .outgoing_consolidation import _write_draft, decimal, export_quantity
     from .outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
-    from .stock_tax_policy import exempt_order_codes
+    from .stock_tax_policy import exempt_order_codes, is_kkknt
     from .outgoing_line_policy import unit_issues, draft_policy_rows
 except ImportError:
     from outgoing_unissued import issued_allocations
     from outgoing_consolidation import _write_draft, decimal, export_quantity
     from outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
-    from stock_tax_policy import exempt_order_codes
+    from stock_tax_policy import exempt_order_codes, is_kkknt
     from outgoing_line_policy import unit_issues, draft_policy_rows
 
 
@@ -72,7 +72,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
             consume[r['order_id']]=max(consume.get(r['order_id'],Decimal(0))-used,Decimal(0))
             qty=min(decimal(r['qty'])-used,need.get(r['order_id'],Decimal(0)))
             code=r['product_code']
-            if code not in exempt:qty=min(qty,capacity.get(code,Decimal(0)))
+            if code not in exempt and not is_kkknt(r['tax']):qty=min(qty,capacity.get(code,Decimal(0)))
             if r['order_id'] in units:qty=Decimal(0)
             capacity[code]=max(capacity.get(code,Decimal(0))-qty,Decimal(0))
             if qty<=Decimal('0.00000001'):qty=Decimal(0)
@@ -123,7 +123,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
                 warnings.append({'contractor':o['contractor'],'message':o['product_code']+': '+ '; '.join(issues[0]['messages'])})
                 continue
             code=o['product_code'];have=available.get(code,Decimal(0))
-            qty=need[o['id']] if code in exempt_by_party[o['contractor']] else min(need[o['id']],have)
+            qty=need[o['id']] if is_kkknt(o['tax']) or code in exempt_by_party[o['contractor']] else min(need[o['id']],have)
             available[code]=max(have-qty,Decimal(0))
             if qty<=Decimal('0.00000001'):continue
             row={**o,'order_id':o['id'],'qty':float(qty),'_source_price':decimal(o['sell_price'])}
@@ -131,7 +131,7 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
         by_tax=defaultdict(list)
         for key,rows in additions.items():
             total=sum((decimal(r['qty']) for r in rows),Decimal(0))
-            total=max(export_quantity(already_held[key]+total,key[2])-already_held[key],Decimal(0))
+            total=max(export_quantity(already_held[key]+total,key[2],key[3])-already_held[key],Decimal(0))
             for r in rows:
                 take=min(total,decimal(r['qty']));total-=take
                 if take>0:by_tax[(key[0],key[3])].append({**r,'qty':float(take)})
@@ -159,10 +159,10 @@ def waiting_readiness(conn,orders,issued,*,stock=None):
         exempt=exempt_order_codes(conn,draft_policy_rows(conn,d['id']))
         expected={r['product_code']:r['qty'] for r in conn.execute('SELECT product_code,SUM(qty) qty FROM outgoing_invoice_lines WHERE draft_id=? GROUP BY product_code',(d['id'],))}
         reserved={r['product_code']:r['qty'] for r in conn.execute("SELECT product_code,SUM(qty_out) qty FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved' GROUP BY product_code",(str(d['id']),))}
-        for r in conn.execute('SELECT order_id,product_code,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
+        for r in conn.execute('SELECT order_id,product_code,qty,tax FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
             if r['order_id'] not in by_order:continue
             oid=r['order_id'];code=r['product_code'];held[oid]+=r['qty']
-            if abs(expected.get(code,0)-reserved.get(code,0))>1e-8 or (code not in exempt and stock.get(code,{}).get('raw_available_qty',0)<-1e-8):
+            if abs(expected.get(code,0)-reserved.get(code,0))>1e-8 or (code not in exempt and not is_kkknt(r['tax']) and stock.get(code,{}).get('raw_available_qty',0)+stock.get(code,{}).get('kkknt_reserved_qty',0)<-1e-8):
                 warnings.append({'contractor':d['contractor'],'message':code+': lượng giữ chờ cần đối chiếu lại với tồn hiện tại.'})
             elif oid not in units:valid[oid]+=r['qty']
     for oid,o in by_order.items():
