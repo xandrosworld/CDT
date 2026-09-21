@@ -83,6 +83,33 @@ class InvoiceDeliveryStatementTests(unittest.TestCase):
         finally:
             workbook.close()
 
+    def test_consolidated_line_keeps_each_source_order_once(self):
+        from copy import deepcopy
+        lines = [{**self.line(order_id=11), 'qty': 0.5, 'amount': 50},
+                 {**self.line(order_id=12), 'qty': 1.5, 'amount': 150, 'work_date': '2026-08-31'}]
+        before = deepcopy(lines)
+        book = invoice_delivery_statement_workbook(lines, [self.draft()])
+        try:
+            detail = book['Bảng kê giao hàng']
+            self.assertEqual(2, sum(detail.cell(r, 5).value for r in (11, 12)))
+            self.assertEqual(200, sum(detail.cell(r, 7).value for r in (11, 12)))
+            self.assertEqual(216, sum(detail.cell(r, 10).value for r in (11, 12)))
+            self.assertEqual({11, 12}, {detail.cell(r, 18).value for r in (11, 12)})
+            self.assertEqual(0, book['Đối chiếu hóa đơn'].cell(4, 10).value)
+            self.assertEqual(before, lines)
+        finally:
+            book.close()
+
+    def test_true_duplicate_allocation_is_still_rejected(self):
+        line = self.line()
+        # Even if totals were also doubled, repeated data must never pass.
+        draft = {**self.draft(total=432), 'subtotal': 400, 'tax_amount': 32}
+        with self.assertRaisesRegex(InvoiceDeliveryStatementError, 'bị lặp'):
+            invoice_delivery_statement_workbook([line, dict(line)], [draft])
+        line.pop('order_id')
+        with self.assertRaisesRegex(InvoiceDeliveryStatementError, 'bị lặp'):
+            invoice_delivery_statement_workbook([line, dict(line)], [draft])
+
     def test_unissued_and_mixed_contractor_scopes_are_rejected(self):
         with self.assertRaises(InvoiceDeliveryStatementError) as unissued:
             invoice_delivery_statement_workbook([self.line()], [self.draft(status="draft")])

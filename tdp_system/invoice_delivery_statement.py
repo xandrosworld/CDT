@@ -209,7 +209,7 @@ def invoice_delivery_statement_workbook(
     detail = workbook.active
     detail.title = "Bảng kê giao hàng"
     computed = defaultdict(lambda: {"subtotal": 0, "tax": 0, "total": 0, "lines": 0})
-    seen_line_ids = set()
+    seen_allocations = set()
     ordered_lines = sorted(lines, key=lambda row: (
         _plain(row.get("issued_invoice_date")), int(row.get("draft_id") or 0),
         _plain(row.get("work_date")), int(row.get("id") or row.get("line_id") or 0),
@@ -220,11 +220,14 @@ def invoice_delivery_statement_workbook(
             workbook.close()
             raise InvoiceDeliveryStatementError("Dòng giao hàng nằm ngoài phạm vi hóa đơn")
         line_id = int(line.get("id") or line.get("line_id") or 0)
-        if line_id and line_id in seen_line_ids:
+        # One consolidated invoice line may represent several daily orders.
+        # Only the same allocation (invoice line + source order) is a duplicate.
+        allocation_key = (line_id, int(line.get('order_id') or 0))
+        if line_id and allocation_key in seen_allocations:
             workbook.close()
             raise InvoiceDeliveryStatementError("Dòng hóa đơn bị lặp trong bảng kê")
         if line_id:
-            seen_line_ids.add(line_id)
+            seen_allocations.add(allocation_key)
         qty = _number(line.get("qty"), "Số lượng")
         unit_price = _number(line.get("unit_price"), "Đơn giá")
         amount = _vnd(line.get("amount"))
