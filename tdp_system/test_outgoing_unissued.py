@@ -40,6 +40,28 @@ class UnissuedTests(unittest.TestCase):
         self.assertEqual(self.report('2026-09-02')['rows'][0]['unissued_qty'],7)
         self.assertEqual(self.report()['rows'][0]['unissued_qty'],7)
 
+    def test_three_issues_show_only_remaining_quantity_with_invoice_evidence(self):
+        a,b=self.seed(stock=20)
+        with server.db() as c:
+            first=c.execute('SELECT id FROM orders WHERE batch_id=?',(a,)).fetchone()[0]
+            second=c.execute('SELECT id FROM orders WHERE batch_id=?',(b,)).fetchone()[0]
+            for batch,oid,number,qty in [(a,first,'101',3),(a,first,'102',2),(b,second,'103',1)]:
+                Fixture.add_posted_source(c,source='minvoice',qty=qty,invoice_date='2026-09-03',number=number)
+                did=Fixture.add_local_issued_draft(c,batch,oid,number=number,invoice_date='2026-09-03',qty=qty)
+                c.execute('UPDATE outgoing_invoice_drafts SET round_no=? WHERE id=?',(int(number),did))
+            before=c.serialize()
+        p=self.report()
+        self.assertEqual(len(p['line_choices']),1)
+        r=p['line_choices'][0]
+        self.assertEqual(r['batch_id'],b)
+        self.assertEqual((r['order_id'],r['approved_qty'],r['issued_qty'],r['qty']),(second,5,1,4))
+        self.assertEqual([(i['number'],i['qty']) for i in r['issued_invoices']],[('103',1)])
+        g=p['reconciliation_groups'][0]
+        self.assertEqual((g['order_rows'],g['fully_issued_rows'],g['remaining_rows']),(2,1,1))
+        self.assertEqual({i['number'] for i in g['invoices']},{'101','102','103'})
+        self.assertIn('pending_reason',r)
+        with server.db() as c:self.assertEqual(c.serialize(),before)
+
     def test_synced_m_invoice_fifo_and_duplicate_local_confirmation_count_once(self):
         a,b=self.seed(stock=20)
         with server.db() as c:

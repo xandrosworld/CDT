@@ -151,7 +151,8 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
 
 def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,start=''):
     # The cutoff selects order dates. An invoice issued later can settle those orders.
-    issued,warnings=issued_allocations(conn)
+    source_allocations = {} if respect_export_choices else None
+    issued,warnings=issued_allocations(conn,source_order_allocations=source_allocations)
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
         WHERE b.status='approved' AND o.work_date<=? AND o.work_date>=? AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(asof,start,contractor,contractor))]
     try:
@@ -160,6 +161,30 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
         from outgoing_amount_settlement import coverage, history
     money_orders, _, _ = coverage(conn)
     orders = [o for o in orders if o['id'] not in money_orders]
+    reconciliation_groups = {}
+    for o in orders:
+        qty=max(o['actual_delivered']-o['customer_return_qty'],0)
+        if qty<=1e-8:continue
+        key=(o['contractor'],str(o['tax']))
+        g=reconciliation_groups.setdefault(key,{'contractor':key[0],'tax':key[1],
+            'order_rows':0,'fully_issued_rows':0,'remaining_rows':0,'invoices':{}})
+        g['order_rows']+=1
+        full=issued.get(o['id'],0)>=qty-1e-8
+        g['fully_issued_rows']+=int(full)
+        g['remaining_rows']+=int(not full)
+    invoice_refs=defaultdict(list)
+    if source_allocations:
+        scoped={o['id']:o for o in orders}
+        for s in conn.execute('''SELECT id,invoice_number,invoice_series,invoice_date
+            FROM outgoing_source_invoices WHERE id IN (SELECT value FROM json_each(?))''',
+            (json.dumps(list(source_allocations)),)):
+            for oid,qty in source_allocations[s['id']].items():
+                if oid not in scoped or qty<=1e-8:continue
+                ref={'number':s['invoice_number'],'series':s['invoice_series'],'date':s['invoice_date'],'qty':qty}
+                invoice_refs[oid].append(ref)
+                o=scoped[oid]
+                if (o['contractor'],str(o['tax'])) in reconciliation_groups:
+                    reconciliation_groups[(o['contractor'],str(o['tax']))]['invoices'][s['id']]=ref
     excluded=set()
     line_choices=[]
     if respect_export_choices:
@@ -205,6 +230,14 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
         for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty'):g[field]+=r[field]
         g['last_date']=o['work_date']
     pending=explain_pending(conn,orders,details,units,warnings,stock)
+    detail_by_id={r['order_id']:r for r in details}
+    for r in line_choices:
+        d=detail_by_id.get(r['order_id'],{})
+        r.update(pending_reason=d.get('pending_reason',''),pending_codes=d.get('pending_codes',[]),
+                 issued_invoices=invoice_refs.get(r['order_id'],[]))
+    for g in reconciliation_groups.values():
+        g['invoices']=sorted(({k:v for k,v in r.items() if k!='qty'} for r in g['invoices'].values()),
+                             key=lambda r:(r['date'],r['number']))
     reasons=defaultdict(list)
     for r in details:
         if r['pending_reason']:
@@ -223,6 +256,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
     return {'from':start,'asof':asof,'contractor':contractor,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
             'amount_settlements': [r for r in history(conn, contractor) if r['date_from'] <= asof and r['date_to'] >= start],
             'line_choices':line_choices,
+            'reconciliation_groups':list(reconciliation_groups.values()),
             'pending_rows':pending,'pending_order_rows':sum(r['waiting_qty']>1e-8 for r in details),
             'signed_stock_issues':signed_stock_issues(conn,contractor),
             'held_line_issues':[{**units[o['id']],'contractor':o['contractor'],'work_date':o['work_date']} for o in orders if o['id'] in units and o['actual_delivered']-o['customer_return_qty']-issued.get(o['id'],0)>1e-8],

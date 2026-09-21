@@ -1031,3 +1031,6 @@ body { min-width: 320px; }
 .invoice-send-controls .compact-controls{align-items:center;gap:16px}
 .invoice-workflow #orderInvoiceExportForm .invoice-send-controls label{display:flex;flex-direction:row;align-items:center;gap:8px}
 .invoice-workflow #orderInvoiceExportForm .invoice-send-controls input[type=checkbox]{width:auto;flex:none}
+
+.invoice-remaining-reason{white-space:normal;min-width:220px;max-width:340px;margin:5px 0;font-size:12px}
+.invoice-reconciliation{margin-top:10px;padding:10px;border-left:3px solid #087f73}

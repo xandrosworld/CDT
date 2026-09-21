@@ -176,8 +176,10 @@ def line_choices_payload(conn, cutoff, contractor='', *, orders=None, issued=Non
         locked=o['id'] in protected
         token=_token(o['id'],enabled,[setting.get('revision',''),o['updated_at'],remaining,o['product_code'],o['unit'],o['sell_price'],locked,
                                     names.get(o['product_code']) or o['product_name'],units.get(o['product_code'],o['unit']),o['tax']])
-        result.append({'order_id':o['id'],'contractor':o['contractor'],'date':o['work_date'],'kitchen':o['kitchen'],
+        result.append({'order_id':o['id'],'batch_id':o['batch_id'],'contractor':o['contractor'],'date':o['work_date'],'kitchen':o['kitchen'],
             'product_code':o['product_code'],'invoice_name':names.get(o['product_code']) or o['product_name'],
+            'approved_qty':max(float(o['actual_delivered'] or 0)-float(o['customer_return_qty'] or 0),0),
+            'issued_qty':issued.get(o['id'],0),
             'qty':remaining,'unit':o['unit'],'price':o['sell_price'],'tax':o['tax'],'invoice_unit':units.get(o['product_code'],o['unit']),'enabled':enabled,'token':token,
             'editable':not locked,'reason':'Đang có bản đã lưu/đang gửi M-Invoice; đối chiếu bản đó trước.' if locked else ''})
     return result
