@@ -74,6 +74,18 @@ class MissingDraftTests(unittest.TestCase):
         self.sync()
         self.assertEqual({i['invoice_number'] for i in self.payload()['items']},{'817','818'})
 
+    def test_issued_filter_independent_of_stock_status_and_matches_filtered_excel(self):
+        for stock in ['pending_mapping','ready','posted','blocked']:
+            self.c.execute('UPDATE outgoing_source_invoices SET stock_status=? WHERE id=?',(stock,self.issued_id))
+            p=self.payload(status='issued')
+            self.assertEqual([i['id'] for i in p['items']],[self.issued_id])
+            self.assertEqual(p['counts']['issued'],1)
+            self.assertEqual(p['totals']['invoice_amount'],108000)
+            rows=list(load_workbook(range_workbook(p),data_only=True).active.values)
+            self.assertEqual(sum(r[1]=='1C26TYY / 817' for r in rows),1)
+        self.c.execute("UPDATE outgoing_source_invoices SET source_status_class='cancelled' WHERE id=?",(self.issued_id,))
+        self.assertEqual(self.payload(status='issued')['items'],[])
+
     def test_partial_or_resumed_tail_does_not_prove_absence(self):
         other=dict(self.issued,id='00000000-0000-0000-0000-000000000003',invoiceNumber=818)
         self.rows.append(other)

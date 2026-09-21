@@ -98,7 +98,7 @@
     invoiceDirection: storedInvoiceFilters.direction === "output" ? "output" : "input",
     invoiceFrom: storedInvoiceFilters.date_from || todayIso.slice(0, 7) + "-01",
     invoiceTo: storedInvoiceFilters.date_to || todayIso,
-    invoiceStatus: ["all", "needs_mapping", "ready", "posted", "error", "reversed", "not_inventory", "draft"].indexOf(storedInvoiceFilters.status) >= 0 ? storedInvoiceFilters.status : "all",
+    invoiceStatus: ["all", "issued", "needs_mapping", "ready", "posted", "error", "reversed", "not_inventory", "draft"].indexOf(storedInvoiceFilters.status) >= 0 ? storedInvoiceFilters.status : "all",
     invoiceLineFilter: storedInvoiceFilters.line_filter || "all",
     invoicePending: storedInvoiceFilters.scope_version === 2 && storedInvoiceFilters.pending === true,
     supplierNeeds: null,
@@ -7069,7 +7069,7 @@
       if (event.target.id === "invoiceTo") { state.invoiceTo = event.target.value; state.invoicePending = false; state.legacyInvoiceMappingPreview = null; }
       if (event.target.id === "invoiceStatus") {
         state.invoiceStatus = event.target.value;
-        if (['posted','reversed','not_inventory'].includes(state.invoiceStatus)) state.invoicePending = false;
+        if (['issued','posted','reversed','not_inventory'].includes(state.invoiceStatus)) state.invoicePending = false;
       }
       if (event.target.id === "invoiceLineFilter") state.invoiceLineFilter = event.target.value;
       persistInvoiceWorkbenchFilters();
@@ -7705,6 +7705,7 @@
     }
     if (action === "set-invoice-direction") {
       state.invoiceDirection = button.dataset.direction === "output" ? "output" : "input";
+      if (state.invoiceDirection === 'input' && state.invoiceStatus === 'issued') state.invoiceStatus = 'all';
       state.legacyInvoiceMappingPreview = null;
       persistInvoiceWorkbenchFilters();
       state.invoiceWorkbench = null;

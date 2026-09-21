@@ -25,7 +25,7 @@ except ImportError:
 
 
 STATUS_LABELS = {
-    "all": "Tất cả hóa đơn", "needs_mapping": "Chưa ghép đủ mã / đơn vị",
+    "all": "Tất cả hóa đơn", "issued": "Đã phát hành", "needs_mapping": "Chưa ghép đủ mã / đơn vị",
     "ready": "Sẵn sàng ghi kho", "posted": "Đã ghi kho",
     "draft": "Chờ ký / chưa phát hành",
     "error": "Cần kiểm tra", "reversed": "Đã hoàn tác kho", "not_inventory": "Không ghi kho",
@@ -187,7 +187,11 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
         invoice["workbench_status"] = state
         counts["all"] += 1
         counts[state] += 1
-        if status != "all" and status != state:
+        issued = direction == 'output' and invoice.get('source_status_class') == 'issued'
+        counts['issued'] += int(issued)
+        if status == 'issued' and not issued:
+            continue
+        if status not in {"all", "issued"} and status != state:
             continue
         if invoice.get('amount_review'):
             amount_reviews.append({
@@ -255,7 +259,8 @@ def invoice_range_payload(conn, *, tenant, invoice_type, date_from, date_to, sta
         "lines": lines, "amount_reviews": amount_reviews, "output_summary": output_summary,
         "missing_drafts": fetched.get('missing_drafts', []),
         "group_warnings":group_warnings,"source_line_count":source_line_count,
-        "counts": counts, "status_labels": STATUS_LABELS, "line_labels": LINE_LABELS,
+        "counts": counts, "status_labels": {k:v for k,v in STATUS_LABELS.items()
+            if direction == 'output' or k != 'issued'}, "line_labels": LINE_LABELS,
         "totals": {
             "invoice_count": len(visible_invoices), "line_count": sum(item.get("id") is not None for item in lines),
             "issue_count": sum(bool(item["issue"]) for item in lines),
