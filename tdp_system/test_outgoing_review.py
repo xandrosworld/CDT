@@ -75,6 +75,25 @@ class InvoiceReviewTests(unittest.TestCase):
         self.assertEqual(self.save(self.preview(restored).json).status_code,200)
         self.assertEqual(self.business(),before)
 
+    def test_choice_quantities_distinguish_prepared_and_waiting_parts(self):
+        with server.db() as c:
+            c.execute("UPDATE inventory_transactions SET qty_in=6 WHERE source_type='OPENING'")
+            c.execute("UPDATE orders SET tax='8%'")
+            c.execute("UPDATE products SET tax='8%' WHERE code='HH-01'")
+            from .outgoing_waiting import refresh_waiting
+            refresh_waiting(c,server.now_iso())
+        before=self.business()
+        payload=self.client.get('/api/outgoing-invoices/unissued',query_string=self.period).json
+        choices={r['order_id']:r for r in payload['line_choices']}
+        for detail in payload['details']:
+            row=choices[detail['order_id']]
+            self.assertEqual(row['ready_qty'],detail['ready_qty'])
+            self.assertEqual(row['waiting_qty'],detail['waiting_qty'])
+            self.assertAlmostEqual(row['qty'],row['ready_qty']+row['waiting_qty'])
+        self.assertTrue(any(r['waiting_qty']>0 for r in choices.values()))
+        self.assertTrue(any(r['ready_qty']>0 for r in choices.values()))
+        self.assertEqual(before,self.business())
+
     def test_range_applies_to_unissued_workbook_and_final_export(self):
         r=self.client.get('/api/outgoing-invoices/unissued-template.zip',query_string=self.period)
         self.assertEqual(r.status_code,200,r.get_json(silent=True))
