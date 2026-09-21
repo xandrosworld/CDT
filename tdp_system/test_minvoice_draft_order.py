@@ -19,8 +19,8 @@ class PortalDraftOrderTests(unittest.TestCase):
                             invoiceDate='2026-09-16')
         line = self.payload['invoiceDetail'][0]
         # Same product twice must stay two distinct lines with their own qty.
-        self.payload['invoiceDetail'] = [dict(line, ordinalNumber='1'),
-                                        dict(line, ordinalNumber='2', quantity=3)]
+        self.payload['invoiceDetail'] = [dict(line, ordinalNumber='1', orders=1),
+                                        dict(line, ordinalNumber='2', orders=2, quantity=3)]
         self.remote = copy.deepcopy(self.payload)
         self.remote.update(keyApi=None, sendTaxStatus=1)
         self.remote['invoiceDetail'].reverse()
@@ -47,6 +47,29 @@ class PortalDraftOrderTests(unittest.TestCase):
         self.client._portal_json = Mock(side_effect=[{'id': self.remote['id']}, self.remote])
         with self.assertRaises(MinvoiceOutcomeUnknown):
             self.client.create_draft({}, dry_run=False, confirm_remote_write=True)
+
+    def test_provider_losing_render_order_requires_reconciliation(self):
+        self.remote['invoiceDetail'][0]['orders'] = None
+        self.client.portal_draft_payload = Mock(return_value=self.payload)
+        self.client.get_invoice_info = Mock(return_value={'found': False})
+        self.client._portal_json = Mock(side_effect=[{'id': self.remote['id']}, self.remote])
+        with self.assertRaises(MinvoiceOutcomeUnknown):
+            self.client.create_draft({}, dry_run=False, confirm_remote_write=True)
+
+    def test_new_draft_sends_numeric_render_order_and_printed_labels(self):
+        from .test_outgoing_portal_send import PortalFixture
+        from .test_minvoice_client import valid_draft
+        c = PortalFixture()
+        draft = valid_draft()
+        draft.update(series='1C26TYY', key_api='TDP-AAAAAAAAAAAA-'+'B'*32)
+        draft['lines'] = [dict(draft['lines'][0], name=f'Goods {i}') for i in range(86)]
+        for key in ('subtotal', 'tax_amount', 'total_amount'):
+            draft.pop(key, None)
+        payload = c.portal_draft_payload(draft)
+        lines = payload['invoiceDetail']
+        self.assertEqual(list(range(1,87)), [l['orders'] for l in lines])
+        self.assertEqual([str(i) for i in range(1,87)], [l['ordinalNumber'] for l in lines])
+        self.assertEqual([f'Goods {i}' for i in range(86)], [l['productName'] for l in sorted(lines, key=lambda l:l['orders'])])
 
     def test_duplicate_missing_and_invalid_ordinals_are_not_guessed(self):
         for positions in [('1', '1'), ('1', None), ('1', '3'), ('0', '1'), ('1', True)]:

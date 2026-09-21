@@ -84,7 +84,9 @@ class PortalDrafts:
                 raise MinvoiceError('Gửi bảng kê chỉ hỗ trợ dòng hàng bán và khuyến mại.')
             tax = self._one(taxes, 'code', line['ma_thue'], 'thuế suất')
             lines.append({
-                'ordinalNumber': str(i), 'property': line['tchat'], 'isShowOrder': True,
+                # Orders controls portal/render order; ordinalNumber is only
+                # the printed label. Both must be sent, even for >9 lines.
+                'orders': i, 'ordinalNumber': str(i), 'property': line['tchat'], 'isShowOrder': True,
                 'productCode': line['inv_itemCode'], 'productName': line['inv_itemName'],
                 'unitCode': line['inv_unitCode'], 'quantity': line['inv_quantity'],
                 'unitPrice': line['inv_unitPrice'], 'amount': line['inv_TotalAmountWithoutVat'],
@@ -181,6 +183,8 @@ class PortalDrafts:
                     or detail.get('invoiceNumber') is not None or detail.get('dateSign') or detail.get('taxAuthorityCode')):
                 raise ValueError('Saved draft needs reconciliation')
             returned_lines = ordered_draft_lines(detail.get('invoiceDetail', []))
+            if [r.get('orders') for r in returned_lines] != list(range(1, len(returned_lines) + 1)):
+                raise ValueError('Saved draft display order changed')
             for key in ('productCode', 'productName', 'unitCode', 'quantity', 'unitPrice', 'amountWithoutVAT', 'vatCode', 'property'):
                 if [r.get(key) for r in returned_lines] != [r.get(key) for r in payload['invoiceDetail']]:
                     raise ValueError('Saved draft lines changed')

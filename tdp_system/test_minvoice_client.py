@@ -400,6 +400,8 @@ class MinvoiceDraftTests(unittest.TestCase):
                 connection.executescript(server.SCHEMA)
                 init_contract_schema(connection)
                 server.init_invoice_workbench_schema(connection)
+                from .outgoing_prepared import SCHEMA as prepared_schema
+                connection.executescript(prepared_schema)
                 connection.execute(
                     """INSERT INTO outgoing_invoice_drafts(
                            batch_id,contractor,invoice_date,status,subtotal,tax_amount,
