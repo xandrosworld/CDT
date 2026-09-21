@@ -156,9 +156,9 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
         WHERE b.status='approved' AND o.work_date<=? AND o.work_date>=? AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(asof,start,contractor,contractor))]
     try:
-        from .outgoing_amount_settlement import coverage, history
+        from .outgoing_amount_settlement import coverage, history, progress
     except ImportError:
-        from outgoing_amount_settlement import coverage, history
+        from outgoing_amount_settlement import coverage, history, progress
     money_orders, _, _ = coverage(conn)
     orders = [o for o in orders if o['id'] not in money_orders]
     try:
@@ -275,6 +275,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
         from outgoing_signed_stock_review import signed_stock_issues
     return {'from':start,'asof':asof,'contractor':contractor,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
             'amount_settlements': [r for r in history(conn, contractor) if r['date_from'] <= asof and r['date_to'] >= start],
+            'amount_progress': progress(conn, contractor, start, asof) if contractor and start else None,
             'line_choices':line_choices,'skipped_details':skipped_details,
             'reconciliation_groups':list(reconciliation_groups.values()),
             'pending_rows':pending,'pending_order_rows':sum(r['waiting_qty']>1e-8 for r in details),

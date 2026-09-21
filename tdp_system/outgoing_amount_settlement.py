@@ -1,4 +1,4 @@
-"""Audited period completion by signed invoice money, never invented quantities."""
+"""Signed-invoice money review: save progress separately from period completion."""
 import hashlib
 import json
 from collections import defaultdict
@@ -15,6 +15,13 @@ CREATE TABLE IF NOT EXISTS outgoing_amount_settlements (
  revoked_at TEXT NOT NULL DEFAULT '', revoked_by TEXT NOT NULL DEFAULT '',
  revoke_reason TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS outgoing_amount_progress (
+ id INTEGER PRIMARY KEY, contractor TEXT NOT NULL, date_from TEXT NOT NULL,
+ date_to TEXT NOT NULL, snapshot_json TEXT NOT NULL, fingerprint TEXT NOT NULL,
+ actor TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS outgoing_amount_progress_scope
+ ON outgoing_amount_progress(contractor,date_from,date_to,id);
 '''
 
 
@@ -80,6 +87,55 @@ def source_snapshot(conn, ids, party):
 
 def current_snapshot(conn, party, start, end, ids):
     return {'orders': order_snapshot(conn, party, start, end), 'invoices': source_snapshot(conn, ids, party)}
+
+
+def progress(conn, party, start, end):
+    """An exact-scope review note, never an allocation or a completed period."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='outgoing_amount_progress'").fetchone():
+        return None
+    row = conn.execute('''SELECT * FROM outgoing_amount_progress
+        WHERE contractor=? AND date_from=? AND date_to=? ORDER BY id DESC LIMIT 1''',
+        (party, start, end)).fetchone()
+    if not row:
+        return None
+    saved = json.loads(row['snapshot_json'])
+    ids = [r['id'] for r in saved['invoices']]
+    error = ''
+    try:
+        if digest(current_snapshot(conn, party, start, end, ids)) != row['fingerprint']:
+            error = 'Đơn hoặc hóa đơn đã thay đổi. Bấm Kiểm tra tổng tiền đã chọn để cập nhật tiến độ.'
+    except ValueError as exc:
+        error = str(exc)
+    demand = sum(r['amount'] for r in saved['orders'])
+    signed = sum(r['total_amount'] for r in saved['invoices'])
+    return {'id': row['id'], 'from': start, 'to': end, 'invoice_ids': ids,
+            'orders_total': demand, 'signed_total': signed, 'remaining': demand-signed,
+            'actor': row['actor'], 'reason': row['reason'], 'created_at': row['created_at'],
+            'needs_review': bool(error), 'message': error}
+
+
+def save_progress(conn, body, timestamp):
+    actor, reason = str(body.get('actor') or '').strip(), str(body.get('reason') or '').strip()
+    if not actor or not reason or len(actor) > 120 or len(reason) > 1000:
+        raise ValueError('Điền Người đối chiếu và Lý do / ghi chú để lưu tiến độ.')
+    report = preview(conn, body)
+    if report['token'] != body.get('token'):
+        raise ValueError('Số liệu vừa thay đổi. Bấm Kiểm tra tổng tiền đã chọn trước khi lưu tiến độ.')
+    if not report['can_save_progress']:
+        raise ValueError('Chỉ lưu tiến độ khi đã chọn hóa đơn đã ký, còn tiền chưa xuất và không có thông tin đối chiếu bị xung đột.')
+    snapshot = report['_snapshot']
+    previous = progress(conn, report['contractor'], report['from'], report['to'])
+    if previous and not previous['needs_review'] and previous['invoice_ids'] == sorted(report['invoice_ids']) and previous['actor'] == actor and previous['reason'] == reason:
+        return {'id': previous['id'], 'unchanged': True}
+    iid = conn.execute('''INSERT INTO outgoing_amount_progress
+        (contractor,date_from,date_to,snapshot_json,fingerprint,actor,reason,created_at)
+        VALUES(?,?,?,?,?,?,?,?)''', (report['contractor'], report['from'], report['to'],
+        json.dumps(snapshot, ensure_ascii=False), digest(snapshot), actor, reason, timestamp)).lastrowid
+    conn.execute('''INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at)
+        VALUES('outgoing.amount_progress','outgoing_amount_progress',?,'ok',?,?,?)''',
+        (str(iid), reason, json.dumps({'actor': actor, 'invoice_ids': report['invoice_ids'],
+                                     'signed_total': report['signed_total'], 'remaining': report['remaining']}), timestamp))
+    return {'id': iid, 'unchanged': False}
 
 
 def coverage(conn):
@@ -178,6 +234,7 @@ def preview(conn, body):
             'signed_tax': float(sum((Decimal(str(r['tax_amount'])) for r in snapshot['invoices']), Decimal(0))),
             'order_rows': len(order_ids), 'invoices': snapshot['invoices'], 'conflicts': conflicts,
             'can_confirm': bool(ids) and demand == signed and not conflicts,
+            'can_save_progress': bool(ids) and 0 < signed < demand and not conflicts,
             'token': digest(basis), '_snapshot': snapshot, '_drafts': drafts}
 
 
@@ -200,7 +257,7 @@ def confirm(conn, body, timestamp):
     if report['token'] != body.get('token'):
         raise ValueError('Số liệu vừa thay đổi. Kiểm tra lại tổng tiền trước khi xác nhận.')
     if not report['can_confirm']:
-        raise ValueError('Chỉ xác nhận khi tiền đã ký bằng đúng doanh thu kỳ đơn đến từng đồng và không còn xung đột.')
+        raise ValueError('Chưa thể xác nhận đã xuất đủ. Nếu còn tiền chưa xuất, bấm Lưu tiến độ — còn chưa xuất; không cần xuất bù để khép kỳ đơn.')
     snapshot = report['_snapshot']
     iid = conn.execute('''INSERT INTO outgoing_amount_settlements(contractor,date_from,date_to,snapshot_json,fingerprint,actor,reason,created_at)
         VALUES(?,?,?,?,?,?,?,?)''', (report['contractor'], report['from'], report['to'], json.dumps(snapshot, ensure_ascii=False),
@@ -251,8 +308,10 @@ def register_routes(app, ctx):
                 except Exception as exc:
                     raise ValueError('Chưa cập nhật đầy đủ M-Invoice; chưa xác nhận đối trừ. Thử cập nhật hóa đơn rồi kiểm tra lại.') from exc
             with ctx['db']() as conn:
-                conn.execute('BEGIN IMMEDIATE' if request.method == 'POST' and body.get('action') in ('confirm', 'revoke') else 'BEGIN')
+                conn.execute('BEGIN IMMEDIATE' if request.method == 'POST' and body.get('action') in ('confirm', 'revoke', 'save_progress') else 'BEGIN')
                 action = body.get('action', 'list')
+                if request.method == 'POST' and action == 'save_progress':
+                    return jsonify(ok=True, **save_progress(conn, body, ctx['now_iso']()))
                 if request.method == 'POST' and action == 'confirm':
                     return jsonify(ok=True, **confirm(conn, body, ctx['now_iso']()))
                 if request.method == 'POST' and action == 'revoke':
@@ -279,6 +338,7 @@ def register_routes(app, ctx):
                     except ValueError as exc:
                         unavailable.append({'id': r['id'], 'number': r['invoice_series']+'/'+r['invoice_number'], 'error': str(exc)})
                 return jsonify(ok=True, orders_total=sum(o['amount'] for o in orders), invoices=invoices,
-                               unavailable_invoices=unavailable, history=history(conn, party))
+                               unavailable_invoices=unavailable, history=history(conn, party),
+                               progress=progress(conn, party, start, end))
         except (ValueError, TypeError) as exc:
             return jsonify(ok=False, error=str(exc)), 409

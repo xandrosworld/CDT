@@ -17,6 +17,7 @@ class AmountSettlementTests(unittest.TestCase):
     def setUp(self):
         with server.db() as c:
             c.execute('DELETE FROM outgoing_amount_settlements')
+            c.execute('DELETE FROM outgoing_amount_progress')
         Fixture.setUp(self)
         with server.db() as c:
             self.batch, self.orders = Fixture.add_batch(c, '2026-09-01', [{'qty': 10}])
@@ -58,6 +59,78 @@ class AmountSettlementTests(unittest.TestCase):
             c.execute("UPDATE outgoing_source_invoices SET source_status_class='draft' WHERE id=?", (self.invoice,))
             with self.assertRaises(ValueError): money.preview(c, self.body)
             self.assertFalse(money.records(c))
+
+    def test_partial_progress_preserves_business_and_allocations_and_remembers_exact_scope(self):
+        with server.db() as c:
+            c.execute('UPDATE outgoing_source_invoices SET subtotal=100,total_amount=100 WHERE id=?',(self.invoice,))
+            tables=('orders','batches','inventory_transactions','invoice_inventory_ledger','receivable_ledger_lines','payable_ledger_lines')
+            before={t:[tuple(r) for r in c.execute('SELECT * FROM '+t)] for t in tables}
+            allocated=issued_allocations(c)
+            report=money.preview(c,self.body)
+            self.assertTrue(report['can_save_progress'])
+            self.assertFalse(report['can_confirm'])
+            body={**self.body,'token':report['token']}
+            saved=money.save_progress(c,body,server.now_iso())
+            self.assertTrue(money.save_progress(c,body,server.now_iso())['unchanged'])
+            note=money.progress(c,'NT-A','2026-09-01','2026-09-15')
+            self.assertEqual((note['signed_total'],note['remaining']),(100,100))
+            self.assertEqual(note['id'],saved['id'])
+            self.assertIsNone(money.progress(c,'NT-A','2026-09-02','2026-09-15'))
+            self.assertIsNone(money.progress(c,'NT-B','2026-09-01','2026-09-15'))
+            self.assertFalse(money.coverage(c)[0])
+            self.assertEqual(allocated,issued_allocations(c))
+            self.assertEqual(7,unissued_payload(c,'2026-09-15','NT-A')['rows'][0]['unissued_qty'])
+            for t in tables:self.assertEqual(before[t],[tuple(r) for r in c.execute('SELECT * FROM '+t)],t)
+
+    def test_progress_rejects_stale_unsigned_over_total_and_missing_actor(self):
+        with server.db() as c:
+            c.execute('UPDATE outgoing_source_invoices SET total_amount=100 WHERE id=?',(self.invoice,))
+            report=money.preview(c,self.body)
+            body={**self.body,'token':report['token']}
+            with self.assertRaises(ValueError):money.save_progress(c,{**body,'actor':''},server.now_iso())
+            c.execute('UPDATE orders SET sell_price=21 WHERE id=?',(self.orders[0],))
+            with self.assertRaises(ValueError):money.save_progress(c,body,server.now_iso())
+            c.execute('UPDATE orders SET sell_price=20 WHERE id=?',(self.orders[0],))
+            money.save_progress(c,body,server.now_iso())
+            c.execute("UPDATE outgoing_source_invoices SET source_status_class='cancelled' WHERE id=?",(self.invoice,))
+            self.assertTrue(money.progress(c,'NT-A','2026-09-01','2026-09-15')['needs_review'])
+            with self.assertRaises(ValueError):money.save_progress(c,body,server.now_iso())
+            c.execute("UPDATE outgoing_source_invoices SET source_status_class='issued',total_amount=201 WHERE id=?",(self.invoice,))
+            report=money.preview(c,self.body)
+            self.assertFalse(report['can_save_progress'])
+            with self.assertRaises(ValueError):money.save_progress(c,{**body,'token':report['token']},server.now_iso())
+
+    def test_progress_api_saves_note_without_remote_sync_or_closing_period(self):
+        with server.db() as c:
+            c.execute('UPDATE outgoing_source_invoices SET total_amount=100 WHERE id=?',(self.invoice,))
+        body={**self.body,'action':'preview'}
+        report=self.client.post('/api/outgoing-invoices/amount-settlement',json=body).json
+        with patch('tdp_system.outgoing_source_refresh.refresh_sources') as refresh:
+            response=self.client.post('/api/outgoing-invoices/amount-settlement',json={**body,'action':'save_progress','token':report['token']})
+            self.assertEqual(response.status_code,200,response.json)
+            refresh.assert_not_called()
+        saved=self.client.get('/api/outgoing-invoices/amount-settlement',query_string={k:self.body[k] for k in ('contractor','from','to')}).json
+        self.assertEqual(saved['progress']['invoice_ids'],[self.invoice])
+        self.assertFalse(saved['history'])
+
+    def test_different_goods_partial_money_does_not_invent_quantities_or_complete_period(self):
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO products(code,name,unit,tax,supplier,buy_price,purchase_list,seller,cccd) VALUES('HH-02','Khác','kg','0%','NCC-A',10,0,'','')")
+            c.execute("UPDATE invoice_inventory_ledger SET product_code='HH-02' WHERE source_invoice_id=? AND source_invoice_table='outgoing_source_invoices'",(self.invoice,))
+            c.execute('UPDATE outgoing_source_invoices SET subtotal=100,total_amount=100 WHERE id=?',(self.invoice,))
+            report=money.preview(c,self.body)
+            money.save_progress(c,{**self.body,'token':report['token']},server.now_iso())
+            payload=unissued_payload(c,'2026-09-15','NT-A',start='2026-09-01')
+            self.assertEqual(payload['amount_progress']['remaining'],100)
+            self.assertEqual(payload['rows'][0]['unissued_qty'],10)
+            self.assertFalse(payload['amount_settlements'])
+            self.assertEqual(len(selected_orders(c,[dict(r) for r in c.execute('SELECT * FROM orders')])),1)
+            # A later full amount requires a fresh, explicit completion confirmation.
+            c.execute('UPDATE outgoing_source_invoices SET subtotal=200,total_amount=200 WHERE id=?',(self.invoice,))
+            self.assertTrue(money.progress(c,'NT-A','2026-09-01','2026-09-15')['needs_review'])
+            self.assertFalse(money.coverage(c)[0])
+            self.settle(c)
+            self.assertTrue(money.coverage(c)[0])
 
     def test_same_invoice_cannot_cover_two_periods_and_does_not_fifo_into_new_orders(self):
         with server.db() as c:
