@@ -60,8 +60,11 @@ class MsmiRefresh:
             'type':{'value':'hoadondientu-gov','matchMode':'equals'}}})})
         accounts = result.get('items',[]) if isinstance(result,dict) else []
         matches = [a for a in accounts if a.get('username') == self.tax_code]
-        if len(matches) != 1 or not matches[0].get('token'):
+        if len(matches) != 1:
             raise RefreshError('Hồ sơ thuế mSMI chưa kết nối hoặc không khớp mã số thuế đã cấu hình.')
+        if not matches[0].get('token'):
+            raise RefreshError('Kết nối thuế trên mSMI đã hết phiên. Mở mSMI, chọn hồ sơ thuế '+self.tax_code+
+                ', đăng nhập lại kết nối thuế, rồi quay lại bấm “Tải/tiếp tục đầu vào”. Hóa đơn đã tải và dữ liệu nhập kho vẫn được giữ nguyên.')
         a = matches[0]
         if not a.get('sync_invoices_purchase',{}).get('sync'):
             raise RefreshError('Hồ sơ mSMI chưa bật đồng bộ hóa đơn mua vào.')

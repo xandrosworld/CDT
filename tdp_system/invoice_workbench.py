@@ -738,6 +738,33 @@ def register_invoice_workbench_routes(app, ctx) -> None:
         except InvoiceWorkbenchError as error:
             return jsonify({"ok": False, "error": str(error)}), 400
 
+    @app.route('/api/invoice-workbench/input-refresh', methods=['GET','POST'])
+    def api_refresh_input_source():
+        import os
+        import threading
+        try:
+            from .automatic_input_sync import request_refresh, run_due, status
+            from .msmi_refresh import MsmiRefresh
+        except ImportError:
+            from automatic_input_sync import request_refresh, run_due, status
+            from msmi_refresh import MsmiRefresh
+        with db_factory() as conn:
+            tenant=tenant_code(conn)
+            if request.method == 'GET':
+                return jsonify(ok=True, sync=status(conn,tenant))
+        body=request.get_json(silent=True) or {}
+        try:
+            if not isinstance(body,dict):raise ValueError('Invalid request')
+            result=request_refresh(db_factory,tenant,body.get('from'),body.get('to'))
+        except (ValueError,TypeError):
+            return jsonify(ok=False,error='Kiểm tra Từ ngày – Đến ngày: cần đủ hai ngày, theo thứ tự và không quá 366 ngày.'),400
+        if result['accepted']:
+            tax_code=os.environ.get('MSMI_SYNC_TAX_CODE','').strip()
+            threading.Thread(target=run_due,args=(db_factory,tenant,create_msmi_client,
+                lambda:MsmiRefresh(os.environ.get('MSMI_USERNAME',''),os.environ.get('MSMI_PASSWORD',''),tax_code),tax_code),
+                daemon=True,name='tdp-manual-input-sync').start()
+        return jsonify(ok=True,**result),202
+
     @app.post("/api/invoice-workbench/batches/<int:batch_id>/sync")
     def api_sync_invoice_batch(batch_id: int):
         # Import lazily to keep this shared workbench module independently

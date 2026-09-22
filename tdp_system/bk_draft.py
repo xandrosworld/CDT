@@ -94,12 +94,17 @@ def suggested_prices(conn, end, codes):
     return result
 
 
-def shortage_rows(conn, start, end, tax='KKKNT'):
+def shortage_rows(conn, start, end, tax='KKKNT', day=None):
     start, end = period(start, end)
+    cutoff = end
+    if day:
+        cutoff, _ = period(day, day)
+        if not start <= cutoff <= end:
+            raise ValueError('Ngày đối chiếu phải nằm trong khoảng Từ ngày – Đến ngày.')
     if tax not in ('KKKNT', 'all'):
         raise ValueError('Bộ lọc thuế không hợp lệ.')
     # Quantity projection also works when a negative item has no usable cost.
-    report = invoice_stock_rows(conn, as_of=end)
+    report = invoice_stock_rows(conn, as_of=cutoff)
     products = {r['code']: dict(r) for r in conn.execute('SELECT code,name,unit,tax FROM products')}
     items = []
     for row in report:
@@ -109,10 +114,11 @@ def shortage_rows(conn, start, end, tax='KKKNT'):
         items.append({'product_code': row['product_code'], 'product_name': product.get('name', row['product_name']),
                       'unit': product.get('unit', row['unit']), 'tax': product.get('tax', ''),
                       'closing_qty': round(row['closing_qty'],6), 'suggested_qty': round(-row['closing_qty'],6)})
-    prices = suggested_prices(conn, end, [r['product_code'] for r in items])
+    prices = suggested_prices(conn, cutoff, [r['product_code'] for r in items])
     for item in items:
         item.update(prices.get(item['product_code'], {}))
-    return {'ok': True, 'from': start, 'to': end, 'items': items, 'writesInventory': False}
+    return {'ok': True, 'from': start, 'to': end, 'day': cutoff,
+            'items': items, 'writesInventory': False}
 
 
 def _number(value, label):
@@ -228,7 +234,7 @@ def register_bk_draft_routes(app, ctx):
         try:
             with ctx['db']() as conn:
                 conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
-                return jsonify(shortage_rows(conn, request.args.get('from'), request.args.get('to'),request.args.get('tax','KKKNT')))
+                return jsonify(shortage_rows(conn, request.args.get('from'), request.args.get('to'),request.args.get('tax','KKKNT'),request.args.get('day')))
         except (ValueError, InvoiceInventoryError) as error:
             return jsonify(ok=False,error=str(error)),400
 

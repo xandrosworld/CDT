@@ -1091,11 +1091,36 @@
     }
   }
 
+  var inputSyncTimer = null;
+  function showInputSyncStatus(sync) {
+    if(state.invoiceDirection!=='input')return;
+    var box=content.querySelector('.automatic-input-status');
+    if(!box){content.insertAdjacentHTML('afterbegin','<div class="code-note automatic-input-status" role="status"></div>');box=content.querySelector('.automatic-input-status');}
+    var active=sync.state==='running'||(sync.manual_requested&&sync.state==='waiting');
+    box.innerHTML='<strong>'+esc(active?'Đang cập nhật nguồn mSMI và tải đầu vào…':sync.state==='error'?'Chưa tải được đầu vào mới':sync.last_success?'Đã cập nhật đầu vào':'Cập nhật đầu vào')+'</strong>'+
+      (sync.message?'<p>'+esc(sync.message)+'</p>':'')+
+      (sync.last_success?'<p>Lần thành công: '+esc(new Date(sync.last_success).toLocaleString('vi-VN'))+'</p>':'')+
+      (sync.state==='error'?/Từ ngày|Đến ngày/.test(sync.message||'')?'<button class="btn btn-outline" data-action="fix-input-sync-dates">Sửa Từ ngày – Đến ngày</button>':'<a class="btn btn-outline" href="https://qlhd.minvoice.com.vn/" target="_blank" rel="noopener noreferrer">Mở mSMI để kiểm tra kết nối thuế</a>':'')+
+      (!active&&sync.state==='success'?'<p>Thêm '+Number((sync.result||{}).new_invoices||0)+' hóa đơn mới. <button class="btn btn-outline" data-action="view-refreshed-input">Xem hóa đơn vừa tải</button></p>':'')+
+      '<small>Hóa đơn và các lựa chọn đang sửa được giữ nguyên. Tải về chưa nhập kho.</small>';
+    clearTimeout(inputSyncTimer);
+    if(active)inputSyncTimer=setTimeout(async function(){
+      try{var result=await api('/api/invoice-workbench/input-refresh');if(content.querySelector('.automatic-input-status'))showInputSyncStatus(result.sync);}
+      catch(error){box.textContent='Chưa đọc được tiến độ. Mở lại Hóa đơn đầu vào để kiểm tra; lượt tải vẫn được lưu.';}
+    },3000);
+  }
   async function prepareInvoiceSyncBatch(button) {
     var originalLabel = button.textContent;
     try {
       button.disabled = true;
       button.textContent = "Đang chuẩn bị…";
+      if(state.invoiceDirection==='input'){
+        showInputSyncStatus({state:'running'});
+        var requested=await api('/api/invoice-workbench/input-refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from:state.invoiceFrom,to:state.invoiceTo})});
+        var progress=await api('/api/invoice-workbench/input-refresh');
+        showInputSyncStatus(progress.sync);showToast(requested.message);
+        button.disabled=false;button.textContent=originalLabel;return;
+      }
       var result = await api("/api/invoice-workbench/batches", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1127,6 +1152,7 @@
           (!synced.status_mapping_configured ? " · chưa đọc được trạng thái, cần người dùng kiểm tra" : ""));
       }
     } catch (error) {
+      if(state.invoiceDirection==='input')showInputSyncStatus({state:'error',message:error.message});
       showToast(error.message, true);
       button.disabled = false;
       button.textContent = originalLabel;
@@ -3950,11 +3976,7 @@
       content.insertAdjacentHTML('afterbegin', '<div class="code-note warning-summary input-source-warning" role="status"><strong>mSMI còn ' + num(state.invoiceWorkbench.undated_source_count) + ' bản ghi chưa có ngày hóa đơn hợp lệ.</strong><p>Chưa xác định được các bản ghi này thuộc kỳ nào nên chưa thể đưa vào danh sách theo ngày. Nếu thiếu hóa đơn mới: vào mSMI → Chức năng → Đồng bộ ngay, chọn khoảng ngày cần lấy và đồng bộ danh sách cùng chi tiết. Xong quay lại đây bấm Tải/tiếp tục đầu vào.</p><a href="https://hdsd.minvoice.com.vn/msmi/dong-bo-chi-tiet-hoa-don/" target="_blank" rel="noopener noreferrer">Hướng dẫn Đồng bộ ngay của mSMI</a></div>');
     }
     var autoInput = state.invoiceWorkbench.automatic_input_sync;
-    if (state.invoiceDirection === 'input' && autoInput && autoInput.enabled) {
-      var autoTime = function(value) { return value ? new Date(value).toLocaleString('vi-VN', {timeZone:'Asia/Ho_Chi_Minh'}) : 'Chưa có'; };
-      var autoLabel = autoInput.attention ? 'Tự cập nhật hóa đơn: cần kiểm tra' : autoInput.state === 'running' ? 'Đang tự cập nhật hóa đơn từ mSMI…' : 'Tự cập nhật hóa đơn đã bật';
-      content.insertAdjacentHTML('afterbegin', '<div class="code-note automatic-input-status ' + (autoInput.attention ? 'warning-summary' : '') + '" role="status"><strong>' + esc(autoLabel) + '</strong><div>02:30 và 06:00 hằng ngày · Rà lại 7 ngày trước · Tự tải cả danh sách và chi tiết.</div><small>Lần thành công: ' + esc(autoTime(autoInput.last_success)) + ' · Lần tiếp theo: ' + esc(autoTime(autoInput.next_attempt)) + '</small>' + (autoInput.message ? '<p>' + esc(autoInput.message) + '</p>' : autoInput.attention ? '<p>Lượt cập nhật đã quá giờ. Dữ liệu hiện có vẫn được giữ; hãy kiểm tra kết nối mSMI hoặc bấm Tải/tiếp tục đầu vào.</p>' : '') + '<div><small>Hóa đơn mới được tải về để kiểm tra; nhập kho vẫn cần bạn xác nhận.</small></div></div>');
-    }
+    if(state.invoiceDirection==='input'&&autoInput&&(autoInput.enabled||autoInput.manual_requested||autoInput.last_attempt))showInputSyncStatus(autoInput);
     invoiceVirtual = window.TdpInvoiceVirtualTable(content.querySelector('.invoice-lines-card .invoice-lines-scroll'), state.invoiceListing.lines || [], window.TdpInvoiceRenderRow);
   }
 
@@ -7768,6 +7790,13 @@
       state.invoiceWorkbench = null;
       loadInvoiceWorkbench();
       return;
+    }
+    if(action==='fix-input-sync-dates'){
+      var dateField=document.getElementById('invoiceFrom');if(dateField){dateField.scrollIntoView({block:'center'});dateField.focus();}return;
+    }
+    if(action==='view-refreshed-input'){
+      if(invoicePendingEdit()){showToast('Lưu phần Ghép mã / Quy đổi đang sửa rồi bấm Xem hóa đơn vừa tải.',true);return;}
+      await loadInvoiceWorkbench(true);render();return;
     }
     if (action === "prepare-invoice-sync") {
       state.legacyInvoiceMappingPreview = null;

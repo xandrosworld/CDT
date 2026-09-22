@@ -42,6 +42,29 @@ def init_schema(conn):
         lease_until TEXT, last_slot TEXT, last_attempt TEXT, last_success TEXT,
         next_attempt TEXT, failures INTEGER NOT NULL DEFAULT 0,
         message TEXT NOT NULL DEFAULT '', result_json TEXT NOT NULL DEFAULT '{}')''')
+    columns={r[1] for r in conn.execute('PRAGMA table_info(automatic_input_sync)')}
+    for name in ('requested_from','requested_to'):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE automatic_input_sync ADD COLUMN {name} TEXT")
+
+
+def request_refresh(db, tenant, start, end, *, now=None):
+    """Persist a manual request; the shared lease survives browser/redeploy loss."""
+    now=now or vn_now()
+    first,last=(datetime.strptime(str(v),'%Y-%m-%d').date() for v in (start,end))
+    if not 0 <= (last-first).days <= 365:
+        raise ValueError('Từ ngày – Đến ngày phải theo thứ tự và không quá 366 ngày.')
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        init_schema(c)
+        c.execute('INSERT OR IGNORE INTO automatic_input_sync(tenant) VALUES(?)',(tenant,))
+        r=dict(c.execute('SELECT * FROM automatic_input_sync WHERE tenant=?',(tenant,)).fetchone())
+        if (r['lease_until'] and datetime.fromisoformat(r['lease_until']) > now) or (r['state']=='waiting' and r.get('requested_from')):
+            return {'accepted':False,'message':'Đang tải đầu vào. Chờ lượt hiện tại hoàn tất rồi tải khoảng ngày khác.'}
+        c.execute("""UPDATE automatic_input_sync SET requested_from=?,requested_to=?,
+            next_attempt=?,state='waiting',message='',failures=0 WHERE tenant=?""",
+            (first.isoformat(),last.isoformat(),now.isoformat(),tenant))
+    return {'accepted':True,'message':'Đang cập nhật nguồn mSMI và tải đầu vào. Có thể tiếp tục làm việc; kết quả sẽ hiện tại đây.'}
 
 
 def status(conn, tenant, now=None):
@@ -51,6 +74,7 @@ def status(conn, tenant, now=None):
     row = conn.execute('SELECT * FROM automatic_input_sync WHERE tenant=?',(tenant,)).fetchone()
     if not row: return {'enabled':False}
     r = dict(row)
+    r['manual_requested']=bool(r.get('requested_from'))
     result = json.loads(r.pop('result_json'))
     r.pop('owner')
     r.update(schedule='02:30 và 06:00 hằng ngày (giờ Việt Nam)', lookback_days=LOOKBACK,
@@ -63,7 +87,7 @@ def status(conn, tenant, now=None):
     else:
         attention = r['state']=='error' or (now > max(due,first_due)+timedelta(minutes=45)
             and (not r['last_success'] or datetime.fromisoformat(r['last_success']) < due))
-    r['attention'] = bool(r['enabled'] and attention)
+    r['attention'] = bool((r['enabled'] or r['manual_requested']) and attention)
     return r
 
 
@@ -73,7 +97,7 @@ def claim(db, tenant, now):
     with db() as c:
         c.execute('BEGIN IMMEDIATE')
         r = dict(c.execute('SELECT * FROM automatic_input_sync WHERE tenant=?',(tenant,)).fetchone())
-        if not r['enabled']: return None
+        if not r['enabled'] and not r.get('requested_from'): return None
         if r['lease_until'] and datetime.fromisoformat(r['lease_until']) > now: return None
         if r['next_attempt'] and datetime.fromisoformat(r['next_attempt']) > now: return None
         c.execute('''UPDATE automatic_input_sync SET state='running',owner=?,lease_until=?,
@@ -138,11 +162,22 @@ def run_due(db, tenant, client_factory, refresher_factory, tax_code, *, now_fn=v
     if not owner: return {'skipped':True}
     start=(now.date()-timedelta(days=LOOKBACK)).isoformat()
     end=now.date().isoformat()
+    with db() as c:
+        request=dict(c.execute('SELECT requested_from,requested_to FROM automatic_input_sync WHERE tenant=?',(tenant,)).fetchone())
+    if request['requested_from']:
+        start,end=request['requested_from'],request['requested_to']
     result={}
     error=''
     try:
-        source=refresher_factory().refresh(start,end)
-        if not source.get('source_ready'): raise RefreshError('mSMI chưa xác nhận đồng bộ đủ chi tiết.')
+        source={'source_ready':True,'repaired_details':0}
+        refresher=refresher_factory()
+        first,last=(datetime.strptime(d,'%Y-%m-%d').date() for d in (start,end))
+        while first <= last:
+            stop=min(first+timedelta(days=30),last)
+            part=refresher.refresh(first.isoformat(),stop.isoformat())
+            if not part.get('source_ready'): raise RefreshError('mSMI chưa xác nhận đồng bộ đủ chi tiết.')
+            source['repaired_details']+=part.get('repaired_details',0)
+            first=stop+timedelta(days=1)
         rows=fetch_snapshot(client_factory(),start,end,tax_code)
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
@@ -156,6 +191,11 @@ def run_due(db, tenant, client_factory, refresher_factory, tax_code, *, now_fn=v
             # The complete in-memory snapshot has a different paging space.
             c.execute("UPDATE invoice_sync_batches SET source_cursor='{}' WHERE id=?",(batch['id'],))
             result=sync_input_batch(c,Snapshot(rows),batch['id'],stamp,max_pages=50,page_size=199)
+            try:
+                from .automatic_invoice_mapping import apply_automatic_input_mappings
+            except ImportError:
+                from automatic_invoice_mapping import apply_automatic_input_mappings
+            result['automatic_mapping']=apply_automatic_input_mappings(c,tenant=tenant,date_from=start,date_to=end,now_iso=stamp)
             result.update(source, stock_changed=False)
             if not result['complete'] or result['review_required'] or result['error_count']:
                 error='Còn hóa đơn thiếu hoặc sai dữ liệu nguồn; hệ thống sẽ tự thử lại. Xem phần Cần kiểm tra.'
@@ -182,6 +222,8 @@ def run_due(db, tenant, client_factory, refresher_factory, tax_code, *, now_fn=v
             last_success=?,next_attempt=?,failures=?,message=?,result_json=? WHERE tenant=?''',
             ('error' if error else 'success',row['last_success'] if error else finished.isoformat(),
              next_attempt.isoformat(),failures,error,json.dumps(result,ensure_ascii=False),tenant))
+        if not error:
+            c.execute('UPDATE automatic_input_sync SET requested_from=NULL,requested_to=NULL WHERE tenant=?',(tenant,))
     return {'ok':not error,'error':error,'result':result}
 
 

@@ -77,6 +77,18 @@ class BkDraftTests(unittest.TestCase):
         all_rows=self.client.get('/api/bk-import/shortages?from=2026-08-01&to=2026-08-31&tax=all').get_json()['items']
         self.assertEqual(len(all_rows),2)
         self.assertEqual(self.counts(),before)
+        daily=self.client.get('/api/bk-import/shortages?from=2026-08-01&to=2026-09-30&day=2026-08-15').get_json()
+        self.assertEqual(daily['day'],'2026-08-15')
+        self.assertEqual(daily['items'][0]['suggested_qty'],2)
+        future=self.client.get('/api/bk-import/shortages?from=2026-08-01&to=2026-09-30&day=2026-09-01').get_json()
+        self.assertEqual(future['items'][0]['suggested_qty'],12)
+        self.assertEqual(self.client.get('/api/bk-import/shortages?from=2026-08-01&to=2026-08-31&day=2026-09-01').status_code,400)
+        body=self.body(True);body['document_date']='2026-08-15'
+        file=self.client.post('/api/bk-import/draft/excel',json=body)
+        confirmed=self.confirm(self.preview(file.data).get_json())
+        self.assertEqual(confirmed.status_code,200,confirmed.get_json())
+        after=self.client.get('/api/bk-import/shortages?from=2026-08-01&to=2026-09-30&day=2026-09-01').get_json()
+        self.assertEqual(after['items'][0]['suggested_qty'],10)
 
     def test_reject_bad_dates_numbers_codes_without_writes(self):
         before=self.counts()

@@ -1,15 +1,17 @@
 (function (root) {
   'use strict';
   root.TdpBkDraft = function (options) {
-    var esc = options.esc, dialog = document.createElement('dialog'), rows = [], loadedPeriod = null, review = null;
+    var esc = options.esc, dialog = document.createElement('dialog'), rows = [], loadedPeriod = null, review = null, dayDrafts = {};
     dialog.className = 'bk-draft-dialog';
     dialog.setAttribute('aria-label', 'Lập bảng kê bổ sung');
     dialog.innerHTML = '<div class="bk-draft-head"><h2>Lập bảng kê bổ sung</h2><button class="btn btn-outline" data-bk="close" aria-label="Đóng">Đóng</button></div>' +
       '<p>1. Chọn hàng và điền thông tin mua → 2. Xem bảng kê tổng, biên nhận → 3. Xác nhận nhập kho. Tải và in chưa cộng kho.</p>' +
       '<div class="bk-draft-controls"><label>Từ ngày<input name="from" type="date" value="' + esc(options.from) + '"></label>' +
       '<label>Đến ngày<input name="to" type="date" value="' + esc(options.to) + '"></label>' +
+      '<label>Ngày đối chiếu<input name="day" type="date" value="' + esc(options.from) + '"></label>' +
       '<label>Nhóm hàng<select name="tax"><option value="KKKNT">KKKNT</option><option value="all">Tất cả hàng tồn âm</option></select></label>' +
       '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div>' +
+      '<p>Chọn Ngày đối chiếu để lập riêng từng ngày, ví dụ 01/09. Lượng gợi ý bằng lượng còn âm cuối ngày đó, gồm cả thiếu từ trước chưa bổ sung. Sau khi xác nhận nhập kho ngày trước, xem lại ngày sau để không bổ sung trùng. Ngày mua thực tế phải đúng ngày đã mua hàng.</p>' +
       '<p class="muted">Có thể chọn lại tháng 8 hoặc kỳ trước. Lượng tồn âm chỉ để đối chiếu; sửa số lượng theo hàng thực mua. Đơn giá gợi ý bằng 95% giá bán gần nhất của đơn đã duyệt đến ngày đối chiếu, cùng ĐVT. Nếu chưa có đơn, dùng giá hóa đơn bán đã ký và ghi kho cùng ĐVT. Nguồn giá hiện dưới mỗi ô; có thể sửa trước khi tải.</p>' +
       '<div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label>' +
       '<label>Số bảng kê<input name="reference" maxlength="100" placeholder="Nhập số của bảng kê đang lập" aria-describedby="bk-reference-help"><small id="bk-reference-help">Số để nhận biết bảng kê này; nhập theo cách đánh số chị đang dùng.</small></label>' +
@@ -54,6 +56,7 @@
       function add(message,target,label){missing.push({message:message,target:target,label:label});}
       if(!field('document_date').value)add('Chưa điền Ngày mua thực tế.',field('document_date'),'Điền ngày mua');
       else if(loadedPeriod && (field('document_date').value<loadedPeriod.from || field('document_date').value>loadedPeriod.to))add('Ngày mua thực tế phải nằm trong khoảng Từ ngày – Đến ngày đang chọn.',field('document_date'),'Sửa ngày mua');
+      else if(loadedPeriod && field('document_date').value>loadedPeriod.day)add('Ngày mua thực tế không được sau Ngày đối chiếu. Chọn lại Ngày đối chiếu nếu hàng mua sau ngày đó.',field('day'),'Sửa Ngày đối chiếu');
       if(!field('reference').value.trim())add('Chưa điền Số bảng kê. Đây là số của bảng kê đang lập, không phải tìm ở bảng khác.',field('reference'),'Điền số bảng kê');
       var noSeller=rows.filter(function(r){return r.selected&&!String(r.source_party||'').trim()&&!field('source_party').value.trim();});
       if(noSeller.length)add(noSeller.length+' mặt hàng chưa có Người bán / NCC. Điền Người bán chung hoặc điền riêng từng dòng.',field('source_party'),'Điền người bán chung');
@@ -69,6 +72,7 @@
       var target=null,label='Đến chỗ cần sửa';
       if(/Số tham chiếu|Số bảng kê/.test(message)){target=field('reference');label=/đã được ghi/.test(message)?'Kiểm tra số bảng kê':'Điền số bảng kê';}
       else if(/Ngày mua thực tế/.test(message)){target=field('document_date');label='Sửa ngày mua';}
+      else if(/Ngày đối chiếu/.test(message)){target=field('day');label='Sửa Ngày đối chiếu';}
       else if(/Từ ngày|Đến ngày/.test(message)){target=field('from');label='Sửa khoảng ngày';}
       else if(/Xem hàng tồn âm|xem hàng tồn âm/.test(message)){target=dialog.querySelector('[data-bk="load"]');label='Đến nút xem hàng tồn âm';}
       else if(/Chọn ít nhất một dòng/.test(message)){target=rowField(0,'selected');label='Đến danh sách chọn hàng';}
@@ -87,7 +91,7 @@
       });
     }
     function render() {
-      dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Tồn cuối kỳ</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
+      dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Tồn cuối ngày '+esc(loadedPeriod ? loadedPeriod.day : '')+'</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
         return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'</td><td>'+esc(r.unit)+'</td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
           return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'">'+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
@@ -97,9 +101,10 @@
     function payload() {
       collect();
       if (!loadedPeriod || loadedPeriod.from!==field('from').value || loadedPeriod.to!==field('to').value) throw new Error('Bấm “Xem hàng tồn âm” để cập nhật khoảng ngày trước khi tải.');
+      if (loadedPeriod.day!==field('day').value || loadedPeriod.tax!==field('tax').value) throw new Error('Bấm “Xem hàng tồn âm” để cập nhật Ngày đối chiếu và Nhóm hàng trước khi tải.');
       var selected=rows.filter(function(r){return r.selected;});
       if (!selected.length) throw new Error('Chọn ít nhất một dòng để lập bảng kê.');
-      return {from:loadedPeriod.from,to:loadedPeriod.to,document_date:field('document_date').value,reference:field('reference').value,
+      return {from:loadedPeriod.from,to:loadedPeriod.day,document_date:field('document_date').value,reference:field('reference').value,
         rows:selected.map(function(r){return {product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||field('source_party').value,note:r.note,source_line:r.source_line};})};
     }
     function post(body) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}; }
@@ -113,13 +118,17 @@
         collect();
         if(['load','file','add','all','none','preview'].indexOf(name)>=0){review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';}
         if (name==='load') {
-          if(rows.some(function(r){return r.selected;}) && !root.confirm('Nạp lại danh sách sẽ thay các dòng đang chọn. Tiếp tục?')) return;
+          if(loadedPeriod)dayDrafts[loadedPeriod.day+'|'+loadedPeriod.tax]={rows:rows,date:field('document_date').value,reference:field('reference').value,seller:field('source_party').value};
           status('Đang đối chiếu sổ kho…');
-          var result=await options.api('/api/bk-import/shortages?'+new URLSearchParams({from:field('from').value,to:field('to').value,tax:field('tax').value}));
+          if(!field('day').value)throw new Error('Chọn Ngày đối chiếu trước khi xem hàng tồn âm.');
+          var result=await options.api('/api/bk-import/shortages?'+new URLSearchParams({from:field('from').value,to:field('to').value,tax:field('tax').value,day:field('day').value}));
           if(!dialog.isConnected)return;
-          loadedPeriod={from:result.from,to:result.to};
-          rows=result.items.map(function(r){return Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:'',note:''});});
-          render(); status(rows.length+' mã đang âm cuối kỳ. Chọn những hàng đã mua cần bổ sung chứng từ.');
+          loadedPeriod={from:result.from,to:result.to,day:result.day,tax:field('tax').value};
+          var kept=dayDrafts[result.day+'|'+loadedPeriod.tax], fresh=result.items;
+          rows=fresh.map(function(r){var old=kept&&kept.rows.find(function(k){return k.product_code===r.product_code;}),merged=Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:'',note:''},old||{},{closing_qty:r.closing_qty,suggested_qty:r.suggested_qty});if(old&&Number(old.qty)===Number(old.suggested_qty))merged.qty=r.suggested_qty;return merged;});
+          if(kept){kept.rows.forEach(function(r){if(!fresh.some(function(f){return f.product_code===r.product_code;}))rows.push(Object.assign({},r,{closing_qty:null,selected:false}));});}
+          field('document_date').value=kept?kept.date:'';field('reference').value=kept?kept.reference:'';field('source_party').value=kept?kept.seller:'';
+          render(); status(fresh.length+' mã đang âm cuối ngày '+result.day+'. Chọn những hàng đã mua cần bổ sung chứng từ.'+(kept?' Đã giữ thông tin đang nhập; kiểm tra lại lượng mua với tồn mới.':''));
           dialog.querySelector('.bk-draft-preview').innerHTML='';
           if(options.productCode){
             var index=rows.findIndex(function(r){return r.product_code===options.productCode;});
@@ -167,6 +176,7 @@
         } else if(name==='confirm') {
           if(!review || !field('confirm_actual').checked || !field('confirm_actor').value.trim())throw new Error('Điền tên và xác nhận đã kiểm tra hàng mua thực tế.');
           var saved=await options.api('/api/bk-import/draft/confirm',post({token:review.import_token,confirmed:true,actor:field('confirm_actor').value}));
+          delete dayDrafts[loadedPeriod.day+'|'+loadedPeriod.tax];
           rows.forEach(function(r){var current=saved.stock.find(function(s){return s.product_code===r.product_code;});if(current){r.closing_qty=current.closing_qty;r.selected=false;r.qty=Math.max(0,-Number(current.closing_qty));}});
           var cleared=saved.stock.filter(function(s){return Number(s.closing_qty)>=-0.000001;}).map(function(s){return s.product_code;});
           rows=rows.filter(function(r){return cleared.indexOf(r.product_code)<0;});render();

@@ -8,7 +8,7 @@ from datetime import datetime,timedelta
 from pathlib import Path
 from unittest.mock import Mock
 
-from .automatic_input_sync import (VN,init_schema,schedule,claim,run_due,status,fetch_snapshot)
+from .automatic_input_sync import (VN,init_schema,schedule,claim,run_due,status,fetch_snapshot,request_refresh)
 from .msmi_refresh import MsmiRefresh,RefreshError
 from .test_invoice_input_sync import init_test_database,DateBoundedMsmi
 from .test_msmi_sync import remote_invoice
@@ -124,8 +124,48 @@ class AutoInputTests(unittest.TestCase):
             self.assertEqual(item['nbten'],raw['nbten'])
             self.assertEqual(item['last_updated_date'],raw['last_updated_date'])
 
+    def test_manual_refresh_repeats_fetches_new_invoice_and_never_posts_stock(self):
+        with self.db() as c:c.execute('UPDATE automatic_input_sync SET enabled=0')
+        first=remote_invoice(20649);first.update(_id='one',tdlap='2026-09-15',nmmst='0202265016')
+        second=deepcopy(first);second.update(_id='two',shdon=20650)
+        for rows,expected in [([first],1),([first,second],2),([first,second],2)]:
+            self.assertTrue(request_refresh(self.db,'TDP','2026-09-01','2026-09-30',now=self.now)['accepted'])
+            self.assertTrue(self.execute(rows)['ok'])
+            self.refresh.refresh.assert_called_with('2026-09-01','2026-09-30')
+            with self.db() as c:
+                self.assertEqual(expected,c.execute('SELECT COUNT(*) FROM msmi_invoices').fetchone()[0])
+                self.assertEqual(0,c.execute('SELECT COUNT(*) FROM inventory_transactions').fetchone()[0])
+            self.assertFalse(self.state()['manual_requested'])
+
+    def test_manual_source_error_is_visible_and_retry_uses_requested_dates(self):
+        request_refresh(self.db,'TDP','2026-08-01','2026-08-31',now=self.now)
+        self.refresh.refresh.side_effect=RefreshError('Kết nối thuế đã hết phiên')
+        self.assertFalse(self.execute()['ok'])
+        self.assertTrue(self.state()['manual_requested'])
+        self.assertIn('hết phiên',self.state()['message'])
+        self.refresh.refresh.side_effect=None
+        request_refresh(self.db,'TDP','2026-08-01','2026-08-31',now=self.now)
+        self.assertTrue(self.execute()['ok'])
+        self.refresh.refresh.assert_called_with('2026-08-01','2026-08-31')
+
+    def test_manual_cannot_replace_running_job_or_spawn_duplicate_fetch(self):
+        request_refresh(self.db,'TDP','2026-09-01','2026-09-30',now=self.now)
+        self.assertIsNotNone(claim(self.db,'TDP',self.now))
+        self.assertFalse(request_refresh(self.db,'TDP','2026-08-01','2026-08-31',now=self.now)['accepted'])
+        self.assertTrue(self.execute()['skipped'])
+        self.refresh.refresh.assert_not_called()
+
 
 class RefreshTests(unittest.TestCase):
+    def test_missing_matching_tax_session_never_uses_other_company_token(self):
+        client=MsmiRefresh('login','private-password','0202265016')
+        client.request=Mock(side_effect=[{}, {'items':[
+            {'username':'OTHER','token':'other-private-token'},
+            {'username':'0202265016','token':''}]}])
+        with self.assertRaisesRegex(RefreshError,'Kết nối thuế trên mSMI đã hết phiên'):
+            client.refresh('2026-09-01','2026-09-30')
+        self.assertEqual(client.request.call_count,2)
+
     def test_portal_refresh_runs_both_purchase_types_then_repairs_details_and_verifies(self):
         client=MsmiRefresh('login','private-password','0202265016')
         a={'_id':'abc123','username':'0202265016','password':'private-tax-password','token':'private-token',
