@@ -3107,7 +3107,7 @@
     var groupPicker=content.querySelector('#invoiceTaxGroupPick');if(groupPicker)groupPicker.disabled=!!busy;
     var editGroup=content.querySelector('[data-invoice-edit-group]');if(editGroup)editGroup.disabled=!!busy||!state.unissued;
     var prepared=activePreparedInvoice(),sendStatus=prepared&&((state.preparedStatus||{})[prepared.id]||{});
-    var sendUnavailable=!prepared||busy||dirty||prepared.stale||sendStatus.saved||prepared.minvoice_status==='saved';
+    var sendUnavailable=!prepared||busy||dirty||prepared.stale||sendStatus.saved||prepared.minvoice_status==='saved'||!!prepared.signed_source;
     content.querySelectorAll('#invoiceSendControls select,#invoiceSendControls input').forEach(function(el){el.disabled=sendUnavailable||(['confirmed','confirm_partial'].includes(el.name)&&!sendStatus.checked);});
     var checkRemote=content.querySelector('[value=check][form^=preparedSend]');if(checkRemote)checkRemote.disabled=sendUnavailable||!(state.minvoiceSeries||[]).length;
     var sendRemote=content.querySelector('[value=send][form^=preparedSend]');if(sendRemote)sendRemote.disabled=sendUnavailable||!sendStatus.checked||!sendStatus.confirmed||!!(prepared&&prepared.coverage&&prepared.coverage.partial&&!sendStatus.partialConfirmed);
@@ -3321,12 +3321,12 @@
     return '<div class="invoice-send-controls" id="invoiceSendControls" aria-label="Xác nhận gửi bản nháp"><p><strong>'+esc(preparedLabel(r))+'</strong> · Ngày hóa đơn: '+dateVN(r.invoice_date)+'</p><div class="compact-controls">'+
       '<label>Ký hiệu <select name="series" form="'+form+'"'+(unavailable?' disabled':'')+'>'+series.map(function(s){var v=s.value||s.khhdon;return '<option value="'+esc(v)+'"'+(selected===v?' selected':'')+'>'+esc(v)+'</option>';}).join('')+'</select></label>'+
       '<label><input type="checkbox" name="confirmed" form="'+form+'"'+(status.confirmed?' checked':'')+(unavailable||!status.checked?' disabled':'')+'> Tôi đã kiểm tra, gửi bản nháp này để chờ ký</label></div>'+
-      invoiceCoverageHtml(r,unavailable||!status.checked,form,status)+'<p role="status"'+(status.error?' class="error-summary"':'')+'>'+esc(status.message||(r.minvoice_status==='saved'?'Đã gửi bản nháp lên M-Invoice.':r.stale?'Dữ liệu đã thay đổi. Bấm bước 4 để chuẩn bị lại bảng kê.':'Bấm “5. Kiểm tra M-Invoice”, rồi tích xác nhận tại đây trước khi bấm bước 6.'))+'</p></div>';
+      invoiceCoverageHtml(r,unavailable||!status.checked,form,status)+'<p role="status"'+(status.error?' class="error-summary"':'')+'>'+esc((r.signed_source&&r.signed_source.message)||status.message||(r.minvoice_status==='saved'?'Đã gửi bản nháp lên M-Invoice.':r.stale?'Dữ liệu đã thay đổi. Bấm bước 4 để chuẩn bị lại bảng kê.':'Bấm “5. Kiểm tra M-Invoice”, rồi tích xác nhận tại đây trước khi bấm bước 6.'))+'</p></div>';
   }
 
   function invoiceWorkflowActionsHtml(disabled) {
     var r=activePreparedInvoice(),status=r&&((state.preparedStatus||{})[r.id]||{}),busy=state.invoiceExportBusy||state.preparedBusy||state.unissuedLoading||state.invoiceChoicesBusy||state.invoiceReviewBusy;
-    var unavailable=!r||busy||exportChoicesDirty()||r.stale||(status&&status.saved)||(r&&r.minvoice_status==='saved');
+    var unavailable=!r||busy||exportChoicesDirty()||r.stale||(status&&status.saved)||(r&&(r.minvoice_status==='saved'||r.signed_source));
     return '<div class="invoice-six-steps"><div class="invoice-workflow-actions" aria-label="6 bước xuất hóa đơn">'+
       '<button type="submit" value="open-review" class="btn btn-primary"'+disabled+'>1. Chọn mặt hàng trên web</button>'+
       '<button type="submit" form="invoiceLineChoicesForm" data-workflow-save class="btn btn-primary"'+(busy||!state.invoiceReviewOpen?' disabled':'')+'>2. Lưu lựa chọn mặt hàng</button>'+
@@ -3354,7 +3354,7 @@
       '<form id="preparedDateForm" class="compact-controls"><label>Ngày hóa đơn<input type="date" name="invoice_date" value="'+esc((activePreparedInvoice()||p.items[0]).invoice_date)+'" required></label><button class="btn btn-outline"'+(state.preparedBusy?' disabled':'')+'>Áp dụng ngày và chuẩn bị lại</button></form>'+
       p.items.filter(function(r){return invoiceGroupKey(r)===invoiceSelectedGroup().key;}).map(function(r){
         var status=Object.assign({saved:r.minvoice_status==='saved',message:r.stale?'Dữ liệu đã thay đổi. Bấm bước 4 để chuẩn bị lại bảng kê.':(['unknown','saving'].includes(r.minvoice_status)?'Lần gửi trước cần đối soát. Kiểm tra rồi xác nhận gửi để đối soát, không tạo lại bản nháp.':'')},(state.preparedStatus||{})[r.id]||{}),buyer=r.buyer||{},busy=state.preparedBusy||state.invoiceExportBusy||exportChoicesDirty()||r.stale;
-        return '<details class="prepared-invoice" data-draft-id="'+r.id+'"'+(activePreparedInvoice()&&r.id===activePreparedInvoice().id?' open':'')+'><summary><strong>'+esc(preparedLabel(r))+'</strong> · '+r.lines.length+' dòng'+(status.saved?' · Đã gửi chờ ký':' · Chưa gửi')+'</summary>'+
+        return '<details class="prepared-invoice" data-draft-id="'+r.id+'"'+(activePreparedInvoice()&&r.id===activePreparedInvoice().id?' open':'')+'><summary><strong>'+esc(preparedLabel(r))+'</strong> · '+r.lines.length+' dòng'+(r.signed_source?' · Đã ký HĐ '+esc(r.signed_source.number)+' — đang đối chiếu, không gửi lại':status.saved?' · Đã gửi chờ ký':['unknown','saving'].includes(r.minvoice_status)?' · Đã có lần gửi — chờ đối chiếu':' · Chưa gửi')+'</summary>'+
           '<p>'+esc(buyer.legal_name||buyer.display_name||'Chưa có hồ sơ người mua')+' · MST: '+esc(buyer.tax_code||'—')+'<br>'+esc(buyer.address||'Chưa có địa chỉ')+'</p>'+
           '<p>Ngày hóa đơn: '+dateVN(r.invoice_date)+' · Tiền hàng: '+money(r.subtotal)+' · Thuế: '+money(r.tax_amount)+' · Tổng: <strong>'+money(r.total_amount)+'</strong></p>'+
           '<form id="preparedSend'+r.id+'" class="preparedSendForm" data-id="'+r.id+'"></form>'+

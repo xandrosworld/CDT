@@ -24,6 +24,10 @@ def signer(app):
 
 
 def snapshot(conn, draft_id):
+    try:
+        from .outgoing_signed_guard import signed_draft_sources
+    except ImportError:
+        from outgoing_signed_guard import signed_draft_sources
     draft = conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?', (draft_id,)).fetchone()
     if not draft or draft['status'] != 'draft':
         raise ValueError('Bảng kê đã thay đổi hoặc hóa đơn đã phát hành. Chuẩn bị lại trước khi gửi.')
@@ -40,6 +44,7 @@ def snapshot(conn, draft_id):
             'buyer': dict(buyer) if buyer else {}, 'lines': lines,
             'sources': sorted((r['order_id'],r['date'],r['contractor'],r['product_code'],r['qty'],r['unit'],
                                r['price'],r['enabled'],r['invoice_name'],r['invoice_unit'],r['tax']) for r in sources)}
+    data['signed_source'] = signed_draft_sources(conn).get(draft_id)
     return data
 
 
@@ -125,6 +130,13 @@ def prepared_payload(app, conn, draft_ids, period, pending, blocked):
 
 
 def validate_prepared(app, conn, draft_id, token):
+    try:
+        from .outgoing_signed_guard import signed_draft_sources
+    except ImportError:
+        from outgoing_signed_guard import signed_draft_sources
+    signed = signed_draft_sources(conn).get(draft_id)
+    if signed:
+        raise ValueError(signed['message'])
     if not isinstance(token, str) or not token or len(token) > 4096:
         raise ValueError('Cần kiểm tra bảng kê đã chuẩn bị trước khi gửi M-Invoice.')
     try:
@@ -161,5 +173,12 @@ def register(app,ctx):
                     items.append({k:v for k,v in data.items() if k!='sources'}|
                                  {'token':token,'minvoice_status':row['minvoice_status'],'stale':stale,
                                   'coverage':send_coverage(app,conn,row['draft_id'],period,report)})
+                try:
+                    from .outgoing_signed_guard import signed_draft_sources
+                except ImportError:
+                    from outgoing_signed_guard import signed_draft_sources
+                signed = signed_draft_sources(conn)
+                for item in items:
+                    item['signed_source'] = signed.get(item['id'])
             return jsonify(ok=True,scope=period,items=items,pending=warnings,blocked=[],remote_write=False)
         except ValueError as exc:return jsonify(ok=False,error=str(exc)),400

@@ -8694,6 +8694,14 @@ def register_contract_routes(app, ctx):
                 return jsonify({"ok": False, "error": "Không tìm thấy dự thảo hóa đơn"}), 404
             if draft["status"] != "draft":
                 return jsonify({"ok": False, "error": "Chỉ dự thảo chưa phát hành mới được lưu lên M-Invoice"}), 409
+            try:
+                from .outgoing_signed_guard import signed_draft_sources
+            except ImportError:
+                from outgoing_signed_guard import signed_draft_sources
+            signed_source = signed_draft_sources(conn).get(draft_id)
+            if signed_source:
+                return jsonify(ok=False, error=signed_source['message'], code='invoice_already_signed',
+                               signed_source=signed_source, remote_write=False), 409
             if not dry_run and draft["minvoice_status"] == "saved":
                 return jsonify({
                     "ok": True, "dry_run": False, "remote_write": False, "idempotent": True,

@@ -171,6 +171,22 @@ class PortalSendTests(unittest.TestCase):
         r=self.send(item,False);self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(self.remote.posts,1)
 
+    def test_signed_source_blocks_send_before_stock_reconciliation(self):
+        item=self.prepare()
+        self.remote.lose_response=True
+        self.send(item,False)
+        self.remote.documents[0].update(invoiceNumber=88,sendTaxStatus=4,dateSign='2026-09-14T13:00:00',taxAuthorityCode='fixture')
+        # A changed quantity cannot be silently reconciled to the original order.
+        self.remote.documents[0]['invoiceDetail'][0]['quantity'] += 0.01
+        refresh_sources(server.db,lambda:self.remote,server.now_iso,'2026-09-01','2026-09-14')
+        listing=self.client.get('/api/outgoing-invoices/prepared',query_string=self.period).json
+        current=listing['items'][0]
+        self.assertEqual(str(current['signed_source']['number']),'88')
+        result=self.send(current,False)
+        self.assertEqual(result.status_code,409)
+        self.assertEqual(result.json['code'],'invoice_already_signed')
+        self.assertEqual(self.remote.posts,1)
+
     def test_signed_source_invalid_ordinal_is_reported_without_linking(self):
         item=self.prepare()
         self.assertEqual(self.send(item,False).status_code,200)
