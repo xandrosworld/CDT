@@ -3283,6 +3283,7 @@
   }
 
   function acceptPreparedInvoices(next) {
+    next.items=(next.items||[]).filter(function(r){return !r.signed_source;});
     var old=((state.preparedInvoices||{}).items||[]),statuses={};
     (next.items||[]).forEach(function(r){
       var previous=old.find(function(x){return x.id===r.id;});

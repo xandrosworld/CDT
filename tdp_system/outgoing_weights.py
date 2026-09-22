@@ -272,7 +272,8 @@ def signed_stock_snapshot(conn, item_id):
                     from minvoice_portal import portal_date
                 if (d['minvoice_series'] == source['invoice_series']
                         and (not d['minvoice_remote_id'] or d['minvoice_remote_id'] == source['remote_id'])
-                        and portal_date(raw.get('invoiceDate')) == d['invoice_date']
+                        and portal_date(raw.get('invoiceDate')) == source['invoice_date']
+                        and source['invoice_date'] >= d['invoice_date']
                         and key(raw.get('sellerTaxCode')) == key(d['company_tax_code_snapshot'])
                         and key(raw.get('buyerTaxCode')) == key(d['buyer_tax_code_snapshot'])
                         and key(raw.get('buyerLegalName') or raw.get('buyerDisplayName')) == key(d['buyer_name_snapshot'])
@@ -308,17 +309,22 @@ def signed_stock_snapshot(conn, item_id):
     if len(actual) != len(expected):
         raise blocked()
     answer = None
+    try:
+        from .minvoice_precision import matches as precision_matches
+    except ImportError:
+        from minvoice_precision import matches as precision_matches
     for remote, (stock, exported, saved) in zip(actual, expected):
         try:
             from .contract_modules import invoice_tax_percent
         except ImportError:
             from contract_modules import invoice_tax_percent
         if (remote['source_item_code'] != stock['product_code'] or key(remote['source_item_name']) != key(stock['product_name'])
-                or key(remote['source_unit']) != key(exported['unit']) or abs(remote['qty']-exported['qty']) > 1e-6
+                or key(remote['source_unit']) != key(exported['unit']) or not precision_matches(remote['qty'],exported['qty'],raw,'quantity')
+                or (saved and abs(remote['qty']-exported['qty'])>1e-6)
                 or abs(remote['amount']-stock['amount']) > .01
                 or invoice_tax_percent(remote['tax_rate']) != invoice_tax_percent(stock['tax'])
                 or str(remote['source_nature'] or '1') != str(stock['invoice_nature'])
-                or abs(remote['unit_price']-exported['unit_price']) > .00001):
+                or not precision_matches(remote['unit_price'],exported['unit_price'],raw,'price')):
             raise blocked()
         if remote['id'] == item_id:
             if remote['product_code'] != stock['product_code']:

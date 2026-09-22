@@ -157,8 +157,17 @@ class ActualWeightTests(unittest.TestCase):
         self.assertEqual(0,sum(r['ready_qty'] for r in p['details']))
         self.assertEqual(14,sum(r['waiting_qty'] for r in p['details']))
 
-    def test_partial_stock_converts_only_selected_packages(self):
+    def test_kkknt_converts_all_packages_even_when_stock_is_short(self):
         with server.db() as conn:conn.execute('UPDATE inventory_transactions SET qty_in=7')
+        self.save();did=self.draft()
+        with server.db() as conn:
+            lines=invoice_rows(conn,conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=?',(did,)))
+            self.assertEqual((2.8,40000,112000,14),tuple(lines[0][k] for k in ('qty','unit_price','amount','stock_qty')))
+
+    def test_taxable_partial_stock_converts_only_available_packages(self):
+        with server.db() as conn:
+            conn.execute('UPDATE inventory_transactions SET qty_in=7')
+            conn.execute("UPDATE orders SET tax='8%'")
         self.save();did=self.draft()
         with server.db() as conn:
             lines=invoice_rows(conn,conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=?',(did,)))

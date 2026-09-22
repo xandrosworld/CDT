@@ -180,12 +180,42 @@ class PortalSendTests(unittest.TestCase):
         self.remote.documents[0]['invoiceDetail'][0]['quantity'] += 0.01
         refresh_sources(server.db,lambda:self.remote,server.now_iso,'2026-09-01','2026-09-14')
         listing=self.client.get('/api/outgoing-invoices/prepared',query_string=self.period).json
-        current=listing['items'][0]
-        self.assertEqual(str(current['signed_source']['number']),'88')
-        result=self.send(current,False)
+        self.assertEqual(listing['items'],[])
+        self.assertEqual(str(listing['signed_items'][0]['number']),'88')
+        result=self.send(item,False)
         self.assertEqual(result.status_code,409)
         self.assertEqual(result.json['code'],'invoice_already_signed')
         self.assertEqual(self.remote.posts,1)
+
+    def test_provider_rounding_and_next_day_issue_keep_original_order_links(self):
+        with server.db() as c:
+            c.execute('UPDATE orders SET actual_delivered=4.055 WHERE id=?',(self.ids[1],))
+            c.execute("UPDATE orders SET tax='KKKNT'")
+        self.remote.get_currency_precisions=lambda:{'currency':{'currency_id':'currency','quantity':2,'price':2,'effective_at':'2026-01-01T00:00:00'}}
+        portal_call=self.remote._portal_json
+        def rounded_portal(method,path,**kwargs):
+            result=portal_call(method,path,**kwargs)
+            if method=='POST':
+                result['creationTime']='2026-09-14T12:00:00'
+                result['invoiceDetail'][0]['quantity']=7.06
+            return result
+        self.remote._portal_json=rounded_portal
+        item=self.prepare();sent=self.send(item,False);self.assertEqual(sent.status_code,200,sent.json)
+        document=self.remote.documents[0]
+        document.update(invoiceNumber=88,sendTaxStatus=4,dateSign='2026-09-15T13:00:00',taxAuthorityCode='fixture',
+                        invoiceDate='2026-09-15',creationTime='2026-09-14T12:00:00')
+        document['invoiceDetail'][0]['quantity']=7.06
+        for attempt in range(2):
+            report=refresh_sources(server.db,lambda:self.remote,server.now_iso,'2026-09-01','2026-09-15')
+            self.assertEqual(report['blocked'],[],report)
+            with server.db() as c:
+                issued,warnings=issued_allocations(c)
+                self.assertEqual(warnings,[])
+                self.assertAlmostEqual(issued[self.ids[1]],4.055)
+                ledger=c.execute("SELECT -SUM(qty_delta) FROM invoice_inventory_ledger WHERE direction='output' AND status='posted'").fetchone()[0]
+                self.assertAlmostEqual(ledger,7.06)
+                self.assertEqual(c.execute('SELECT issued_invoice_date FROM outgoing_invoice_drafts WHERE id=?',(item['id'],)).fetchone()[0],'2026-09-15')
+        self.assertEqual(self.client.get('/api/outgoing-invoices/prepared',query_string=self.period).json['items'],[])
 
     def test_signed_source_invalid_ordinal_is_reported_without_linking(self):
         item=self.prepare()

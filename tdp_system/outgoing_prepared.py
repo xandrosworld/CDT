@@ -120,6 +120,8 @@ def prepared_payload(app, conn, draft_ids, period, pending, blocked):
     report = unissued_payload(conn, period['to'], period['contractor'], respect_export_choices=True, start=period['from']) if draft_ids else None
     for did in draft_ids:
         data = snapshot(conn, did)
+        if data.get('signed_source'):
+            continue
         token = signer(app).dumps({'id': did, 'digest': digest(data)})
         conn.execute('INSERT OR REPLACE INTO outgoing_prepared_scopes VALUES(?,?,?,?,?)',
                      (did,period['from'],period['to'],period['contractor'],digest(data)))
@@ -153,7 +155,7 @@ def register(app,ctx):
         try:
             try:from .outgoing_review import scope
             except ImportError:from outgoing_review import scope
-            period=scope(request.args,ctx['valid_iso_date']);items=[];warnings=[]
+            period=scope(request.args,ctx['valid_iso_date']);items=[];warnings=[];signed_items=[]
             with ctx['db']() as conn:
                 conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
                 rows=conn.execute('''SELECT s.*,d.minvoice_status FROM outgoing_prepared_scopes s
@@ -180,5 +182,7 @@ def register(app,ctx):
                 signed = signed_draft_sources(conn)
                 for item in items:
                     item['signed_source'] = signed.get(item['id'])
-            return jsonify(ok=True,scope=period,items=items,pending=warnings,blocked=[],remote_write=False)
+                signed_items=[item['signed_source'] for item in items if item.get('signed_source')]
+                items=[item for item in items if not item.get('signed_source')]
+            return jsonify(ok=True,scope=period,items=items,signed_items=signed_items,pending=warnings,blocked=[],remote_write=False)
         except ValueError as exc:return jsonify(ok=False,error=str(exc)),400

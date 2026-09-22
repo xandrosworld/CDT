@@ -93,10 +93,30 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
             for r in conn.execute('SELECT product_code,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
                 local[r['product_code']]+=r['qty']
             for s in matching:
+                expected_stock=dict(local)
+                raw=json.loads(s['raw_json'] or '{}')
+                if raw.get('_tdp_source_contract')=='minvoice_portal_v1' and raw.get('orderNumber')==d['minvoice_key_api']:
+                    try:
+                        from .minvoice_portal_drafts import ordered_draft_lines
+                        from .minvoice_precision import matches as precision_matches
+                    except ImportError:
+                        from minvoice_portal_drafts import ordered_draft_lines
+                        from minvoice_precision import matches as precision_matches
+                    base=list(conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(d['id'],)))
+                    actual=ordered_draft_lines(raw.get('invoiceDetail',[]))
+                    if len(base)==len(actual):
+                        for b,a in zip(base,actual):
+                            if (not conn.execute('SELECT 1 FROM outgoing_weight_exports WHERE line_id=?',(b['id'],)).fetchone()
+                                    and a.get('productCode')==b['product_code'] and a.get('unitCode','').casefold()==b['unit'].casefold()
+                                    and precision_matches(a.get('quantity'),b['qty'],raw,'quantity')
+                                    and precision_matches(a.get('unitPrice'),b['unit_price'],raw,'price')
+                                    and abs(float(a.get('amountWithoutVAT',-1))-b['amount'])<=.000001):
+                                expected_stock[b['product_code']]+=float(a['quantity'])-b['qty']
+                expected_stock={code:qty for code,qty in expected_stock.items() if abs(qty)>1e-8}
                 posted={r['product_code']:r['qty'] for r in conn.execute("""SELECT product_code,-SUM(qty_delta) qty FROM invoice_inventory_effective_ledger
                     WHERE direction='output' AND status='posted' AND source_invoice_table='outgoing_source_invoices'
                     AND source_invoice_id=? GROUP BY product_code""",(s['id'],))}
-                if s['source_status_class']!='issued' or s['sync_status']!='synced' or set(local)!=set(posted) or any(abs(q-posted.get(code,0))>1e-8 for code,q in local.items()):
+                if s['source_status_class']!='issued' or s['sync_status']!='synced' or set(expected_stock)!=set(posted) or any(abs(q-posted.get(code,0))>1e-8 for code,q in expected_stock.items()):
                     warnings.append({'contractor':d['contractor'],'message':'Hóa đơn '+str(d['issued_invoice_number'])+' chưa khớp trạng thái/lượng giữa xác nhận và M-Invoice; số chưa xuất cần đối chiếu.'})
         linked.update(s['id'] for s in matching)
         for r in conn.execute('SELECT order_id,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):

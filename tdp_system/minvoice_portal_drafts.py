@@ -33,6 +33,13 @@ def ordered_draft_lines(lines):
 
 
 class PortalDrafts:
+    def get_currency_precisions(self):
+        self._ensure_login()
+        return {r['id']:{'currency_id':r['id'],'quantity':r.get('formatQuantity'),
+                         'price':r.get('formatPrice'),
+                         'effective_at':r.get('lastModificationTime') or r.get('creationTime')}
+                for r in self._catalog('app/currency') if r.get('id')}
+
     @staticmethod
     def _guard_unsigned_payload(p):
         if (not isinstance(p, dict) or p.get('invoiceStatus') != 0 or p.get('sendTaxStatus') != 0
@@ -183,9 +190,20 @@ class PortalDrafts:
                     or detail.get('invoiceNumber') is not None or detail.get('dateSign') or detail.get('taxAuthorityCode')):
                 raise ValueError('Saved draft needs reconciliation')
             returned_lines = ordered_draft_lines(detail.get('invoiceDetail', []))
+            try:
+                from .minvoice_precision import matches as precision_matches
+            except ImportError:
+                from minvoice_precision import matches as precision_matches
+            precision=self.get_currency_precisions().get(detail.get('currencyId'))
+            proof={**detail,'_tdp_currency_precision':precision}
             if [r.get('orders') for r in returned_lines] != list(range(1, len(returned_lines) + 1)):
                 raise ValueError('Saved draft display order changed')
             for key in ('productCode', 'productName', 'unitCode', 'quantity', 'unitPrice', 'amountWithoutVAT', 'vatCode', 'property'):
+                if key in ('quantity','unitPrice'):
+                    field='quantity' if key=='quantity' else 'price'
+                    if len(returned_lines)!=len(payload['invoiceDetail']) or any(not precision_matches(a.get(key),b.get(key),proof,field) for a,b in zip(returned_lines,payload['invoiceDetail'])):
+                        raise ValueError('Saved draft numeric values changed')
+                    continue
                 if [r.get(key) for r in returned_lines] != [r.get(key) for r in payload['invoiceDetail']]:
                     raise ValueError('Saved draft lines changed')
         except Exception as exc:

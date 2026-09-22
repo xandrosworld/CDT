@@ -1,6 +1,7 @@
 """Refresh actual issued invoices before producing another order export."""
 import threading
 import time
+import json
 
 REFRESH_LOCK = threading.RLock()
 
@@ -18,6 +19,8 @@ class SourceSnapshot:
         deadline = time.monotonic() + 600
         pages = 0
         self.identities = set()
+        precision_reader=getattr(client,'get_currency_precisions',None)
+        precisions=precision_reader() if callable(precision_reader) else {}
         for code in _minvoice_series_codes(client, start, end):
             rows = []; total = 1; expected_total = None
             while len(rows) < total:
@@ -29,6 +32,8 @@ class SourceSnapshot:
                     raise ValueError('Danh sách M-Invoice thay đổi trong lúc tải; cần cập nhật lại đầy đủ.')
                 expected_total = total
                 for row in part:
+                    if row.get('_tdp_source_contract')=='minvoice_portal_v1' and row.get('currencyId') in precisions:
+                        row['_tdp_currency_precision']=precisions[row['currencyId']]
                     identity = _identity(row)['identity_key']
                     if identity in self.identities:
                         raise ValueError('M-Invoice trả trùng hóa đơn giữa các trang; chưa xác nhận đã tải đủ.')
@@ -92,6 +97,19 @@ def _refresh_sources(db_factory, client_factory, now_iso, start, end):
                                   date_from=start,date_to=end,now_iso=now_iso,audit_event=None)
         conn.execute("UPDATE invoice_sync_batches SET source_cursor='{}' WHERE id=?",(batch['id'],))
         result=sync_output_batch(conn,snapshot,batch['id'],now_iso,max_pages=50,page_size=199)
+        # Posted sources freeze their accounting fields. Attach independently
+        # read currency evidence without replacing that frozen source document.
+        for page in snapshot.rows.values():
+            for remote in page:
+                precision=remote.get('_tdp_currency_precision')
+                if not precision:continue
+                row=conn.execute("SELECT id,raw_json FROM outgoing_source_invoices WHERE source='minvoice' AND remote_id=?",(remote.get('id'),)).fetchone()
+                if not row:continue
+                raw=json.loads(row['raw_json'] or '{}')
+                if raw.get('currencyId')!=precision.get('currency_id') or raw.get('_tdp_source_contract')!='minvoice_portal_v1':continue
+                if raw.get('_tdp_currency_precision')==precision:continue
+                raw['_tdp_currency_precision']=precision
+                conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',(json.dumps(raw,ensure_ascii=False),row['id']))
     if not result['complete']:
         raise ValueError('M-Invoice chưa tải hết hóa đơn. Bấm cập nhật tiếp trước khi xuất file mới.')
     with db_factory() as conn:

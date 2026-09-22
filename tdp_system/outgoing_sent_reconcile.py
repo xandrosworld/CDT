@@ -12,11 +12,13 @@ try:
     from .minvoice_portal import portal_date
     from .minvoice_portal_drafts import ordered_draft_lines
     from .minvoice_client import MinvoiceError
+    from .minvoice_precision import matches as precision_matches
 except ImportError:
     from outgoing_weights import invoice_rows
     from minvoice_portal import portal_date
     from minvoice_portal_drafts import ordered_draft_lines
     from minvoice_client import MinvoiceError
+    from minvoice_precision import matches as precision_matches
 
 
 def text(v):return str(v or '').strip()
@@ -57,7 +59,8 @@ def reconcile_sent(conn,timestamp):
                 expected=invoice_rows(conn,base);actual=ordered_draft_lines(raw.get('invoiceDetail',[]))
                 if (raw.get('orderNumber')!=d['minvoice_key_api']
                         or (d['minvoice_remote_id'] and s['remote_id']!=d['minvoice_remote_id'])
-                        or s['invoice_series']!=d['minvoice_series'] or portal_date(raw.get('invoiceDate'))!=d['invoice_date']
+                        or s['invoice_series']!=d['minvoice_series'] or portal_date(raw.get('invoiceDate'))!=s['invoice_date']
+                        or s['invoice_date']<d['invoice_date']
                         or text(raw.get('sellerTaxCode'))!=text(d['company_tax_code_snapshot'])
                         or text(raw.get('buyerTaxCode'))!=text(d['buyer_tax_code_snapshot'])
                         or text(raw.get('buyerLegalName') or raw.get('buyerDisplayName'))!=text(d['buyer_name_snapshot'])
@@ -69,12 +72,16 @@ def reconcile_sent(conn,timestamp):
                     if (text(a.get('productCode')).upper()!=text(b['product_code']).upper()
                             or text(a.get('productName'))!=text(b['product_name'])
                             or text(a.get('unitCode')).casefold()!=text(b['unit']).casefold()
-                            or not close(a.get('quantity'),b['qty']) or not close(a.get('unitPrice'),b['unit_price'])
+                            or not precision_matches(a.get('quantity'),b['qty'],raw,'quantity') or not precision_matches(a.get('unitPrice'),b['unit_price'],raw,'price')
+                            or ('amountWithoutVAT' in a and not close(a['amountWithoutVAT'],b['amount']))
                             or invoice_tax_percent(a.get('vatCode'))!=invoice_tax_percent(b['tax'])
                             or text(a.get('property'))!=text(b['invoice_nature'])):
                         reason='Dòng hàng đã ký khác bảng kê đã gửi; cần đối chiếu đơn gốc.'
                 stock=defaultdict(float)
-                for r in base:stock[r['product_code']]+=r['qty']
+                for r,a in zip(base,actual):
+                    measured=conn.execute('SELECT 1 FROM outgoing_weight_exports WHERE line_id=?',(r['id'],)).fetchone()
+                    stock[r['product_code']]+=r['qty'] if measured else float(a['quantity'])
+                stock={code:qty for code,qty in stock.items() if abs(qty)>1e-8}
                 posted={r['product_code']:r['qty'] for r in conn.execute("""SELECT product_code,-SUM(qty_delta) qty
                     FROM invoice_inventory_effective_ledger WHERE direction='output' AND status='posted'
                     AND source_invoice_table='outgoing_source_invoices' AND source_invoice_id=? GROUP BY product_code""",(s['id'],))}
@@ -95,6 +102,12 @@ def reconcile_sent(conn,timestamp):
             WHERE source_type='OUTGOING_DRAFT' AND source_id=? AND status='reserved'""",(timestamp,str(d['id'])))
         conn.execute("""INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at)
             VALUES('outgoing.signed_source_link','outgoing_invoice',?,'ok','Đối chiếu hóa đơn ký, giữ liên kết đơn gốc',?,?)""",
-            (str(d['id']),json.dumps({'source_invoice_id':s['id'],'stock_posted_again':False}),timestamp))
+            (str(d['id']),json.dumps({'source_invoice_id':s['id'],'stock_posted_again':False,
+                'draft_date':d['invoice_date'],'signed_invoice_date':s['invoice_date'],
+                'currency_precision':raw.get('_tdp_currency_precision'),
+                'provider_rounding':[{'product_code':b['product_code'],'order_invoice_qty':b['qty'],
+                                     'signed_qty':a.get('quantity'),'order_invoice_price':b['unit_price'],
+                                     'signed_price':a.get('unitPrice')}
+                    for a,b in zip(actual,expected) if not close(a.get('quantity'),b['qty']) or not close(a.get('unitPrice'),b['unit_price'])]}),timestamp))
         linked.append({'draft_id':d['id'],'source_invoice_id':s['id']})
     return {'linked':linked,'blocked':blocked}
