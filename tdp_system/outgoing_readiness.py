@@ -384,6 +384,14 @@ def invoice_order_issues(orders):
 def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     """Read-only recheck before handing off a file or saving a remote draft."""
     try:
+        from .outgoing_price_guard import assert_current_prices
+    except ImportError:
+        from outgoing_price_guard import assert_current_prices
+    try:
+        assert_current_prices(conn, draft_id)
+    except ValueError as exc:
+        raise OutgoingReadinessError(str(exc), code='draft_price_changed') from None
+    try:
         from .outgoing_contractors import assert_enabled, assert_draft_lines_enabled
     except ImportError:
         from outgoing_contractors import assert_enabled, assert_draft_lines_enabled

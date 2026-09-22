@@ -3322,7 +3322,7 @@
     return '<div class="invoice-send-controls" id="invoiceSendControls" aria-label="Xác nhận gửi bản nháp"><p><strong>'+esc(preparedLabel(r))+'</strong> · Ngày hóa đơn: '+dateVN(r.invoice_date)+'</p><div class="compact-controls">'+
       '<label>Ký hiệu <select name="series" form="'+form+'"'+(unavailable?' disabled':'')+'>'+series.map(function(s){var v=s.value||s.khhdon;return '<option value="'+esc(v)+'"'+(selected===v?' selected':'')+'>'+esc(v)+'</option>';}).join('')+'</select></label>'+
       '<label><input type="checkbox" name="confirmed" form="'+form+'"'+(status.confirmed?' checked':'')+(unavailable||!status.checked?' disabled':'')+'> Tôi đã kiểm tra, gửi bản nháp này để chờ ký</label></div>'+
-      invoiceCoverageHtml(r,unavailable||!status.checked,form,status)+'<p role="status"'+(status.error?' class="error-summary"':'')+'>'+esc((r.signed_source&&r.signed_source.message)||status.message||(r.minvoice_status==='saved'?'Đã gửi bản nháp lên M-Invoice.':r.stale?'Dữ liệu đã thay đổi. Bấm bước 4 để chuẩn bị lại bảng kê.':'Bấm “5. Kiểm tra M-Invoice”, rồi tích xác nhận tại đây trước khi bấm bước 6.'))+'</p></div>';
+      invoiceCoverageHtml(r,unavailable||!status.checked,form,status)+'<p role="status"'+(status.error||r.price_error?' class="error-summary"':'')+'>'+esc((r.signed_source&&r.signed_source.message)||r.price_error||status.message||(r.minvoice_status==='saved'?'Đã gửi bản nháp lên M-Invoice.':r.stale?'Dữ liệu đã thay đổi. Bấm bước 4 để chuẩn bị lại bảng kê.':'Bấm “5. Kiểm tra M-Invoice”, rồi tích xác nhận tại đây trước khi bấm bước 6.'))+'</p>'+((r.stale||status.error)&&!['saved','saving','unknown'].includes(r.minvoice_status)?'<button type="button" class="btn btn-outline" data-invoice-go-prepare>Đến bước 4 để kiểm tra lại</button>':'')+'</div>';
   }
 
   function invoiceWorkflowActionsHtml(disabled) {
@@ -7201,6 +7201,7 @@
     if(event.target.closest('[data-invoice-go-prepare]')){
       var prepare=content.querySelector('#orderInvoiceExportForm [value=prepare]');
       var target=prepare&&!prepare.disabled?prepare:content.querySelector('[data-workflow-save]');
+      if(!target||target.disabled){openInvoiceGroupChoices();target=content.querySelector('[data-workflow-save]');}
       if(target){target.scrollIntoView({block:'center'});target.focus();}
       if(!prepare||prepare.disabled)showToast('Bấm “2. Lưu lựa chọn mặt hàng” trước, rồi “4. Kiểm tra tồn và tạo file”.');
       return;

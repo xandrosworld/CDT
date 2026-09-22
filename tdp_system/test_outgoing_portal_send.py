@@ -75,6 +75,36 @@ class PortalSendTests(unittest.TestCase):
         result.pop('invoice_inventory_ledger')
         return result
 
+    def test_changed_order_price_blocks_old_send_then_reprepare_uses_current_price(self):
+        item=self.prepare()
+        with server.db() as c:
+            c.execute('UPDATE orders SET sell_price=30 WHERE id=?',(self.ids[0],))
+        before=self.business()
+        response=self.send(item,False)
+        self.assertEqual(response.status_code,409,response.json)
+        self.assertIn('Giá đơn gốc',response.json['error'])
+        self.assertEqual(self.remote.posts,0)
+        legacy=self.client.post(f"/api/minvoice/drafts/{item['id']}",json={'series':'1C26TYY','dry_run':True})
+        self.assertEqual(legacy.status_code,409,legacy.json)
+        self.assertEqual(legacy.json['code'],'draft_price_changed')
+        current=self.client.get('/api/outgoing-invoices/prepared',query_string=self.period).json['items'][0]
+        self.assertTrue(current['stale']);self.assertIn('giữ giá cũ',current['price_error'])
+        replacement=self.prepare()
+        self.assertNotEqual(replacement['id'],item['id'])
+        self.assertEqual(replacement['subtotal'],3*30+4*20)
+        self.assertEqual(self.business(),before)
+        self.assertEqual(self.send(replacement).status_code,200)
+
+    def test_saved_remote_draft_price_change_does_not_report_ready_or_create_another(self):
+        item=self.prepare();self.assertEqual(self.send(item,False).status_code,200)
+        documents=copy.deepcopy(self.remote.documents)
+        with server.db() as c:c.execute('UPDATE orders SET sell_price=30 WHERE id=?',(self.ids[0],))
+        for path in (f"/api/minvoice/drafts/{item['id']}",f"/api/outgoing-invoices/prepared/{item['id']}/send"):
+            result=self.client.post(path,json={'series':'1C26TYY','dry_run':False,'confirm_remote_write':True,'review_token':item['token']})
+            self.assertEqual(result.status_code,409,result.json)
+            self.assertIn('trước khi ký',result.json['error'])
+        self.assertEqual(self.remote.posts,1);self.assertEqual(self.remote.documents,documents)
+
     def test_partial_send_requires_confirmation_bound_to_current_remainder(self):
         with server.db() as c:
             c.execute("UPDATE inventory_transactions SET qty_in=5 WHERE source_type='OPENING'")

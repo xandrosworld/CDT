@@ -45,6 +45,11 @@ def snapshot(conn, draft_id):
             'sources': sorted((r['order_id'],r['date'],r['contractor'],r['product_code'],r['qty'],r['unit'],
                                r['price'],r['enabled'],r['invoice_name'],r['invoice_unit'],r['tax']) for r in sources)}
     data['signed_source'] = signed_draft_sources(conn).get(draft_id)
+    try:
+        from .outgoing_price_guard import price_message
+    except ImportError:
+        from outgoing_price_guard import price_message
+    data['price_error'] = price_message(conn, draft_id)
     return data
 
 
@@ -133,6 +138,11 @@ def prepared_payload(app, conn, draft_ids, period, pending, blocked):
 
 def validate_prepared(app, conn, draft_id, token):
     try:
+        from .outgoing_price_guard import assert_current_prices
+    except ImportError:
+        from outgoing_price_guard import assert_current_prices
+    assert_current_prices(conn, draft_id)
+    try:
         from .outgoing_signed_guard import signed_draft_sources
     except ImportError:
         from outgoing_signed_guard import signed_draft_sources
@@ -170,7 +180,7 @@ def register(app,ctx):
                 for row in rows:
                     try:data=snapshot(conn,row['draft_id'])
                     except ValueError as exc:warnings.append(str(exc));continue
-                    stale=digest(data)!=row['digest']
+                    stale=bool(data.get('price_error')) or digest(data)!=row['digest']
                     token=signer(app).dumps({'id':row['draft_id'],'digest':row['digest']})
                     items.append({k:v for k,v in data.items() if k!='sources'}|
                                  {'token':token,'minvoice_status':row['minvoice_status'],'stale':stale,

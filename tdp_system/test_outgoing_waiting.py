@@ -41,6 +41,48 @@ class WaitingTests(unittest.TestCase):
         self.assertEqual(self.refresh('NT-B')['rows'][0]['ready_qty'],0)
         self.assertEqual(self.refresh()['rows'][0]['ready_qty'],7)
 
+    def test_price_change_rebuilds_unsent_hold_without_changing_orders_or_stock(self):
+        _,ids=self.seed(qty=3,stock=10);self.refresh()
+        with server.db() as c:
+            old=c.execute("SELECT id FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0]
+            c.execute('UPDATE orders SET sell_price=30 WHERE id=?',(ids[0],))
+            before=[tuple(r) for r in c.execute('SELECT * FROM orders')]
+            stock=canonical_available_stock(c)['HH-01']['raw_available_qty']
+        self.refresh()
+        with server.db() as c:
+            self.assertEqual(c.execute('SELECT status FROM outgoing_invoice_drafts WHERE id=?',(old,)).fetchone()[0],'cancelled')
+            line=c.execute("SELECT l.* FROM outgoing_invoice_lines l JOIN outgoing_invoice_drafts d ON d.id=l.draft_id WHERE d.status='draft'").fetchone()
+            self.assertEqual((line['qty'],line['unit_price'],line['amount']),(3,30,90))
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM orders')],before)
+            self.assertEqual(canonical_available_stock(c)['HH-01']['raw_available_qty'],stock)
+            did=line['draft_id']
+        self.refresh()
+        with server.db() as c:self.assertEqual(c.execute("SELECT id FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0],did)
+
+    def test_price_change_cannot_rewrite_any_remote_draft(self):
+        self.seed();self.refresh()
+        with server.db() as c:
+            did=c.execute("SELECT id FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0]
+            c.execute('UPDATE orders SET sell_price=30')
+        for status in ('saved','saving','unknown'):
+            with self.subTest(status=status),server.db() as c:
+                c.execute('UPDATE outgoing_invoice_drafts SET minvoice_status=? WHERE id=?',(status,did))
+                before=c.serialize()
+                result=refresh_waiting(c,server.now_iso())
+                self.assertIn('Giá đơn gốc',result['warnings'][0]['message'])
+                self.assertEqual(c.serialize(),before)
+
+    def test_vnd_rounding_is_not_a_source_price_change(self):
+        self.seed(qty=.333,stock=2)
+        with server.db() as c:c.execute("UPDATE orders SET tax='KKKNT',sell_price=10")
+        self.refresh()
+        with server.db() as c:
+            did=c.execute("SELECT id FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0]
+            from .outgoing_price_guard import assert_current_prices
+            assert_current_prices(c,did)
+        self.refresh()
+        with server.db() as c:self.assertEqual(c.execute("SELECT id FROM outgoing_invoice_drafts WHERE status='draft'").fetchone()[0],did)
+
     def test_partial_external_issue_then_new_orders_and_stock_accumulate_once(self):
         a,ids=self.seed();self.refresh()
         with server.db() as c:

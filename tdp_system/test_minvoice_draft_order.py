@@ -11,6 +11,7 @@ class PortalDraftOrderTests(unittest.TestCase):
     def setUp(self):
         self.client = client()
         self.client._ensure_login = Mock()
+        self.client.get_currency_precisions = Mock(return_value={})
         self.payload = document()
         self.payload.update(orderNumber='TDP-AAAAAAAAAAAA-' + 'B' * 32,
                             keyApi='TDP-AAAAAAAAAAAA-' + 'B' * 32,

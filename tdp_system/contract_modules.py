@@ -8703,6 +8703,14 @@ def register_contract_routes(app, ctx):
                 return jsonify(ok=False, error=signed_source['message'], code='invoice_already_signed',
                                signed_source=signed_source, remote_write=False), 409
             if not dry_run and draft["minvoice_status"] == "saved":
+                try:
+                    from .outgoing_price_guard import assert_current_prices
+                except ImportError:
+                    from outgoing_price_guard import assert_current_prices
+                try:
+                    assert_current_prices(conn, draft_id)
+                except ValueError as exc:
+                    return jsonify(ok=False,error=str(exc),code='draft_price_changed',remote_write=False),409
                 return jsonify({
                     "ok": True, "dry_run": False, "remote_write": False, "idempotent": True,
                     "remote_id": draft["minvoice_remote_id"],

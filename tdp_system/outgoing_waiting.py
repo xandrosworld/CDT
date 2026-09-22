@@ -8,12 +8,14 @@ try:
     from .outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from .stock_tax_policy import exempt_order_codes, is_kkknt
     from .outgoing_line_policy import unit_issues, draft_policy_rows
+    from .outgoing_price_guard import same_price, price_message
 except ImportError:
     from outgoing_unissued import issued_allocations
     from outgoing_consolidation import _write_draft, decimal, export_quantity
     from outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from stock_tax_policy import exempt_order_codes, is_kkknt
     from outgoing_line_policy import unit_issues, draft_policy_rows
+    from outgoing_price_guard import same_price, price_message
 
 
 def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
@@ -60,11 +62,12 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
             capacity[r['product_code']]=capacity.get(r['product_code'],Decimal(0))+decimal(r['qty_out'])
     capacity={code:max(q,Decimal(0)) for code,q in capacity.items()}
     for d in drafts:
-        rows=[dict(r) for r in conn.execute("""SELECT l.*,o.batch_id,o.work_date,o.buy_price,o.purchase_list,o.unit order_unit,a.source_unit_price
+        rows=[dict(r) for r in conn.execute("""SELECT l.*,o.batch_id,o.work_date,o.buy_price,o.purchase_list,o.unit order_unit,o.sell_price order_sell_price,a.source_unit_price
             FROM outgoing_order_allocations l JOIN orders o ON o.id=l.order_id
             LEFT JOIN outgoing_line_allocations a ON a.line_id=l.id AND a.order_id=l.order_id
             WHERE l.draft_id=? ORDER BY o.work_date,o.id,l.id""",(d['id'],))]
         kept=[];changed=False
+        changed_price=price_message(conn,d['id'])
         exempt=exempt_order_codes(conn,rows)
         units=unit_issues(conn,rows)
         for r in rows:
@@ -79,10 +82,13 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
             changed=changed or (qty==0 and decimal(r['qty'])>0) or abs(qty-decimal(r['qty']))>Decimal('0.00000001')
             need[r['order_id']]=max(need.get(r['order_id'],Decimal(0))-qty,Decimal(0))
             if qty>0:
-                kept.append({**r,'qty':float(qty),'_source_price':decimal(r['source_unit_price'] if r['source_unit_price'] is not None else r['unit_price'])})
+                source_price=r['source_unit_price'] if r['source_unit_price'] is not None else r['unit_price']
+                changed=changed or not same_price(source_price,r['order_sell_price'])
+                kept.append({**r,'qty':float(qty),'_source_price':decimal(r['order_sell_price'])})
+        changed=changed or bool(changed_price)
         if not changed:continue
         if d['minvoice_status'] in ('saved','saving','unknown'):
-            warnings.append({'contractor':d['contractor'],'message':'Bản đã lưu M-Invoice còn chồng với lượng đã phát hành; cần đối chiếu bản số '+str(d['id'])+'.'})
+            warnings.append({'contractor':d['contractor'],'message':changed_price or 'Bản đã lưu M-Invoice còn chồng với lượng đã phát hành; cần đối chiếu bản số '+str(d['id'])+'.'})
             continue
         old.append(d['id'])
         if kept:replacement.append((d['contractor'],kept))
