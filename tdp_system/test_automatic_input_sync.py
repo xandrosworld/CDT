@@ -157,6 +157,14 @@ class AutoInputTests(unittest.TestCase):
 
 
 class RefreshTests(unittest.TestCase):
+    def test_source_reports_locked_tax_account_without_retrying_tax_login(self):
+        client=MsmiRefresh('login','private-password','0202265016')
+        client.request=Mock(side_effect=[{}, {'items':[
+            {'username':'0202265016','token':'','auto_login':{'last_message':'Tài khoản đã bị khoá vì đã nhập sai thông tin quá số lần quy định'}}]}])
+        with self.assertRaisesRegex(RefreshError,'bị khóa vì nhập sai'):
+            client.refresh('2026-09-01','2026-09-30')
+        self.assertEqual(client.request.call_count,2)
+
     def test_missing_matching_tax_session_never_uses_other_company_token(self):
         client=MsmiRefresh('login','private-password','0202265016')
         client.request=Mock(side_effect=[{}, {'items':[

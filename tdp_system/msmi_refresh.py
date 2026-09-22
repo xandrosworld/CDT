@@ -63,6 +63,11 @@ class MsmiRefresh:
         if len(matches) != 1:
             raise RefreshError('Hồ sơ thuế mSMI chưa kết nối hoặc không khớp mã số thuế đã cấu hình.')
         if not matches[0].get('token'):
+            login=matches[0].get('auto_login') or {}
+            reason=str(login.get('last_message','') if isinstance(login,dict) else '').lower()
+            if 'khoá' in reason or 'khóa' in reason:
+                raise RefreshError('mSMI báo tài khoản thuế '+self.tax_code+
+                    ' bị khóa vì nhập sai thông tin quá số lần quy định. Mở mSMI → Đăng nhập lại để kiểm tra lỗi và thông tin đăng nhập; cần khôi phục kết nối thuế trước khi tải hóa đơn mới. Hóa đơn đã tải và dữ liệu nhập kho vẫn được giữ nguyên.')
             raise RefreshError('Kết nối thuế trên mSMI đã hết phiên. Mở mSMI, chọn hồ sơ thuế '+self.tax_code+
                 ', đăng nhập lại kết nối thuế, rồi quay lại bấm “Tải/tiếp tục đầu vào”. Hóa đơn đã tải và dữ liệu nhập kho vẫn được giữ nguyên.')
         a = matches[0]
