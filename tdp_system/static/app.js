@@ -3401,7 +3401,18 @@
     state.invoiceExportDiagnostic=null;
     var body=Object.assign({},orderInvoiceScope(),{invoice_date:invoiceDate||(activePreparedInvoice()||{}).invoice_date||currentWorkDate(),review_confirmed:true,
       review_rows:((state.unissued&&state.unissued.line_choices)||[]).map(function(r){return {order_id:r.order_id,token:r.token};})});
-    acceptPreparedInvoices(await api('/api/outgoing-invoices/prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+    try {
+      acceptPreparedInvoices(await api('/api/outgoing-invoices/prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+    } catch (error) {
+      if(error.payload && error.payload.code==='invoice_review_changed') {
+        state.invoiceReviewedKey='';
+        await loadUnissuedScope(false);
+        state.orderInvoiceExportResult='Đã cập nhật bảng sau khi đối chiếu hóa đơn đã ký. Lựa chọn đã lưu được giữ nguyên. Kiểm tra số lượng đang hiện, bấm bước 2 xác nhận lại rồi bấm bước 4; không cần tải lại trang.';
+        renderDocuments();
+        return;
+      }
+      throw error;
+    }
     if(state.preparedInvoices.outcome==='no_eligible_quantity'){
       state.invoiceExportDiagnostic=state.preparedInvoices.diagnostic;state.orderInvoiceExportResult='';state.outgoingSourceReview=null;
       await loadUnissuedScope(false);state.invoiceExportDiagnosticKey=invoiceReviewKey();return;
@@ -6335,7 +6346,16 @@
       event.preventDefault();
       if(state.invoiceChoicesBusy||state.invoiceExportBusy||state.unissuedBusy)return;
       var lineChanges=(state.unissued.line_choices || []).filter(function(r){return Object.prototype.hasOwnProperty.call(state.invoiceLineEdits || {},r.order_id);}).map(function(r){return {order_id:r.order_id,enabled:state.invoiceLineEdits[r.order_id],token:r.token};});
-      if(!lineChanges.length){state.invoiceReviewedKey=invoiceReviewKey();state.invoiceLineMessage='Đã lưu lựa chọn của '+invoiceSelectedGroup().label+'.';renderDocuments();return;}
+      if(!lineChanges.length){
+        state.invoiceChoicesBusy=true;
+        try {
+          await loadUnissuedScope(false);
+          if(state.unissuedError)throw new Error(state.unissuedError);
+          state.invoiceReviewedKey=invoiceReviewKey();state.invoiceLineMessage='Đã kiểm tra và lưu lựa chọn của '+invoiceSelectedGroup().label+'.';
+        }catch(error){state.invoiceReviewedKey='';state.invoiceLineMessage=error.message;}
+        finally{state.invoiceChoicesBusy=false;renderDocuments();}
+        return;
+      }
       var lineSaveOk=false;
       state.invoiceChoicesBusy=true;
       refreshInvoiceActionHints();

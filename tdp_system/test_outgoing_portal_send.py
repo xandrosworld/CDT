@@ -271,6 +271,7 @@ class PortalSendTests(unittest.TestCase):
     def test_prepare_requires_current_review_and_persists_preview(self):
         r=self.client.post('/api/outgoing-invoices/prepare',json={**self.period,'invoice_date':'2026-09-14','review_confirmed':True,'review_rows':[]})
         self.assertEqual(r.status_code,409,r.json)
+        self.assertEqual(r.json['code'],'invoice_review_changed')
         item=self.prepare()
         p=self.client.get('/api/outgoing-invoices/prepared',query_string=self.period).json
         self.assertEqual(p['items'][0]['id'],item['id'])

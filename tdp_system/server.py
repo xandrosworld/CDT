@@ -4786,7 +4786,7 @@ def api_export_order_invoices():
                 supplied = body.get('review_rows')
                 if (not isinstance(supplied, list) or any(not isinstance(r,dict) or type(r.get('order_id')) is not int or not isinstance(r.get('token'),str) for r in supplied)
                         or sorted((r['order_id'],r['token']) for r in supplied) != current):
-                    raise ValueError('Bảng lựa chọn vừa thay đổi. Tải lại và kiểm tra trước khi gửi.')
+                    raise InvoiceTaxExportError('Dữ liệu đơn hoặc hóa đơn đã ký vừa thay đổi. Web sẽ cập nhật bảng để chị kiểm tra lại; lựa chọn đã lưu vẫn giữ nguyên.', code='invoice_review_changed')
             try:
                 from .outgoing_waiting import refresh_waiting
             except ImportError:
