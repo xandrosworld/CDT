@@ -407,6 +407,30 @@ def unapproved_purchase_sheets(conn, date_from, date_to):
     return result
 
 
+def draft_purchase_reconciliation(conn, date_from, date_to, supplier_filter=""):
+    """Read uploaded purchases without posting debt, approving, or touching stock."""
+    codes, aliases, names, current_names = _supplier_catalog(conn)
+    rows, issues = [], []
+    for batch in unapproved_purchase_sheets(conn, date_from, date_to):
+        source = conn.execute('SELECT items_json,issues_json FROM supplier_plan_sources WHERE batch_id=?', (batch['batch_id'],)).fetchone()
+        if source:
+            items = json.loads(source['items_json'])
+            issues.extend({'batch_id': batch['batch_id'], 'work_date': batch['work_date'], 'message': message}
+                          for message in json.loads(source['issues_json']))
+        else:
+            items = [dict(r) for r in conn.execute("SELECT * FROM purchase_workbook_lines WHERE batch_id=? AND status='confirmed'", (batch['batch_id'],))]
+        for item in items:
+            code, snapshot = _supplier_reference(item.get('supplier'), exact_codes=codes,
+                code_aliases=aliases, names=names, current_names=current_names, existing=None)
+            if supplier_filter and code.casefold() != supplier_filter.casefold():
+                continue
+            rows.append({**item, 'batch_id': batch['batch_id'], 'work_date': batch['work_date'],
+                         'supplier_code': code, 'supplier_name': current_names.get(code) or snapshot,
+                         'amount': _vnd(item.get('amount')), 'status': 'draft'})
+    return {'rows': rows, 'row_count': len(rows), 'amount': sum(r['amount'] for r in rows),
+            'quantities_by_unit': quantity_totals(rows, 'actual_qty'), 'issues': issues}
+
+
 def pending_purchase_sheets(conn, date_from, date_to):
     sheets = {s['batch_id']: s for s in _purchase_sheet_sources(conn)}
     result = []
@@ -940,6 +964,7 @@ def payable_ledger_payload(
         "historical_through_date": _historical_cutoff(conn) or None,
         "pending_purchase_sheets": pending_purchase_sheets(conn, safe_from, safe_to),
         "unapproved_purchase_sheets": unapproved_purchase_sheets(conn, safe_from, safe_to),
+        "draft_reconciliation": draft_purchase_reconciliation(conn, safe_from, safe_to, supplier_filter),
     }
 
 

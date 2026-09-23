@@ -19,6 +19,17 @@ class PayablePurchaseSheetTests(fixtures.SupplierPlanSourceTests):
             self.assertEqual(data['purchase_sheet'],{'row_count':1,'amount':63000})
             ledger=payable_ledger_payload(conn,date_from='2026-09-01',date_to='2026-09-01',statuses='all')
             self.assertEqual(ledger['summary']['remaining_amount'],0)
+            draft = ledger['draft_reconciliation']
+            self.assertEqual((draft['row_count'], draft['amount']), (1, 63000))
+            self.assertEqual(draft['rows'][0]['actual_qty'], 7)
+            self.assertEqual(draft['rows'][0]['buy_price'], 9000)
+            self.assertEqual(draft['rows'][0]['status'], 'draft')
+            self.assertTrue(draft['rows'][0]['source_row'])
+            filtered = payable_ledger_payload(conn,date_from='2026-09-01',date_to='2026-09-01',supplier='NOT-A-SUPPLIER',statuses='all')
+            self.assertEqual(filtered['draft_reconciliation']['rows'], [])
+            self.assertEqual(filtered['draft_reconciliation']['amount'], 0)
+            outside = payable_ledger_payload(conn,date_from='2026-09-02',date_to='2026-09-02',statuses='all')
+            self.assertEqual(outside['draft_reconciliation']['rows'], [])
             self.assertEqual(ledger['unapproved_purchase_sheets'],[{'batch_id':bid,'work_date':'2026-09-01','row_count':1,'amount':63000}])
             after={t:[tuple(r) for r in conn.execute('SELECT * FROM '+t)] for t in before}
             self.assertEqual(before,after)
@@ -27,6 +38,8 @@ class PayablePurchaseSheetTests(fixtures.SupplierPlanSourceTests):
             ledger=payable_ledger_payload(conn,date_from='2026-09-01',date_to='2026-09-01',statuses='all')
             self.assertEqual(ledger['unapproved_purchase_sheets'],[])
             self.assertEqual(ledger['summary']['remaining_amount'],63000)
+            self.assertEqual(ledger['draft_reconciliation']['rows'], [])
+            self.assertEqual(ledger['draft_reconciliation']['amount'], 0)
 
     def setUp(self):
         with server.db() as conn:
