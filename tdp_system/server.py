@@ -5785,6 +5785,11 @@ except ImportError:
     from purchase_document_selection import register_routes as register_purchase_document_selection
 register_purchase_document_selection(app, globals())
 try:
+    from .purchase_document_supplements import register_routes as register_purchase_document_supplements
+except ImportError:
+    from purchase_document_supplements import register_routes as register_purchase_document_supplements
+register_purchase_document_supplements(app, globals())
+try:
     from .purchase_seller_revision import register_routes as register_purchase_sellers
 except ImportError:
     from purchase_seller_revision import register_routes as register_purchase_sellers

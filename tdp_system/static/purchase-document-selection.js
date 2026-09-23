@@ -7,7 +7,7 @@
     dialog.className = 'purchase-selection-dialog';
     dialog.innerHTML = '<header><div><h2>Chọn hàng lập bảng kê / phần chờ</h2><p>1. Xem ngày mua → 2. Chọn hàng, nhập lượng lập → 3. Lưu lựa chọn.</p></div><button class="btn btn-outline" data-select-action="close">Đóng</button></header>' +
       '<p>Hạn mức lựa chọn: <strong>5.000.000đ / người bán / ngày</strong>, cộng chung các đơn cùng ngày. Người bán vượt hạn mức chưa được chọn sẵn.</p>' +
-      '<p>Phần chưa chọn hiện riêng <strong>Chờ bổ sung chứng từ</strong>. Tiền mua, công nợ và hàng đã ghi kho giữ nguyên.</p>' +
+      '<p>Sau khi Lưu lựa chọn, phần chưa chọn tự vào <strong>Chờ lập bảng kê bổ sung</strong>, giữ ngày mua gốc để cuối tháng lập một lượt. Tiền mua, công nợ và hàng đã ghi kho giữ nguyên.</p><button class="btn btn-primary" data-select-action="supplements">Chờ lập bảng kê bổ sung</button>' +
       '<section class="pending-queue"><h3>Phần chờ các ngày đến hôm nay</h3><p>Tự nhớ phần còn lại theo ngày mua gốc, kể cả ngoài khoảng ngày bên dưới. Sang ngày mới không đổi ngày mua và không cấp thêm hạn mức. Phần đã chọn là lựa chọn đang lưu, chưa phải xác nhận đã in.</p><button class="btn btn-outline" data-select-action="pending-refresh">Cập nhật phần chờ</button><p class="pending-message" role="status">Đang kiểm tra các ngày…</p><div class="pending-days"></div><button class="btn btn-outline" data-select-action="pending-more" hidden>Xem tiếp các ngày còn lại</button></section>' +
       '<div class="selection-controls"><label>Từ ngày<input name="from" type="date" value="' + esc(options.from || '') + '"></label><label>Đến ngày<input name="to" type="date" value="' + esc(options.to || '') + '"></label><button class="btn btn-outline" data-select-action="load">Xem ngày mua</button></div>' +
       '<details class="seller-update"><summary><strong>Cập nhật người bán từ Excel</strong></summary><p>Dùng khi đơn đã ghi kho và chị sửa người bán hoặc tách lượng giữa người bán. Chọn cùng một ngày ở hai ô trên. Tiền mua, kho và công nợ giữ nguyên; số tiền bảng kê dùng giá mua BK đã ghi kho.</p><input name="seller_file" type="file" accept=".xlsx" aria-label="File đơn đã sửa người bán"><button class="btn btn-outline" data-select-action="seller-preview">Xem trước thay đổi</button><div class="seller-preview"></div></details>' +
@@ -64,7 +64,7 @@
           var selected = rows.reduce(function (s, r) { return s + part(r); }, 0);
           var exceeded = selected > data.limit + 0.000001;
           var el = dialog.querySelector('[data-group="' + di + '-' + gi + '"]');
-          el.textContent = 'Tổng mua: ' + money(group.total) + ' · Đã chọn: ' + money(selected) + ' · Chờ bổ sung: ' + money(group.total - selected) + (!good ? ' · Số lượng không hợp lệ' : exceeded ? ' · Vượt hạn mức — giảm lượng chọn' : '');
+          el.textContent = 'Tổng mua: ' + money(group.total) + ' · Đã chọn: ' + money(selected) + ' · Chờ lập bảng kê bổ sung: ' + money(Math.max(0,group.total - selected - (group.supplemented || 0))) + (group.supplemented ? ' · Đã lập bảng kê bổ sung: '+money(group.supplemented) : '') + (!good ? ' · Số lượng không hợp lệ' : exceeded ? ' · Vượt hạn mức — giảm lượng chọn' : '');
           el.classList.toggle('selection-error', !good || exceeded);
           if (!good || exceeded) valid = false;
         });
@@ -93,6 +93,11 @@
         return;
       }
       if (busy) return;
+      if (name === 'supplements') {
+        if (dirty) { message('Bấm Lưu lựa chọn để chuyển phần chưa chọn sang Chờ lập bảng kê bổ sung.', true); dialog.querySelector('[data-select-action="save"]').scrollIntoView({block:'center'}); return; }
+        window.TdpPurchaseDocumentSupplements({api:options.api,esc:esc,from:field('from').value,to:field('to').value,onSaved:options.onSaved,onClosed:function(){action('load');}});
+        return;
+      }
       if (name === 'pending-open') {
         if (dirty && !window.confirm('Mở ngày khác sẽ bỏ lựa chọn chưa lưu. Tiếp tục?')) return;
         field('from').value = pendingDate; field('to').value = pendingDate;
@@ -138,7 +143,7 @@
             days: data.days.map(function (day) { var quantities = {}; day.rows.forEach(function (r) { quantities[r.selection_key] = r.selected_quantity; }); return {date: day.date, quantities: quantities}; })
           })});
           dirty = false; field('reason').value = ''; render();
-          message('Đã lưu. Đóng cửa sổ này, bấm Xem phần đã chọn hoặc Tải file đã chọn để lấy bảng kê và danh sách chờ bổ sung.');
+          message('Đã lưu. Phần chưa chọn đã vào Chờ lập bảng kê bổ sung theo ngày mua gốc. Bấm Chờ lập bảng kê bổ sung ở phía trên để xem; phần đã chọn vẫn tải tại Xem bảng kê và biên nhận.');
           if (options.onSaved) options.onSaved();
           await loadPending(false);
         }

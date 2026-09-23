@@ -27,6 +27,12 @@ class SelectionError(PurchaseSummaryError):
 
 
 def init_schema(conn):
+    conn.execute('''CREATE TABLE IF NOT EXISTS purchase_document_supplements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL UNIQUE,
+        reference TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL,
+        days_json TEXT NOT NULL, rows_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+        cancelled_by TEXT NOT NULL DEFAULT '', cancel_reason TEXT NOT NULL DEFAULT '',
+        cancelled_at TEXT NOT NULL DEFAULT '')''')
     conn.execute('''CREATE TABLE IF NOT EXISTS purchase_document_selections (
         work_date TEXT PRIMARY KEY, revision INTEGER NOT NULL, source_hash TEXT NOT NULL,
         quantities_json TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL,
@@ -140,6 +146,11 @@ def scope(conn, start, end):
             if totals[row['cccd']]['amount'] <= RECEIPT_MAX_DAILY_AMOUNT}
         stale = bool(plan and plan['source_hash'] != source_hash)
         selected_amounts = defaultdict(Decimal)
+        supplemented = defaultdict(Decimal)
+        for record in active_supplements(conn, work_date):
+            for item in json.loads(record['rows_json']):
+                if item['work_date'] == work_date:
+                    supplemented[item['cccd']] += Decimal(str(item['amount']))
         public_rows = []
         for row in rows:
             qty = quantities.get(row['selection_key'], '0')
@@ -153,6 +164,7 @@ def scope(conn, start, end):
                      'rows': public_rows, 'groups': [
                          {'seller': g['seller'], 'identity': key, 'total': float(g['amount']),
                           'selected': float(selected_amounts[key]),
+                          'supplemented': float(supplemented[key]),
                           'pending': float(g['amount'] - selected_amounts[key])}
                          for key, g in totals.items()]})
     token = digest([{'date': d['date'], 'source_hash': d['source_hash'], 'revision': d['revision']} for d in days])
@@ -180,6 +192,8 @@ def save(conn, body, timestamp, audit):
         quantities = {k: format(decimal(v).normalize(), 'f') for k, v in requested[day['date']].items() if decimal(v)}
         prior = saved_plan(conn, day['date'])
         unchanged = bool(prior and json.loads(prior['quantities_json']) == quantities)
+        if not unchanged and active_supplements(conn, day['date']):
+            raise SelectionError('Ngày ' + day['date'] + ' đã lập bảng kê bổ sung. Mở Chờ lập bảng kê bổ sung → Đã lập, hủy bản cần sửa trước khi thay lựa chọn.')
         if prior and not unchanged and not reason:
             raise SelectionError('Ghi lý do thay lựa chọn; bản mới thay thế bản cũ, không phải bảng kê cộng thêm')
         prepared.append((day, rows, quantities, unchanged))
@@ -201,6 +215,43 @@ def save(conn, body, timestamp, audit):
               metadata={'revision': revision, 'actor': actor, 'reason': reason, 'selected_rows': len(quantities),
                         'source_hash': day['source_hash']})
     return {**scope(conn, body['from'], body['to']), 'ok': True}
+
+
+def active_supplements(conn, work_date):
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='purchase_document_supplements'").fetchone():
+        return []
+    return [dict(r) for r in conn.execute("SELECT * FROM purchase_document_supplements WHERE status='active' ORDER BY id")
+            if work_date in json.loads(r['days_json'])]
+
+
+def remaining_supplement_rows(conn, work_date, source_hash, pending):
+    """Filed paperwork consumes only the saved remainder, never buys stock again."""
+    records = active_supplements(conn, work_date)
+    if not records:
+        return pending
+    for record in records:
+        day = json.loads(record['days_json'])[work_date]
+        if day['source_hash'] != source_hash:
+            raise SelectionError('Nguồn ngày ' + work_date + ' đã đổi sau khi lập bảng kê bổ sung. Mở Đã lập để đối chiếu và hủy bản cần sửa trước khi lập lại.')
+    consumed = {}
+    for record in records:
+        for row in json.loads(record['rows_json']):
+            if row['work_date'] == work_date:
+                key = row['selection_key']
+                qty, money = consumed.get(key, (Decimal(0), Decimal(0)))
+                consumed[key] = (qty + Decimal(str(row['quantity'])), money + Decimal(str(row['amount'])))
+    result = []
+    for row in pending:
+        qty, money = consumed.pop(row['selection_key'], (Decimal(0), Decimal(0)))
+        left = Decimal(str(row['quantity'])) - qty
+        left_amount = Decimal(str(row['amount'])) - money
+        if left < 0 or left_amount < 0 or (not left and left_amount):
+            raise SelectionError('Phần đã lập không khớp lựa chọn hiện tại. Mở Đã lập để đối chiếu trước khi lập lại.')
+        if left:
+            result.append({**row, 'quantity': float(left), 'amount': float(left_amount)})
+    if consumed:
+        raise SelectionError('Dòng đã lập bảng kê bổ sung không còn trong phần chờ. Mở Đã lập để đối chiếu.')
+    return result
 
 
 def pending_queue(conn, through, after=''):
@@ -236,15 +287,16 @@ def pending_queue(conn, through, after=''):
             day = state['days'][0]
             if day['stale']:
                 raise SelectionError('Nguồn đã đổi sau khi lưu; cần đối chiếu bản đã lập, chưa xác định lại phần chờ')
-            rows, _ = day_source(conn, work_date)
+            rows, source_hash = day_source(conn, work_date)
             _, pending = split_rows(rows, {r['selection_key']: r['selected_quantity'] for r in day['rows']})
+            pending = remaining_supplement_rows(conn, work_date, source_hash, pending)
             if not pending:
                 continue
             groups = []
             for group in day['groups']:
                 remainder = [r for r in pending if r['cccd'] == group['identity']]
                 if remainder:
-                    groups.append({**group, 'remaining_capacity': max(0, state['limit'] - group['selected']),
+                    groups.append({**group, 'pending': float(sum(Decimal(str(r['amount'])) for r in remainder)), 'remaining_capacity': max(0, state['limit'] - group['selected']),
                                    'rows': remainder})
             entries.append({'date': work_date, 'revision': day['revision'], 'groups': groups,
                             'pending': float(sum((Decimal(str(r['amount'])) for r in pending), Decimal(0))),
@@ -274,6 +326,7 @@ def export_scope(conn, batch, rows):
     if plan['source_hash'] != source_hash:
         raise SelectionError('Nguồn bảng kê đã thay đổi sau khi lưu lựa chọn; cần đối chiếu trước khi xuất lại')
     selected, pending = split_rows(all_rows, json.loads(plan['quantities_json']))
+    pending = remaining_supplement_rows(conn, batch['work_date'], source_hash, pending)
     batch_id = int(batch['id'])
     return ([r for r in selected if r['batch_id'] == batch_id],
             [r for r in pending if r['batch_id'] == batch_id],
@@ -289,6 +342,7 @@ def annotate_workbook(book, selection, pending):
             "Chỉ gồm phần đã chọn; xem Đối chiếu lựa chọn để biết tổng mua và phần chờ trong ngày.")
     all_groups = group_totals(selection['all_rows'])
     chosen = group_totals(selection['selected_rows'])
+    waiting = group_totals(selection['pending_rows'])
     for ws in book:
         receipt = ws.title.startswith('biên nhận')
         if receipt:
@@ -303,9 +357,10 @@ def annotate_workbook(book, selection, pending):
             continue
         full = sum(g['amount'] for g in all_groups.values())
         part = sum((g['amount'] for g in chosen.values()), Decimal(0))
+        waiting_amount = sum((g['amount'] for g in waiting.values()), Decimal(0))
         visible_note = (f"Lựa chọn ngày {selection['date']} · bản {selection['revision']} (thay thế bản trước). "
                         f"Tổng mua cả ngày: {full:,.2f}đ; đã chọn cả ngày: {part:,.2f}đ; "
-                        f"chờ bổ sung: {full - part:,.2f}đ.")
+                        f"chờ bổ sung: {waiting_amount:,.2f}đ; đã lập bảng kê bổ sung: {full - part - waiting_amount:,.2f}đ.")
         bottom, left, right = ws.max_row + 2, 1, ws.max_column
         ws.cell(bottom, left, visible_note)
         ws.merge_cells(start_row=bottom, start_column=left, end_row=bottom, end_column=right)
@@ -314,11 +369,12 @@ def annotate_workbook(book, selection, pending):
         ws.row_dimensions[bottom].height = 48
         ws.print_area = f'{get_column_letter(left)}1:{get_column_letter(right)}{bottom}'
     ws = book.create_sheet('Đối chiếu lựa chọn')
-    ws.append(['Ngày', 'Người bán', 'Tổng mua trong ngày', 'Phần đã chọn', 'Chờ bổ sung chứng từ'])
+    ws.append(['Ngày', 'Người bán', 'Tổng mua trong ngày', 'Phần đã chọn', 'Chờ bổ sung chứng từ', 'Đã lập bảng kê bổ sung'])
     for identity, item in all_groups.items():
         part = chosen.get(identity, {}).get('amount', Decimal(0))
-        ws.append([selection['date'], item['seller'], float(item['amount']), float(part), float(item['amount'] - part)])
-    ws.append(['TỔNG', '', *[sum(float(ws.cell(r, c).value) for r in range(2, ws.max_row + 1)) for c in (3, 4, 5)]])
+        remaining = waiting.get(identity, {}).get('amount', Decimal(0))
+        ws.append([selection['date'], item['seller'], float(item['amount']), float(part), float(remaining), float(item['amount'] - part - remaining)])
+    ws.append(['TỔNG', '', *[sum(float(ws.cell(r, c).value) for r in range(2, ws.max_row + 1)) for c in (3, 4, 5, 6)]])
     ws.append(['Phần chờ không làm giảm tiền mua/công nợ, không tự tạo hàng âm. Tổng mua thực tế trong ngày giữ nguyên.'])
     ws.append([note])
     pending_sheet = book.create_sheet('Chờ bổ sung chứng từ')

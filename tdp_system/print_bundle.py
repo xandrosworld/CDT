@@ -77,7 +77,7 @@ def _header_row(worksheet, *, allow_wide: bool = False) -> tuple[int, int]:
     """Locate the first styled application table header and its last column."""
 
     selection_headers = {
-        'Đối chiếu lựa chọn': ['Ngày', 'Người bán', 'Tổng mua trong ngày', 'Phần đã chọn', 'Chờ bổ sung chứng từ'],
+        'Đối chiếu lựa chọn': ['Ngày', 'Người bán', 'Tổng mua trong ngày', 'Phần đã chọn', 'Chờ bổ sung chứng từ', 'Đã lập bảng kê bổ sung'],
         'Chờ bổ sung chứng từ': ['Ngày mua', 'Người bán', 'Tên hàng', 'ĐVT', 'Số lượng chờ', 'Giá mua BK', 'Tiền chờ', 'Bếp', 'Dòng nguồn'],
     }
     expected = selection_headers.get(worksheet.title)
