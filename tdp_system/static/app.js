@@ -3033,11 +3033,11 @@
         f=pendingScope();key=JSON.stringify(f);state.unissuedLoadKey=key;
       }
       var d=await api('/api/outgoing-invoices/unissued'+(refresh?'/refresh':'')+'?'+new URLSearchParams(f).toString(),refresh?{method:'POST'}:undefined);
-      var extra=await Promise.all([api('/api/outgoing-invoices/review-notes?'+new URLSearchParams(f).toString()),api('/api/outgoing-invoices/prepared?'+new URLSearchParams(f).toString())]);
+      var extra=await Promise.all([api('/api/outgoing-invoices/review-notes?'+new URLSearchParams(f).toString()),api('/api/outgoing-invoices/prepared?'+new URLSearchParams(f).toString()),api('/api/outgoing-invoices/source-scopes?scope=unissued')]);
       var notes=extra[0],preparedList=extra[1];
       if(preparedList.items.length && !(state.minvoiceSeries||[]).length){state.minvoiceSeries=(await api('/api/minvoice/series')).items||[];}
       if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope())){
-        state.unissued=d;state.invoiceReviewNotes=notes;
+        state.unissued=d;state.invoiceReviewNotes=notes;state.outgoingSourceReview=extra[2].items;
         state.outputSyncApplied=(state.outputSyncStatus||{}).last_checked;
         acceptPreparedInvoices(preparedList);
       }
@@ -3414,9 +3414,9 @@
   function sourceScopeReviewHtml() {
     if(!state.outgoingSourceReview) return '';
     var party=pendingScope().contractor,enabled=(state.invoiceContractorChoices&&state.invoiceContractorChoices.items||[]).filter(function(r){return r.enabled;}).map(function(r){return r.code;});
-    var rows=state.outgoingSourceReview.filter(function(r){return party?r.contractor===party:enabled.includes(r.contractor);});
+    var rows=state.outgoingSourceReview.filter(function(r){return r.scope==='unresolved'||r.scope==='outside'||(party?r.contractor===party:enabled.includes(r.contractor));});
     if(!rows.length)return '';
-    return '<details id="invoiceSourceReview"><summary>Hóa đơn đã ký vừa đối chiếu · '+esc(party||'nhà thầu đã chọn')+' · '+rows.length+' hóa đơn</summary>'+rows.map(function(r){
+    return '<details id="invoiceSourceReview" '+(rows.some(function(r){return r.scope==='unresolved';})?'open':'')+'><summary>Hóa đơn đã ký · gồm hóa đơn xuất ngoài / chưa xác định · '+rows.length+' hóa đơn</summary><p>Hóa đơn xuất ngoài đơn trên web: chọn “Đơn riêng, chưa đưa vào phần mềm” rồi Lưu đối chiếu. Hóa đơn thuộc đơn trên web: chọn đúng nhà thầu để tránh xuất trùng.</p>'+rows.map(function(r){
       var status=r.scope==='outside'?'Đơn riêng · không trừ đơn đã duyệt':r.scope==='orders'?'Trừ đơn của '+r.contractor:'Chưa xác định đơn liên quan';
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
