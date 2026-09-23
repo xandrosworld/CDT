@@ -2437,7 +2437,12 @@ def batch_payload(conn, batch_id=None):
         revenue, cost, profit, total = order_totals(item)
         item.update(revenue=revenue, cost=cost, profit=profit, total=total)
         item["physical_revision"] = physical_order_revision(item)
-    return {"batch": dict(batch), "orders": orders, "summary": calculate_summary(conn, orders)}
+    try:
+        from .payable_ledger import purchase_sheet_totals
+    except ImportError:
+        from payable_ledger import purchase_sheet_totals
+    return {"batch": dict(batch), "orders": orders, "summary": calculate_summary(conn, orders),
+            "purchase_sheet": purchase_sheet_totals(conn, batch['id'])}
 
 
 def calculate_summary(conn, orders):

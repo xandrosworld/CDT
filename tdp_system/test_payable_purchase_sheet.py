@@ -9,6 +9,25 @@ from .payable_export import payable_export_data
 
 
 class PayablePurchaseSheetTests(fixtures.SupplierPlanSourceTests):
+    def test_draft_purchase_total_visible_without_approving_or_creating_debt(self):
+        from .payable_ledger import payable_ledger_payload
+        bid=self.daily(self.file(7,9000))
+        with server.db() as conn:
+            before={t:[tuple(r) for r in conn.execute('SELECT * FROM '+t)] for t in
+                    ('batches','orders','payable_ledger_lines','inventory_transactions','invoice_inventory_ledger')}
+            data=server.batch_payload(conn,bid)
+            self.assertEqual(data['purchase_sheet'],{'row_count':1,'amount':63000})
+            ledger=payable_ledger_payload(conn,date_from='2026-09-01',date_to='2026-09-01',statuses='all')
+            self.assertEqual(ledger['summary']['remaining_amount'],0)
+            self.assertEqual(ledger['unapproved_purchase_sheets'],[{'batch_id':bid,'work_date':'2026-09-01','row_count':1,'amount':63000}])
+            after={t:[tuple(r) for r in conn.execute('SELECT * FROM '+t)] for t in before}
+            self.assertEqual(before,after)
+        self.approve_for_payable(bid)
+        with server.db() as conn:
+            ledger=payable_ledger_payload(conn,date_from='2026-09-01',date_to='2026-09-01',statuses='all')
+            self.assertEqual(ledger['unapproved_purchase_sheets'],[])
+            self.assertEqual(ledger['summary']['remaining_amount'],63000)
+
     def setUp(self):
         with server.db() as conn:
             conn.execute('DELETE FROM payable_payment_allocations')

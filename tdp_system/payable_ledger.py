@@ -382,6 +382,31 @@ def _purchase_sheet_sources(conn):
     return sources
 
 
+def purchase_sheet_totals(conn, batch_id):
+    """Read the purchase sheet separately from sales costs and posted debt."""
+    source = conn.execute('SELECT items_json FROM supplier_plan_sources WHERE batch_id=?', (batch_id,)).fetchone()
+    if source:
+        rows = json.loads(source['items_json'])
+    else:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT amount FROM purchase_workbook_lines WHERE batch_id=? AND status='confirmed'", (batch_id,))]
+    if not source and not rows:
+        return None
+    return {'row_count': len(rows), 'amount': sum(_vnd(r.get('amount', 0)) for r in rows)}
+
+
+def unapproved_purchase_sheets(conn, date_from, date_to):
+    result = []
+    cutoff = _historical_cutoff(conn)
+    for batch in conn.execute("SELECT id,work_date,status FROM batches WHERE status!='approved' AND work_date BETWEEN ? AND ? ORDER BY work_date,id", (date_from, date_to)):
+        if cutoff and batch['work_date'] <= cutoff:
+            continue
+        totals = purchase_sheet_totals(conn, batch['id'])
+        if totals is not None:
+            result.append({'batch_id': batch['id'], 'work_date': batch['work_date'], **totals})
+    return result
+
+
 def pending_purchase_sheets(conn, date_from, date_to):
     sheets = {s['batch_id']: s for s in _purchase_sheet_sources(conn)}
     result = []
@@ -914,6 +939,7 @@ def payable_ledger_payload(
         },
         "historical_through_date": _historical_cutoff(conn) or None,
         "pending_purchase_sheets": pending_purchase_sheets(conn, safe_from, safe_to),
+        "unapproved_purchase_sheets": unapproved_purchase_sheets(conn, safe_from, safe_to),
     }
 
 

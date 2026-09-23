@@ -1709,6 +1709,8 @@
       '</strong></div><div><span>Tiền mua theo sheet đơn hàng</span><strong>', stockMoney(visibleTotals.cost),
       '</strong></div><div><span>Tiền bán gồm VAT</span><strong>', stockMoney(visibleTotals.total), '</strong></div></div>',
       '<div class="code-note order-payable-explanation">Các tổng trên tính theo những dòng đơn hàng đang xem. Công nợ phải trả nhà cung cấp lấy từ sheet <b>Đặt hàng</b>. ',
+      d.purchase_sheet ? '<p class="purchase-sheet-total"><strong>Tiền mua theo sheet Đặt hàng: '+stockMoney(d.purchase_sheet.amount)+'</strong> · '+num(d.purchase_sheet.row_count)+' dòng, toàn bộ nhà cung cấp.</p>' : '<p>Chưa có dữ liệu sheet Đặt hàng để tính tổng tiền mua.</p>',
+      approved ? '' : '<p><strong>Ngày '+dateVN(d.batch.work_date)+' chưa duyệt đơn hàng nên chưa tính vào công nợ phải trả.</strong> Kiểm tra đơn rồi bấm Duyệt đơn hàng. <button class="btn btn-outline" data-action="focus-order-approval">Đến nút Duyệt đơn hàng</button></p>',
       '<button class="btn btn-outline" data-action="view-order-payable">Xem phải trả ngày ', dateVN(d.batch.work_date), '</button></div>',
       '<div class="card fade-in"><div class="card-head"><div><h3>Đơn hàng đã kiểm tra</h3>',
       '<p>Lưu đơn là trừ kho thực tế theo số đặt, kể cả chưa giao. Chốt lượng đã giao để chuyển sang số giao ròng, không trừ lần hai.</p></div><span class="tag ',
@@ -2419,6 +2421,7 @@
       '<div class="payable-workspace fade-in">',
       '<div id="supplierPaymentHost"></div>',
       '<div class="code-note">Phải trả tập hợp đầy đủ các dòng từ sheet Đặt hàng của ngày đã duyệt, gồm cả NCC “kho”; tính theo số lượng thực tế và giá mua trên sheet.</div>',
+      (ledger.unapproved_purchase_sheets || []).length ? '<div class="code-note warning-summary payable-unapproved"><strong>Có ngày chưa duyệt đơn hàng — công nợ chưa được tính cho các ngày này.</strong><ul>'+ledger.unapproved_purchase_sheets.map(function(item){return '<li>Ngày '+esc(dateVN(item.work_date))+' · Tiền mua theo sheet Đặt hàng: <strong>'+stockMoney(item.amount)+'</strong> · '+num(item.row_count)+' dòng, toàn bộ nhà cung cấp. <button class="btn btn-primary" data-action="open-payable-order" data-batch-id="'+item.batch_id+'">Kiểm tra và duyệt đơn ngày '+esc(dateVN(item.work_date))+'</button></li>';}).join('')+'</ul><p>Tổng tiền sheet Đặt hàng ở trên chưa trừ thanh toán và chưa tính vào các tổng công nợ bên dưới. Số 0 không có nghĩa là ngày này không có tiền mua hàng.</p></div>' : '',
       (ledger.pending_purchase_sheets || []).length ? '<div class="code-note danger-text payable-source-warning"><strong>Công nợ chưa được tính đủ trong khoảng ngày đã chọn.</strong><p>Web cần bổ sung dữ liệu Đặt hàng hoặc giá mua cho các ngày dưới đây. File Excel của chị vẫn có thể đã có đầy đủ sheet Đặt hàng.</p><ul>' + ledger.pending_purchase_sheets.map(function (item) {
         return '<li><strong>' + esc(dateVN(item.work_date)) + '</strong><ul>' + (item.issues || []).map(function (issue) { return '<li>' + esc(issue) + '</li>'; }).join('') + '</ul><button class="btn btn-primary" data-action="repair-payable-source" data-batch-id="' + item.batch_id + '">Sửa file và cập nhật công nợ ngày ' + esc(dateVN(item.work_date)) + '</button></li>';
       }).join('') + '</ul><p>Bấm nút của ngày cần sửa để xem hướng dẫn, chọn file và lưu ngay tại đây.</p><p>Các tổng bên dưới chưa gồm những ngày còn lỗi; số 0 không có nghĩa là không còn nợ.</p></div>' : '',
@@ -2431,7 +2434,7 @@
       '<div class="card"><div class="card-head"><div><h3>Sổ phải trả chi tiết</h3><p>Đã trả và Còn trả tự cập nhật sau khi ghi nhận. Có thể chọn riêng dòng cần thanh toán.</p></div><span class="tag">',
       num((ledger.pagination || {}).returned || 0), ' dòng đang hiển thị</span></div>',
       '<div class="table-wrap round3-table payable-ledger-table"><table><thead><tr><th>Chọn</th><th>Ngày</th><th>Nhà cung cấp</th><th>Bếp</th><th>Hàng</th><th>Số thực tế</th><th>Giá mua</th><th>Thành tiền</th><th>Đã trả</th><th>Còn trả</th><th>Trạng thái</th><th>Phân bổ lần này</th></tr></thead><tbody>',
-      lineRows || '<tr><td colspan="12"><div class="empty">' + ((ledger.pending_purchase_sheets || []).length ? 'Chưa có dòng công nợ đủ dữ liệu để hiển thị. Xem các ngày cần bổ sung ở trên.' : 'Không có dòng nợ theo bộ lọc này.') + '</div></td></tr>',
+      lineRows || '<tr><td colspan="12"><div class="empty">' + ((ledger.unapproved_purchase_sheets || []).length ? 'Có ngày chưa duyệt đơn hàng. Xem tổng tiền sheet Đặt hàng và nút kiểm tra ở trên.' : (ledger.pending_purchase_sheets || []).length ? 'Chưa có dòng công nợ đủ dữ liệu để hiển thị. Xem các ngày cần bổ sung ở trên.' : 'Không có dòng nợ theo bộ lọc này.') + '</div></td></tr>',
       '</tbody><tfoot><tr class="table-total-row"><td colspan="5">TỔNG THEO BỘ LỌC</td><td class="num-cell">',
       esc(quantityGroups(summary.filtered_quantities_by_unit)), '</td><td></td><td class="num-cell">', money(summary.filtered_amount),
       '</td><td class="num-cell">', money(summary.filtered_paid_amount), '</td><td class="num-cell">',
@@ -7459,6 +7462,15 @@
     var button = event.target.closest("[data-action]");
     if (!button) return;
     var action = button.dataset.action;
+    if(action==='focus-order-approval'){
+      var approveButton=content.querySelector('[data-action="approve-batch"]');
+      if(approveButton){approveButton.scrollIntoView({block:'center'});approveButton.focus();}return;
+    }
+    if(action==='open-payable-order'){
+      await loadData(Number(button.dataset.batchId));navigate('orders');
+      var approval=content.querySelector('[data-action="approve-batch"]');
+      if(approval){approval.scrollIntoView({block:'center'});approval.focus();}return;
+    }
     if (action === 'view-order-payable') {
       state.debtFrom = state.debtTo = state.data.batch.work_date;
       state.debtSection = 'payable'; state.payableSupplier = ''; state.payableStatus = 'all';
