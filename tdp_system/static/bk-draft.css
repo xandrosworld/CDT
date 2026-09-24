@@ -16,3 +16,5 @@
 .bk-draft-issues li{margin:8px 0}.bk-draft-issues li .btn{margin-left:10px;white-space:normal}
 .bk-draft-dialog [aria-invalid=true]{border:2px solid #ad2424;background:#fff6f3}
 .bk-draft-dialog input:focus-visible,.bk-draft-dialog button:focus-visible{outline:3px solid #007f78;outline-offset:3px}
+
+.bk-quick-fill,.bk-source-panel,.bk-row-summary{padding:12px;margin:12px 0;border:1px solid #b8c8cf;border-radius:8px;background:#f4f9f8}.bk-draft-dialog>details{margin:12px 0}.bk-source-panel[hidden]{display:none}.bk-draft-dialog summary{cursor:pointer;font-weight:600}

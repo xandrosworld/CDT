@@ -5,25 +5,24 @@
     dialog.className = 'bk-draft-dialog';
     dialog.setAttribute('aria-label', 'Lập bảng kê bổ sung');
     dialog.innerHTML = '<div class="bk-draft-head"><h2>Lập bảng kê bổ sung</h2><button class="btn btn-outline" data-bk="close" aria-label="Đóng">Đóng</button></div>' +
-      '<p>Chốt phần cần xuất ở Bảng kê &amp; hóa đơn trước. KKKNT vẫn được xuất đủ lượng đã chọn khi thiếu tồn. Sau khi hóa đơn đã ký được cập nhật và trừ kho, mở phần này để đối chiếu lượng còn thiếu thực tế; hàng bỏ không xuất không tự tạo nhu cầu nhập.</p>' +
-      '<p>1. Đối chiếu phần còn thiếu và thông tin mua thực tế → 2. Xem bảng kê tổng, biên nhận → 3. Xác nhận nhập kho. Tải và in chưa cộng kho; duyệt đơn hàng cũng không cộng kho hóa đơn.</p>' +
+      '<p><strong>1. Chọn tháng → 2. Kiểm tra hàng mua → 3. Xem, in và xác nhận nhập kho</strong></p>' +
+      '<p class="muted">Cập nhật đủ hóa đơn đã ký trước khi đối chiếu. Lượng âm là gợi ý cần kiểm tra với hàng thực mua; xem và in chưa ghi kho.</p>' +
       '<div class="bk-draft-controls"><label>Từ ngày<input name="from" type="date" value="' + esc(options.from) + '"></label>' +
       '<label>Đến ngày<input name="to" type="date" value="' + esc(options.to) + '"></label>' +
       '<label>Nhóm hàng<select name="tax"><option value="KKKNT">KKKNT</option><option value="all">Tất cả hàng tồn âm</option></select></label>' +
       '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div>' +
-      '<p>Chọn Từ ngày – Đến ngày để xem chung và chọn hàng một lần. Các dòng mua của hàng còn âm được đưa sang theo ngày và người bán. Kiểm tra đúng người bán thực tế trước khi chọn. Lượng gợi ý là lượng còn thiếu đến hết Đến ngày, gồm cả thiếu từ trước chưa bổ sung; không cộng lặp lượng âm của từng ngày. Ngày mua thực tế vẫn điền theo hàng đã mua.</p>' +
-      '<p class="muted">Có thể chọn lại tháng 8 hoặc kỳ trước. Lượng tồn âm chỉ để đối chiếu; sửa số lượng theo hàng thực mua. Có nguồn mua thì dùng giá mua của dòng nguồn. Khi chưa ghép được nguồn, đơn giá gợi ý bằng 95% giá bán gần nhất của đơn đã duyệt đến hết Đến ngày, cùng ĐVT. Nếu chưa có đơn, dùng giá hóa đơn bán đã ký và ghi kho cùng ĐVT. Nguồn giá hiện dưới mỗi ô; có thể sửa trước khi tải.</p>' +
-      '<div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label>' +
-      '<label>Số bảng kê<input name="reference" maxlength="100" placeholder="Nhập số của bảng kê đang lập" aria-describedby="bk-reference-help"><small id="bk-reference-help">Số để nhận biết bảng kê này; nhập theo cách đánh số chị đang dùng.</small></label>' +
-      '<label>Người bán chung<input name="source_party" list="bk-supplement-sellers" maxlength="150" placeholder="Chọn tên trong danh mục"></label><datalist id="bk-supplement-sellers"></datalist></div>' +
+      '<div class="bk-draft-controls"><label>Số bảng kê<input name="reference" maxlength="100" aria-describedby="bk-reference-help"><small id="bk-reference-help">Đã gợi ý sẵn; có thể sửa theo cách đánh số đang dùng.</small></label></div>' +
+      '<details class="bk-quick-fill"><summary>Điền nhanh nhiều dòng (không bắt buộc)</summary><p>Chỉ điền ô còn trống của những dòng đã tích chọn. Dùng khi đúng cùng ngày mua hoặc cùng người bán thực tế.</p><div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label><label>Người bán / NCC<input name="source_party" list="bk-supplement-sellers" maxlength="150"></label><button class="btn btn-outline" data-bk="apply-common">Điền vào ô trống của dòng đã chọn</button></div></details><datalist id="bk-supplement-sellers"></datalist>' +
+      '<details><summary>Nguồn số liệu và cách tính lượng gợi ý</summary><p>Đối chiếu tồn đến cuối kỳ, gồm thiếu từ trước chưa bổ sung; không cộng lặp lượng âm từng ngày. Nguồn mua chưa ghi kho được đưa sang theo ngày, người bán và giá mua. Nguồn đã ghi kho chỉ để tra cứu, không nhập lại. Khi chưa có nguồn, giá gợi ý bằng 95% giá bán gần nhất; cần kiểm tra theo giá mua thực tế.</p></details>' +
       '<details><summary>Đã sửa file Excel: mở lại tại đây</summary><input name="import_file" type="file" accept=".xlsx" aria-label="File bảng kê bổ sung đã sửa"><button class="btn btn-outline" data-bk="file">Đọc file đã sửa</button><p>Đọc file chưa ghi kho. Xem bộ bảng kê rồi xác nhận bên dưới.</p></details>' +
-      '<div class="bk-draft-controls"><label>Thêm hàng ngoài danh sách tồn âm<input name="search" placeholder="Tìm theo mã hoặc tên hàng"></label>' +
+      '<details><summary>Thêm hàng ngoài danh sách tồn âm</summary><div class="bk-draft-controls"><label>Thêm hàng ngoài danh sách tồn âm<input name="search" placeholder="Tìm theo mã hoặc tên hàng"></label>' +
       '<button class="btn btn-outline" data-bk="search">Tìm hàng</button><select name="product" aria-label="Kết quả tìm hàng"></select>' +
-      '<button class="btn btn-outline" data-bk="add">Thêm dòng</button></div>' +
+      '<button class="btn btn-outline" data-bk="add">Thêm dòng</button></div></details>' +
+      '<div class="bk-row-summary" role="status"></div><div class="bk-source-panel" hidden></div>' +
       '<p class="bk-draft-status" role="status"></p><div class="bk-draft-issues" role="alert" hidden></div><div class="bk-daily-warning" role="status"></div><div class="bk-draft-table"></div>' +
       '<div class="bk-draft-controls"><button class="btn btn-outline" data-bk="all">Chọn tất cả</button>' +
       '<button class="btn btn-outline" data-bk="none">Bỏ chọn</button>' +
-      '<button class="btn btn-primary" data-bk="excel">Tải Excel để nhập lại</button>' +
+      '<button class="btn btn-outline" data-bk="excel">Tải Excel để nhập lại</button>' +
       '<button class="btn btn-primary" data-bk="preview">Xem bảng kê tổng & biên nhận</button></div>' +
       '<p class="muted">Thiếu thông tin vẫn tải Excel để điền tiếp. Để in bộ bảng kê, cần đủ ngày mua thực tế, số bảng kê, người bán trong danh mục, lượng và giá. Hạn mức cộng chung 5.000.000đ/người/ngày với các bảng kê đã ghi kho.</p>' +
       '<div class="bk-draft-preview"></div>';
@@ -62,7 +61,7 @@
     function rowField(i,key) {return dialog.querySelector('tr[data-row="'+i+'"] [data-field="'+key+'"]');}
     function dailyWarnings() {
       var groups={};
-      rows.forEach(function(r,i){if(!r.selected)return;var seller=String(r.source_party||field('source_party').value).trim(),day=r.document_date||field('document_date').value,key=day+'|'+seller.toLocaleLowerCase();if(!seller||!day)return;if(!groups[key])groups[key]={seller:seller,day:day,amount:0,index:i};groups[key].amount+=(Number(r.qty)||0)*(Number(r.unit_cost)||0);});
+      rows.forEach(function(r,i){if(!r.selected)return;var seller=String(r.source_party||'').trim(),day=r.document_date||'',key=day+'|'+seller.toLocaleLowerCase();if(!seller||!day)return;if(!groups[key])groups[key]={seller:seller,day:day,amount:0,index:i};groups[key].amount+=(Number(r.qty)||0)*(Number(r.unit_cost)||0);});
       var over=Object.values(groups).filter(function(g){return g.amount>5000000;});
       dialog.querySelector('.bk-daily-warning').innerHTML=over.map(function(g){return '<p class="error-summary">'+esc(g.seller+' · '+g.day)+': '+g.amount.toLocaleString('vi-VN')+'đ, vượt 5.000.000đ/người/ngày. Kiểm tra lượng mua và người bán thực tế. Không đổi ngày mua để chia hạn mức. <button type="button" class="btn btn-outline" data-bk-split="'+g.index+'">Thêm người bán thực tế cùng ngày</button></p>';}).join('');
       return over;
@@ -70,17 +69,17 @@
     function validatePreview() {
       var missing=[];
       function add(message,target,label){missing.push({message:message,target:target,label:label});}
-      if(rows.some(function(r){return r.selected&&!r.document_date;})&&!field('document_date').value)add('Chưa điền Ngày mua thực tế.',field('document_date'),'Điền ngày mua');
-      else if(field('document_date').value && loadedPeriod && (field('document_date').value<loadedPeriod.from || field('document_date').value>loadedPeriod.to))add('Ngày mua thực tế phải nằm trong khoảng Từ ngày – Đến ngày đang chọn.',field('document_date'),'Sửa ngày mua');
-      if(!field('reference').value.trim())add('Chưa điền Số bảng kê. Đây là số của bảng kê đang lập, không phải tìm ở bảng khác.',field('reference'),'Điền số bảng kê');
-      var noSeller=rows.filter(function(r){return r.selected&&!String(r.source_party||'').trim()&&!field('source_party').value.trim();});
-      if(noSeller.length)add(noSeller.length+' mặt hàng chưa có Người bán / NCC. Điền Người bán chung hoặc điền riêng từng dòng.',field('source_party'),'Điền người bán chung');
+      var noDate=rows.findIndex(function(r){return r.selected&&!r.document_date;});
+      if(noDate>=0)add('Dòng đã chọn còn thiếu Ngày mua thực tế. Điền từng dòng hoặc mở Điền nhanh nhiều dòng.',rowField(noDate,'document_date'),'Điền ngày mua còn thiếu');
+      if(!field('reference').value.trim())add('Chưa điền Số bảng kê.',field('reference'),'Điền số bảng kê');
+      var noSeller=rows.findIndex(function(r){return r.selected&&!String(r.source_party||'').trim();});
+      if(noSeller>=0)add('Dòng đã chọn còn thiếu Người bán / NCC. Chọn đúng người bán thực tế trong danh mục.',rowField(noSeller,'source_party'),'Điền người bán còn thiếu');
       rows.forEach(function(r,i){
         if(!r.selected)return;
         var title=r.product_name+' ('+r.product_code+')';
         if(!String(r.qty==null?'':r.qty).trim() || !Number.isFinite(Number(r.qty)) || Number(r.qty)<=0)add(title+': Lượng mua bổ sung phải lớn hơn 0.',rowField(i,'qty'),'Sửa lượng mua');
         if(!String(r.unit_cost==null?'':r.unit_cost).trim() || !Number.isFinite(Number(r.unit_cost)) || Number(r.unit_cost)<=0)add(title+': Đơn giá phải lớn hơn 0.',rowField(i,'unit_cost'),'Sửa đơn giá');
-        var day=r.document_date||field('document_date').value;
+        var day=r.document_date||'';
         if(day&&loadedPeriod&&(day<loadedPeriod.from||day>loadedPeriod.to))add(title+': Ngày mua thực tế phải nằm trong kỳ đang chọn.',rowField(i,'document_date'),'Sửa ngày mua');
       });
       dailyWarnings().forEach(function(g){add(g.seller+' · '+g.day+': vượt 5.000.000đ/người/ngày. Kiểm tra đúng người bán và lượng thực mua.',rowField(g.index,'source_party'),'Kiểm tra người bán thực tế');});
@@ -96,7 +95,7 @@
       else if(/Chọn file Excel/.test(message)){target=field('import_file');label='Chọn file Excel';}
       else if(/Nhập mã hoặc tên hàng|Tìm và chọn hàng/.test(message)){target=field('search');label='Tìm hàng';}
       else if(/Người bán|hạn mức/.test(message)){
-        var i=rows.findIndex(function(r){var seller=String(r.source_party||field('source_party').value).trim();return r.selected&&seller&&message.indexOf(seller)>=0;});
+        var i=rows.findIndex(function(r){var seller=String(r.source_party||'').trim();return r.selected&&seller&&message.indexOf(seller)>=0;});
         if(i>=0){target=rowField(i,'source_party');label='Kiểm tra người bán thực tế';}
       }
       return target?[{message:message,target:target,label:label}]:[];
@@ -114,12 +113,17 @@
     }
     function render() {
       dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Ngày mua thực tế</th><th>Tồn cuối ngày '+esc(loadedPeriod ? loadedPeriod.to.split('-').reverse().join('/') : '')+'</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
-        return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+purchaseHistoryHtml(r)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
+        return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'<br><button type="button" class="btn btn-outline" data-bk-source="'+i+'">Xem / chọn nguồn mua</button>'+purchaseHistoryHtml(r)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
           return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'">'+(key==='source_party'?'<small>'+esc(r.source_party_original ? 'Người bán nguồn: '+r.source_party_original+' · '+(r.cccd||'')+' · '+(r.address||'')+' · Ngày cấp: '+(r.issue_date||'chưa có')+' · Nơi cấp: '+(r.issue_place||'chưa có') : '')+'</small><button type="button" data-bk-split="'+i+'" class="btn btn-outline">Thêm người bán cùng ngày</button>':'')+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
         }).join('')+'</tr>';
       }).join('')+'</tbody></table>';
       dailyWarnings();
+      updateSummary();
+    }
+    function updateSummary() {
+      var selected=rows.filter(function(r){return r.selected;}),missing=selected.filter(function(r){return !r.document_date||!r.source_party||!(Number(r.qty)>0)||!(Number(r.unit_cost)>0);});
+      dialog.querySelector('.bk-row-summary').innerHTML='<strong>Đã chọn '+selected.length+' dòng · '+missing.length+' dòng cần bổ sung thông tin</strong><p>Kiểm tra ngày mua, người bán, lượng và giá ngay trên từng dòng. Nguồn mua có sẵn đã điền tự động; dòng trống có nút Xem / chọn nguồn mua.</p>';
     }
     function payload() {
       collect();
@@ -128,8 +132,8 @@
       var selected=rows.filter(function(r){return r.selected;});
       if (!selected.length) throw new Error('Chọn ít nhất một dòng để lập bảng kê.');
       var nextLine=selected.reduce(function(max,r){return Math.max(max,Number(r.source_line)||0);},0);
-      return {from:loadedPeriod.from,to:loadedPeriod.to,document_date:field('document_date').value,reference:field('reference').value,
-        rows:selected.map(function(r){return {document_date:r.document_date||field('document_date').value,product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||field('source_party').value,note:(r.note||'')+(r.source_key?' [TDP-SOURCE:'+r.source_key+']':''),source_line:r.source_line||++nextLine};})};
+      return {from:loadedPeriod.from,to:loadedPeriod.to,document_date:'',reference:field('reference').value,
+        rows:selected.map(function(r){return {document_date:r.document_date||'',product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||'',note:(r.note||'')+(r.source_key?' [TDP-SOURCE:'+r.source_key+']':''),source_line:r.source_line||++nextLine};})};
     }
     function post(body) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}; }
     async function action(name) {
@@ -140,6 +144,7 @@
       dialog.querySelectorAll('input,select').forEach(function(el){el.disabled=true;});
       try {
         collect();
+        if(['load','file','add','next','confirm'].indexOf(name)>=0){var sourcePanel=dialog.querySelector('.bk-source-panel');sourcePanel.hidden=true;sourcePanel.innerHTML='';}
         if(['load','file','add','all','none','preview'].indexOf(name)>=0){review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';}
         if (name==='load') {
           if(loadedPeriod)periodDrafts[loadedPeriod.from+'|'+loadedPeriod.to+'|'+loadedPeriod.tax]={rows:rows,date:field('document_date').value,reference:field('reference').value,seller:field('source_party').value};
@@ -155,7 +160,7 @@
           });
           rows=fresh.map(function(r){var old=kept&&kept.rows.find(function(k){return (k.row_key||k.product_code)===(r.row_key||r.product_code);}),merged=Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:r.source_party||'',note:''},old||{},{closing_qty:r.closing_qty,suggested_qty:r.suggested_qty});if(old&&Number(old.qty)===Number(old.suggested_qty))merged.qty=r.suggested_qty;return merged;});
           if(kept){kept.rows.forEach(function(r){if(!fresh.some(function(f){return (f.row_key||f.product_code)===(r.row_key||r.product_code);}))rows.push(Object.assign({},r,{closing_qty:null,selected:false}));});}
-          field('document_date').value=kept?kept.date:'';field('reference').value=kept?kept.reference:'';field('source_party').value=kept?kept.seller:'';
+          field('document_date').value=kept?kept.date:'';field('reference').value=kept?kept.reference:('BKBS-'+result.to.slice(0,7).replace('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase());field('source_party').value=kept?kept.seller:'';
           render(); status(result.items.length+' mã hàng còn thiếu đến hết '+result.to.split('-').reverse().join('/')+'. Lượng thiếu được phân gợi ý theo nguồn mua, không cộng lặp giữa các ngày. Dòng lượng 0 chưa cần bổ sung. Bấm Chọn tất cả hoặc chọn từng dòng đã mua cần bổ sung chứng từ.'+(kept?' Đã giữ thông tin đang nhập; kiểm tra lại lượng mua với tồn mới.':''));
           dialog.querySelector('.bk-draft-preview').innerHTML='';
           if(result.source_warnings&&result.source_warnings.length){var warning=document.createElement('p');warning.className='error-summary';warning.textContent=result.source_warnings.join(' | ');dialog.querySelector('.bk-draft-table').prepend(warning);}
@@ -164,6 +169,14 @@
             if(index>=0){var target=dialog.querySelector('[data-row="'+index+'"]');target.scrollIntoView({block:'center'});focusAfterAction=rowField(index,'selected');}
             options.productCode=null;
           }
+        } else if(name==='apply-common') {
+          var chosen=rows.filter(function(r){return r.selected;});
+          if(!chosen.length)throw new Error('Chọn ít nhất một dòng để điền nhanh.');
+          var day=field('document_date').value,seller=field('source_party').value.trim();
+          if(!day&&!seller)throw new Error('Điền Ngày mua thực tế hoặc Người bán / NCC trong Điền nhanh nhiều dòng.');
+          if(day&&loadedPeriod&&(day<loadedPeriod.from||day>loadedPeriod.to))throw new Error('Ngày mua thực tế phải nằm trong khoảng Từ ngày – Đến ngày đang chọn.');
+          chosen.forEach(function(r){if(!r.document_date&&day)r.document_date=day;if(!r.source_party&&seller)r.source_party=seller;});
+          review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';field('document_date').value='';field('source_party').value='';render();status('Đã điền các ô còn trống của '+chosen.length+' dòng đã chọn. Các ô đã có thông tin được giữ nguyên.');
         } else if(name==='file') {
           if(!field('import_file').files.length)throw new Error('Chọn file Excel đã sửa trước.');
           var form=new FormData();form.append('file',field('import_file').files[0]);
@@ -223,14 +236,22 @@
           box.querySelector('[data-bk-stock-review]').onclick=function(){if(options.onStockReview)options.onStockReview(stockReview.period);};
         }
       }
-      finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});var confirm=dialog.querySelector('[data-bk="confirm"]');if(confirm)confirm.disabled=!field('confirm_actual').checked;if(focusAfterAction){focusIssue(focusAfterAction);focusAfterAction=null;}}
+      finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});var confirm=dialog.querySelector('[data-bk="confirm"]');if(confirm)confirm.disabled=!field('confirm_actual').checked||!field('confirm_actor').value.trim();if(focusAfterAction){focusIssue(focusAfterAction);focusAfterAction=null;}}
     }
-    dialog.addEventListener('click',function(e){var split=e.target.closest('[data-bk-split]');if(split){collect();var source=rows[Number(split.dataset.bkSplit)];rows.push(Object.assign({},source,{row_key:(source.row_key||source.product_code)+':split:'+rows.length,qty:'',source_party:'',source_line:undefined,selected:true}));review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();focusIssue(rowField(rows.length-1,'source_party'));return;}var fix=e.target.closest('[data-bk-fix]');if(fix){focusIssue(issues[Number(fix.dataset.bkFix)].target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
+    dialog.addEventListener('click',function(e){
+      if(busy&&!e.target.closest('[data-bk="close"]'))return;
+      var sourceButton=e.target.closest('[data-bk-source]');
+      if(sourceButton){collect();var index=Number(sourceButton.dataset.bkSource),r=rows[index],panel=dialog.querySelector('.bk-source-panel'),sources=r.purchase_sources||[];panel.hidden=false;
+        panel.innerHTML='<strong>'+esc(r.product_code+' · '+r.product_name)+'</strong><p>'+(!sources.length?'Không tìm thấy nguồn mua phù hợp trong kỳ đã chọn. Kiểm tra kỳ, mã hàng và chứng từ mua; chỉ điền ngày và người bán khi có thông tin thực tế.':'Nguồn đã ghi kho chỉ để đối chiếu. Nguồn chưa ghi kho đã có dòng riêng bên dưới; bấm Chọn dòng nguồn để đến đúng dòng, không tạo thêm lượng mua.')+'</p>'+sources.map(function(source){var target=rows.findIndex(function(x){return x.source_key===source.source_key;});return '<p>'+esc(source.document_date+' · '+source.source_party+' · '+source.purchase_qty+' '+source.unit+' · '+source.source_description)+' '+(source.already_posted?'<strong>Đã ghi kho — không nhập lại</strong>':target>=0?'<button type="button" class="btn btn-outline" data-bk-source-row="'+target+'">Chọn dòng nguồn</button>':'')+'</p>';}).join('')+'<button type="button" class="btn btn-outline" data-bk-manual="'+index+'">Điền theo chứng từ thực tế</button> <button type="button" class="btn btn-outline" data-bk-source-close>Đóng nguồn mua</button>';panel.scrollIntoView({block:'center'});return;}
+      var sourceRow=e.target.closest('[data-bk-source-row]');if(sourceRow){collect();var i=Number(sourceRow.dataset.bkSourceRow);rows[i].selected=true;review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();focusIssue(rowField(i,'qty'));return;}
+      var manual=e.target.closest('[data-bk-manual]');if(manual){focusIssue(rowField(Number(manual.dataset.bkManual),'document_date'));return;}
+      if(e.target.closest('[data-bk-source-close]')){dialog.querySelector('.bk-source-panel').hidden=true;return;}
+      var split=e.target.closest('[data-bk-split]');if(split){if(busy)return;collect();var source=rows[Number(split.dataset.bkSplit)];rows.push(Object.assign({},source,{row_key:(source.row_key||source.product_code)+':split:'+rows.length,qty:'',source_party:'',source_line:undefined,selected:true}));review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();focusIssue(rowField(rows.length-1,'source_party'));return;}var fix=e.target.closest('[data-bk-fix]');if(fix){focusIssue(issues[Number(fix.dataset.bkFix)].target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
     dialog.addEventListener('input',function(e){
-      if(e.target.name==='confirm_actor'||e.target.name==='confirm_actual'){var button=dialog.querySelector('[data-bk="confirm"]');if(button)button.disabled=!field('confirm_actual').checked;return;}
+      if(e.target.name==='confirm_actor'||e.target.name==='confirm_actual'){var button=dialog.querySelector('[data-bk="confirm"]');if(button)button.disabled=!field('confirm_actual').checked||!field('confirm_actor').value.trim();return;}
       if(issues.length){clearIssues();status('Đã thay đổi thông tin. Bấm Xem bảng kê tổng & biên nhận để kiểm tra lại.');}
       review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';
-      collect();dailyWarnings();
+      collect();dailyWarnings();updateSummary();
     });
     dialog.addEventListener('close',function(){paperObserver.disconnect();dialog.remove();});
     options.api('/api/bk-import/draft/sellers').then(function(p){if(dialog.isConnected)dialog.querySelector('#bk-supplement-sellers').innerHTML=p.names.map(function(n){return '<option value="'+esc(n)+'"></option>';}).join('');}).catch(function(){});
