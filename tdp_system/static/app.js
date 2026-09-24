@@ -4306,6 +4306,7 @@
     content.innerHTML = html([
       '<div class="print-workspace-heading"><button class="btn btn-outline" data-view="home">← Đơn hàng - bảng kê</button><h3>',
       {deliveries:'In đơn hàng đi giao', purchases:'In bảng kê và biên nhận', suppliers:'In đơn đặt nhà cung cấp', report:'In báo cáo tổng hợp'}[state.printingDocument], '</h3></div>',
+      state.printingDocument === 'purchases' ? '<section class="card"><div class="card-head"><div><h3>Lập và in bảng kê bổ sung cuối tháng</h3><p>Đối chiếu tồn cả tháng, chọn hàng còn âm và kiểm tra ngày mua, người bán thực tế. Sau đó xem bảng kê, in hoặc tải Excel ngay trong bản xem.</p></div></div><div class="card-body"><div class="compact-controls"><label>Tháng đối chiếu <input id="bkPrintMonth" type="month" required value="'+esc(state.bkPrintMonth||(state.printingTo||currentWorkDate()).slice(0,7))+'"></label><button class="btn btn-primary" data-action="open-monthly-bk">Lập bảng kê bổ sung từ tồn âm</button></div><p class="muted">Không cần tích ngày ở danh sách đơn hàng. Ngày mua vẫn theo từng dòng thực tế; xem, in và tải file chưa ghi nhập kho.</p></div></section><details id="purchaseLegacyPrint" class="operation-details"'+(state.purchaseLegacyPrintOpen?' open':'')+'><summary>Bảng kê theo đơn trước đây / phần chờ đã lưu</summary><div class="operation-details-body"><p>Dùng để xem lại hoặc sửa lựa chọn theo đơn đã lưu trước đây. Phần này không tự lọc hàng âm cuối tháng.</p>' : '',
       '<div class="card print-selection-card fade-in"><div class="card-head"><div><h3>',
       state.printingDocument === "deliveries" ? 'Chọn bếp cần in phiếu giao' : 'Chọn ngày cần lấy giấy tờ', '</h3>',
       '<p>Chọn phiếu, xem ngay tại đây hoặc in phần đã chọn. Bảng kê/biên nhận có thể chọn tiếp từng sheet trong bản xem.</p></div>',
@@ -4319,7 +4320,7 @@
       '<button class="btn btn-primary" data-action="print-selected-documents" ', selectedCount ? '' : 'disabled', '>In phần đã chọn</button>',
       '<button class="btn btn-outline" data-action="download-selected-documents" ', selectedCount ? '' : 'disabled', '>Tải file đã chọn</button>',
       '</div>',
-      state.printingDocument === "purchases" ? '<div class="compact-controls"><button class="btn btn-primary" data-action="open-purchase-selection">Cập nhật người bán / chọn hàng lập bảng kê</button><button class="btn btn-primary" data-action="open-purchase-supplements">Chờ lập bảng kê bổ sung</button><button class="btn btn-outline" data-action="open-bk-draft">Lập bảng kê bổ sung từ tồn âm</button><button class="btn btn-outline" data-action="choose-bk-workbook">Nhập bảng kê bổ sung</button></div>' : '',
+      state.printingDocument === "purchases" ? '<div class="compact-controls"><button class="btn btn-outline" data-action="open-purchase-selection">Cập nhật người bán / chọn hàng lập bảng kê</button><button class="btn btn-outline" data-action="open-purchase-supplements">Chờ lập bảng kê bổ sung</button><button class="btn btn-outline" data-action="choose-bk-workbook">Nhập bảng kê bổ sung từ Excel</button></div>' : '',
       state.printingDocument === "purchases" ? '<p class="muted">Để tải bảng kê đầu vào đã ghi kho, quay lại Đơn hàng - bảng kê và chọn Tải bảng kê đầu vào.</p>' : '',
       state.printingDocument === 'deliveries' ? '<label class="print-customer-filter">Khách hàng / bếp <select id="printingCustomer"><option value="">Tất cả bếp</option>' + state.data.master.kitchens.map(function(k) { return '<option value="' + esc(k.code) + '" ' + (state.printingCustomer === k.code ? 'selected' : '') + '>' + esc(k.name || k.code) + '</option>'; }).join('') + '</select></label>' : '', '</div>',
       '<div class="table-wrap print-batch-table"><table><thead><tr><th>Chọn</th><th>',
@@ -4327,7 +4328,7 @@
       '</th><th>Số dòng</th><th>Trạng thái</th><th>Xem</th></tr></thead><tbody>',
       batchRows || '<tr><td colspan="5"><div class="empty">' + esc(state.printingListError || 'Khoảng ngày này chưa có giấy tờ phù hợp.') + '</div></td></tr>',
       '</tbody></table></div></div><div id="printingPreview"></div>',
-      state.printingDocument === "purchases" ? bkImportPreviewHtml() : '',
+      state.printingDocument === "purchases" ? bkImportPreviewHtml()+'</div></details>' : '',
       '<details class="operation-details fade-in"><summary>', directPrinting ? 'In trực tiếp trọn bộ của ngày đang chọn' : 'Cách in trên máy tính và lịch sử in', '</summary><div class="operation-details-body">',
       directPrinting ? html([
       '<div class="toolbar"><div class="status-bar">Dùng khi muốn gửi thẳng bộ giấy của đơn đang chọn sang máy in</div><div class="compact-controls">',
@@ -4350,6 +4351,8 @@
       rows || '<tr><td colspan="7"><div class="empty">Chưa có lần in nào.</div></td></tr>',
       '</tbody></table></div></div></div></details>'
     ]);
+    var legacyPrint=content.querySelector('#purchaseLegacyPrint');
+    if(legacyPrint)legacyPrint.ontoggle=function(){if(legacyPrint.isConnected)state.purchaseLegacyPrintOpen=legacyPrint.open;};
   }
 
   async function loadBackupStatus() {
@@ -7014,6 +7017,7 @@
   });
 
   content.addEventListener("change", function (event) {
+    if(event.target.id==='bkPrintMonth'){state.bkPrintMonth=event.target.value;return;}
     if(event.target.id==='invoiceTaxGroupPick'){selectInvoiceGroup(event.target.value);openInvoiceGroupChoices();return;}
     if(event.target.form&&event.target.form.classList.contains('preparedSendForm')){
       var did=Number(event.target.form.dataset.id);state.preparedActiveId=did;state.preparedStatus=state.preparedStatus||{};
@@ -7962,6 +7966,15 @@
       window.TdpPurchaseDocumentSupplements({api:api,esc:esc,
         from:state.view === 'printing' ? state.printingFrom : state.inventoryFrom,
         to:state.view === 'printing' ? state.printingTo : state.inventoryTo});
+      return;
+    }
+    if (action === "open-monthly-bk") {
+      var monthField=content.querySelector('#bkPrintMonth');
+      if(!monthField||!monthField.reportValidity())return;
+      var month=monthField.value,parts=month.split('-'),lastDay=new Date(Number(parts[0]),Number(parts[1]),0).getDate();
+      state.bkPrintMonth=month;
+      window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,onStockReview:openSupplementStockReview,
+        from:month+'-01',to:month+'-'+lastDay,onSaved:function(){loadBkDocuments(true);}});
       return;
     }
     if (action === "open-bk-draft") {
