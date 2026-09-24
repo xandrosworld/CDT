@@ -696,6 +696,16 @@ def build_purchase_summary_workbook(
                 end_row=signature_first + end_row,
                 end_column=end_col,
             )
+        note_row=signature_first+1
+        note=sheet.cell(note_row,2).value
+        note_font=copy(sheet.cell(note_row,2).font)
+        sheet.unmerge_cells(f'B{note_row}:C{note_row}')
+        sheet.cell(note_row,2).value=None
+        sheet.merge_cells(start_row=note_row,start_column=1,end_row=note_row,end_column=3)
+        write_literal(sheet,f'A{note_row}',note)
+        sheet.cell(note_row,1).font=note_font
+        for row in (signature_first,note_row):
+            sheet.cell(row,1).alignment=Alignment(horizontal='center',vertical='center',wrap_text=False)
         write_literal(
             sheet,
             f"H{signature_first}",

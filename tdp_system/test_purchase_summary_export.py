@@ -134,7 +134,7 @@ class PurchaseSummaryExportTests(unittest.TestCase):
             self.assertIn("A34:E34", {str(value) for value in sheet.merged_cells.ranges})
             self.assertIn("A37:C37", {str(value) for value in sheet.merged_cells.ranges})
             self.assertIn("H37:J37", {str(value) for value in sheet.merged_cells.ranges})
-            self.assertIn("B38:C38", {str(value) for value in sheet.merged_cells.ranges})
+            self.assertIn("A38:C38", {str(value) for value in sheet.merged_cells.ranges})
             self.assertIn("A39:C39", {str(value) for value in sheet.merged_cells.ranges})
             self.assertIn("H39:J39", {str(value) for value in sheet.merged_cells.ranges})
             self.assertEqual(str(sheet.print_area), "'bảng kê tổng'!$A$1:$J$44")
