@@ -573,6 +573,10 @@ def build_purchase_summary_workbook(
 
     workbook = cloned.workbook
     sheet = workbook[PURCHASE_SUMMARY_TEMPLATE_SHEET]
+    # Keep dates and references readable in both the web preview and A4 export.
+    for column, width in {'A':16, 'B':24, 'C':36, 'D':18, 'E':28,
+                          'F':7, 'G':12, 'H':16, 'I':19, 'J':20}.items():
+        sheet.column_dimensions[column].width=width
     item_style = _row_snapshot(sheet, TABLE_FIRST_ROW, include_values=False)
     total_style = _row_snapshot(sheet, GOLDEN_TOTAL_ROW, include_values=False)
     amount_words_style = _row_snapshot(sheet, GOLDEN_TOTAL_ROW + 1, include_values=False)
@@ -643,12 +647,17 @@ def build_purchase_summary_workbook(
             sheet.cell(row, 8).number_format = "#,##0"
             sheet.cell(row, 9).number_format = "#,##0"
             sheet.row_dimensions[row].height = max(sheet.row_dimensions[row].height or 22,
-                17 * max(math.ceil(len(str(item['product_name'])) / 26), math.ceil(len(str(item['address'])) / 22)))
-            for column in (2, 3, 5):
+                17 * max(math.ceil(len(str(item['product_name'])) / 26), math.ceil(len(str(item['address'])) / 30),
+                         math.ceil(len(str(item['seller'])) / 22), math.ceil(len(str(item['reference'])) / 18)))
+            for column in (2, 3, 5, 10):
                 alignment = copy(sheet.cell(row, column).alignment)
                 alignment.wrap_text = True
                 alignment.vertical = 'center'
                 sheet.cell(row, column).alignment = alignment
+            for column in (1,4,6):
+                sheet.cell(row,column).alignment=Alignment(horizontal='center',vertical='center',wrap_text=False)
+            for column in (7,8,9):
+                sheet.cell(row,column).alignment=Alignment(horizontal='right',vertical='center')
             total_quantity += _decimal(item["quantity"], "Tổng số lượng")
             total_amount += _decimal(item["amount"], "Tổng tiền")
 
@@ -667,12 +676,16 @@ def build_purchase_summary_workbook(
         sheet[f"I{total_row}"].number_format = "#,##0"
 
         _apply_row_snapshot(sheet, amount_words_row, amount_words_style)
+        sheet.merge_cells(start_row=amount_words_row,start_column=1,end_row=amount_words_row,end_column=10)
         write_literal(
             sheet,
             f"A{amount_words_row}",
             "Số tiền bằng chữ: " + amount_in_words(int(total_amount.quantize(Decimal("1"), rounding=ROUND_HALF_UP))) + "./.",
         )
         _apply_row_snapshot(sheet, total_row + 2, spacer_style)
+        sheet.cell(amount_words_row,1).alignment=Alignment(horizontal='left',vertical='center',wrap_text=True)
+        sheet.row_dimensions[amount_words_row].height=34
+        sheet.row_dimensions[total_row+2].height=14
 
         for offset, snapshot in enumerate(signature_rows):
             _apply_row_snapshot(sheet, signature_first + offset, snapshot)

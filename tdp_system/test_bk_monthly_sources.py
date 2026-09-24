@@ -76,3 +76,15 @@ class MonthlySourcesTests(unittest.TestCase):
         with server.db() as c:
             with self.assertRaisesRegex(ValueError,'Nguồn mua đã bổ sung'):
                 bk_supplement.prepare(c,response.data,body['from'],body['to'])
+
+    def test_historical_posted_seller_is_visible_without_suggesting_duplicate_input(self):
+        from . import batch_bk_approval
+        with server.db() as c:
+            p=batch_bk_approval.prepare(c,self.batch)
+            batch_bk_approval.approve(c,self.batch,{'source_hash':p['sourceHash'],'confirm_bk':True},server.now_iso(),server.audit_event)
+            item=bk_draft.shortage_rows(c,'2026-09-01','2026-09-30')['items'][0]
+            history=[r for r in item['purchase_sources'] if r['already_posted']]
+            self.assertEqual(len(history),1)
+            self.assertEqual(history[0]['source_party'],'Người bán BK')
+            self.assertEqual(history[0]['purchase_qty'],0)
+            self.assertEqual(history[0]['posted_qty'],3)

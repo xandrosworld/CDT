@@ -28,6 +28,15 @@
       '<p class="muted">Thiếu thông tin vẫn tải Excel để điền tiếp. Để in bộ bảng kê, cần đủ ngày mua thực tế, số bảng kê, người bán trong danh mục, lượng và giá. Hạn mức cộng chung 5.000.000đ/người/ngày với các bảng kê đã ghi kho.</p>' +
       '<div class="bk-draft-preview"></div>';
     document.body.appendChild(dialog); dialog.showModal();
+    function fitPapers() {
+      dialog.querySelectorAll('.bk-draft-paper .document-sheet').forEach(function(table){
+        var width=Array.from(table.querySelectorAll('col')).reduce(function(total,col){return total+(parseFloat(col.style.width)||0);},0);
+        var available=table.parentElement.clientWidth-24;
+        if(width&&available>0){table.style.width=width+'px';table.style.margin='0 auto';table.style.zoom=Math.min(1,available/width);}
+      });
+    }
+    var paperWidth=0,paperObserver=new ResizeObserver(function(entries){var width=entries[0].contentRect.width;if(width!==paperWidth){paperWidth=width;fitPapers();}});
+    paperObserver.observe(dialog);dialog.addEventListener('toggle',fitPapers,true);
     var products = [], busy = false, issues = [], focusAfterAction = null;
     function field(name) { return dialog.querySelector('[name="' + name + '"]'); }
     function status(text, error) { var el=dialog.querySelector('.bk-draft-status');el.textContent=text;el.style.color=error?'#ad2424':''; }
@@ -98,9 +107,14 @@
         ['document_date','qty','unit_cost','source_party','note'].forEach(function(key){row[key]=tr.querySelector('[data-field="'+key+'"]').value;});
       });
     }
+    function purchaseHistoryHtml(r) {
+      var history=(r.purchase_sources||[]).filter(function(s){return s.already_posted;});
+      if(!history.length)return '';
+      return '<details><summary>Nguồn mua đã ghi bảng kê ('+history.length+')</summary><p>Chỉ tra cứu; không gợi ý nhập lại nguồn đã ghi kho. Lượng âm hiện tại cần đối chiếu nguồn nhập, xuất và mã hàng.</p>'+history.map(function(s){return '<p>'+esc(s.document_date+' · '+s.source_party+' · '+s.cccd+' · '+s.address+' · Ngày cấp: '+(s.issue_date||'chưa có')+' · Nơi cấp: '+(s.issue_place||'chưa có')+' · Đã ghi: '+s.posted_qty+' '+s.unit+' · '+s.source_description)+'</p>';}).join('')+'</details>';
+    }
     function render() {
       dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Ngày mua thực tế</th><th>Tồn cuối ngày '+esc(loadedPeriod ? loadedPeriod.to.split('-').reverse().join('/') : '')+'</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
-        return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
+        return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+purchaseHistoryHtml(r)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
           return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'">'+(key==='source_party'?'<small>'+esc(r.source_party_original ? 'Người bán nguồn: '+r.source_party_original+' · '+(r.cccd||'')+' · '+(r.address||'')+' · Ngày cấp: '+(r.issue_date||'chưa có')+' · Nơi cấp: '+(r.issue_place||'chưa có') : '')+'</small><button type="button" data-bk-split="'+i+'" class="btn btn-outline">Thêm người bán cùng ngày</button>':'')+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
         }).join('')+'</tr>';
@@ -135,7 +149,7 @@
           loadedPeriod={from:result.from,to:result.to,tax:field('tax').value};
           var kept=periodDrafts[result.from+'|'+result.to+'|'+loadedPeriod.tax], fresh=[];
           result.items.forEach(function(item){
-            var left=Number(item.suggested_qty),sources=item.purchase_sources||[];
+            var left=Number(item.suggested_qty),sources=(item.purchase_sources||[]).filter(function(s){return !s.already_posted;});
             sources.forEach(function(source){var qty=Math.min(left,Number(source.purchase_qty));left=Math.max(0,left-qty);fresh.push(Object.assign({},item,source,{row_key:source.source_key,source_party_original:source.source_party,suggested_qty:qty,price_source:'Giá mua từ '+source.source_description}));});
             if(!sources.length||left>0.000001)fresh.push(Object.assign({},item,{row_key:item.product_code+':unmatched',suggested_qty:left,source_description:'Chưa ghép được nguồn mua; điền theo chứng từ thực tế.'}));
           });
@@ -186,7 +200,7 @@
           var base='/api/documents/'+encodeURIComponent(preview.token);
           dialog.querySelector('.bk-draft-preview').innerHTML='<div class="bk-draft-controls"><a class="btn btn-primary" target="_blank" rel="noopener" href="'+base+'/pdf?paper=A4&sides=simplex">In bộ bảng kê & biên nhận</a><a class="btn btn-outline" href="'+base+'/excel">Tải Excel bản in</a></div>'+preview.sheets.map(function(s){return '<details class="bk-supplement-paper" open><summary>'+esc(s.name)+'</summary><div class="bk-draft-paper">'+s.html+'</div></details>';}).join('')+
             (preview.already_posted?'<p>Bộ này đã ghi kho. In hoặc tải lại không cộng thêm kho.</p>':'<div class="bk-supplement-confirm"><p>Tổng tiền mua bổ sung: <strong>'+Number(preview.totals.amount).toLocaleString('vi-VN')+'đ</strong>.</p>'+(preview.rebuild_periods.length?'<p>Tháng '+esc(preview.rebuild_periods.join(', '))+' đã chốt. Khi xác nhận, hệ thống sẽ tính lại tồn chuyển sang tháng sau; nếu không đạt kiểm tra thì không ghi thay đổi nào.</p>':'')+'<label>Người xác nhận<input name="confirm_actor" maxlength="100" placeholder="Họ tên người kiểm tra"></label><label><input name="confirm_actual" type="checkbox"> Tôi đã kiểm tra hàng mua thực tế, ngày mua, người bán và đồng ý nhập kho'+(preview.rebuild_periods.length?', cập nhật tồn chuyển kỳ':'')+'.</label><button class="btn btn-primary" data-bk="confirm" disabled>Xác nhận nhập kho một lần</button></div>');
-          status(preview.already_posted?'Bộ bảng kê này đã ghi kho.':'Đã tạo bảng kê tổng và biên nhận. Kiểm tra bản in, rồi xác nhận nhập kho ở dưới.');
+          fitPapers();status(preview.already_posted?'Bộ bảng kê này đã ghi kho.':'Đã tạo bảng kê tổng và biên nhận. Kiểm tra bản in, rồi xác nhận nhập kho ở dưới.');
           dialog.querySelector('.bk-draft-preview').scrollIntoView({block:'start'});
         } else if(name==='confirm') {
           if(!review || !field('confirm_actual').checked || !field('confirm_actor').value.trim())throw new Error('Điền tên và xác nhận đã kiểm tra hàng mua thực tế.');
@@ -218,7 +232,7 @@
       review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';
       collect();dailyWarnings();
     });
-    dialog.addEventListener('close',function(){dialog.remove();});
+    dialog.addEventListener('close',function(){paperObserver.disconnect();dialog.remove();});
     options.api('/api/bk-import/draft/sellers').then(function(p){if(dialog.isConnected)dialog.querySelector('#bk-supplement-sellers').innerHTML=p.names.map(function(n){return '<option value="'+esc(n)+'"></option>';}).join('');}).catch(function(){});
     render(); action('load');
   };
