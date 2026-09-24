@@ -37,6 +37,21 @@ class MonthlySourcesTests(unittest.TestCase):
         self.assertEqual([s['document_date'] for s in item['purchase_sources']],['2026-09-03','2026-09-04'])
         self.assertTrue(all(s['source_party']=='Người bán BK' and s['cccd']=='123456789' and s['address'] for s in item['purchase_sources']))
 
+    def test_seller_catalog_and_print_use_selected_person_identity(self):
+        with server.db() as c:
+            c.execute("INSERT INTO people(name,cccd,address,issue_date,issue_place) VALUES('Người bán khác','987654321','Địa chỉ mới','02/02/2020','Nơi cấp mới')")
+        response=self.client.get('/api/bk-import/draft/sellers')
+        self.assertEqual(response.status_code,200)
+        person=next(p for p in response.json['items'] if p['name']=='Người bán khác')
+        self.assertEqual(person['cccd'],'987654321')
+        self.assertEqual(person['address'],'Địa chỉ mới')
+        with server.db() as c:
+            before=c.serialize()
+            rows=bk_supplement.receipt_rows(c,{'rows':[{'sourceParty':'Người bán khác','documentDate':'2026-09-03','productName':'Hàng BK','unit':'kg','qty':1,'unitCost':111,'amount':111,'sourceLine':1,'sourceReference':'TEST'}]})
+            self.assertEqual(rows[0]['cccd'],'987654321')
+            self.assertEqual(rows[0]['address'],'Địa chỉ mới')
+            self.assertEqual(before,c.serialize())
+
     def test_multiday_excel_roundtrip_post_repeated_and_deficit_recheck(self):
         body=self.body()
         response=self.client.post('/api/bk-import/draft/excel',json=body)

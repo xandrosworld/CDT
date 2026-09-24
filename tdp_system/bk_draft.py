@@ -193,7 +193,8 @@ def register_bk_draft_routes(app, ctx):
     @app.get('/api/bk-import/draft/sellers')
     def supplement_sellers():
         with ctx['db']() as conn:
-            return jsonify(ok=True,names=[r['name'] for r in conn.execute('SELECT name FROM people ORDER BY name')])
+            items=[dict(r) for r in conn.execute('SELECT name,cccd,address,issue_date,issue_place FROM people ORDER BY name')]
+            return jsonify(ok=True,names=[r['name'] for r in items],items=items)
 
     @app.post('/api/bk-import/draft/file')
     def supplement_file():
