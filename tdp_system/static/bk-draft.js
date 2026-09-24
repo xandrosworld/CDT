@@ -136,6 +136,9 @@
     function updateSummary() {
       var selected=rows.filter(function(r){return r.selected;}),missing=selected.filter(function(r){return !r.document_date||!r.source_party||!(Number(r.qty)>0)||!(Number(r.unit_cost)>0);});
       dialog.querySelector('.bk-row-summary').innerHTML='<strong>Đã chọn '+selected.length+' dòng · '+missing.length+' dòng cần bổ sung thông tin</strong><p>Kiểm tra ngày mua, người bán, lượng và giá ngay trên từng dòng. Nguồn mua có sẵn đã điền tự động; dòng trống có nút Xem / chọn nguồn mua.</p>';
+      if(loadedPeriod&&loadedPeriod.from===loadedPeriod.to&&field('from').value===loadedPeriod.from&&field('to').value===loadedPeriod.to&&selected.some(function(r){return !r.document_date;})){
+        dialog.querySelector('.bk-row-summary').innerHTML+='<button type="button" class="btn btn-primary" data-bk="apply-period-date">Điền ngày '+esc(loadedPeriod.from.split('-').reverse().join('/'))+' cho dòng đã chọn</button><p class="muted">Bấm khi đây đúng là ngày mua thực tế. Chỉ điền Ngày mua thực tế còn trống; giữ nguyên các thông tin khác.</p>';
+      }
     }
     function payload() {
       collect();
@@ -181,6 +184,10 @@
             if(index>=0){var target=dialog.querySelector('[data-row="'+index+'"]');target.scrollIntoView({block:'center'});focusAfterAction=rowField(index,'selected');}
             options.productCode=null;
           }
+        } else if(name==='apply-period-date') {
+          if(!loadedPeriod||loadedPeriod.from!==loadedPeriod.to||field('from').value!==loadedPeriod.from||field('to').value!==loadedPeriod.to)throw new Error('Chọn cùng một ngày ở Từ ngày và Đến ngày, rồi bấm Xem hàng tồn âm.');
+          var changed=0;rows.forEach(function(r){if(r.selected&&!r.document_date){r.document_date=loadedPeriod.from;changed++;}});
+          review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã điền Ngày mua thực tế '+loadedPeriod.from.split('-').reverse().join('/')+' cho '+changed+' dòng còn trống. Người bán, lượng mua và đơn giá được giữ nguyên.');
         } else if(name==='apply-common') {
           var chosen=rows.filter(function(r){return r.selected;});
           if(!chosen.length)throw new Error('Chọn ít nhất một dòng để điền nhanh.');
