@@ -8965,7 +8965,8 @@ def register_contract_routes(app, ctx):
                           metadata={"key_api": key_api})
                 return jsonify({
                     "ok": False,
-                    "error": "Đối soát không thấy bản nháp trên M-Invoice; hệ thống chưa tự gửi lại. Hãy kiểm tra rồi bấm Lưu nháp lần nữa.",
+                    "error": "Đối soát chưa tìm thấy bản nháp trên M-Invoice. Đã giữ nguyên hàng đã chuẩn bị. Bấm “5. Kiểm tra M-Invoice”, tích “Tôi đã kiểm tra, gửi bản nháp này để chờ ký”, rồi bấm “6. Gửi bản nháp lên M-Invoice”.",
+                    "code": "minvoice_reconcile_not_found", "minvoice_status": "not_sent",
                     "reconciled": True, "remote_write": False,
                     "retry_requires_new_confirmation": True,
                 }), 409

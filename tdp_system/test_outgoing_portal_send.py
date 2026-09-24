@@ -201,6 +201,26 @@ class PortalSendTests(unittest.TestCase):
         r=self.send(item,False);self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(self.remote.posts,1)
 
+    def test_unknown_not_found_keeps_draft_and_requires_fresh_confirmation(self):
+        item=self.prepare()
+        with server.db() as c:
+            c.execute("UPDATE outgoing_invoice_drafts SET minvoice_status='unknown',minvoice_series='1C26TYY' WHERE id=?",(item['id'],))
+            lines=[tuple(r) for r in c.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=?',(item['id'],))]
+        r=self.send(item,False)
+        self.assertEqual(r.status_code,409,r.json)
+        self.assertEqual(r.json['code'],'minvoice_reconcile_not_found')
+        self.assertTrue(r.json['retry_requires_new_confirmation'])
+        self.assertEqual(self.remote.posts,0)
+        with server.db() as c:
+            self.assertEqual(c.execute('SELECT minvoice_status FROM outgoing_invoice_drafts WHERE id=?',(item['id'],)).fetchone()[0],'not_sent')
+            self.assertEqual(lines,[tuple(r) for r in c.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=?',(item['id'],))])
+        self.assertEqual(self.send(item,True).status_code,200)
+        self.assertEqual(self.remote.posts,0)
+        self.assertEqual(self.send(item,False).status_code,200)
+        self.assertEqual(self.remote.posts,1)
+        self.assertEqual(self.send(item,False).status_code,200)
+        self.assertEqual(self.remote.posts,1)
+
     def test_signed_source_blocks_send_before_stock_reconciliation(self):
         item=self.prepare()
         self.remote.lose_response=True

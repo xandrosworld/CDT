@@ -3355,7 +3355,7 @@
     return '<div class="invoice-send-controls" id="invoiceSendControls" aria-label="Xác nhận gửi bản nháp"><p><strong>'+esc(preparedLabel(r))+'</strong> · Ngày hóa đơn: '+dateVN(r.invoice_date)+'</p><div class="compact-controls">'+
       '<label>Ký hiệu <select name="series" form="'+form+'"'+(unavailable?' disabled':'')+'>'+series.map(function(s){var v=s.value||s.khhdon;return '<option value="'+esc(v)+'"'+(selected===v?' selected':'')+'>'+esc(v)+'</option>';}).join('')+'</select></label>'+
       '<label><input type="checkbox" name="confirmed" form="'+form+'"'+(status.confirmed?' checked':'')+(unavailable||!status.checked?' disabled':'')+'> Tôi đã kiểm tra, gửi bản nháp này để chờ ký</label></div>'+
-      invoiceCoverageHtml(r,unavailable||!status.checked,form,status)+'<p role="status"'+(status.error||r.price_error?' class="error-summary"':'')+'>'+esc((r.signed_source&&r.signed_source.message)||r.price_error||status.message||(r.minvoice_status==='saved'?'Đã gửi bản nháp lên M-Invoice.':r.stale?'Dữ liệu đã thay đổi. Bấm bước 4 để chuẩn bị lại bảng kê.':'Bấm “5. Kiểm tra M-Invoice”, rồi tích xác nhận tại đây trước khi bấm bước 6.'))+'</p>'+((r.stale||status.error)&&!['saved','saving','unknown'].includes(r.minvoice_status)?'<button type="button" class="btn btn-outline" data-invoice-go-prepare>Đến bước 4 để kiểm tra lại</button>':'')+'</div>';
+      invoiceCoverageHtml(r,unavailable||!status.checked,form,status)+'<p role="status"'+(status.error||r.price_error?' class="error-summary"':'')+'>'+esc((r.signed_source&&r.signed_source.message)||r.price_error||status.message||(r.minvoice_status==='saved'?'Đã gửi bản nháp lên M-Invoice.':r.stale?'Dữ liệu đã thay đổi. Bấm bước 4 để chuẩn bị lại bảng kê.':'Bấm “5. Kiểm tra M-Invoice”, rồi tích xác nhận tại đây trước khi bấm bước 6.'))+'</p>'+(status.retryCheck?'<button type="submit" form="'+form+'" value="check" data-retry-minvoice-check class="btn btn-primary"'+(unavailable?' disabled':'')+'>5. Kiểm tra M-Invoice</button>':'')+((r.stale||status.error)&&!status.retryCheck&&!['saved','saving','unknown'].includes(r.minvoice_status)?'<button type="button" class="btn btn-outline" data-invoice-go-prepare>Đến bước 4 để kiểm tra lại</button>':'')+'</div>';
   }
 
   function invoiceWorkflowActionsHtml(disabled) {
@@ -6782,8 +6782,12 @@
       try{
         var sent=await api('/api/outgoing-invoices/prepared/'+sendId+'/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_token:prepared.token,series:sendSeries,dry_run:!sendNow,confirm_remote_write:!!sendNow,confirm_partial:!!sendValues.get('confirm_partial'),coverage_token:prepared.coverage&&prepared.coverage.token})});
         state.preparedStatus[sendId]={series:sendSeries,checked:true,confirmed:false,saved:sendNow,message:sendNow?'Đã gửi bản nháp lên M-Invoice, chờ chị ký. Chưa trừ kho và chưa ghi thêm công nợ.':'Thông tin M-Invoice hợp lệ. Tích “Tôi đã kiểm tra…” rồi bấm bước 6 để gửi bản nháp này.'};
-      }catch(error){state.preparedStatus[sendId]={series:sendSeries,checked:false,error:true,message:error.message};showToast(error.message,true);}
-      finally{state.preparedBusy=false;renderDocuments();var shown=content.querySelector('#invoiceSendControls');if(shown){shown.scrollIntoView({block:'nearest'});var confirm=shown.querySelector('input[name=confirmed]:not(:disabled)');if(confirm)confirm.focus({preventScroll:true});}}
+      }catch(error){
+        var retryCheck=!!(error.payload&&error.payload.retry_requires_new_confirmation);
+        if(retryCheck)prepared.minvoice_status='not_sent';
+        state.preparedStatus[sendId]={series:sendSeries,checked:false,confirmed:false,partialConfirmed:checkedStatus.partialConfirmed,error:true,retryCheck:retryCheck,message:error.message};showToast(error.message,true);
+      }
+      finally{state.preparedBusy=false;renderDocuments();var shown=content.querySelector('#invoiceSendControls');if(shown){shown.scrollIntoView({block:'nearest'});var confirm=shown.querySelector('[data-retry-minvoice-check]:not(:disabled),input[name=confirmed]:not(:disabled)');if(confirm)confirm.focus({preventScroll:true});}}
       return;
     }
     if (event.target.id === "orderInvoiceExportForm") {
