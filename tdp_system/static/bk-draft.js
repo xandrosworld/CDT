@@ -12,7 +12,8 @@
       '<label>Nhóm hàng<select name="tax"><option value="KKKNT">KKKNT</option><option value="all">Tất cả hàng tồn âm</option></select></label>' +
       '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div>' +
       '<div class="bk-draft-controls"><label>Số bảng kê<input name="reference" maxlength="100" aria-describedby="bk-reference-help"><small id="bk-reference-help">Đã gợi ý sẵn; có thể sửa theo cách đánh số đang dùng.</small></label></div>' +
-      '<details class="bk-quick-fill"><summary>Điền nhanh nhiều dòng (không bắt buộc)</summary><p>Chỉ điền ô còn trống của những dòng đã tích chọn. Dùng khi đúng cùng ngày mua hoặc cùng người bán thực tế.</p><div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label><label>Người bán / NCC<input name="source_party" list="bk-supplement-sellers" maxlength="150"></label><button class="btn btn-outline" data-bk="apply-common">Điền vào ô trống của dòng đã chọn</button></div></details><datalist id="bk-supplement-sellers"></datalist>' +
+      '<div class="bk-quick-fill"><div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label><button class="btn btn-primary" data-bk="apply-date">Áp dụng ngày cho dòng đã chọn</button></div><p>Chọn ngày mua một lần, tích các dòng cùng ngày rồi bấm Áp dụng ngày cho dòng đã chọn. Chỉ điền ngày còn trống; giữ nguyên ngày đã có. Từ ngày – Đến ngày phía trên dùng để đối chiếu tồn.</p></div>' +
+      '<details class="bk-quick-seller"><summary>Điền nhanh người bán (không bắt buộc)</summary><p>Chỉ điền Người bán / NCC còn trống của những dòng đã tích chọn.</p><div class="bk-draft-controls"><label>Người bán / NCC<input name="source_party" list="bk-supplement-sellers" maxlength="150"></label><button class="btn btn-outline" data-bk="apply-common">Điền người bán cho dòng đã chọn</button></div></details><datalist id="bk-supplement-sellers"></datalist>' +
       '<details><summary>Nguồn số liệu và cách tính lượng gợi ý</summary><p>Đối chiếu tồn đến cuối kỳ, gồm thiếu từ trước chưa bổ sung; không cộng lặp lượng âm từng ngày. Nguồn mua chưa ghi kho được đưa sang theo ngày, người bán và giá mua. Nguồn đã ghi kho chỉ để tra cứu, không nhập lại. Khi chưa có nguồn, giá gợi ý bằng 95% giá bán gần nhất; cần kiểm tra theo giá mua thực tế.</p></details>' +
       '<details><summary>Đã sửa file Excel: mở lại tại đây</summary><input name="import_file" type="file" accept=".xlsx" aria-label="File bảng kê bổ sung đã sửa"><button class="btn btn-outline" data-bk="file">Đọc file đã sửa</button><p>Đọc file chưa ghi kho. Xem bộ bảng kê rồi xác nhận bên dưới.</p></details>' +
       '<details><summary>Thêm hàng ngoài danh sách tồn âm</summary><div class="bk-draft-controls"><label>Thêm hàng ngoài danh sách tồn âm<input name="search" placeholder="Tìm theo mã hoặc tên hàng"></label>' +
@@ -81,7 +82,7 @@
       var missing=[];
       function add(message,target,label){missing.push({message:message,target:target,label:label});}
       var noDate=rows.findIndex(function(r){return r.selected&&!r.document_date;});
-      if(noDate>=0)add('Dòng đã chọn còn thiếu Ngày mua thực tế. Điền từng dòng hoặc mở Điền nhanh nhiều dòng.',rowField(noDate,'document_date'),'Điền ngày mua còn thiếu');
+      if(noDate>=0)add('Dòng đã chọn còn thiếu Ngày mua thực tế. Chọn Ngày mua thực tế phía trên rồi bấm Áp dụng ngày cho dòng đã chọn.',field('document_date'),'Điền ngày mua còn thiếu');
       if(!field('reference').value.trim())add('Chưa điền Số bảng kê.',field('reference'),'Điền số bảng kê');
       var noSeller=rows.findIndex(function(r){return r.selected&&!String(r.source_party||'').trim();});
       if(noSeller>=0)add('Dòng đã chọn còn thiếu Người bán / NCC. Chọn đúng người bán thực tế trong danh mục.',rowField(noSeller,'source_party'),'Điền người bán còn thiếu');
@@ -188,14 +189,14 @@
           if(!loadedPeriod||loadedPeriod.from!==loadedPeriod.to||field('from').value!==loadedPeriod.from||field('to').value!==loadedPeriod.to)throw new Error('Chọn cùng một ngày ở Từ ngày và Đến ngày, rồi bấm Xem hàng tồn âm.');
           var changed=0;rows.forEach(function(r){if(r.selected&&!r.document_date){r.document_date=loadedPeriod.from;changed++;}});
           review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã điền Ngày mua thực tế '+loadedPeriod.from.split('-').reverse().join('/')+' cho '+changed+' dòng còn trống. Người bán, lượng mua và đơn giá được giữ nguyên.');
-        } else if(name==='apply-common') {
+        } else if(name==='apply-common'||name==='apply-date') {
           var chosen=rows.filter(function(r){return r.selected;});
           if(!chosen.length)throw new Error('Chọn ít nhất một dòng để điền nhanh.');
-          var day=field('document_date').value,seller=field('source_party').value.trim();
-          if(!day&&!seller)throw new Error('Điền Ngày mua thực tế hoặc Người bán / NCC trong Điền nhanh nhiều dòng.');
+          var day=name==='apply-date'?field('document_date').value:'',seller=name==='apply-common'?field('source_party').value.trim():'';
+          if(!day&&!seller)throw new Error('Điền Ngày mua thực tế hoặc Người bán / NCC tương ứng với nút vừa bấm.');
           if(day&&loadedPeriod&&(day<loadedPeriod.from||day>loadedPeriod.to))throw new Error('Ngày mua thực tế phải nằm trong khoảng Từ ngày – Đến ngày đang chọn.');
           chosen.forEach(function(r){if(!r.document_date&&day)r.document_date=day;if(!r.source_party&&seller)r.source_party=seller;});
-          review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';field('document_date').value='';field('source_party').value='';render();status('Đã điền các ô còn trống của '+chosen.length+' dòng đã chọn. Các ô đã có thông tin được giữ nguyên.');
+          review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã áp dụng '+(name==='apply-date'?'Ngày mua thực tế':'Người bán / NCC')+' vào ô trống của các dòng đã chọn. Các ô đã có thông tin được giữ nguyên.');
         } else if(name==='file') {
           if(!field('import_file').files.length)throw new Error('Chọn file Excel đã sửa trước.');
           var form=new FormData();form.append('file',field('import_file').files[0]);
