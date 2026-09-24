@@ -114,7 +114,7 @@
       var selected=rows.filter(function(r){return r.selected;});
       if (!selected.length) throw new Error('Chọn ít nhất một dòng để lập bảng kê.');
       return {from:loadedPeriod.from,to:loadedPeriod.to,document_date:field('document_date').value,reference:field('reference').value,
-        rows:selected.map(function(r,i){return {document_date:r.document_date||field('document_date').value,product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||field('source_party').value,note:(r.note||'')+(r.source_key?' [TDP-SOURCE:'+r.source_key+']':''),source_line:i+1};})};
+        rows:selected.map(function(r,i){return {document_date:r.document_date||field('document_date').value,product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||field('source_party').value,note:(r.note||'')+(r.source_key?' [TDP-SOURCE:'+r.source_key+']':''),source_line:r.source_line||i+1};})};
     }
     function post(body) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}; }
     async function action(name) {
@@ -210,7 +210,7 @@
       }
       finally {busy=false;dialog.querySelectorAll('button,input,select').forEach(function(b){b.disabled=false;});var confirm=dialog.querySelector('[data-bk="confirm"]');if(confirm)confirm.disabled=!field('confirm_actual').checked;if(focusAfterAction){focusIssue(focusAfterAction);focusAfterAction=null;}}
     }
-    dialog.addEventListener('click',function(e){var split=e.target.closest('[data-bk-split]');if(split){collect();var source=rows[Number(split.dataset.bkSplit)];rows.push(Object.assign({},source,{row_key:(source.row_key||source.product_code)+':split:'+rows.length,qty:'',source_party:'',selected:true}));review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();focusIssue(rowField(rows.length-1,'source_party'));return;}var fix=e.target.closest('[data-bk-fix]');if(fix){focusIssue(issues[Number(fix.dataset.bkFix)].target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
+    dialog.addEventListener('click',function(e){var split=e.target.closest('[data-bk-split]');if(split){collect();var source=rows[Number(split.dataset.bkSplit)];rows.push(Object.assign({},source,{row_key:(source.row_key||source.product_code)+':split:'+rows.length,qty:'',source_party:'',source_line:undefined,selected:true}));review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();focusIssue(rowField(rows.length-1,'source_party'));return;}var fix=e.target.closest('[data-bk-fix]');if(fix){focusIssue(issues[Number(fix.dataset.bkFix)].target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
     dialog.addEventListener('input',function(e){
       if(e.target.name==='confirm_actor'||e.target.name==='confirm_actual'){var button=dialog.querySelector('[data-bk="confirm"]');if(button)button.disabled=!field('confirm_actual').checked;return;}
       if(issues.length){clearIssues();status('Đã thay đổi thông tin. Bấm Xem bảng kê tổng & biên nhận để kiểm tra lại.');}
