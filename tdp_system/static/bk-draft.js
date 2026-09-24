@@ -113,8 +113,9 @@
       if (loadedPeriod.tax!==field('tax').value) throw new Error('Bấm “Xem hàng tồn âm” để cập nhật Nhóm hàng trước khi tải.');
       var selected=rows.filter(function(r){return r.selected;});
       if (!selected.length) throw new Error('Chọn ít nhất một dòng để lập bảng kê.');
+      var nextLine=selected.reduce(function(max,r){return Math.max(max,Number(r.source_line)||0);},0);
       return {from:loadedPeriod.from,to:loadedPeriod.to,document_date:field('document_date').value,reference:field('reference').value,
-        rows:selected.map(function(r,i){return {document_date:r.document_date||field('document_date').value,product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||field('source_party').value,note:(r.note||'')+(r.source_key?' [TDP-SOURCE:'+r.source_key+']':''),source_line:r.source_line||i+1};})};
+        rows:selected.map(function(r){return {document_date:r.document_date||field('document_date').value,product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||field('source_party').value,note:(r.note||'')+(r.source_key?' [TDP-SOURCE:'+r.source_key+']':''),source_line:r.source_line||++nextLine};})};
     }
     function post(body) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}; }
     async function action(name) {
