@@ -1,6 +1,7 @@
 """Reviewed supplementary purchase documents and atomic stock carry-forward."""
 import hashlib
 import json
+import re
 from collections import defaultdict
 from decimal import Decimal
 
@@ -44,7 +45,6 @@ def receipt_rows(conn, parsed):
             'quantity':r['qty'],'buy_price':r['unitCost'],'amount':r['amount'],
             'source_ref':r['sourceLine'],'reference':r['sourceReference'],'supplier':r['sourceParty']})
     result=enrich_receipt_identity_rows(conn,result)
-    group_receipt_rows(result)
     return result
 
 
@@ -82,16 +82,40 @@ def prepare(conn, blob, start, end):
         errors=['Dòng '+str(r['sourceRow'])+': '+'; '.join(r['errors']) for r in parsed['rows'] if r['errors']]
         raise ValueError('Chưa đủ dữ liệu lập bộ bảng kê: '+' | '.join(errors[:8]))
     dates={r['documentDate'] for r in parsed['rows']}
+    source_state={}
     if any(not start<=day<=end for day in dates):raise ValueError('Ngày mua thực tế phải nằm trong kỳ đang chọn.')
+    if not parsed['alreadyPosted'] and any('[TDP-SOURCE:' in r['note'] for r in parsed['rows']):
+        try:
+            from .bk_purchase_sources import purchase_sources
+        except ImportError:
+            from bk_purchase_sources import purchase_sources
+        available,_=purchase_sources(conn,start,end,{r['productCode'] for r in parsed['rows']})
+        bykey={r['source_key']:(code,r) for code,items in available.items() for r in items}
+        quantities=defaultdict(float)
+        for r in parsed['rows']:
+            match=re.search(r'\[TDP-SOURCE:([^\]]+)\]',r['note'])
+            if not match:continue
+            key=match.group(1);quantities[key]+=float(r['qty'])
+            source=bykey.get(key)
+            if not source or source[0]!=r['productCode'] or quantities[key]>float(source[1]['purchase_qty'])+0.000001:
+                raise ValueError('Nguồn mua đã bổ sung hoặc lượng chọn vượt lượng mua còn lại. Bấm Xem hàng tồn âm để đối chiếu lại; thông tin đang nhập được giữ lại.')
+            source_state[key]=source
+        stock={r['product_code']:r['closing_qty'] for r in invoice_stock_rows(conn,as_of=end,include_zero=True)}
+        totals=defaultdict(float)
+        for r in parsed['rows']:totals[r['productCode']]+=float(r['qty'])
+        for code,qty in totals.items():
+            if qty>max(0,-stock.get(code,0))+0.000001:
+                raise ValueError(f'{code}: Lượng mua bổ sung vượt lượng còn thiếu cuối kỳ. Bấm Xem hàng tồn âm để đối chiếu lại; thông tin đang nhập được giữ lại.')
     receipts=receipt_rows(conn,parsed)
     daily_check(conn,receipts,parsed['existingDocumentId'])
+    group_receipt_rows(receipts)
     periods=[] if parsed['alreadyPosted'] else rebuild_periods(conn,min(dates))
     database_hash=bk._database_state_hash(conn,parsed['rows'])
     # Immutable events and source/target openings participate in optimistic locking.
     inventory=[tuple(r) for r in conn.execute('''SELECT id,product_code,txn_date,qty_delta,unit_cost,status
         FROM invoice_inventory_effective_ledger WHERE txn_date>=? ORDER BY id''',(min(dates),))]
     openings=[tuple(r) for r in conn.execute("SELECT * FROM inventory_transactions WHERE source_type='OPENING' ORDER BY id")]
-    state=bk._hash_json([parsed['contentHash'],receipts,periods,database_hash,inventory,openings])
+    state=bk._hash_json([parsed['contentHash'],receipts,periods,database_hash,inventory,openings,source_state])
     return {'parsed':parsed,'receipts':receipts,'periods':periods,'state_hash':state,
             'database_state_hash':database_hash,'blob':blob,'start':start,'end':end}
 

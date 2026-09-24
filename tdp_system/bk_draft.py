@@ -117,8 +117,15 @@ def shortage_rows(conn, start, end, tax='KKKNT', day=None):
     prices = suggested_prices(conn, cutoff, [r['product_code'] for r in items])
     for item in items:
         item.update(prices.get(item['product_code'], {}))
+    try:
+        from .bk_purchase_sources import purchase_sources
+    except ImportError:
+        from bk_purchase_sources import purchase_sources
+    sources, warnings = purchase_sources(conn, start, cutoff, {r['product_code'] for r in items})
+    for item in items:
+        item['purchase_sources'] = [r for r in sources[item['product_code']] if mapping_key(r['unit']) == mapping_key(item['unit'])]
     return {'ok': True, 'from': start, 'to': end, 'day': cutoff,
-            'items': items, 'writesInventory': False}
+            'items': items, 'source_warnings': warnings, 'writesInventory': False}
 
 
 def _number(value, label):
@@ -159,7 +166,11 @@ def draft_rows(conn, body):
                 raise InvalidOperation
         except InvalidOperation:
             raise ValueError(f'Dòng {index}: lượng hoặc giá quá lớn.') from None
-        result.append({'document_date': document_date, 'source_type': BK_IMPORT_SOURCE_TYPE,
+        row_date = str(item.get('document_date') or document_date).strip()
+        if row_date:
+            row_date = period(row_date, row_date)[0]
+            if not start <= row_date <= end:raise ValueError(f'Dòng {index}: Ngày mua thực tế phải nằm trong kỳ đang chọn.')
+        result.append({'document_date': row_date, 'source_type': BK_IMPORT_SOURCE_TYPE,
             'source_reference': reference, 'source_line': item.get('source_line',index), 'product_code': code,
             'product_name': product['name'], 'unit': product['unit'],
             'qty': float(qty) if qty is not None else '', 'unit_cost': float(cost) if cost is not None else '',
@@ -196,11 +207,11 @@ def register_bk_draft_routes(app, ctx):
             if not parsed['canConfirm']:
                 raise ValueError(' | '.join('Dòng '+str(r['sourceRow'])+': '+'; '.join(r['errors']) for r in parsed['rows'] if r['errors']))
             dates={r['documentDate'] for r in parsed['rows']};refs={r['sourceReference'] for r in parsed['rows']}
-            if len(dates)!=1 or len(refs)!=1:raise ValueError('Mỗi lần nhập bổ sung chọn một ngày mua và một số bảng kê.')
-            return jsonify(ok=True,document_date=next(iter(dates)),reference=next(iter(refs)),
+            if len(refs)!=1:raise ValueError('Mỗi lần nhập bổ sung chọn một số bảng kê.')
+            return jsonify(ok=True,document_date=next(iter(dates)) if len(dates)==1 else '',reference=next(iter(refs)),
                 rows=[{'product_code':r['productCode'],'product_name':r['productName'],'unit':r['unit'],
                        'qty':r['qty'],'unit_cost':r['unitCost'],'source_party':r['sourceParty'],
-                       'source_line':r['sourceLine'],'note':r['note'],'selected':True} for r in parsed['rows']])
+                       'document_date':r['documentDate'],'source_line':r['sourceLine'],'note':r['note'],'selected':True} for r in parsed['rows']])
         except ValueError as exc:return jsonify(ok=False,error=str(exc)),400
 
     @app.post('/api/bk-import/draft/confirm')
