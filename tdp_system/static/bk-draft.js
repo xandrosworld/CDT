@@ -5,7 +5,8 @@
     dialog.className = 'bk-draft-dialog';
     dialog.setAttribute('aria-label', 'Lập bảng kê bổ sung');
     dialog.innerHTML = '<div class="bk-draft-head"><h2>Lập bảng kê bổ sung</h2><button class="btn btn-outline" data-bk="close" aria-label="Đóng">Đóng</button></div>' +
-      '<p>1. Chọn hàng và điền thông tin mua → 2. Xem bảng kê tổng, biên nhận → 3. Xác nhận nhập kho. Tải và in chưa cộng kho.</p>' +
+      '<p>Chốt phần cần xuất ở Bảng kê &amp; hóa đơn trước. KKKNT vẫn được xuất đủ lượng đã chọn khi thiếu tồn. Sau khi hóa đơn đã ký được cập nhật và trừ kho, mở phần này để đối chiếu lượng còn thiếu thực tế; hàng bỏ không xuất không tự tạo nhu cầu nhập.</p>' +
+      '<p>1. Đối chiếu phần còn thiếu và thông tin mua thực tế → 2. Xem bảng kê tổng, biên nhận → 3. Xác nhận nhập kho. Tải và in chưa cộng kho; duyệt đơn hàng cũng không cộng kho hóa đơn.</p>' +
       '<div class="bk-draft-controls"><label>Từ ngày<input name="from" type="date" value="' + esc(options.from) + '"></label>' +
       '<label>Đến ngày<input name="to" type="date" value="' + esc(options.to) + '"></label>' +
       '<label>Nhóm hàng<select name="tax"><option value="KKKNT">KKKNT</option><option value="all">Tất cả hàng tồn âm</option></select></label>' +

@@ -3,6 +3,7 @@ import unittest
 from . import server, batch_bk_approval as approval
 from .seller_import_repair import repair_order_sellers, row_hash
 from .test_batch_bk_approval import BatchBKApprovalTests
+from .test_bk_import import NOW
 
 
 class SellerImportRepairTests(unittest.TestCase):
@@ -15,9 +16,13 @@ class SellerImportRepairTests(unittest.TestCase):
         with server.db() as conn:
             conn.execute("INSERT INTO people(name,cccd,address) VALUES('Workbook seller','987654321','Verified address')")
             conn.execute("UPDATE orders SET seller='Người bán BK',cccd='987654321' WHERE id=?", (self.order,))
-        p = self.client.get(f'/api/batches/{self.batch}/approval-preview').get_json()
-        r = self.client.post(f'/api/batches/{self.batch}/approve', json={
-            'source_hash': p['sourceHash'], 'confirm_bk': True})
+        # Recreate a historical, already-posted approval. New order approvals
+        # deliberately no longer post a purchase schedule.
+        with server.db() as conn:
+            p = approval.prepare(conn, self.batch)
+            approval.approve(conn, self.batch, {
+                'source_hash': p['sourceHash'], 'confirm_bk': True}, NOW, server.audit_event)
+        r = self.client.post(f'/api/batches/{self.batch}/approve', json={})
         self.assertEqual(r.status_code, 200, r.get_json())
 
     def item(self, conn):

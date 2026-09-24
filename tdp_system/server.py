@@ -3192,7 +3192,12 @@ def api_create_batch():
 def api_batch_approval_preview(batch_id):
     try:
         with db() as conn:
-            return jsonify({"ok": True, **batch_bk_approval.public_preview(batch_bk_approval.prepare(conn, batch_id))})
+            batch = conn.execute('SELECT id FROM batches WHERE id=?', (batch_id,)).fetchone()
+            if not batch:
+                return jsonify(ok=False, error='Không tìm thấy phiên đơn'), 404
+            return jsonify(ok=True, canApprove=True, rowCount=0, amount=0,
+                           inventoryMode='separate_supplement', writesInventory=False,
+                           message='Duyệt đơn không lập bảng kê hoặc nhập kho hóa đơn. Sau khi chọn xuất, đối chiếu phần KKKNT thiếu để lập bảng kê bổ sung.')
     except batch_bk_approval.bk.BKImportError as exc:
         return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
 
@@ -3225,14 +3230,16 @@ def api_approve_batch(batch_id):
             return jsonify({"ok": False, "error": "Đơn đang trống"}), 400
         if bad:
             return jsonify({"ok": False, "error": f"Còn {bad} dòng lỗi cần xử lý"}), 400
-        try:
-            bk_result = batch_bk_approval.approve(conn, batch_id, request.get_json(silent=True) or {}, now_iso(), audit_event)
-        except batch_bk_approval.bk.BKImportError as exc:
-            conn.rollback()
-            return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
-        except sqlite3.IntegrityError:
-            conn.rollback()
-            return jsonify({"ok": False, "error": "Chưa ghi bảng kê: nguồn trùng hoặc dữ liệu đã đổi. Hãy kiểm tra lại.", "code": "batch_bk_write_failed"}), 409
+        # Historical receipts remain immutable, including their source checks.
+        if batch_bk_approval.linked_document(conn, batch_id):
+            try:
+                batch_bk_approval.prepare(conn, batch_id)
+            except batch_bk_approval.bk.BKImportError as exc:
+                return jsonify(ok=False, error=str(exc), code=exc.code), exc.status
+        # Approval validates operations and debt only. Even an older browser
+        # sending confirm_bk must not manufacture invoice stock from the order.
+        bk_result = {'inventoryLines': 0, 'newInventoryLines': 0,
+                     'inventoryMode': 'separate_supplement', 'writesInventory': False}
         conn.execute(
             "UPDATE batches SET status='approved',approved_at=? WHERE id=?",
             (now_iso(), batch_id),

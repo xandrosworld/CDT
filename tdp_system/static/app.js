@@ -5177,6 +5177,10 @@
 
   async function confirmBatchApproval(batchId) {
       var preview = await api("/api/batches/" + batchId + "/approval-preview");
+      if (preview.inventoryMode === 'separate_supplement') {
+        if (!window.confirm('Duyệt đơn hàng này?\nĐơn và công nợ được cập nhật. Không tự lập bảng kê hoặc nhập kho hóa đơn. Phần KKKNT thiếu được đối chiếu riêng khi lập bảng kê bổ sung.')) return null;
+        return api('/api/batches/'+batchId+'/approve', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+      }
       if (!preview.canApprove) {
         var dialog = document.createElement('dialog');
         dialog.className = 'inventory-totals-dialog batch-bk-approval-dialog';
