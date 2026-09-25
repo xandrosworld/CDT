@@ -114,10 +114,14 @@
     }
     function syncCommonDate() {
       var day=field('document_date').value;
+      // Localized date controls have a visible text input beside the native
+      // value. Synchronize both after programmatic changes, without bubbling
+      // into this dialog's edit/collect handlers.
+      field('document_date').dispatchEvent(new Event('change'));
       rows.forEach(function(r,i){
         if(r.common_date || (r.selected&&!r.document_date&&day)){
           r.common_date=true;r.document_date=day;
-          var input=rowField(i,'document_date');if(input){input.value=day;input.readOnly=true;}
+          var input=rowField(i,'document_date');if(input){input.value=day;input.readOnly=true;input.dispatchEvent(new Event('change'));var wrapper=input.closest('.localized-date-control');if(wrapper){wrapper.querySelector('.localized-date-display').readOnly=true;wrapper.querySelector('.localized-date-icon').disabled=true;}}
         }
         var hint=dialog.querySelector('[data-date-hint="'+i+'"]');
         if(hint)hint.textContent=r.common_date?(day?'Dùng Ngày mua thực tế đã chọn phía trên.':'Chọn Ngày mua thực tế phía trên.') : (!r.document_date?'Chọn Ngày mua thực tế phía trên một lần cho các dòng đã tích.':'Ngày riêng của dòng; giữ theo nguồn mua.');
