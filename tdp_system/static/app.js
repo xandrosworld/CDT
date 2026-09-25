@@ -1638,6 +1638,10 @@
       return Number(Boolean(b.errors.length)) - Number(Boolean(a.errors.length)) || a.id - b.id;
     });
     var approved = d.batch.status === "approved";
+    var missingProducts = orders.filter(function(item, index, all) {
+      return item.errors.includes('Mã hàng chưa có trong danh mục: ' + item.product_code) &&
+        all.findIndex(function(other) { return other.product_code === item.product_code; }) === index;
+    });
     var visibleTotals = orders.reduce(function (result, item) {
       result.ordered += n(item.qty);
       result.received += Math.max(n(item.actual_received) - n(item.damaged_qty) - n(item.supplier_return_qty), 0);
@@ -1703,6 +1707,9 @@
       approved ? "disabled" : "", '>Lưu giá đã đổi</button><input class="input-date search-input" id="orderSearch" value="',
       esc(state.orderFilter), '" placeholder="Tìm mã, tên hàng, bếp, nhà cung cấp…"></div></div>',
       state.orderImportMessage ? '<div class="code-note">' + esc(state.orderImportMessage) + '</div>' : '',
+      missingProducts.length ? '<div class="error-summary" role="alert"><strong>Có ' + missingProducts.length + ' mã hàng mới cần bổ sung danh mục</strong><p>Dòng đơn đã được giữ lại. Bấm từng mã để kiểm tra thông tin có sẵn rồi lưu; không cần tải lại file.</p>' + missingProducts.map(function(item) {
+        return '<button class="btn btn-outline" data-action="add-order-product" data-id="' + item.id + '">Bổ sung ' + esc(item.product_code) + ' · ' + esc(item.product_name) + '</button>';
+      }).join(' ') + '</div>' : '',
       '<div class="totals-strip fade-in" id="orderVisibleTotals"><div><span>Tổng số đặt</span><strong>', stockQty(visibleTotals.ordered),
       '</strong></div><div><span>Tổng thực nhận</span><strong>', stockQty(visibleTotals.received),
       '</strong></div><div><span>Tổng thực giao</span><strong>', stockQty(visibleTotals.delivered),
@@ -4429,6 +4436,10 @@
       '<div class="form-field catalog-invoice-name"><label for="newProductInvoiceName">Tên trên hóa đơn (không bắt buộc)</label><input id="newProductInvoiceName" name="invoice_name" maxlength="255" placeholder="Bỏ trống để dùng tên hàng"></div>' +
       '<div class="form-field"><label for="newProductInvoiceUnit">ĐVT xuất hóa đơn</label><input id="newProductInvoiceUnit" name="invoice_unit" maxlength="50" list="newProductUnits" placeholder="Bỏ trống để dùng ĐVT kho"><p>Khác ĐVT kho: lưu yêu cầu và giữ phần xuất chờ xác nhận quy đổi. Không tự đổi số lượng hoặc đơn giá.</p></div>' +
       '<p class="catalog-product-error" role="alert"></p></div><div class="catalog-product-footer"><button type="button" class="btn btn-outline catalog-product-cancel">Hủy</button><button type="submit" class="btn btn-primary">Lưu mã hàng</button></div></form>';
+    if (options.prefill && !product) {
+      ['code','name','unit','tax'].forEach(function(key) { dialog.querySelector('[name="' + key + '"]').value = options.prefill[key] == null ? '' : options.prefill[key]; });
+      dialog.querySelector('[name="code"]').readOnly = true;
+    }
     if (product) {
       dialog.querySelector('h3').textContent = 'Sửa mã hàng';
       ['code','name','unit','invoice_name','invoice_unit'].forEach(function(key) { dialog.querySelector('[name="' + key + '"]').value = product[key] || ''; });
@@ -7884,6 +7895,15 @@
     if (action === "edit-catalog-product") { openCatalogProductDialog(state.catalogItems.find(function(item) { return item.code === button.dataset.code; })); return; }
     if (action === "catalog-previous" || action === "catalog-next") { state.catalogOffset = Math.max(0, state.catalogOffset + (action === 'catalog-next' ? 50 : -50)); await loadCatalogProducts(); return; }
     if (action === "add-catalog-product") { openCatalogProductDialog(); return; }
+    if (action === 'add-order-product') {
+      var sourceOrder = state.data.orders.find(function(row) { return String(row.id) === String(button.dataset.id); });
+      if (!sourceOrder) return;
+      var pendingPrices = Array.from(document.querySelectorAll('.quick-sell-price')).map(function(input) { return {id:input.dataset.orderId, value:input.value}; });
+      openCatalogProductDialog(null, {prefill:{code:sourceOrder.product_code, name:sourceOrder.product_name, unit:sourceOrder.unit, tax:sourceOrder.tax}, onSaved:function() {
+        pendingPrices.forEach(function(saved) { var input=document.querySelector('.quick-sell-price[data-order-id="'+saved.id+'"]'); if(input)input.value=saved.value; });
+      }});
+      return;
+    }
     if (action === "choose-catalog-workbook") {
       state.catalogImportMode = document.getElementById('catalogImportMode').value;
       state.catalogImportPreview = null;

@@ -199,6 +199,19 @@ class DailyWorkbookImportTests(unittest.TestCase):
         with server.db() as conn:
             empty_unit = server.resolve_order(conn, {**row, 'unit': ''}, '2026-09-01', *server.product_lookup(conn))
         self.assertIn('Thiếu đơn vị tính', empty_unit['errors'])
+        with server.db() as conn:
+            batch = conn.execute("INSERT INTO batches(work_date,source_name,status,created_at) VALUES('2026-09-01','new-product.xlsx','draft',?)", (server.now_iso(),)).lastrowid
+            row['errors'].append('Lỗi khác cần giữ')
+            server.save_imported_orders(conn, batch, [row])
+            before = dict(conn.execute('SELECT * FROM orders WHERE batch_id=?', (batch,)).fetchone())
+        response = self.client.post('/api/catalog/products', json={'code':'NEW-CAN','name':'New canned product','unit':'Can','tax':'KKKNT'})
+        self.assertEqual(201, response.status_code, response.json)
+        with server.db() as conn:
+            after = dict(conn.execute('SELECT * FROM orders WHERE batch_id=?', (batch,)).fetchone())
+            self.assertEqual('draft', conn.execute('SELECT status FROM batches WHERE id=?', (batch,)).fetchone()[0])
+        self.assertNotIn('Mã hàng chưa có trong danh mục', after['errors'])
+        self.assertIn('Lỗi khác cần giữ', after['errors'])
+        self.assertEqual({k:v for k,v in before.items() if k!='errors'}, {k:v for k,v in after.items() if k!='errors'})
 
     def analyze_api(self, payload: bytes, filename="orders.xlsx") -> dict:
         response = self.client.post(
