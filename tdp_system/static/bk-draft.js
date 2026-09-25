@@ -12,7 +12,7 @@
       '<label>Nhóm hàng<select name="tax"><option value="KKKNT">KKKNT</option><option value="all">Tất cả hàng tồn âm</option></select></label>' +
       '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div>' +
       '<div class="bk-draft-controls"><label>Số bảng kê<input name="reference" maxlength="100" aria-describedby="bk-reference-help"><small id="bk-reference-help">Đã gợi ý sẵn; có thể sửa theo cách đánh số đang dùng.</small></label></div>' +
-      '<div class="bk-quick-fill"><div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label><button class="btn btn-primary" data-bk="apply-date">Áp dụng ngày cho dòng đã chọn</button></div><p>Chọn ngày mua một lần, tích các dòng cùng ngày rồi bấm Áp dụng ngày cho dòng đã chọn. Chỉ điền ngày còn trống; giữ nguyên ngày đã có. Từ ngày – Đến ngày phía trên dùng để đối chiếu tồn.</p></div>' +
+      '<div class="bk-quick-fill"><div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label></div><p>Chọn một lần: các dòng đã tích chưa có ngày riêng tự dùng ngày này, không cần bấm áp dụng. Ngày đã có từ nguồn mua được giữ nguyên. Từ ngày – Đến ngày phía trên chỉ dùng để đối chiếu tồn.</p></div>' +
       '<details class="bk-quick-seller"><summary>Điền nhanh người bán (không bắt buộc)</summary><p>Chỉ điền Người bán / NCC còn trống của những dòng đã tích chọn.</p><div class="bk-draft-controls"><label>Người bán / NCC<input name="source_party" list="bk-supplement-sellers" maxlength="150"></label><button class="btn btn-outline" data-bk="apply-common">Điền người bán cho dòng đã chọn</button></div></details><datalist id="bk-supplement-sellers"></datalist>' +
       '<details><summary>Nguồn số liệu và cách tính lượng gợi ý</summary><p>Đối chiếu tồn đến cuối kỳ, gồm thiếu từ trước chưa bổ sung; không cộng lặp lượng âm từng ngày. Nguồn mua chưa ghi kho được đưa sang theo ngày, người bán và giá mua. Nguồn đã ghi kho chỉ để tra cứu, không nhập lại. Khi chưa có nguồn, giá gợi ý bằng 95% giá bán gần nhất; cần kiểm tra theo giá mua thực tế.</p></details>' +
       '<details><summary>Đã sửa file Excel: mở lại tại đây</summary><input name="import_file" type="file" accept=".xlsx" aria-label="File bảng kê bổ sung đã sửa"><button class="btn btn-outline" data-bk="file">Đọc file đã sửa</button><p>Đọc file chưa ghi kho. Xem bộ bảng kê rồi xác nhận bên dưới.</p></details>' +
@@ -82,7 +82,7 @@
       var missing=[];
       function add(message,target,label){missing.push({message:message,target:target,label:label});}
       var noDate=rows.findIndex(function(r){return r.selected&&!r.document_date;});
-      if(noDate>=0)add('Dòng đã chọn còn thiếu Ngày mua thực tế. Chọn Ngày mua thực tế phía trên rồi bấm Áp dụng ngày cho dòng đã chọn.',field('document_date'),'Điền ngày mua còn thiếu');
+      if(noDate>=0)add('Dòng đã chọn còn thiếu Ngày mua thực tế. Chọn Ngày mua thực tế phía trên; các dòng chưa có ngày riêng sẽ tự dùng ngày đó.',field('document_date'),'Điền ngày mua còn thiếu');
       if(!field('reference').value.trim())add('Chưa điền Số bảng kê.',field('reference'),'Điền số bảng kê');
       var noSeller=rows.findIndex(function(r){return r.selected&&!String(r.source_party||'').trim();});
       if(noSeller>=0)add('Dòng đã chọn còn thiếu Người bán / NCC. Chọn đúng người bán thực tế trong danh mục.',rowField(noSeller,'source_party'),'Điền người bán còn thiếu');
@@ -112,11 +112,23 @@
       }
       return target?[{message:message,target:target,label:label}]:[];
     }
+    function syncCommonDate() {
+      var day=field('document_date').value;
+      rows.forEach(function(r,i){
+        if(r.common_date || (r.selected&&!r.document_date&&day)){
+          r.common_date=true;r.document_date=day;
+          var input=rowField(i,'document_date');if(input){input.value=day;input.readOnly=true;}
+        }
+        var hint=dialog.querySelector('[data-date-hint="'+i+'"]');
+        if(hint)hint.textContent=r.common_date?(day?'Dùng Ngày mua thực tế đã chọn phía trên.':'Chọn Ngày mua thực tế phía trên.') : (!r.document_date?'Chọn Ngày mua thực tế phía trên một lần cho các dòng đã tích.':'Ngày riêng của dòng; giữ theo nguồn mua.');
+      });
+    }
     function collect() {
       dialog.querySelectorAll('tr[data-row]').forEach(function(tr) {
         var row=rows[Number(tr.dataset.row)]; row.selected=tr.querySelector('[data-field="selected"]').checked;
         ['document_date','qty','unit_cost','source_party','note'].forEach(function(key){row[key]=tr.querySelector('[data-field="'+key+'"]').value;});
       });
+      syncCommonDate();
     }
     function purchaseHistoryHtml(r) {
       var history=(r.purchase_sources||[]).filter(function(s){return s.already_posted;});
@@ -124,12 +136,14 @@
       return '<details><summary>Nguồn mua đã ghi bảng kê ('+history.length+')</summary><p>Chỉ tra cứu; không gợi ý nhập lại nguồn đã ghi kho. Lượng âm hiện tại cần đối chiếu nguồn nhập, xuất và mã hàng.</p>'+history.map(function(s){return '<p>'+esc(s.document_date+' · '+s.source_party+' · '+s.cccd+' · '+s.address+' · Ngày cấp: '+(s.issue_date||'chưa có')+' · Nơi cấp: '+(s.issue_place||'chưa có')+' · Đã ghi: '+s.posted_qty+' '+s.unit+' · '+s.source_description)+'</p>';}).join('')+'</details>';
     }
     function render() {
+      syncCommonDate();
       dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Ngày mua thực tế</th><th>Tồn cuối ngày '+esc(loadedPeriod ? loadedPeriod.to.split('-').reverse().join('/') : '')+'</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
-        return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'<br><button type="button" class="btn btn-outline" data-bk-source="'+i+'">Xem / chọn nguồn mua</button>'+purchaseHistoryHtml(r)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
+        return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'<br><button type="button" class="btn btn-outline" data-bk-source="'+i+'">Xem / chọn nguồn mua</button>'+purchaseHistoryHtml(r)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" '+(r.common_date?'readonly ':'')+'aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small data-date-hint="'+i+'"></small><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'</td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
           return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'">'+(key==='source_party'?'<small>'+esc(r.source_party_original ? 'Người bán nguồn: '+r.source_party_original : '')+'</small><div class="bk-seller-details" data-seller-details="'+i+'"></div><button type="button" data-bk-split="'+i+'" class="btn btn-outline">Thêm người bán cùng ngày</button>':'')+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
         }).join('')+'</tr>';
       }).join('')+'</tbody></table>';
+      syncCommonDate();
       dailyWarnings();
       updateSellerDetails();
       updateSummary();
@@ -187,7 +201,7 @@
           }
         } else if(name==='apply-period-date') {
           if(!loadedPeriod||loadedPeriod.from!==loadedPeriod.to||field('from').value!==loadedPeriod.from||field('to').value!==loadedPeriod.to)throw new Error('Chọn cùng một ngày ở Từ ngày và Đến ngày, rồi bấm Xem hàng tồn âm.');
-          var changed=0;rows.forEach(function(r){if(r.selected&&!r.document_date){r.document_date=loadedPeriod.from;changed++;}});
+          field('document_date').value=loadedPeriod.from;var changed=0;rows.forEach(function(r){if(r.selected&&!r.document_date){r.common_date=true;r.document_date=loadedPeriod.from;changed++;}});
           review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã điền Ngày mua thực tế '+loadedPeriod.from.split('-').reverse().join('/')+' cho '+changed+' dòng còn trống. Người bán, lượng mua và đơn giá được giữ nguyên.');
         } else if(name==='apply-common'||name==='apply-date') {
           var chosen=rows.filter(function(r){return r.selected;});
