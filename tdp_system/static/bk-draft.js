@@ -117,7 +117,6 @@
       // Localized date controls have a visible text input beside the native
       // value. Synchronize both after programmatic changes, without bubbling
       // into this dialog's edit/collect handlers.
-      field('document_date').dispatchEvent(new Event('change'));
       rows.forEach(function(r,i){
         if(r.common_date || (r.selected&&!r.document_date&&day)){
           r.common_date=true;r.document_date=day;
@@ -195,6 +194,7 @@
           rows=fresh.map(function(r){var old=kept&&kept.rows.find(function(k){return (k.row_key||k.product_code)===(r.row_key||r.product_code);}),merged=Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:r.source_party||'',note:''},old||{},{closing_qty:r.closing_qty,suggested_qty:r.suggested_qty});if(old&&Number(old.qty)===Number(old.suggested_qty))merged.qty=r.suggested_qty;return merged;});
           if(kept){kept.rows.forEach(function(r){if(!fresh.some(function(f){return (f.row_key||f.product_code)===(r.row_key||r.product_code);}))rows.push(Object.assign({},r,{closing_qty:null,selected:false}));});}
           field('document_date').value=kept?kept.date:(result.from===result.to?result.from:'');field('reference').value=kept?kept.reference:('BKBS-'+result.to.slice(0,7).replace('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase());field('source_party').value=kept?kept.seller:'';
+          field('document_date').dispatchEvent(new Event('change'));
           render(); status(result.items.length+' mã hàng còn thiếu đến hết '+result.to.split('-').reverse().join('/')+'. Lượng thiếu được phân gợi ý theo nguồn mua, không cộng lặp giữa các ngày. Dòng lượng 0 chưa cần bổ sung. Bấm Chọn tất cả hoặc chọn từng dòng đã mua cần bổ sung chứng từ.'+(kept?' Đã giữ thông tin đang nhập; kiểm tra lại lượng mua với tồn mới.':''));
           dialog.querySelector('.bk-draft-preview').innerHTML='';
           if(result.source_warnings&&result.source_warnings.length){var warning=document.createElement('p');warning.className='error-summary';warning.textContent=result.source_warnings.join(' | ');dialog.querySelector('.bk-draft-table').prepend(warning);}
@@ -206,6 +206,7 @@
         } else if(name==='apply-period-date') {
           if(!loadedPeriod||loadedPeriod.from!==loadedPeriod.to||field('from').value!==loadedPeriod.from||field('to').value!==loadedPeriod.to)throw new Error('Chọn cùng một ngày ở Từ ngày và Đến ngày, rồi bấm Xem hàng tồn âm.');
           field('document_date').value=loadedPeriod.from;var changed=0;rows.forEach(function(r){if(r.selected&&!r.document_date){r.common_date=true;r.document_date=loadedPeriod.from;changed++;}});
+          field('document_date').dispatchEvent(new Event('change'));
           review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã điền Ngày mua thực tế '+loadedPeriod.from.split('-').reverse().join('/')+' cho '+changed+' dòng còn trống. Người bán, lượng mua và đơn giá được giữ nguyên.');
         } else if(name==='apply-common'||name==='apply-date') {
           var chosen=rows.filter(function(r){return r.selected;});
@@ -221,6 +222,7 @@
           var imported=await options.api('/api/bk-import/draft/file',{method:'POST',body:form});
           if(!loadedPeriod)throw new Error('Chọn kỳ và xem hàng tồn âm trước khi đọc file.');
           rows=imported.rows;field('document_date').value=imported.document_date;field('reference').value=imported.reference;
+          field('document_date').dispatchEvent(new Event('change'));
           render();status('Đã đọc '+rows.length+' dòng. Bấm Xem bảng kê tổng & biên nhận để kiểm tra. Kho chưa thay đổi.');
         } else if(name==='search') {
           if(!field('search').value.trim())throw new Error('Nhập mã hoặc tên hàng cần tìm.');
