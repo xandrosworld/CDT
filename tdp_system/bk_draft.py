@@ -113,7 +113,9 @@ def shortage_rows(conn, start, end, tax='KKKNT', day=None):
             continue
         items.append({'product_code': row['product_code'], 'product_name': product.get('name', row['product_name']),
                       'unit': product.get('unit', row['unit']), 'tax': product.get('tax', ''),
-                      'closing_qty': round(row['closing_qty'],6), 'suggested_qty': round(-row['closing_qty'],6)})
+                      'closing_qty': round(row['closing_qty'],6), 'suggested_qty': round(-row['closing_qty'],6),
+                      'stock_explanation': 'Tồn đầu: {0:g} · Nhập đã ghi kho: {1:g} · Xuất đã ghi kho: {2:g} · Hoàn tác: {3:g}'.format(
+                          round(row['opening_qty'],6), round(row['input_qty'],6), round(row['output_qty'],6), round(row['reversal_qty'],6))})
     prices = suggested_prices(conn, cutoff, [r['product_code'] for r in items])
     for item in items:
         item.update(prices.get(item['product_code'], {}))
