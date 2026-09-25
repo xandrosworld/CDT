@@ -32,6 +32,26 @@ class CatalogInvoiceLabelsTests(unittest.TestCase):
             batch,ids=support.OutgoingReadinessTests.add_batch(conn,'2026-09-01',[{'qty':7}])
         return batch,ids
 
+    def test_new_only_recovers_price_sheet_code_without_overwriting_catalog(self):
+        book=self.book([])
+        price=book.create_sheet('BÁO GIÁ')
+        price.append(['Mã hàng','Tên Thành Đạt Phát','ĐVT','Thuế','Giá mua','NCC'])
+        price.append([1,2,3,4,5,6])
+        price.append(['C000030','Thịt thăn bò CN','Kg','KKKNT',192000,'khánh'])
+        price.append(['C000030','Thịt thăn bò cn','Kg','KKKNT',195000,'khác'])
+        with server.db() as conn:
+            before=list(conn.iterdump())
+            result=parse_catalog_workbook(conn,book,mode='new_only')
+            self.assertEqual(before,list(conn.iterdump()))
+            self.assertTrue(result['can_confirm'],result)
+            self.assertEqual(1,result['counts']['new_products'])
+            item=result['items'][0]
+            self.assertEqual(('C000030','Kg','KKKNT','BÁO GIÁ'),(item['product_code'],item['unit'],item['tax'],item['source_sheet']))
+            price.append(['C000030','Thịt khác','Kg','KKKNT'])
+            conflict=parse_catalog_workbook(conn,book,mode='new_only')
+            self.assertFalse(conflict['can_confirm'])
+        book.close()
+
     def test_cumulative_and_waiting_drafts_use_invoice_name(self):
         batch,_=self.seed()
         with server.db() as conn:

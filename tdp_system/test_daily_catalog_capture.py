@@ -70,6 +70,22 @@ class DailyCatalogCaptureTests(unittest.TestCase):
             self.assertEqual(before, after)
         self.assertEqual(response.get_json()['catalogImport']['inserted'], 1)
 
+    def test_code_only_in_price_sheet_is_captured_with_daily_order(self):
+        wb=load_workbook(io.BytesIO(self.workbook(used=True)))
+        ws=wb['danh mục hh']
+        ws.delete_rows(ws.max_row)
+        if 'BÁO GIÁ' in wb:
+            del wb['BÁO GIÁ']
+        price=wb.create_sheet('BÁO GIÁ')
+        price.append(['Mã hàng','Tên hàng','ĐVT','Thuế'])
+        price.append(['NEW001','New product','Lon','8%'])
+        data=io.BytesIO();wb.save(data);wb.close()
+        preview=self.preview(data.getvalue())
+        self.assertEqual(1,preview['catalogAdditions']['newCount'])
+        response=self.confirm(preview)
+        self.assertEqual(200,response.status_code,response.json)
+        self.assertEqual(0,response.json['summary']['totals']['errors'])
+
     def test_new_code_used_by_order_is_resolved_before_save(self):
         preview = self.preview(self.workbook(used=True))
         day = next(row for row in preview['sheets'] if row['name'] == '01.09')

@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from openpyxl import load_workbook
 
 try:
-    from .contract_modules import parse_catalog_workbook, mapping_key, catalog_database_state_hash
+    from .contract_modules import parse_catalog_workbook, mapping_key, catalog_database_state_hash, new_products_from_price_sheets
 except ImportError:
-    from contract_modules import parse_catalog_workbook, mapping_key, catalog_database_state_hash
+    from contract_modules import parse_catalog_workbook, mapping_key, catalog_database_state_hash, new_products_from_price_sheets
 
 
 CATALOG_SHEET_KEYS = {'danhmuchh', 'danhmuchanghoa', 'danhmuchang'}
@@ -39,6 +39,15 @@ def preview_catalog_additions(conn, path):
                     errors.append(f"Mã {code} khác dữ liệu giữa {current['sheet']} dòng {current['source_row']} và {ws.title} dòng {row['source_row']}")
                 else:
                     items[code] = {**row, 'sheet': ws.title}
+        excluded = set(items) | {r['code'] for r in conn.execute('SELECT code FROM products')}
+        for row in new_products_from_price_sheets(conn, workbook, excluded):
+            source = row['source_sheet']
+            if source not in sheets:
+                sheets.append(source)
+            if row['errors']:
+                errors.append(f"{source} · dòng {row['source_row']} · {row['product_code']}: " + '; '.join(row['errors']))
+            elif row['apply']:
+                items[row['product_code']] = {**row, 'sheet': source}
     finally:
         workbook.close()
     return {'sheets': sheets, 'items': list(items.values()), 'newCount': len(items),
@@ -69,6 +78,8 @@ def apply_catalog_additions(conn, preview, *, timestamp, source_hash, source_nam
             (code,name,unit,tax,supplier,buy_price,purchase_list,product_group,catalog_updated_at)
             VALUES(?,?,?,?,'',0,0,?,?)''',
             (code, item['product_name'], item['unit'], item['tax'], item['product_group'], timestamp))
+        from tdp_system.catalog_products import clear_missing_product_error
+        clear_missing_product_error(conn, code)
         if item['invoice_name']:
             conn.execute('INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES(?,?,?)',
                          (code, item['invoice_name'], timestamp))

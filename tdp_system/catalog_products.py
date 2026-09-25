@@ -36,6 +36,14 @@ def worksheet_row(row):
     return {**row,'id':row['code'],'tax':tax_label,'worksheet_revision':revision(row)}
 
 
+def clear_missing_product_error(conn, code):
+    for row in conn.execute("SELECT o.id,o.errors FROM orders o JOIN batches b ON b.id=o.batch_id WHERE o.product_code=? AND b.status='draft'", (code,)).fetchall():
+        errors = json.loads(row['errors'] or '[]')
+        remaining = [e for e in errors if e != 'Mã hàng chưa có trong danh mục: ' + code]
+        if remaining != errors:
+            conn.execute('UPDATE orders SET errors=? WHERE id=?', (json.dumps(remaining, ensure_ascii=False), row['id']))
+
+
 def save_product(conn, body, *, editing, ctx):
     if not isinstance(body,dict): raise CatalogError('Thông tin mã hàng không hợp lệ.')
     limits={'code':64,'name':255,'unit':50,'tax':20}
@@ -80,11 +88,7 @@ def save_product(conn, body, *, editing, ctx):
         conn.execute("INSERT INTO products(code,name,unit,tax,supplier,buy_price,purchase_list,product_group,catalog_updated_at) VALUES(?,?,?,?,'',0,0,'',?)",(code,name,unit,tax,ctx['now_iso']()))
         # Clear only the now-resolved catalog error; preserve all order values
         # and unrelated validation errors. No approval or stock posting here.
-        for row in conn.execute("SELECT o.id,o.errors FROM orders o JOIN batches b ON b.id=o.batch_id WHERE o.product_code=? AND b.status='draft'", (code,)).fetchall():
-            errors = json.loads(row['errors'] or '[]')
-            remaining = [e for e in errors if e != 'Mã hàng chưa có trong danh mục: ' + code]
-            if remaining != errors:
-                conn.execute('UPDATE orders SET errors=? WHERE id=?', (json.dumps(remaining, ensure_ascii=False), row['id']))
+        clear_missing_product_error(conn, code)
     if invoice_name:
         conn.execute('INSERT INTO outgoing_product_names(product_code,invoice_name,updated_at) VALUES(?,?,?) ON CONFLICT(product_code) DO UPDATE SET invoice_name=excluded.invoice_name,updated_at=excluded.updated_at',(code,invoice_name,ctx['now_iso']()))
     elif editing:conn.execute('DELETE FROM outgoing_product_names WHERE product_code=?',(code,))

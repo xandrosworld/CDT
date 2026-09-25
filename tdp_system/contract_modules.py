@@ -1398,7 +1398,59 @@ def payables_database_state_hash(conn) -> str:
     ))
 
 
-def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
+def new_products_from_price_sheets(conn, workbook, excluded_codes):
+    """Use explicit price sheets only as a source for missing catalog codes.
+
+    Never import prices/suppliers or alter existing catalog definitions.
+    The same validator handles missing fields and conflicting new codes.
+    """
+    staging = Workbook()
+    sheet = staging.active
+    sheet.title = 'Mã mới từ Báo giá'
+    sheet.append(['Mã hàng', 'Tên hàng', 'ĐVT', 'Thuế'])
+    origins = []
+    for source in workbook.worksheets:
+        if mapping_key(source.title) not in {'baogia', 'banggia'}:
+            continue
+        header = None
+        for index, values in enumerate(source.iter_rows(max_row=25, max_col=30, values_only=True), 1):
+            fields = catalog_header_fields(values)
+            if {'product_code','product_name','unit','tax'}.issubset(fields):
+                header = (index, fields)
+                break
+        if not header:
+            continue
+        if source.max_row > 100_000:
+            raise ValueError('Sheet Báo giá vượt 100.000 dòng; hãy bỏ dòng trống dư.')
+        index, fields = header
+        for rowno, values in enumerate(source.iter_rows(min_row=index+1,max_col=max(fields.values()),values_only=True), index+1):
+            code = mapping_cell_text(values[fields['product_code']-1]).upper()
+            if not code or code in excluded_codes:
+                continue
+            name, unit, tax = [values[fields[key]-1] for key in ('product_name','unit','tax')]
+            # Numbered column guide under the workbook's header is not a product.
+            if all(isinstance(v,(int,float)) for v in (values[fields['product_code']-1],name,unit,tax)):
+                continue
+            sheet.append([code,name,unit,tax])
+            origins.append((source.title,rowno))
+            if len(origins)>MAPPING_IMPORT_MAX_ROWS:
+                raise ValueError('Báo giá có quá nhiều mã mới trong một lần nạp.')
+    if not origins:
+        staging.close()
+        return []
+    parsed = parse_catalog_workbook(conn, staging, mode='new_only', price_fallback=False)
+    for item in parsed['rows']:
+        source, rowno = origins[item['source_row']-2]
+        item.update(source_sheet=source, source_row=rowno)
+        item['warnings'].append(f'Mã mới lấy từ {source}, dòng {rowno}; kiểm tra trước khi xác nhận.')
+        if not re.fullmatch(r'[A-Z0-9][A-Z0-9._-]*',item['product_code']) or item['tax'] not in {'KKKNT','KCT','0','0.05','0.08','0.1'}:
+            item['errors'].append('Mã hàng hoặc Thuế không hợp lệ.')
+            item['apply']=False
+    staging.close()
+    return parsed['rows']
+
+
+def parse_catalog_workbook(conn, workbook, mode='full', *, price_fallback=True) -> dict:
     if mode not in ('full','names_and_new', 'new_only'):
         raise ValueError('Chọn đúng phạm vi nhập danh mục.')
     found = find_catalog_sheet(workbook)
@@ -1434,6 +1486,8 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
         start=header_row + 1,
     ):
         code = mapping_cell_text(row[fields["product_code"] - 1]).upper()
+        if mapping_key(worksheet.title) in {'baogia','banggia'} and all(isinstance(row[fields[k]-1],(int,float)) for k in ('product_code','product_name','unit','tax')):
+            continue
         if mode == 'new_only' and code in existing_products:
             scanned += 1
             if scanned > MAPPING_IMPORT_MAX_ROWS:
@@ -1553,6 +1607,8 @@ def parse_catalog_workbook(conn, workbook, mode='full') -> dict:
     if not rows and mode != 'new_only':
         raise ValueError("Sheet được nhận diện nhưng không có dòng dữ liệu")
 
+    if mode == 'new_only' and price_fallback:
+        rows.extend(new_products_from_price_sheets(conn, workbook, set(existing_products) | set(unique_items)))
     unique_rows = [item for item in rows if item["apply"] and item["product_status"] != "duplicate"]
     incoming_codes = {item["product_code"] for item in unique_rows}
     retained_codes = sorted(set(existing_products) - incoming_codes)
@@ -6488,6 +6544,9 @@ def register_contract_routes(app, ctx):
                         ),
                     )
 
+                    if not current_product:
+                        from tdp_system.catalog_products import clear_missing_product_error
+                        clear_missing_product_error(conn, code)
                     if item.get('has_invoice_unit'):
                         conn.execute('INSERT INTO outgoing_product_units VALUES(?,?,?) ON CONFLICT(product_code) DO UPDATE SET invoice_unit=excluded.invoice_unit,updated_at=excluded.updated_at',(code,item['invoice_unit'],timestamp))
                     invoice_name = item["invoice_name"]
