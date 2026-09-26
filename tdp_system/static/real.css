@@ -172,12 +172,13 @@ body { min-width: 320px; }
 .supplier-order-card.is-reopened { border-color:#f0d596; background:#fffdf7; box-shadow:inset 4px 0 #d38a08; }
 .supplier-order-card.is-ordered { border-color:#b8dfd2; background:#f4fbf8; box-shadow:inset 4px 0 #087f73; }
 .supplier-order-title { flex-wrap:wrap; }
-.supplier-order-summary { flex:1 1 180px; min-width:0; }
-.supplier-order-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; margin-left:auto; }
+.supplier-order-summary { flex:0 1 340px; min-width:0; }
+.supplier-order-actions { display:flex; align-items:center; justify-content:flex-start; flex-wrap:wrap; gap:10px; margin-left:0; }
 .supplier-order-actions .btn { min-height:44px; padding:11px 16px; white-space:nowrap; font-size:14px; }
 .supplier-order-actions .btn-link { min-height:auto; padding:7px 5px; border:0; background:transparent; color:#5e7083; box-shadow:none; }
-.supplier-order-card .supplier-order-title { border-bottom:0; }
-.supplier-order-card .group-total { padding:10px 16px; }
+.supplier-order-card .supplier-order-title { border-bottom:0; justify-content:flex-start; gap:20px; }
+.supplier-order-card .group-total { padding:10px 16px; justify-content:flex-start; gap:16px; flex-wrap:wrap; }
+.supplier-order-card { width:100%; max-width:1120px; box-sizing:border-box; }
 .supplier-order-overview { padding:17px 20px; display:flex; align-items:center; justify-content:space-between; gap:16px; border:1px solid #cfe1df; border-radius:14px; background:#f2faf8; }
 .supplier-order-overview strong,.supplier-order-overview span { display:block; }
 .supplier-order-overview strong { color:#17324d; font-size:20px; }
