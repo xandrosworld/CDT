@@ -235,6 +235,16 @@ class AmountSettlementTests(unittest.TestCase):
             self.assertFalse(unissued_payload(c, '2026-09-15', 'NT-A')['details'])
             self.assertEqual(before, [tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')])
 
+    def test_draft_is_explained_but_never_selectable(self):
+        with server.db() as c:
+            c.execute("UPDATE outgoing_source_invoices SET source_status_class='draft',invoice_date='2026-09-10' WHERE id=?", (self.invoice,))
+        response = self.client.get('/api/outgoing-invoices/amount-settlement?contractor=NT-A&from=2026-09-01&to=2026-09-15')
+        self.assertEqual(200, response.status_code)
+        self.assertFalse(response.json['invoices'])
+        self.assertEqual(self.invoice, response.json['unsigned_invoices'][0]['id'])
+        with server.db() as c:
+            with self.assertRaises(ValueError): money.preview(c, self.body)
+
     def test_held_signed_invoice_is_visible_but_cannot_be_selected_for_money(self):
         with server.db() as c:
             c.execute("UPDATE outgoing_source_invoices SET sync_status='review_required' WHERE id=?", (self.invoice,))

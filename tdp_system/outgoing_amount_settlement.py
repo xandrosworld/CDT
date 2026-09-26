@@ -320,7 +320,7 @@ def register_routes(app, ctx):
                     return jsonify(ok=True, **public(preview(conn, body)))
                 party, start, end = validate_scope(conn, body)
                 orders = order_snapshot(conn, party, start, end)
-                invoices, unavailable = [], []
+                invoices, unavailable, unsigned = [], [], []
                 try:
                     from .outgoing_source_scope import resolve_scope
                 except ImportError:
@@ -329,16 +329,20 @@ def register_routes(app, ctx):
                 for profile in conn.execute('SELECT contractor,tax_code FROM outgoing_buyer_profiles'):
                     profiles[(profile['tax_code'] or '').strip().upper()].append(profile['contractor'])
                 # Include late and early invoices for explicit review. No inferred period assignment.
-                for r in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND source_status_class='issued' ORDER BY invoice_date,id"):
+                for r in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND source_status_class IN ('issued','draft') ORDER BY invoice_date,id"):
                     resolved, error = resolve_scope(conn, r, profiles)
                     if resolved != party and party not in profiles.get((r['buyer_tax_code'] or '').strip().upper(), []):
+                        continue
+                    if r['source_status_class'] == 'draft':
+                        if start <= r['invoice_date'] <= end:
+                            unsigned.append({k: r[k] for k in ('id', 'invoice_date', 'subtotal', 'total_amount', 'synced_at')})
                         continue
                     try:
                         invoices.extend(source_snapshot(conn, [r['id']], party))
                     except ValueError as exc:
                         unavailable.append({'id': r['id'], 'number': r['invoice_series']+'/'+r['invoice_number'], 'error': str(exc)})
                 return jsonify(ok=True, orders_total=sum(o['amount'] for o in orders), invoices=invoices,
-                               unavailable_invoices=unavailable, history=history(conn, party),
+                               unavailable_invoices=unavailable, unsigned_invoices=unsigned, history=history(conn, party),
                                progress=progress(conn, party, start, end))
         except (ValueError, TypeError) as exc:
             return jsonify(ok=False, error=str(exc)), 409

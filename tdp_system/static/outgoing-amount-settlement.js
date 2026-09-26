@@ -11,7 +11,7 @@
       '<p>Lưu tiến độ chỉ nhớ các hóa đơn đang đối chiếu và số tiền còn lại, chưa trừ thêm số lượng mặt hàng. Chỉ dùng “Xác nhận đã xuất đủ theo tiền” khi đã khớp đủ tiền và muốn khép toàn bộ kỳ đơn.</p>' +
       '<p>Thao tác này không xác nhận khớp mặt hàng, không sửa doanh thu, công nợ hoặc lượng hàng đã ghi kho.</p>' +
       '<button class="btn btn-outline" data-money="sync">Cập nhật hóa đơn đã ký từ M-Invoice</button>' +
-      '<p data-money-status role="status"></p><div data-money-progress></div><div data-money-history></div><div data-money-list></div><div data-money-review></div>' +
+      '<p data-money-status role="status"></p><div data-money-unsigned></div><div data-money-progress></div><div data-money-history></div><div data-money-list></div><div data-money-review></div>' +
       '<footer><button class="btn btn-primary" data-money="preview">Kiểm tra tổng tiền đã chọn</button><button class="btn btn-primary" data-money="save_progress" hidden disabled>Lưu tiến độ — còn chưa xuất</button><button class="btn btn-primary" data-money="confirm" disabled>Xác nhận đã xuất đủ theo tiền</button></footer>';
     document.body.appendChild(dialog); dialog.showModal();
     var status = function (s, bad) { var e = dialog.querySelector('[data-money-status]'); e.textContent = s; e.classList.toggle('selection-error', !!bad); };
@@ -34,6 +34,7 @@
       var saved=data.progress, completed=data.history.some(function(r){return !r.needs_review&&r.date_from===scope.from&&r.date_to===scope.to;});
       if(selected===null)selected=saved?saved.invoice_ids:[];
       if(saved){if(entered.actor===undefined)entered.actor=saved.actor;if(entered.reason===undefined)entered.reason=saved.reason;}
+      dialog.querySelector('[data-money-unsigned]').innerHTML = (data.unsigned_invoices||[]).length ? '<details open><summary><strong>Bản nháp chưa tính vào tiền đã xuất</strong></summary><p>Các bản dưới đây chưa được đồng bộ ở trạng thái đã ký. Sau khi ký trên M-Invoice, bấm Cập nhật hóa đơn đã ký từ M-Invoice ở trên.</p><ul>'+(data.unsigned_invoices||[]).map(function(r){return '<li>Ngày '+esc(r.invoice_date)+' · Trước thuế '+money(r.subtotal)+' · Gồm thuế '+money(r.total_amount)+' · Đồng bộ '+esc(r.synced_at)+'</li>';}).join('')+'</ul></details>' : '';
       dialog.querySelector('[data-money-progress]').innerHTML = saved&&!completed?'<p><strong>Tiến độ đã lưu · '+esc(saved.from+' → '+saved.to)+'</strong><br>Tiền hóa đơn đã chọn: '+money(saved.signed_total)+' · Còn chưa xuất theo tiền: '+money(saved.remaining)+'. Chưa khép kỳ đơn.</p>'+(saved.needs_review?'<p class="selection-error">'+esc(saved.message)+' <button class="btn btn-outline" data-money="preview">Kiểm tra tổng tiền đã chọn</button></p>':''):'';
       dialog.querySelector('[data-money-list]').innerHTML = '<h3>Doanh thu kỳ đơn, gồm thuế: ' + money(data.orders_total) + '</h3>' +
         '<p>Danh sách dưới đây gồm cả hóa đơn kỳ khác. Chỉ tích hóa đơn thuộc đúng kỳ đang đối trừ.</p>' + (data.unavailable_invoices||[]).map(function(r){return '<p class="selection-error">Chưa dùng được hóa đơn '+esc(r.number)+': '+esc(r.error)+'</p>';}).join('') + '<div class="selection-table"><table><thead><tr><th>Chọn</th><th>Hóa đơn</th><th>Ngày hóa đơn</th><th>Tiền trước thuế</th><th>Thuế</th><th>Tổng tiền</th></tr></thead><tbody>' +
