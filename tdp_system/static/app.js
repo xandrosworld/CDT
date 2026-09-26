@@ -3373,6 +3373,7 @@
       '<button type="submit" form="invoiceLineChoicesForm" data-workflow-save class="btn btn-primary"'+(busy||!state.invoiceReviewOpen?' disabled':'')+'>2. Lưu lựa chọn mặt hàng</button>'+
       '<button type="button" class="btn btn-outline" data-invoice-unit=""'+disabled+'>3. Sửa ĐVT / nhập kg</button>'+
       '<button type="submit" value="prepare" class="btn btn-primary" aria-describedby="invoicePrepareHelp"'+(disabled||(!invoiceReviewReady()?' disabled':''))+'>4. Kiểm tra tồn và tạo file</button>'+
+      '<button type="button" class="btn btn-outline" data-action="stock-only-preview"'+disabled+'>Xuất theo tồn · xem trước</button>'+
       '<button type="submit" form="preparedSend'+(r?r.id:'None')+'" value="check" class="btn btn-outline"'+(unavailable||!(state.minvoiceSeries||[]).length?' disabled':'')+'>5. Kiểm tra M-Invoice</button>'+
       '<button type="submit" form="preparedSend'+(r?r.id:'None')+'" value="send" class="btn btn-primary"'+(unavailable||!status||!status.checked||!status.confirmed||(r.coverage&&r.coverage.partial&&!status.partialConfirmed)?' disabled':'')+'>6. Gửi bản nháp lên M-Invoice</button></div>'+
       (invoiceLineGroups().length?'<label class="prepared-picker">Nhóm hàng đang xem<select id="invoiceTaxGroupPick"'+(busy?' disabled':'')+'>'+invoiceLineGroups().map(function(g){return '<option value="'+esc(g.key)+'"'+(g.key===invoiceSelectedGroup().key?' selected':'')+'>'+esc(g.label)+'</option>';}).join('')+'</select></label><button type="button" class="btn btn-outline" data-invoice-edit-group'+(busy?' disabled':'')+'>Xem / chọn hàng của nhóm này</button><p class="muted">Bảng chờ xuất giữ cả hàng tạm thiếu đầu vào. Chỉ dòng chị chủ động chuyển sang Chưa xuất mới ra khỏi bảng sau khi lưu.</p>':'')+invoiceReconciliationHtml()+invoiceGroupPortionsHtml()+invoiceSendControlsHtml(r,unavailable)+'</div>';
@@ -3427,6 +3428,27 @@
     var series=await api('/api/minvoice/series');state.minvoiceSeries=series.items||[];
     state.orderInvoiceExportResult='Đã chuẩn bị '+state.preparedInvoices.items.length+' bản nháp. Mở từng nhà thầu bên dưới để kiểm tra và gửi M-Invoice.';
     await loadUnissuedScope(false);
+  }
+
+  async function openStockOnlyPreview() {
+    if(exportChoicesDirty()){showToast('Lưu lựa chọn mặt hàng trước khi xem xuất theo tồn.',true);return;}
+    var scope=pendingScope(),dialog=document.createElement('dialog');
+    dialog.className='inventory-totals-dialog';dialog.style.width='min(1100px,95vw)';
+    dialog.innerHTML='<h3>Xuất theo tồn</h3><p>Đang tính lượng còn lại của các đơn đã duyệt đến '+esc(dateVN(scope.to))+'. Giữ nguyên những dòng đã bỏ chọn.</p><div data-stock-body>Đang kiểm tra…</div><button type="button" class="btn btn-outline" data-stock-close>Đóng</button>';
+    document.body.appendChild(dialog);dialog.showModal();dialog.querySelector('[data-stock-close]').onclick=function(){dialog.close();};dialog.onclose=function(){dialog.remove();};
+    async function refresh(){
+      var target=dialog.querySelector('[data-stock-body]');target.textContent='Đang đối chiếu tồn và các bản nháp…';
+      try{
+        var result=await api('/api/outgoing-invoice-upload/stock-preview?'+new URLSearchParams({from:scope.from,to:scope.to,contractor:scope.contractor||''}),{method:'POST'});
+        if(!dialog.isConnected)return;
+        target.innerHTML='<p><strong>'+result.ready_count+' dòng có thể xuất · '+result.waiting_count+' dòng còn chờ · '+money(result.amount)+'</strong></p><p>Chỉ phân bổ trong tồn khả dụng, kể cả KKKNT. Phần đã giữ cho bản nháp khác và phần đã ký được đối trừ. Không đổi lựa chọn hoặc số lượng đơn hàng.</p><div class="table-wrap" style="max-height:50vh;overflow:auto"><table><thead><tr><th>Nhà thầu / Ngày</th><th>Mặt hàng</th><th>ĐVT</th><th>Chưa xuất</th><th>Xuất lần này</th><th>Còn chờ / Lý do</th></tr></thead><tbody>'+result.items.map(function(r){return '<tr><td>'+esc(r.contractor)+'<br>'+esc(dateVN(r.date))+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'</td><td>'+esc(r.unit)+'</td><td>'+stockQty(r.requested_qty)+'</td><td><strong>'+stockQty(r.ready_qty)+'</strong></td><td>'+stockQty(r.waiting_qty)+'<br>'+esc(r.reason)+'</td></tr>';}).join('')+'</tbody></table></div><p><label><input type="checkbox" data-stock-confirm> Tôi đã kiểm tra lượng xuất lần này. Tạo file sẽ thay các bản nháp chưa gửi có liên quan.</label></p><button type="button" class="btn btn-primary" data-stock-export disabled>Xác nhận và tải file theo tồn</button> <button type="button" class="btn btn-outline" data-stock-refresh>Tính lại</button><p data-stock-status role="status">Tải file chưa phát hành hóa đơn. Dùng file này để nhập lên M-Invoice, kiểm tra rồi ký.</p>';
+        var button=target.querySelector('[data-stock-export]');
+        target.querySelector('[data-stock-confirm]').onchange=function(){button.disabled=!this.checked||!result.ready_count;};
+        target.querySelector('[data-stock-refresh]').onclick=refresh;
+        button.onclick=async function(){button.disabled=true;try{await downloadFile('/api/outgoing-invoice-upload/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:result.token,confirmed:true})});target.querySelector('[data-stock-status]').textContent='Đã tải file theo tồn. Chưa ký/phát hành hóa đơn; phần còn lại vẫn chờ.';}catch(error){target.querySelector('[data-stock-status]').textContent=error.message+' Bấm Tính lại để xem số mới.';}finally{button.disabled=false;}};
+      }catch(error){target.textContent=error.message;}
+    }
+    await refresh();
   }
 
   function sourceScopeReviewHtml() {
@@ -7895,6 +7917,7 @@
     if (action === "edit-catalog-product") { openCatalogProductDialog(state.catalogItems.find(function(item) { return item.code === button.dataset.code; })); return; }
     if (action === "catalog-previous" || action === "catalog-next") { state.catalogOffset = Math.max(0, state.catalogOffset + (action === 'catalog-next' ? 50 : -50)); await loadCatalogProducts(); return; }
     if (action === "add-catalog-product") { openCatalogProductDialog(); return; }
+    if (action === 'stock-only-preview') { await openStockOnlyPreview(); return; }
     if (action === 'add-order-product') {
       var sourceOrder = state.data.orders.find(function(row) { return String(row.id) === String(button.dataset.id); });
       if (!sourceOrder) return;

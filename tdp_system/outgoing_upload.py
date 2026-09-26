@@ -153,7 +153,7 @@ def _parse_workbook(data):
         wb.close()
 
 
-def build_plan(conn, requests, cutoff, contractor, tax_percent):
+def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=False):
     sources = {o['id']:o for o in source_rows(conn, cutoff, contractor)}
     external = {}
     issued, warnings = issued_allocations(conn, external_quantities=external)
@@ -222,12 +222,12 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent):
     for group,rows in ordered_groups:
         code=group[1];want=sum((min(decimal(r['qty']),held[r['id']]) for r in rows),Decimal(0))
         have=max(capacity.get(code,Decimal(0)),Decimal(0))
-        keep=export_quantity(want if is_kkknt(group[3]) or code in exempt[group[0]] else min(want,have),group[2],group[3])
+        keep=export_quantity(want if not stock_only and (is_kkknt(group[3]) or code in exempt[group[0]]) else min(want,have),group[2],group[3])
         planned[group]=keep;capacity[code]=have-keep
     for group,rows in ordered_groups:
         code=group[1];total=sum((decimal(r['qty']) for r in rows),Decimal(0))
         have=max(capacity.get(code,Decimal(0)),Decimal(0));keep=planned[group]
-        can=export_quantity(total if is_kkknt(group[3]) or code in exempt[group[0]] else min(total,keep+have),group[2],group[3])
+        can=export_quantity(total if not stock_only and (is_kkknt(group[3]) or code in exempt[group[0]]) else min(total,keep+have),group[2],group[3])
         planned[group]=can;capacity[code]=have-(can-keep)
     by_id = {i['order_id']:i for i in items}; ready = []
     for group, rows in ordered_groups:
@@ -324,6 +324,23 @@ def register(app, ctx):
             return send_file(BytesIO(data),as_attachment=True,download_name=f'DE_NGHI_LAP_HOA_DON_{party or "TAT_CA"}_{cutoff}.xlsx')
         except ValueError as exc:return jsonify(ok=False,error=str(exc)),400
 
+    @app.post('/api/outgoing-invoice-upload/stock-preview')
+    def stock_preview():
+        try:
+            cutoff,party=scope()
+            start=ctx['valid_iso_date'](request.values.get('from') or cutoff[:7]+'-01','Từ ngày đơn')
+            if start>cutoff:raise ValueError('Từ ngày đơn phải trước hoặc bằng Đến ngày đơn.')
+            with ctx['db']() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                requested=[r for r in parse_workbook(template(conn,cutoff,party)) if str(r['values'][2])>=start]
+                if not requested:raise ValueError('Không có đơn đã duyệt đang chọn còn lượng chưa xuất. Chọn lại mặt hàng cần xuất trước.')
+                plan=build_plan(conn,requested,cutoff,party,ctx['invoice_tax_percent'],stock_only=True)
+                token=uuid.uuid4().hex
+                conn.execute('INSERT INTO outgoing_upload_jobs(token,source_name,cutoff,contractor,rows_json,preview_hash,preview_json,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                    (token,'STOCK_ONLY',cutoff,party,packed(requested),plan['fingerprint'],packed(public_plan(plan)),ctx['now_iso'](),time.time()+900))
+            return jsonify(ok=True,token=token,**public_plan(plan))
+        except (ValueError,InvalidOperation) as exc:return jsonify(ok=False,error=str(exc)),409
+
     @app.post('/api/outgoing-invoice-upload/preview')
     def upload_preview():
         try:
@@ -376,7 +393,7 @@ def register(app, ctx):
                     result=json.loads(job['result_json']);ids=result['draft_ids']
                 else:
                     if time.time()>job['expires_at']:raise ValueError('Bản xem trước đã hết hạn. Nhập lại file.')
-                    plan=build_plan(conn,requested,job['cutoff'],job['contractor'],ctx['invoice_tax_percent'])
+                    plan=build_plan(conn,requested,job['cutoff'],job['contractor'],ctx['invoice_tax_percent'],stock_only=job['source_name']=='STOCK_ONLY')
                     if plan['fingerprint']!=job['preview_hash']:
                         raise ValueError('Đơn, lựa chọn, quy đổi, tồn hoặc hóa đơn đã ký vừa thay đổi. Nhập lại file để xem số mới; chưa tạo dự thảo.')
                     ids=create_plan_drafts(conn,plan,timestamp,ctx['invoice_tax_percent'])

@@ -40,6 +40,22 @@ class OutgoingUploadTests(unittest.TestCase):
                 ['orders','batches','products','receivable_ledger_lines','payable_ledger_lines',
                  'invoice_inventory_ledger','outgoing_source_invoices','outgoing_source_invoice_items']}
 
+    def test_stock_only_limits_kkknt_and_preserves_orders(self):
+        with server.db() as c:
+            c.execute("UPDATE orders SET tax='KKKNT',actual_delivered=12,qty=12 WHERE id=?",(self.oids[0],))
+            c.execute("UPDATE orders SET tax='KKKNT' WHERE id=?",(self.oids[1],))
+        before=self.business()
+        response=self.client.post('/api/outgoing-invoice-upload/stock-preview?to=2026-09-13&contractor=NT-A')
+        self.assertEqual(200,response.status_code,response.json)
+        plan=response.json
+        self.assertEqual(10,sum(r['ready_qty'] for r in plan['items']))
+        self.assertEqual(7,sum(r['waiting_qty'] for r in plan['items']))
+        self.assertEqual(before,self.business())
+        exported=self.export(plan['token'])
+        self.assertEqual(200,exported.status_code,exported.get_json(silent=True))
+        self.assertEqual(before,self.business())
+        self.assertEqual(200,self.export(plan['token']).status_code)
+
     def workbook(self, edit=None):
         r=self.client.get('/api/outgoing-invoice-upload/template.xlsx?to=2026-09-13&contractor=NT-A')
         self.assertEqual(r.status_code,200,r.get_json(silent=True))
