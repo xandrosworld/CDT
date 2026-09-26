@@ -3489,7 +3489,8 @@
       (d&&(d.amount_settlements||[]).length?'<p><strong>Đối trừ theo tiền:</strong> '+d.amount_settlements.map(function(r){return esc(r.contractor+' · '+r.date_from+' → '+r.date_to)+' · '+money(r.amount)+' · '+(r.needs_review?'Cần đối chiếu lại':'Đã xuất đủ theo tiền');}).join('<br>')+'</p>':'')+
       (d&&d.amount_progress&&!(d.amount_settlements||[]).some(function(r){return !r.needs_review&&r.date_from===f.from&&r.date_to===f.to;})?'<p><strong>Tiến độ đối chiếu tiền đã lưu:</strong> '+(d.amount_progress.needs_review?'Số liệu đã thay đổi, cần kiểm tra lại.':'Hóa đơn đã chọn '+money(d.amount_progress.signed_total)+' · Còn chưa xuất theo tiền '+money(d.amount_progress.remaining)+'. Chưa khép kỳ đơn.')+' <button type="button" class="btn btn-outline" data-money-settlement>Mở tiến độ đối chiếu</button></p>':'')+
       '<form id="unissuedForm"><button class="btn btn-primary" type="submit" value="all-template"'+(!all.length||state.unissuedBusy||state.invoiceExportBusy||exportChoicesDirty()||state.invoiceReviewPreview?' disabled':'')+'>Tải toàn bộ chưa ký · '+esc(f.contractor||'tất cả nhà thầu đã tích')+'</button></form>'+(f.contractor?'<p>Đang lọc '+esc(f.contractor)+', nên file chỉ có nhà thầu này. <button type="button" class="btn btn-outline" data-invoice-all-parties'+(exportChoicesDirty()||state.unissuedBusy||state.invoiceExportBusy?' disabled':'')+'>Chuyển sang tất cả nhà thầu đã tích</button></p>':'')+'<p>File gồm cả phần đã bỏ chọn và bản nháp chưa ký; xem trạng thái ở sheet Chi tiet don. Mỗi nhà thầu có hàng chưa xuất trong phạm vi chọn được một file, cùng mẫu 13 cột, gộp các thuế suất và có tổng tiền sẵn. Số lượng, đơn giá theo đơn gốc để chị kiểm tra trước khi lập hóa đơn.</p>'+
-      (d?'<p><strong>Nhà thầu có dữ liệu trong file ('+fileParties.length+'):</strong> '+esc(fileParties.join(', ')||'Chưa có dòng trong phạm vi này')+'.</p>':'')+
+      '<button type="button" class="btn btn-outline" data-download-archive>Ẩn phần cũ khỏi bảng tải / Khôi phục</button><p class="code-note">Các dòng đã ẩn không có trong file tải. Bấm nút trên để xem số dòng còn tải được hoặc khôi phục. Thao tác này không xác nhận đã xuất hóa đơn.</p>'+
+      (d?'<p><strong>Nhà thầu có dữ liệu chưa xuất ('+fileParties.length+'):</strong> '+esc(fileParties.join(', ')||'Chưa có dòng trong phạm vi này')+'.</p>':'')+
       '<p id="outputSyncStatus" role="status" class="'+((state.outputSyncStatus||{}).attention?'warning-summary':'muted')+'">'+esc(outputSyncText(state.outputSyncStatus))+'</p>'+
       (state.unissuedExportResult?'<p role="status">'+esc(state.unissuedExportResult)+'</p>':'')+
       (d&&d.warnings.length?'<details><summary>'+d.warnings.length+' thông tin cần đối chiếu hóa đơn đã ký</summary>'+d.warnings.map(function(w){return '<p>'+esc(w.message)+'</p>';}).join('')+'</details>':'')+
@@ -7318,6 +7319,10 @@
       var amountScope=pendingScope();
       if(!amountScope.contractor){showToast('Chọn một nhà thầu và khoảng ngày đơn cần đối trừ trước.',true);return;}
       window.TdpAmountSettlement({api:api,esc:esc,scope:amountScope,onSaved:function(){state.preparedInvoices=null;return loadUnissuedScope(false);}});return;
+    }
+    if(event.target.closest('[data-download-archive]')){
+      if(exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy){showToast('Lưu lựa chọn đang sửa trước khi ẩn phần cũ khỏi bảng tải.',true);return;}
+      window.TdpDownloadArchive({api:api,esc:esc,scope:pendingScope()});return;
     }
     if(event.target.closest('[data-invoice-next]')){openInvoiceNextStep();return;}
     var unitAction=event.target.closest('[data-invoice-unit]');

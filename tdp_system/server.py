@@ -4641,6 +4641,12 @@ def api_outgoing_unissued():
                     from outgoing_waiting import refresh_waiting
                 refreshed=refresh_waiting(conn,now_iso())
             payload=unissued_payload(conn,cutoff,party,respect_export_choices=True,start=start)
+            if request.path.endswith('unissued-template.zip') and portion!='waiting':
+                try:from .outgoing_download_archive import visible_payload
+                except ImportError:from outgoing_download_archive import visible_payload
+                payload=visible_payload(conn,payload)
+                if payload['download_hidden_rows'] and not payload['details'] and not payload['skipped_details']:
+                    raise ValueError('Không còn dòng để tải trong phạm vi này vì đã ẩn phần cũ. Bấm “Ẩn phần cũ khỏi bảng tải / Khôi phục” để khôi phục khi cần.')
             payload['source_checked_at']=checked_at
             if refreshed:
                 for warning in refreshed['warnings']:
@@ -5806,6 +5812,11 @@ try:
 except ImportError:
     from outgoing_amount_settlement import register_routes as register_amount_settlement
 register_amount_settlement(app, globals())
+try:
+    from .outgoing_download_archive import register_routes as register_download_archive
+except ImportError:
+    from outgoing_download_archive import register_routes as register_download_archive
+register_download_archive(app, globals())
 order_worksheet.register(app, globals())
 
 register_physical_inventory_routes(app, {

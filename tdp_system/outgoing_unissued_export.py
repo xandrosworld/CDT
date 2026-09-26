@@ -152,7 +152,7 @@ def _contractor_workbook(archive, names, party, details, payload, tax_percent):
         summary=workbook.create_sheet('Tong hop')
         summary.append(['Nhà thầu',_literal(party)])
         summary.append(['Khoảng ngày đơn',dates])
-        summary.append(['Phạm vi','Chỉ phần còn chờ' if waiting else 'Toàn bộ phần chưa ký được đối chiếu'])
+        summary.append(['Phạm vi','Chỉ phần còn chờ' if waiting else 'Phần chưa ký được đối chiếu, không gồm dòng đã chủ động ẩn khỏi bảng tải'])
         summary.append(['Thuế suất','Số dòng sau gộp','Tiền trước thuế','Tiền thuế','Tổng tiền'])
         for row in totals:summary.append(row)
         summary.append(['TỔNG CỘNG',*grand])
