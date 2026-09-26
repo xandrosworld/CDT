@@ -226,6 +226,16 @@ def preview(conn, body):
             drafts.append(d['id'])
     demand = sum(r['amount'] for r in snapshot['orders'])
     signed = sum(r['total_amount'] for r in snapshot['invoices'])
+    price_differences = []
+    for r in conn.execute('''SELECT d.issued_invoice_number invoice_number,
+        a.order_id,o.work_date,a.product_code,a.product_name,a.qty,
+        a.unit_price invoice_price,o.sell_price order_price
+        FROM outgoing_order_allocations a JOIN outgoing_invoice_drafts d ON d.id=a.draft_id
+        JOIN orders o ON o.id=a.order_id
+        WHERE d.status='issued' AND a.order_id IN (SELECT value FROM json_each(?))
+          AND ABS(a.unit_price-o.sell_price)>0.000001''', (json.dumps(sorted(order_ids)),)):
+        price_differences.append({**dict(r), 'difference': float(Decimal(str(r['qty'])) *
+            (Decimal(str(r['invoice_price'])) - Decimal(str(r['order_price']))))})
     basis = {'snapshot': snapshot, 'conflicts': conflicts,
              'scope': [party, start, end]}
     return {'contractor': party, 'from': start, 'to': end, 'invoice_ids': ids,
@@ -233,6 +243,7 @@ def preview(conn, body):
             'orders_tax': sum(r['tax_amount'] for r in snapshot['orders']),
             'signed_tax': float(sum((Decimal(str(r['tax_amount'])) for r in snapshot['invoices']), Decimal(0))),
             'order_rows': len(order_ids), 'invoices': snapshot['invoices'], 'conflicts': conflicts,
+            'price_differences': price_differences,
             'can_confirm': bool(ids) and demand == signed and not conflicts,
             'can_save_progress': bool(ids) and 0 < signed < demand and not conflicts,
             'token': digest(basis), '_snapshot': snapshot, '_drafts': drafts}
