@@ -177,7 +177,14 @@ def register(app,ctx):
                 except ImportError:
                     from outgoing_unissued import unissued_payload
                 report = unissued_payload(conn, period['to'], period['contractor'], respect_export_choices=True, start=period['from']) if rows else None
+                try:from .outgoing_queue_archive import archived_order_ids
+                except ImportError:from outgoing_queue_archive import archived_order_ids
+                archived=archived_order_ids(conn)
                 for row in rows:
+                    archived_links={r[0] for r in conn.execute('SELECT order_id FROM outgoing_order_allocations WHERE draft_id=?',(row['draft_id'],))} & archived
+                    if archived_links:
+                        warnings.append('Bản M-Invoice #'+str(row['draft_id'])+' có phần đã bỏ khỏi chờ xuất. Bản trên M-Invoice vẫn giữ để đối soát; không tự gửi lại. Bấm “Bỏ phần cũ / Khôi phục” nếu cần đưa phần này trở lại.')
+                        continue
                     try:data=snapshot(conn,row['draft_id'])
                     except ValueError as exc:warnings.append(str(exc));continue
                     stale=bool(data.get('price_error')) or digest(data)!=row['digest']

@@ -4641,6 +4641,8 @@ def api_outgoing_unissued():
                     from outgoing_waiting import refresh_waiting
                 refreshed=refresh_waiting(conn,now_iso())
             payload=unissued_payload(conn,cutoff,party,respect_export_choices=True,start=start)
+            if request.path.endswith(('unissued-template.zip','unissued.xlsx')) and payload.get('queue_archived_order_rows') and not payload['details'] and not payload['skipped_details']:
+                raise ValueError('Không còn phần chưa xuất để tải trong phạm vi này. Phần cũ đã được bỏ khỏi chờ xuất; bấm “Bỏ phần cũ / Khôi phục” nếu cần đưa lại.')
             if request.path.endswith('unissued-template.zip') and portion!='waiting':
                 try:from .outgoing_download_archive import visible_payload
                 except ImportError:from outgoing_download_archive import visible_payload
@@ -5817,6 +5819,11 @@ try:
 except ImportError:
     from outgoing_download_archive import register_routes as register_download_archive
 register_download_archive(app, globals())
+try:
+    from .outgoing_queue_archive import register_routes as register_queue_archive
+except ImportError:
+    from outgoing_queue_archive import register_routes as register_queue_archive
+register_queue_archive(app, globals())
 order_worksheet.register(app, globals())
 
 register_physical_inventory_routes(app, {

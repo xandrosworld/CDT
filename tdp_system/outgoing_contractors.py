@@ -40,6 +40,9 @@ def excluded_order_ids(conn):
     except ImportError:
         from outgoing_amount_settlement import coverage
     settled, _, _ = coverage(conn)
+    try:from .outgoing_queue_archive import archived_order_ids
+    except ImportError:from outgoing_queue_archive import archived_order_ids
+    settled = settled | archived_order_ids(conn)
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='outgoing_order_choices'").fetchone():
         return settled
     return settled | {r[0] for r in conn.execute('SELECT order_id FROM outgoing_order_choices WHERE enabled=0')}
@@ -81,7 +84,7 @@ def choices_payload(conn):
     return {'items': items, 'excluded': [r['code'] for r in items if not r['enabled']]}
 
 
-def release_disabled_drafts(conn, timestamp):
+def release_disabled_drafts(conn, timestamp, *, order_ids=None):
     """Only retire locally editable drafts. Issued/remote snapshots stay intact."""
     excluded = excluded_codes(conn)
     skipped = excluded_order_ids(conn)
@@ -92,6 +95,10 @@ def release_disabled_drafts(conn, timestamp):
         AND (contractor IN (SELECT value FROM json_each(?)) OR id IN (
             SELECT draft_id FROM outgoing_order_allocations WHERE order_id IN (SELECT value FROM json_each(?))))
         ORDER BY id""", (json.dumps(sorted(excluded)),json.dumps(sorted(skipped))))]
+    if order_ids is not None:
+        affected={r[0] for r in conn.execute('SELECT DISTINCT draft_id FROM outgoing_order_allocations WHERE order_id IN (SELECT value FROM json_each(?))',
+                                           (json.dumps(sorted(order_ids)),))}
+        ids=[iid for iid in ids if iid in affected]
     if not ids:
         return []
     payload = json.dumps(ids)
@@ -147,6 +154,9 @@ def line_choices_payload(conn, cutoff, contractor='', *, orders=None, issued=Non
     except ImportError:
         from outgoing_amount_settlement import coverage
     money_settled, _, _ = coverage(conn)
+    try:from .outgoing_queue_archive import archived_order_ids
+    except ImportError:from outgoing_queue_archive import archived_order_ids
+    money_settled = money_settled | archived_order_ids(conn)
     try:
         from .outgoing_unissued import issued_allocations
     except ImportError:

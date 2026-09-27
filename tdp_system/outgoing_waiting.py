@@ -53,6 +53,9 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
         AND (?='' OR contractor=?)
         ORDER BY CASE WHEN minvoice_status IN ('saved','saving','unknown') THEN 0 ELSE 1 END,id""",(contractor,contractor))]
     drafts=[r for r in drafts if r['contractor'] not in excluded]
+    try:from .outgoing_queue_archive import archived_order_ids
+    except ImportError:from outgoing_queue_archive import archived_order_ids
+    archived=archived_order_ids(conn)
     stock=canonical_available_stock(conn)
     capacity={code:decimal(r['raw_available_qty']) for code,r in stock.items()}
     # Recheck old holds too: a changed policy or stock cannot keep an invalid
@@ -71,6 +74,10 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
         exempt=exempt_order_codes(conn,rows)
         units=unit_issues(conn,rows)
         for r in rows:
+            if r['order_id'] in archived and d['minvoice_status'] in ('saved','saving','unknown'):
+                # Retiring demand is not permission to cancel a remote draft or release its hold.
+                capacity[r['product_code']]=max(capacity.get(r['product_code'],Decimal(0))-decimal(r['qty']),Decimal(0))
+                continue
             used=min(decimal(r['qty']),consume.get(r['order_id'],Decimal(0)))
             consume[r['order_id']]=max(consume.get(r['order_id'],Decimal(0))-used,Decimal(0))
             qty=min(decimal(r['qty'])-used,need.get(r['order_id'],Decimal(0)))

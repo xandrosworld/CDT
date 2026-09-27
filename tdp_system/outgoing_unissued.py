@@ -180,6 +180,11 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
     except ImportError:
         from outgoing_amount_settlement import coverage, history, progress
     money_orders, _, _ = coverage(conn)
+    try:from .outgoing_queue_archive import archived_order_ids
+    except ImportError:from outgoing_queue_archive import archived_order_ids
+    archived = archived_order_ids(conn)
+    archived_count = sum(o['id'] in archived for o in orders)
+    money_orders = money_orders | archived
     orders = [o for o in orders if o['id'] not in money_orders]
     try:
         from .outgoing_contractors import excluded_order_ids
@@ -295,7 +300,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
         from .outgoing_signed_stock_review import signed_stock_issues
     except ImportError:
         from outgoing_signed_stock_review import signed_stock_issues
-    return {'from':start,'asof':asof,'contractor':contractor,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
+    return {'from':start,'asof':asof,'contractor':contractor,'queue_archived_order_rows':archived_count,'excluded_contractors':sorted(excluded),'rows':rows,'details':[r for r in details if r['unissued_qty']>1e-8],
             'amount_settlements': [r for r in history(conn, contractor) if r['date_from'] <= asof and r['date_to'] >= start],
             'amount_progress': progress(conn, contractor, start, asof) if contractor and start else None,
             'line_choices':line_choices,'skipped_details':skipped_details,

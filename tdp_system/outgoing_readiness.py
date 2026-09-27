@@ -519,6 +519,11 @@ def validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, in
 
 
 def validate_demand_orders(conn, orders: list[dict[str, Any]]) -> None:
+    try:from .outgoing_queue_archive import archived_order_ids
+    except ImportError:from outgoing_queue_archive import archived_order_ids
+    archived = archived_order_ids(conn)
+    if any((r.get('order_id') or r.get('id')) in archived for r in orders):
+        raise OutgoingReadinessError('Dòng đã bỏ khỏi chờ xuất. Bấm “Bỏ phần cũ / Khôi phục” để khôi phục trước khi lập hóa đơn.', code='queue_archived')
     try:
         from .outgoing_amount_settlement import coverage
     except ImportError:
