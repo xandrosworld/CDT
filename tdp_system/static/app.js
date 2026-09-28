@@ -2525,14 +2525,14 @@
         return '<td' + (index >= 3 ? ' class="num-cell"' : '') + '>' + (index >= 3 ? stockMoney(value) : esc(value || "")) + '</td>';
       }).join("") + '</tr>';
     }).join("") : "";
-    content.innerHTML = '<div class="toolbar"><label>Từ ngày <input id="reportFrom" type="date" value="' + esc(state.reportFrom) + '"></label>' +
+    content.innerHTML = '<div class="toolbar monthly-report-toolbar"><label>Từ ngày <input id="reportFrom" type="date" value="' + esc(state.reportFrom) + '"></label>' +
       '<label>Đến ngày <input id="reportTo" type="date" value="' + esc(state.reportTo) + '"></label><button class="btn btn-outline" data-action="refresh-monthly-report">Tải lại</button>' +
       (data ? '<a class="btn btn-primary" href="/api/reports/summary/export?from=' + encodeURIComponent(data.date_from) + '&to=' + encodeURIComponent(data.date_to) + '">Tải báo cáo tổng hợp</a><button class="btn btn-outline" data-action="preview-report-documents">Xem / In báo cáo</button>' : '') +
       '</div><div class="code-note">Báo cáo tổng hợp theo nhà thầu và từng bếp từ ngày đến ngày, chỉ cộng đơn đã duyệt. Bếp chưa phát sinh vẫn hiện; không lấy khoản thu/chi hay hóa đơn đỏ.' +
       (data && data.draft_count ? ' Còn ' + data.draft_count + ' phiên chưa duyệt, chưa cộng vào báo cáo.' : '') + '</div>' +
       (state.reportError ? '<div class="error-summary">' + esc(state.reportError) + '</div>' : '') +
       (state.reportLoading ? '<div class="loading-inline">Đang nạp báo cáo…</div>' : '') +
-      (data ? '<div class="card"><div class="table-wrap round3-table" id="monthlyReportTable"><table><thead><tr>' +
+      (data ? '<div class="card monthly-report-card"><div class="table-wrap round3-table" id="monthlyReportTable"><table><thead><tr>' +
         data.headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>' : '') + '<div id="reportDocumentPreview"></div>';
   }
 

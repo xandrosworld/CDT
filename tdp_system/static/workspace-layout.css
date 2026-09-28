@@ -159,3 +159,13 @@
 .output-remap-dialog [data-remap-confirm] { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin-top:16px; }
 .output-remap-dialog [data-remap-confirm] label { display:grid; gap:6px; }
 .output-remap-dialog [data-remap-confirm] input { padding:9px; border:1px solid #b8c8ce; border-radius:6px; }
+
+/* Keep report labels and their amounts together on wide customer screens. */
+#content .monthly-report-toolbar { justify-content:flex-start; gap:12px; }
+#content .monthly-report-toolbar label { flex:0 0 auto; }
+#content .monthly-report-card { width:100%; max-width:1180px; }
+#content #monthlyReportTable table { width:100%; min-width:960px; table-layout:fixed; }
+#content #monthlyReportTable th, #content #monthlyReportTable td { padding:7px 10px; }
+#content #monthlyReportTable th:nth-child(n+4), #content #monthlyReportTable td:nth-child(n+4) { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+#content #monthlyReportTable th:nth-child(-n+3) { width:13%; }
+#content #monthlyReportTable th:nth-child(7) { width:17%; }
