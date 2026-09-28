@@ -285,7 +285,7 @@ def _find_headers(sheet) -> tuple[int, dict[str, int], list[tuple[int, str]]]:
     )
 
 
-def _map_price_columns(conn, columns: list[tuple[int, str]]) -> list[tuple[int, str, str]]:
+def _map_price_columns(conn, columns: list[tuple[int, str]], new_contractors=None) -> list[tuple[int, str, str]]:
     """Map each literal source header to one canonical configured price group.
 
     Matching is exact after whitespace/case normalization.  Column position is
@@ -303,10 +303,10 @@ def _map_price_columns(conn, columns: list[tuple[int, str]]) -> list[tuple[int, 
         header = _plain(source_header).upper()
         candidates = aliases.get(header, set())
         if not candidates:
-            raise QuoteImportError(
-                f"Header giá {source_header} chưa khớp mã/nhóm nhà thầu cấu hình",
-                code="contractor_header_unknown",
-            )
+            if new_contractors is None or len(header)>80 or not header or not header[0].isalnum() or any(not (ch.isalnum() or ch in ' _-.') for ch in header) or _key(header) in {'ghichu','tong','tongcong','thanhtien','stt','note','notes'}:
+                raise QuoteImportError(f'Cột “{source_header}” chưa phải tên nhà thầu hợp lệ. Đặt tên nhà thầu ở đầu cột giá; đặt cột ghi chú sau cột “Thêm”.',code='contractor_header_unknown')
+            candidates={header}
+            new_contractors.append({'code':header,'name':header,'price_group':header,'source_column':source_column})
         if len(candidates) != 1:
             raise QuoteImportError(
                 f"Header giá {source_header} khớp nhiều nhóm nhà thầu",
@@ -422,7 +422,8 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
     sheet = _find_price_sheet(workbook)
     value_sheet = _find_price_sheet(value_workbook) if value_workbook is not None else None
     header_row, columns, raw_price_columns = _find_headers(sheet)
-    price_columns = _map_price_columns(conn, raw_price_columns)
+    new_contractors = []
+    price_columns = _map_price_columns(conn, raw_price_columns, new_contractors)
     known_products = {
         _plain(row["code"]).upper(): _plain(row["name"])
         for row in conn.execute("SELECT code,name FROM products")
@@ -526,6 +527,7 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
         "sheet": sheet.title,
         "header_row": header_row,
         "price_groups": price_groups,
+        "new_contractors": new_contractors,
         "price_columns": [{
             "sourceColumn": column,
             "sourceHeader": source_header,
@@ -973,6 +975,7 @@ def register_quote_import_routes(app, ctx) -> None:
                 and parsed["counts"]["conflicts"] == 0
             ),
             "priceGroups": parsed["price_groups"],
+            "newContractors": parsed['new_contractors'],
             "priceColumns": parsed["price_columns"],
             "counts": parsed["counts"],
             "conflicts": parsed["conflicts"][:250],
@@ -986,11 +989,16 @@ def register_quote_import_routes(app, ctx) -> None:
         body = request.get_json(force=True) or {}
         token = _plain(body.get("token"))
         with QUOTE_IMPORT_LOCK:
-            pending = PENDING_QUOTE_IMPORTS.pop(token, None)
+            pending = PENDING_QUOTE_IMPORTS.get(token)
         if not pending or time.time() - pending["created"] > QUOTE_IMPORT_TTL_SECONDS:
             return jsonify({"ok": False, "error": "Phiên preview đã hết hạn", "code": "preview_expired"}), 410
         if body.get("confirmed") is not True:
             return jsonify({"ok": False, "error": "Cần xác nhận rõ trước khi ghi", "code": "confirmation_required"}), 400
+        if pending.get('new_contractors') and body.get('confirm_new_contractors') is not True:
+            return jsonify(ok=False,error='Tích “Tạo các nhà thầu mới theo cột giá trong file” trước khi lưu.',code='new_contractors_confirmation_required'),400
+        with QUOTE_IMPORT_LOCK:
+            if PENDING_QUOTE_IMPORTS.pop(token,None) is None:
+                return jsonify(ok=False,error='Phiên xem trước đã được xử lý. Xem trước lại để kiểm tra bản đã lưu.',code='preview_expired'),410
         supplied_hash = _plain(body.get("state_hash") or body.get("stateHash")).upper()
         if supplied_hash != pending["state_hash"]:
             return jsonify({"ok": False, "error": "Preview không còn đúng trạng thái", "code": "stale_preview"}), 409
@@ -1019,6 +1027,7 @@ def register_quote_import_routes(app, ctx) -> None:
                         "sourceHash": pending["source_hash"],
                         "counts": pending["counts"],
                         "idempotent": True,
+                        "newContractors": pending.get('new_contractors',[]),
                     })
                 if _database_state_hash(conn) != pending["database_state_hash"]:
                     return jsonify({
@@ -1037,6 +1046,9 @@ def register_quote_import_routes(app, ctx) -> None:
                         "code": "stale_version",
                     }), 409
                 timestamp = now_iso()
+                for contractor in pending.get('new_contractors',[]):
+                    conn.execute("INSERT INTO contractors(code,name,price_group,pricing_mode) VALUES(?,?,?,'group')",
+                        (contractor['code'],contractor['name'],contractor['price_group']))
                 cursor = conn.execute(
                     """INSERT INTO quote_versions(
                            effective_period,version_no,source_hash,source_name,source_sheet,
@@ -1088,6 +1100,7 @@ def register_quote_import_routes(app, ctx) -> None:
                         "content_hash": pending["content_hash"],
                         "product_count": pending["counts"]["products"],
                         "price_count": pending["counts"]["price_cells"],
+                        "new_contractors": pending.get('new_contractors',[]),
                     },
                 )
             except Exception:
@@ -1101,6 +1114,7 @@ def register_quote_import_routes(app, ctx) -> None:
                 "sourceHash": pending["source_hash"],
                 "counts": pending["counts"],
                 "idempotent": False,
+                "newContractors": pending.get('new_contractors',[]),
             })
 
     @app.get("/api/quotes/versions")

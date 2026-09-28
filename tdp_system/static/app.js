@@ -2028,6 +2028,7 @@
       '<span class="tag ', preview.canConfirm ? "tag-ok" : "tag-red", '">',
       preview.canConfirm ? "File hợp lệ" : "Đang bị chặn", "</span></div>",
       '<div class="code-note"><strong>Các cột giá đã nhận:</strong> ', mappings, "</div>",
+      (preview.newContractors||[]).length?'<div class="code-note"><strong>Nhà thầu mới sẽ được tạo khi lưu:</strong> '+preview.newContractors.map(function(r){return esc(r.code)+' (cột '+esc(excelColumnName(r.source_column))+')';}).join(', ')+'<p>Mỗi nhà thầu dùng đúng giá ở cột cùng tên và tự có báo giá riêng trong file ZIP tổng. Kiểm tra tên để tránh tạo nhầm do gõ sai.</p><label style="display:flex;flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="quoteConfirmNewContractors" style="width:auto"> Tạo các nhà thầu mới theo cột giá trong file</label></div>':'',
       '<div class="summary-grid compact-summary"><div><span>Mã lặp</span><strong>', counts.duplicate_codes || 0,
       '</strong></div><div><span>Gộp an toàn</span><strong>', counts.safe_duplicate_codes || 0,
       '</strong></div><div><span>Mã xung đột</span><strong>', counts.conflict_codes || 0,
@@ -2083,13 +2084,13 @@
     var exportQuery = state.quoteMode === "daily" && meta.dailySource
       ? "?batch_id=" + meta.dailySource.batch_id
       : "?period=" + encodeURIComponent(state.quotePeriod);
-    var canExportQuote = state.quoteMode === "daily" ? Boolean(meta.dailySource) : Boolean(meta.version);
+    var canExportQuote = state.quoteMode === "daily" ? Boolean(meta.dailySource)&&outputCount>0 : Boolean(meta.version)&&outputCount>0;
     var exportControl = canExportQuote
       ? '<a class="btn btn-primary" href="/api/export/quote/' + encodeURIComponent(state.quoteContractor) +
         exportQuery + '">Tải báo giá ' + esc(state.quoteContractor) + "</a>"
       : '<button class="btn btn-primary" type="button" disabled title="' +
         (state.quoteMode === "daily" ? "Phải chọn đơn hàng có giá theo ngày" : "Phải nạp báo giá đúng kỳ trước khi xuất") + '">' +
-        (state.quoteMode === "daily" ? "Chưa thể xuất · cần chọn đơn hàng" : "Chưa thể xuất · cần bảng giá kỳ này") + "</button>";
+        (state.quoteMode === "daily" ? "Chưa có giá theo ngày để xuất" : meta.version ? "Chưa có giá nhà thầu để xuất" : "Chưa thể xuất · cần bảng giá kỳ này") + "</button>";
     if (canExportQuote) exportControl += '<button class="btn btn-outline" data-action="preview-quote">Xem bản gửi khách / In</button>';
     var versions = state.quoteVersions || [];
     var latestVersion = versions.length ? versions[0] : null;
@@ -2160,6 +2161,7 @@
       '<section class="quote-choice-card"><div class="quote-choice-icon">CT</div><div><h3>Báo giá chi tiết</h3>',
       '<p>Chọn đúng nhà thầu cần gửi.</p><label>Nhà thầu<select class="select" id="quoteContractor">', options,
       '</select></label></div><div class="quote-choice-actions">', exportControl,
+      !canExportQuote&&state.quoteMode!=='daily'&&meta.version?'<p>Nhà thầu này chưa có dòng giá xuất được trong bản đã chọn. Bổ sung giá vào cột '+esc(meta.price_group||state.quoteContractor)+' trong báo giá tổng rồi bấm “Nạp báo giá tháng mới”.</p><button class="btn btn-outline" data-action="choose-quote-workbook">Nạp báo giá tháng mới</button>':'',
       '<button class="btn btn-outline" data-action="toggle-quote-details">', state.quoteDetailsOpen ? 'Ẩn bảng chi tiết' : 'Xem bảng chi tiết',
       '</button></div></section></div>',
       '<div class="secondary-action-row"><button class="btn btn-outline" data-action="toggle-quote-history">',
@@ -2183,11 +2185,12 @@
       form.append('effective_to', state.quotePeriod + '-' + (state.quoteCycle === 'first' ? '15' : lastDay));
       form.append("file", file);
       state.quoteImportPreview = await api("/api/quotes/import/preview", { method: "POST", body: form });
-      if (state.quoteImportPreview.canConfirm) {
+      if (state.quoteImportPreview.canConfirm && !(state.quoteImportPreview.newContractors||[]).length) {
         await confirmQuoteImport(null);
       } else {
         renderQuotes();
-        showToast("Báo giá có mã trùng xung đột · chưa ghi dữ liệu", true);
+        showToast(state.quoteImportPreview.canConfirm?'Có nhà thầu mới. Kiểm tra tên và tích xác nhận trước khi lưu.':'Báo giá còn lỗi hoặc mã trùng xung đột · chưa ghi dữ liệu', !state.quoteImportPreview.canConfirm);
+        content.querySelector('.quote-import-preview')?.scrollIntoView({block:'start'});
       }
     } catch (error) {
       state.quoteImportPreview = null;
@@ -2198,6 +2201,11 @@
   async function confirmQuoteImport(button) {
     var preview = state.quoteImportPreview;
     if (!preview || !preview.canConfirm) return;
+    var confirmNew=document.getElementById('quoteConfirmNewContractors');
+    if((preview.newContractors||[]).length&&(!confirmNew||!confirmNew.checked)){
+      showToast('Tích “Tạo các nhà thầu mới theo cột giá trong file” trước khi lưu.',true);
+      if(confirmNew){confirmNew.scrollIntoView({block:'center'});confirmNew.focus();}return;
+    }
     try {
       if (button) {
         button.disabled = true;
@@ -2207,12 +2215,16 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          token: preview.token, confirmed: true, state_hash: preview.stateHash
+          token: preview.token, confirmed: true, state_hash: preview.stateHash, confirm_new_contractors:!!(confirmNew&&confirmNew.checked)
         })
       });
       state.quoteImportPreview = null;
       state.quoteItems = null;
       state.quoteMeta = null;
+      if((result.newContractors||[]).length){
+        var fresh=await api('/api/bootstrap'+(state.batchId?'?batch_id='+state.batchId:''));
+        state.data.master=fresh.master;state.quoteContractor=result.newContractors[0].code;
+      }
       await fetchQuote();
       showToast("Đã lưu báo giá mới nhất kỳ " + result.effectivePeriod + " · lần " + result.versionNo);
     } catch (error) {

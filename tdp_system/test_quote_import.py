@@ -256,6 +256,37 @@ class QuoteImportTests(unittest.TestCase):
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM quote_versions").fetchone()[0], 1)
 
+    def test_new_contractor_requires_confirmation_then_exports_own_prices(self):
+        payload=self.matrix_bytes(['C1','NEW-QA'],[{'code':'P1','prices':[12000,34567],'buy':8000}])
+        p=self.preview('2026-09',payload).json
+        self.assertEqual(['NEW-QA'],[r['code'] for r in p['newContractors']])
+        with server.db() as c:self.assertIsNone(c.execute("SELECT 1 FROM contractors WHERE code='NEW-QA'").fetchone())
+        self.assertEqual('new_contractors_confirmation_required',self.confirm(p).json['code'])
+        result=self.client.post('/api/quotes/import/confirm',json=dict(token=p['token'],state_hash=p['stateHash'],confirmed=True,confirm_new_contractors=True))
+        self.assertEqual(200,result.status_code,result.json)
+        with server.db() as c:
+            self.assertEqual('NEW-QA',c.execute("SELECT price_group FROM contractors WHERE code='NEW-QA'").fetchone()[0])
+            self.assertEqual(34567,quote_import.quote_rows_for_contractor(c,'NEW-QA','2026-09')['items'][0]['sell_price'])
+            self.assertEqual(12000,quote_import.quote_rows_for_contractor(c,'C1','2026-09')['items'][0]['sell_price'])
+        bundle=self.client.get('/api/export/quotes/all?period=2026-09')
+        self.assertEqual(200,bundle.status_code)
+        with zipfile.ZipFile(io.BytesIO(bundle.data)) as z:
+            self.assertTrue(any('NEW-QA' in n for n in z.namelist()))
+        replay=self.preview('2026-09',payload).json
+        self.assertEqual([],replay['newContractors'])
+        self.assertTrue(self.confirm(replay).json['idempotent'])
+        with server.db() as c:c.execute("DELETE FROM contractors WHERE code='NEW-QA'")
+
+    def test_new_contractor_is_not_created_when_quote_transaction_fails(self):
+        with server.db() as c:
+            c.execute("CREATE TRIGGER fail_quote_price BEFORE INSERT ON quote_version_prices BEGIN SELECT RAISE(ABORT,'forced quote failure'); END")
+        p=self.preview('2026-09',self.matrix_bytes(['NEW-ROLLBACK'],[{'code':'P1','prices':[12345]}])).json
+        result=self.client.post('/api/quotes/import/confirm',json=dict(token=p['token'],state_hash=p['stateHash'],confirmed=True,confirm_new_contractors=True))
+        self.assertGreaterEqual(result.status_code,400)
+        with server.db() as c:
+            self.assertIsNone(c.execute("SELECT 1 FROM contractors WHERE code='NEW-ROLLBACK'").fetchone())
+            self.assertEqual(0,c.execute('SELECT COUNT(*) FROM quote_versions').fetchone()[0])
+
     def test_confirmation_failure_rolls_back_version_lines_and_audit(self):
         with server.db() as conn:
             conn.execute(
