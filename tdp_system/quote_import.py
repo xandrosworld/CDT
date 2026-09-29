@@ -24,6 +24,7 @@ from typing import Any
 
 from flask import jsonify, request
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 
 QUOTE_IMPORT_MAX_BYTES = 20 * 1024 * 1024
@@ -456,20 +457,28 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
                 continue
         errors: list[str] = []
         row_warnings: list[str] = []
+        issues = []
+
+        def row_error(message, field, column, correction):
+            errors.append(message)
+            issues.append({"field": field, "cell": f"{get_column_letter(column)}{row_no}" if column else "",
+                           "message": message, "correction": correction})
+
         if not code:
-            errors.append("Thiếu mã hàng")
+            row_error("Thiếu Mã hàng", "Mã hàng", columns["product_code"], "Điền Mã hàng của mặt hàng này.")
         elif code not in known_products:
             # A quotation is a source snapshot, not an inventory/master import.
             # A fully described new item can be quoted before being stocked.
             row_warnings.append("Mã chưa có trong danh mục; giữ thông tin trong báo giá, không tự thêm vào kho")
-            for field, label in (('unit', 'ĐVT'), ('tax', 'thuế')):
+            for field, label in (('unit', 'ĐVT'), ('tax', 'Thuế')):
                 if field not in columns or not _plain(sheet.cell(row_no, columns[field]).value):
-                    errors.append('Mã mới thiếu ' + label)
+                    row_error('Mã mới thiếu ' + label, label, columns.get(field),
+                              'Điền ' + label + ' cho mã hàng mới.' + (' Thêm cột ' + label + ' vào file nếu chưa có.' if field not in columns else ''))
         if not name and code in known_products:
             name = known_products[code]
             row_warnings.append("Tên hàng trống; dùng tên danh mục")
         elif not name:
-            errors.append("Thiếu tên hàng")
+            row_error("Thiếu Tên hàng", "Tên hàng", columns["product_name"], "Điền Tên hàng của mặt hàng này.")
         elif code in known_products and _key(name) != _key(known_products[code]):
             row_warnings.append("Tên hàng khác danh mục")
         if "buy_price" in columns:
@@ -479,7 +488,8 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
         else:
             buy_text, buy_value, buy_state = "", None, "blank"
         if buy_state == "formula":
-            errors.append("Công thức giá mua không an toàn hoặc chưa có giá trị lưu")
+            row_error("Công thức Giá mua không an toàn hoặc chưa có giá trị lưu", "Giá mua", columns["buy_price"],
+                      "Kiểm tra kết quả trong Excel, rồi sao chép ô Giá mua và dán chỉ giá trị vào chính ô đó; lưu file.")
         elif buy_state == "text":
             row_warnings.append("Giá mua là trạng thái chữ; chỉ mua thực tế mới được bổ sung")
         prices = []
@@ -488,7 +498,8 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
                 sheet, value_sheet, row_no, source_column,
             )
             if price_state == "formula":
-                errors.append(f"Giá {group} không được là công thức")
+                row_error(f"Giá {group} có công thức chưa đọc được", f"Giá {group}", source_column,
+                          f"Kiểm tra kết quả trong Excel, rồi sao chép ô Giá {group} và dán chỉ giá trị vào chính ô đó; lưu file.")
             elif price_state == "text" and price_text:
                 row_warnings.append(f"Giá {group} là trạng thái chữ")
             prices.append({
@@ -511,6 +522,7 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
             "buy_price_state": buy_state,
             "prices": prices,
             "errors": errors,
+            "issues": issues,
             "warnings": row_warnings,
         }
         items.append(item)
@@ -522,7 +534,7 @@ def _parse_quote(conn, workbook, value_workbook=None) -> dict[str, Any]:
         raise QuoteImportError("Sheet BÁO GIÁ không có dòng dữ liệu", code="quote_empty")
     price_groups = [group for _column, group, _header in price_columns]
     duplicate_analysis = _duplicate_analysis(items, price_groups)
-    serializable = [{key: value for key, value in item.items() if key != "warnings"} for item in items]
+    serializable = [{key: value for key, value in item.items() if key not in {"warnings", "issues"}} for item in items]
     return {
         "sheet": sheet.title,
         "header_row": header_row,
@@ -980,6 +992,10 @@ def register_quote_import_routes(app, ctx) -> None:
             "counts": parsed["counts"],
             "conflicts": parsed["conflicts"][:250],
             "conflictsTruncated": len(parsed["conflicts"]) > 250,
+            # Diagnostics must include errors beyond the 250-row sample.
+            "rowErrors": [{"sourceRow": item["source_row"], "productCode": item["product_code"],
+                           "productName": item["product_name"], "issues": item["issues"]}
+                          for item in parsed["items"] if item["errors"]],
             "items": _public_items(parsed["items"]),
             "itemsTruncated": len(parsed["items"]) > 250,
         })

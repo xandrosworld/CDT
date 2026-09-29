@@ -2006,6 +2006,21 @@
     var preview = state.quoteImportPreview;
     if (!preview) return "";
     var counts = preview.counts || {};
+    var rowErrors = (preview.rowErrors || []).map(function (item) {
+      return (item.issues || []).map(function (issue) {
+        return '<tr><td>' + esc(item.sourceRow) + '</td><td>' + esc(issue.cell || 'Chưa có cột') +
+          '</td><td>' + esc(item.productCode || 'Chưa có mã') + '</td><td>' + esc(item.productName) +
+          '</td><td>' + esc(issue.field) + '</td><td>' + esc(issue.message) +
+          '</td><td>' + esc(issue.correction) + '</td></tr>';
+      }).join('');
+    }).join('');
+    var rowErrorTable = counts.rows_with_errors ?
+      '<div class="code-note danger-note" role="alert"><strong>Có ' + esc(counts.rows_with_errors) +
+      ' dòng cần sửa trong trang Excel ' + esc(preview.sheet) + '.</strong> Chưa lưu báo giá. Xem ô và cách sửa bên dưới; sau khi sửa và lưu file, bấm “Chọn file đã sửa”.' +
+      ' Tháng báo giá và Kỳ áp dụng của file nạp được giữ nguyên.</div>' +
+      '<div class="table-wrap" id="quoteRowErrors" tabindex="-1" role="region" aria-label="Các dòng báo giá cần sửa"><table><thead><tr>' +
+      '<th>Dòng trong file</th><th>Ô trong Excel</th><th>Mã hàng</th><th>Tên hàng</th><th>Trường cần sửa</th><th>Lỗi</th><th>Cách sửa</th>' +
+      '</tr></thead><tbody>' + rowErrors + '</tbody></table></div>' : '';
     var mappings = (preview.priceColumns || []).map(function (item) {
       return '<span class="tag tag-ok">' + esc(item.sourceHeader) + " · cột " +
         esc(excelColumnName(item.sourceColumn)) + " → " + esc(item.priceGroup) + "</span>";
@@ -2033,9 +2048,12 @@
       '</strong></div><div><span>Gộp an toàn</span><strong>', counts.safe_duplicate_codes || 0,
       '</strong></div><div><span>Mã xung đột</span><strong>', counts.conflict_codes || 0,
       '</strong></div><div><span>Xung đột nhóm</span><strong>', counts.conflicts || 0, "</strong></div></div>",
+      counts.rows_with_errors ? '<div class="toolbar"><button class="btn btn-outline" data-action="show-quote-row-errors">Xem các dòng cần sửa</button></div>' : '',
+      rowErrorTable,
       conflictTable,
       counts.buy_price_conflicts ? '<div class="code-note">Có mã cùng giá bán nhưng khác giá mua theo nhà cung cấp. Báo giá vẫn gộp một dòng; giá mua được giữ theo từng nguồn.</div>' : '',
       '<div class="toolbar"><button class="btn btn-light" data-action="cancel-quote-import">Bỏ file này</button>',
+      !preview.canConfirm ? '<button class="btn btn-outline" data-action="choose-quote-workbook">Chọn file đã sửa</button>' : '',
       preview.canConfirm ? '<button class="btn btn-primary" data-action="confirm-quote-import">Lưu lại file này</button>' : "",
       "</div></div>"
     ]);
@@ -2189,7 +2207,7 @@
         await confirmQuoteImport(null);
       } else {
         renderQuotes();
-        showToast(state.quoteImportPreview.canConfirm?'Có nhà thầu mới. Kiểm tra tên và tích xác nhận trước khi lưu.':'Báo giá còn lỗi hoặc mã trùng xung đột · chưa ghi dữ liệu', !state.quoteImportPreview.canConfirm);
+        showToast(state.quoteImportPreview.canConfirm?'Có nhà thầu mới. Kiểm tra tên và tích xác nhận trước khi lưu.':((state.quoteImportPreview.counts.rows_with_errors || 0) + ' dòng cần sửa · ' + (state.quoteImportPreview.counts.conflicts || 0) + ' xung đột nhóm giá. Xem chi tiết trong Kiểm tra file báo giá; chưa lưu dữ liệu.'), !state.quoteImportPreview.canConfirm);
         content.querySelector('.quote-import-preview')?.scrollIntoView({block:'start'});
       }
     } catch (error) {
@@ -7868,6 +7886,11 @@
     if (action === "choose-quote-workbook") {
       state.quoteImportPreview = null;
       quoteWorkbookInput.click();
+      return;
+    }
+    if (action === "show-quote-row-errors") {
+      var quoteErrors = document.getElementById('quoteRowErrors');
+      if (quoteErrors) { quoteErrors.scrollIntoView({block:'center'}); quoteErrors.focus({preventScroll:true}); }
       return;
     }
     if (action === "cancel-quote-import") {

@@ -320,6 +320,28 @@ class QuoteImportTests(unittest.TestCase):
         self.assertIn("Thiếu giá mua", errors)
         self.assertNotEqual(missing["buy_price"], 7_000)  # catalogue value is from another/no period
 
+    def test_preview_explains_errors_beyond_sample_without_saving(self):
+        rows = [{"code": f"NEW{i}", "name": f"Product {i}", "prices": [12000]}
+                for i in range(251)]
+        rows[-1].update(unit="", tax="", buy="=A1", prices=["=L4"])
+        preview = self.preview("2026-10", self.matrix_bytes(["C1"], rows),
+                               effective_from="2026-10-01", effective_to="2026-10-15").get_json()
+        self.assertFalse(preview["canConfirm"])
+        self.assertEqual(preview["counts"]["conflicts"], 0)
+        self.assertEqual(preview["counts"]["rows_with_errors"], 1)
+        self.assertTrue(preview["itemsTruncated"])
+        errors = preview["rowErrors"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["productCode"], "NEW250")
+        self.assertEqual({issue["cell"] for issue in errors[0]["issues"]},
+                         {"J254", "K254", "E254", "L254"})
+        self.assertTrue(all(issue["correction"] for issue in errors[0]["issues"]))
+        self.assertEqual(preview["effectiveFrom"], "2026-10-01")
+        self.assertEqual(preview["effectiveTo"], "2026-10-15")
+        self.assertEqual(self.confirm(preview).status_code, 400)
+        with server.db() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM quote_versions").fetchone()[0], 0)
+
     def test_preview_validates_period_sheet_and_formula_price_without_writes(self):
         invalid_period = self.preview("2026-13")
         self.assertEqual(invalid_period.status_code, 400)

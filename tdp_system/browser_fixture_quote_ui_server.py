@@ -54,6 +54,11 @@ def _build_fixtures(output_dir: Path) -> None:
         {"code": "P4", "name": "Dòng để rỗng", "buy": 10_000,
          "prices": [10_000, 11_000, 12_000, 13_000, 14_000, None, 19_000]},
     ])
+    _write_workbook(output_dir / "quote-row-error.xlsx", [
+        {"code": f"QA{i}", "name": f"Product {i}", "buy": 7000,
+         "prices": [10000, 11000, 12000, 13000, 14000, "=A1" if i == 250 else 15000, 16000]}
+        for i in range(251)
+    ])
 
 
 def main() -> None:

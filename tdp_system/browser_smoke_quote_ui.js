@@ -105,6 +105,7 @@ async function main() {
     await client.call("Page.enable");
     await client.call("Runtime.enable");
     await client.call("DOM.enable");
+    await client.call('Emulation.setDeviceMetricsOverride', {width:1440, height:1000, deviceScaleFactor:1, mobile:false});
     await client.call("Page.navigate", { url: baseUrl });
     await waitFor(client, 'document.readyState==="complete" && document.querySelector("[data-view=quotes]")', "app shell");
     await openQuoteView(client);
@@ -114,8 +115,26 @@ async function main() {
     assert.equal(await evaluate(client,
       'document.querySelectorAll(\'a[href^="/api/export/quote/TOYOTA"]\').length'), 0);
 
+    const path = require('node:path');
+    await upload(client, path.join(path.dirname(cleanFile), 'quote-row-error.xlsx'));
+    await waitFor(client, 'document.getElementById("quoteRowErrors")', "row error beyond first 250 rows");
+    const rowErrorText = await evaluate(client, 'document.getElementById("quoteRowErrors").innerText');
+    assert(rowErrorText.includes('QA250'));
+    assert(rowErrorText.includes('Q254'));
+    assert(rowErrorText.includes('Giá TOYOTA'));
+    assert(rowErrorText.includes('dán chỉ giá trị'));
+    assert.equal(await evaluate(client,
+      'document.querySelectorAll(\'[data-action="confirm-quote-import"]\').length'), 0);
+    await evaluate(client, 'document.querySelector(\'[data-action="show-quote-row-errors"]\').click()');
+    assert.equal(await evaluate(client, 'document.activeElement.id'), 'quoteRowErrors');
+    assert.equal(await evaluate(client, 'document.getElementById("quotePeriod").value'), '2026-09');
+    assert.equal(await evaluate(client,
+      'document.querySelector(\'[data-action="choose-quote-workbook"]\').textContent'), 'Nạp báo giá tháng mới');
+    const shot = await client.call('Page.captureScreenshot', {format:'png', captureBeyondViewport:false});
+    require('node:fs').writeFileSync(path.join(path.dirname(cleanFile), 'quote-row-error.png'), Buffer.from(shot.data, 'base64'));
+    // Replacing the corrected file does not require cancelling the old preview.
     await upload(client, conflictFile);
-    await waitFor(client, 'document.querySelector(".quote-import-preview")', "conflict preview");
+    await waitFor(client, 'document.querySelector(".quote-import-preview")?.innerText.includes("P1")', "conflict preview");
     const conflictText = await evaluate(client, 'document.querySelector(".quote-import-preview").innerText');
     assert(conflictText.includes("TOYOTA · cột Q → TOYOTA"));
     assert(conflictText.includes("P1"));
