@@ -27,6 +27,10 @@ from statistics import median
 
 from flask import jsonify, request, send_file
 try:
+    from .invoice_identity_policy import identity_error
+except ImportError:
+    from invoice_identity_policy import identity_error
+try:
     from .supplier_plan import parse_supplier_plan, save_supplier_plan, reopen_changed_suppliers
 except ImportError:
     from supplier_plan import parse_supplier_plan, save_supplier_plan, reopen_changed_suppliers
@@ -629,7 +633,7 @@ MAPPING_IMPORT_LOCK = threading.Lock()
 PENDING_LEGACY_INVOICE_MAPPING_IMPORTS = {}
 LEGACY_INVOICE_MAPPING_IMPORT_LOCK = threading.Lock()
 PENDING_CATALOG_IMPORTS = {}
-CATALOG_IMPORT_LOCK = threading.Lock()
+CATALOG_IMPORT_LOCK = threading.RLock()
 PENDING_KITCHEN_IMPORTS = {}
 KITCHEN_IMPORT_LOCK = threading.Lock()
 PENDING_OPENING_IMPORTS = {}
@@ -1521,6 +1525,8 @@ def parse_catalog_workbook(conn, workbook, mode='full', *, price_fallback=True) 
             "errors": [],
             "apply": False,
         }
+        item['current_unit'] = existing_products.get(code, {}).get('unit', '')
+        item['current_invoice_name'] = existing_names.get(code) or existing_products.get(code, {}).get('name', '')
         if not code:
             item["errors"].append("Thiếu mã hàng")
         if not name:
@@ -1529,13 +1535,13 @@ def parse_catalog_workbook(conn, workbook, mode='full', *, price_fallback=True) 
             item["errors"].append("Thiếu đơn vị tính")
         if not tax:
             item["errors"].append("Thiếu thuế")
+        identity_message = identity_error(code, invoice_name or name)
+        if identity_message:
+            item['errors'].append(identity_message)
         if mode != 'new_only' and "invoice_name" in fields and not invoice_name:
             item["errors"].append("Thiếu tên xuất hóa đơn")
         if mode != 'new_only' and 'invoice_unit' in fields and not invoice_unit:
             item['errors'].append('Thiếu ĐVT xuất hóa đơn')
-        if invoice_unit and invoice_unit != unit:
-            message='ĐVT xuất hóa đơn '+invoice_unit+' khác ĐVT đơn hàng '+unit+'; cần xác nhận số lượng và tỷ lệ quy đổi trước khi áp dụng.'
-            item['warnings'].append(message+' Lưu ĐVT yêu cầu và giữ phần xuất chờ quy đổi.')
 
         previous = unique_items.get(code) if code else None
         signature = (mapping_key(name), mapping_key(invoice_name), mapping_key(unit), tax, group, invoice_unit)
@@ -1571,8 +1577,8 @@ def parse_catalog_workbook(conn, workbook, mode='full', *, price_fallback=True) 
                 item['warnings'].append('Giữ tên nội bộ, ĐVT kho và thuế đang dùng; cập nhật tên và ĐVT xuất hóa đơn theo file')
             name=current['name'];unit=current['unit'];tax=current['tax'];group=current['product_group']
             item.update(product_name=name,unit=unit,tax=tax,product_group=group)
-            if invoice_unit and invoice_unit!=catalog_unit(unit) and not any('chờ quy đổi' in w for w in item['warnings']):
-                item['warnings'].append('ĐVT hóa đơn '+invoice_unit+' khác ĐVT kho '+unit+'; lưu yêu cầu và giữ phần xuất chờ quy đổi.')
+        if invoice_unit and invoice_unit != catalog_unit(unit):
+            item['warnings'].append('ĐVT xuất hóa đơn '+invoice_unit+' khác ĐVT Thành Đạt Phát '+unit+'; lưu yêu cầu và giữ phần xuất chờ quy đổi. Không tự đổi số lượng hoặc đơn giá.')
         if current and catalog_unit(current['unit'])!=catalog_unit(unit):
             from tdp_system.invoice_repairs import product_unit_usage
             if product_unit_usage(conn,code):
@@ -1778,6 +1784,10 @@ def parse_mapping_workbook(conn, workbook, mapping_type: str) -> dict:
             item["resolved_code"] = code
             item["resolved_name"] = mapping_cell_text(resolved.get("name"))
             item["current_value"] = mapping_cell_text(existing.get(code))
+            if mapping_type == 'invoice_names':
+                identity_message = identity_error(code, target)
+                if identity_message:
+                    item['errors'].append(identity_message)
         if item["errors"]:
             rows.append(item)
             continue
@@ -6442,6 +6452,10 @@ def register_contract_routes(app, ctx):
         except zipfile.BadZipFile:
             return jsonify({"ok": False, "error": "File Excel bị hỏng hoặc không đúng định dạng"}), 400
 
+        return catalog_preview_response(payload, filename, request.form.get('mode', 'full'))
+
+    def catalog_preview_response(payload, filename, mode, edits=None):
+        edits = edits or {}
         cutoff = time.time() - MAPPING_IMPORT_TTL_SECONDS
         with CATALOG_IMPORT_LOCK:
             for old_token, item in list(PENDING_CATALOG_IMPORTS.items()):
@@ -6450,10 +6464,20 @@ def register_contract_routes(app, ctx):
         workbook = None
         try:
             workbook = load_workbook(
-                io.BytesIO(payload), read_only=True, data_only=True, keep_links=False,
+                io.BytesIO(payload), read_only=not bool(edits), data_only=True, keep_links=False,
             )
+            if edits:
+                sheet, header_row, fields = find_catalog_sheet(workbook)
+                for source_row, values in edits.items():
+                    row = int(source_row)
+                    if row <= header_row or row > sheet.max_row or not sheet.cell(row, fields['product_code']).value:
+                        raise ValueError('Dòng cần sửa không còn trong file đã nạp.')
+                    for field, value in values.items():
+                        if field not in fields:
+                            raise ValueError('File thiếu cột cần sửa. Hãy kiểm tra tiêu đề cột trong Excel.')
+                        sheet.cell(row, fields[field], value)
             with db_factory() as conn:
-                preview = parse_catalog_workbook(conn, workbook,request.form.get('mode','full'))
+                preview = parse_catalog_workbook(conn, workbook, mode)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception:
@@ -6470,6 +6494,8 @@ def register_contract_routes(app, ctx):
             "source_hash": source_hash,
             "sheet": preview["sheet"],
             "header_row": preview["header_row"],
+            "payload": payload,
+            "edits": edits,
             "mode": preview['mode'],
             "items": preview.pop("items"),
             "counts": preview["counts"],
@@ -6485,8 +6511,47 @@ def register_contract_routes(app, ctx):
             "filename": filename,
             "source_hash": source_hash,
             "expires_in_minutes": MAPPING_IMPORT_TTL_SECONDS // 60,
+            "reviewed_on_screen": bool(edits),
             **preview,
         })
+
+    @app.post('/api/catalog/import/review')
+    def api_catalog_import_review():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get('edits', []), list):
+            return jsonify(ok=False, error='Nội dung sửa chưa hợp lệ.'), 400
+        changes = body.get('edits', [])
+        if len(changes) > MAPPING_IMPORT_MAX_ROWS:
+            return jsonify(ok=False, error='Có quá nhiều dòng sửa trong một lần.'), 400
+        with CATALOG_IMPORT_LOCK:
+            token = clean_text(body.get('token'))
+            pending = PENDING_CATALOG_IMPORTS.get(token)
+            if not pending or time.time() - pending['created'] > MAPPING_IMPORT_TTL_SECONDS:
+                return jsonify(ok=False, error='Bản xem trước đã hết hạn. Chọn lại file để kiểm tra; dữ liệu đang lưu chưa thay đổi.'), 410
+            review_key = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            if pending.get('review_key') == review_key:
+                return jsonify(pending['review_response'])
+            edits = deepcopy(pending.get('edits', {}))
+            seen = set()
+            for change in changes:
+                if not isinstance(change, dict) or type(change.get('source_row')) is not int:
+                    return jsonify(ok=False, error='Chọn đúng dòng cần sửa trong bản xem trước.'), 400
+                row = change['source_row']
+                values = change.get('values')
+                if (row in seen or not isinstance(values, dict) or not values
+                        or set(values) - {'unit', 'invoice_name', 'invoice_unit'}
+                        or any(not isinstance(v, str) or len(v) > (255 if k == 'invoice_name' else 50)
+                               or v.lstrip().startswith('=') for k, v in values.items())):
+                    return jsonify(ok=False, error='Chỉ sửa ĐVT Thành Đạt Phát, Tên xuất hóa đơn và ĐVT xuất hóa đơn; nhập chữ, không nhập công thức.'), 400
+                seen.add(row)
+                edits.setdefault(str(row), {}).update(values)
+            response = catalog_preview_response(pending['payload'], pending['filename'],
+                                                body.get('mode', pending['mode']), edits)
+            if not isinstance(response, tuple):
+                pending['superseded'] = True
+                pending['review_key'] = review_key
+                pending['review_response'] = response.get_json()
+            return response
 
     @app.post("/api/catalog/import/confirm")
     def api_catalog_import_confirm():
@@ -6495,7 +6560,12 @@ def register_contract_routes(app, ctx):
             return jsonify({"ok": False, "error": "Cần xác nhận trước khi ghi danh mục"}), 400
         token = clean_text(body.get("token"))
         with CATALOG_IMPORT_LOCK:
-            pending = PENDING_CATALOG_IMPORTS.pop(token, None)
+            current = PENDING_CATALOG_IMPORTS.get(token)
+            if current and current.get('confirmed_result'):
+                return jsonify(current['confirmed_result'])
+            if current and current.get('superseded'):
+                return jsonify(ok=False, error='Bản xem trước đã được sửa. Xác nhận trên kết quả Kiểm tra lại mới nhất.'), 409
+            pending = current
         if not pending or time.time() - pending["created"] > MAPPING_IMPORT_TTL_SECONDS:
             return jsonify({"ok": False, "error": "Phiên xem trước đã hết hạn; vui lòng chọn lại file"}), 410
         if pending["has_errors"]:
@@ -6585,13 +6655,17 @@ def register_contract_routes(app, ctx):
                     metadata={
                         "filename": pending["filename"], "sheet": pending["sheet"],
                         "mode": pending['mode'],
+                        "reviewed_edits": pending.get('edits', {}),
                         "header_row": pending["header_row"], "source_hash": pending["source_hash"],
                         **result_counts,
                     },
                 )
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 409
-        return jsonify({"ok": True, "source_hash": pending["source_hash"], **result_counts})
+        result = {"ok": True, "source_hash": pending["source_hash"], **result_counts}
+        with CATALOG_IMPORT_LOCK:
+            pending['confirmed_result'] = result
+        return jsonify(result)
 
     @app.post("/api/mappings/import/preview")
     def api_mapping_import_preview():
@@ -8468,6 +8542,9 @@ def register_contract_routes(app, ctx):
         invoice_name = clean_text(body.get("invoice_name"))
         if not code or not invoice_name:
             return jsonify({"ok": False, "error": "Cần mã hàng và tên xuất hóa đơn"}), 400
+        identity_message = identity_error(code, invoice_name)
+        if identity_message:
+            return jsonify(ok=False, error=identity_message), 400
         with db_factory() as conn:
             product = conn.execute("SELECT code FROM products WHERE code=?", (code,)).fetchone()
             if not product:

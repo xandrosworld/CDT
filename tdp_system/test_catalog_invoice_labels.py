@@ -178,7 +178,11 @@ class CatalogInvoiceLabelsTests(unittest.TestCase):
             self.assertEqual('danh mục hh',full['sheet']);self.assertTrue(full['can_confirm'])
             self.assertEqual('Kg',full['rows'][0]['invoice_unit'])
             names=parse_catalog_workbook(conn,book,'names_and_new');self.assertTrue(names['can_confirm'])
-            self.assertTrue(any('chờ quy đổi' in w for w in names['rows'][0]['warnings']))
+            # Names-only import keeps the existing Kg, so the source's Gói
+            # must not leave a false conversion warning after preservation.
+            self.assertEqual('kg', names['rows'][0]['unit'].lower())
+            self.assertFalse(any('chờ quy đổi' in w for w in names['rows'][0]['warnings']))
+            self.assertTrue(any('chờ quy đổi' in w for w in full['rows'][0]['warnings']))
         book.close()
 
     def test_malformed_explicit_catalog_does_not_fall_back_to_price_sheet(self):

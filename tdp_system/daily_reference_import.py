@@ -21,6 +21,10 @@ from typing import Any
 
 from flask import jsonify, request
 from openpyxl import load_workbook
+try:
+    from .invoice_identity_policy import identity_error
+except ImportError:
+    from invoice_identity_policy import identity_error
 
 
 WRITABLE_ROLES = {
@@ -382,6 +386,9 @@ def _parse_product_catalog(conn, worksheet) -> dict[str, Any]:
         if not any((code, name, unit, tax, group, invoice_name)):
             continue
         item_errors = []
+        identity_message = identity_error(code, invoice_name or name)
+        if identity_message:
+            item_errors.append(identity_message)
         if not code:
             item_errors.append("missing_product_code")
         if not name:

@@ -1247,20 +1247,27 @@
     var preview = state.catalogImportPreview;
     if (!preview) return "";
     var statusNames = { "new": "Thêm mới", "update": "Cập nhật", "unchanged": "Không đổi", "duplicate": "Dòng trùng", "error": "Lỗi" };
-    var visibleRows = preview.rows.slice().sort(function(a,b){return Number(Boolean(b.errors.length))-Number(Boolean(a.errors.length)) || Number(b.invoice_status==='update')-Number(a.invoice_status==='update');}).slice(0, 200).map(function (item) {
+    var visibleRows = preview.rows.slice().sort(function(a,b){return Number(Boolean(b.errors.length))-Number(Boolean(a.errors.length)) || Number(b.invoice_status==='update')-Number(a.invoice_status==='update');}).filter(function(item,index){return item.errors.length || index < 200;}).map(function (item) {
       var messages = item.errors.concat(item.warnings);
       var status = item.errors.length ? "error" : item.product_status;
       var tagClass = status === "error" ? "tag-red" : status === "new" ? "tag-ok" : "tag-warn";
+      var editor = '<button type="button" class="btn btn-small btn-outline" data-action="edit-catalog-preview-row">Sửa dòng này</button>' +
+        '<div class="catalog-preview-editor" hidden data-source-row="' + item.source_row + '">' +
+        [['unit','ĐVT Thành Đạt Phát'],['invoice_name','Tên xuất hóa đơn'],['invoice_unit','ĐVT xuất hóa đơn']].filter(function(field){return field[0]!=='invoice_unit'||item.has_invoice_unit;}).map(function(field){
+          return '<label style="display:block;margin:8px 0">' + field[1] + '<input style="display:block;width:100%;min-width:160px" data-catalog-field="'+field[0]+'" data-original="'+esc(item[field[0]]||'')+'" value="'+esc(item[field[0]]||'')+'" maxlength="'+(field[0]==='invoice_name'?255:50)+'"></label>';
+        }).join('') + (item.current_unit ? '<button type="button" class="btn btn-small btn-light" data-action="restore-catalog-preview-unit" data-unit="'+esc(item.current_unit)+'">Giữ ĐVT Thành Đạt Phát: '+esc(item.current_unit)+'</button>' : '') +
+        (item.current_invoice_name ? '<button type="button" class="btn btn-small btn-light" data-action="restore-catalog-preview-name" data-name="'+esc(item.current_invoice_name)+'">Dùng Tên xuất hóa đơn đang lưu: '+esc(item.current_invoice_name)+'</button>' : '') +
+        '<p class="muted">Chỉ sửa bản xem trước. Bấm Kiểm tra lại rồi xác nhận mới ghi danh mục.</p></div>';
       return '<tr class="' + (item.errors.length ? 'row-error' : item.warnings.length ? 'row-warning' : '') + '"><td>' + item.source_row + '</td><td><strong>' + esc(item.product_code) +
         '</strong><div class="muted">' + esc(item.product_group || "—") + '</div></td><td><strong>' +
         esc(item.product_name) + '</strong><div class="muted">' + esc(item.unit) + (item.invoice_unit ? ' · ĐVT hóa đơn theo file: '+esc(item.invoice_unit) : '') + ' · ' +
         esc(taxText(item.tax)) + '</div></td><td>' + esc(item.invoice_name || "—") +
-        '</td><td><span class="tag ' + tagClass + '">' + esc(statusNames[status] || status) +
-        '</span><div class="muted">' + esc(messages.join(" · ")) + '</div></td></tr>';
+        '</td><td style="white-space:normal;overflow-wrap:anywhere"><span class="tag ' + tagClass + '">' + esc(statusNames[status] || status) +
+        '</span><div class="muted">' + esc(messages.join(" · ")) + '</div>' + editor + '</td></tr>';
     }).join("");
     var count = preview.counts;
     return html([
-      '<div class="card" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước danh mục ', esc(preview.filename),
+      '<div class="card" id="catalogImportReview" style="margin-top:18px"><div class="card-head"><div><h3>Xem trước danh mục ', esc(preview.filename),
       '</h3><p>Trang Excel ', esc(preview.sheet), ' · dòng tiêu đề ', preview.header_row,
       ' · chỉ ghi sau khi người dùng xác nhận</p></div><button class="btn btn-small btn-outline" data-action="cancel-catalog-import">Bỏ file</button></div>',
       '<div class="card-body code-note">Phạm vi: ',preview.mode==='new_only'?'Thêm mã mới từ Danh mục hàng hóa và Báo giá có đủ Mã hàng, Tên hàng, ĐVT, Thuế; giữ nguyên các mã đã có.':preview.mode==='names_and_new'?'Thêm mã mới, cập nhật tên và ĐVT xuất hóa đơn; giữ thông tin kho của mã đã có.':'Cập nhật toàn bộ danh mục theo file.',
@@ -1269,13 +1276,14 @@
       ' mã mới · ', count.update_products, ' cập nhật · ', count.retained_products,
       ' mã cũ được giữ · ', count.new_names, ' tên hóa đơn mới · ', count.error, ' lỗi</div></div>',
       preview.mode==='new_only' && !count.new_products && !count.error ? '<div class="card-body code-note">Không tìm thấy mã mới trong Danh mục hàng hóa hoặc Báo giá. Kiểm tra mã hàng trong file; mỗi mã mới cần đủ Tên hàng, ĐVT và Thuế.</div>' : '',
-      '<div class="table-wrap"><table><thead><tr><th>Dòng</th><th>Mã / nhóm</th><th>Tên TĐP</th><th>Tên xuất hóa đơn</th><th>Kiểm tra</th></tr></thead><tbody>',
+      '<div class="card-body"><label>Phạm vi nạp <select id="catalogReviewMode">' + [['new_only','Chỉ thêm mã mới, giữ nguyên mã cũ'],['names_and_new','Giữ tên và ĐVT Thành Đạt Phát; cập nhật tên và ĐVT xuất hóa đơn'],['full','Cập nhật mã trong file; giữ mã ngoài file']].map(function(r){return '<option value="'+r[0]+'"'+(r[0]===preview.mode?' selected':'')+'>'+r[1]+'</option>';}).join('') + '</select></label><button class="btn btn-outline" data-action="review-catalog-import">Kiểm tra lại</button><p id="catalogReviewStatus" role="status">Có thể đổi Phạm vi nạp và sửa dòng ngay tại đây, không cần nạp lại file. ĐVT xuất hóa đơn khác ĐVT Thành Đạt Phát vẫn chờ quy đổi trước khi xuất.</p></div>',
+      '<div class="table-wrap"><table style="table-layout:fixed;width:100%;min-width:760px"><colgroup><col style="width:6%"><col style="width:12%"><col style="width:18%"><col style="width:18%"><col style="width:46%"></colgroup><thead><tr><th>Dòng</th><th>Mã / nhóm</th><th>Tên Thành Đạt Phát</th><th>Tên xuất hóa đơn</th><th>Kiểm tra</th></tr></thead><tbody>',
       visibleRows, '</tbody></table></div>',
-      preview.rows.length > 200 ? '<div class="card-body muted">Hiển thị 200 dòng đầu; toàn bộ file vẫn được kiểm tra và nhập.</div>' : '',
+      preview.rows.length > 200 ? '<div class="card-body muted">Hiển thị toàn bộ dòng lỗi; các dòng còn lại được rút gọn. Toàn bộ file vẫn được kiểm tra.</div>' : '',
       '<div class="card-body"><div class="code-note"><strong>Nguyên tắc:</strong> giữ nguyên giá mua, nhà cung cấp và các nhóm giá đang có; không xóa mã cũ. Tên xuất hóa đơn được dùng đúng theo file khách đã xác nhận.</div>',
       '<div class="form-actions"><button class="btn btn-primary" data-action="confirm-catalog-import" ',
       preview.can_confirm && count.unique_products ? '' : 'disabled', '>Xác nhận cập nhật danh mục</button></div>',
-      preview.can_confirm ? '' : '<div class="code-note"><strong>Chưa thể nhập:</strong> sửa hết dòng lỗi rồi chọn lại file.</div>',
+      preview.can_confirm ? '' : '<div class="code-note"><strong>Chưa thể nhập:</strong> bấm Sửa dòng này tại dòng lỗi, sửa thông tin rồi bấm Kiểm tra lại.</div>',
       '</div></div>'
     ]);
   }
@@ -5930,9 +5938,49 @@
     }
   }
 
+  function catalogReviewDirty() {
+    var preview = state.catalogImportPreview;
+    if (!preview) return false;
+    return document.getElementById('catalogReviewMode')?.value !== preview.mode ||
+      Array.from(content.querySelectorAll('[data-catalog-field]')).some(function(input){return input.value !== input.dataset.original;});
+  }
+
+  async function reviewCatalogImport(button) {
+    var preview = state.catalogImportPreview;
+    if (!preview) return;
+    var edits = Array.from(content.querySelectorAll('.catalog-preview-editor')).map(function(editor){
+      var values = {};
+      editor.querySelectorAll('[data-catalog-field]').forEach(function(input){
+        if (input.value !== input.dataset.original) values[input.dataset.catalogField] = input.value;
+      });
+      return {source_row:Number(editor.dataset.sourceRow), values:values};
+    }).filter(function(row){return Object.keys(row.values).length;});
+    var mode = document.getElementById('catalogReviewMode').value;
+    var controls = Array.from(document.querySelectorAll('#catalogImportReview input, #catalogImportReview select, #catalogImportReview button'));
+    var disabled = controls.map(function(control){return control.disabled;});
+    controls.forEach(function(control){control.disabled=true;});
+    try {
+      var next = await api('/api/catalog/import/review', {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({token:preview.token, mode:mode, edits:edits})});
+      state.catalogImportPreview = next; state.catalogImportMode = next.mode;
+      renderSettings();
+      var firstError = content.querySelector('#catalogImportReview .row-error [data-action="edit-catalog-preview-row"]');
+      if (firstError) firstError.click();
+      else { var confirm = content.querySelector('[data-action="confirm-catalog-import"]'); confirm?.scrollIntoView({block:'center'}); confirm?.focus(); }
+      showToast(next.can_confirm ? 'Đã kiểm tra lại. Xem kết quả rồi xác nhận cập nhật danh mục.' : 'Còn '+next.counts.error+' dòng cần sửa; chưa ghi danh mục.', !next.can_confirm);
+    } catch(error) {
+      document.getElementById('catalogReviewStatus').textContent = error.message + ' Phần đang sửa được giữ nguyên; bấm Kiểm tra lại để thử lại.';
+      showToast(error.message, true);
+    } finally { controls.forEach(function(control,i){control.disabled=disabled[i];}); }
+  }
+
   async function confirmCatalogImport(button) {
     var preview = state.catalogImportPreview;
     if (!preview || !preview.can_confirm) return;
+    if (catalogReviewDirty()) {
+      showToast('Bấm Kiểm tra lại để kiểm tra phần vừa sửa trước khi xác nhận.', true);
+      content.querySelector('[data-action="review-catalog-import"]')?.focus(); return;
+    }
     try {
       button.disabled = true;
       button.textContent = "Đang cập nhật danh mục…";
@@ -7014,6 +7062,12 @@
   });
 
   content.addEventListener("input", function (event) {
+    if (event.target.matches('[data-catalog-field], #catalogReviewMode')) {
+      var confirm = content.querySelector('[data-action="confirm-catalog-import"]');
+      if (confirm) confirm.disabled = catalogReviewDirty() || !state.catalogImportPreview?.can_confirm;
+      var status = document.getElementById('catalogReviewStatus');
+      if (status) status.textContent = 'Phần sửa chưa ghi dữ liệu. Bấm Kiểm tra lại trước khi xác nhận.';
+    }
     if(event.target.name==='actual_kg' && event.target.closest('.actual-weight-form')) {
       var wf=event.target.closest('.actual-weight-form'),kg=Number(event.target.value);
       wf.querySelector('.actual-weight-price').textContent=Number.isFinite(kg)&&kg>0?stockQty(Number(wf.dataset.amount)/kg)+' đ/kg':'Chưa có kg thực tế';
@@ -8140,6 +8194,20 @@
       state.catalogImportPreview = null;
       renderSettings();
     }
+    if (action === 'edit-catalog-preview-row') {
+      var editor = button.parentElement.querySelector('.catalog-preview-editor');
+      editor.hidden = false; editor.scrollIntoView({block:'center'});
+      editor.querySelector('[data-catalog-field="invoice_name"]')?.focus(); return;
+    }
+    if (action === 'restore-catalog-preview-unit') {
+      var input = button.closest('.catalog-preview-editor').querySelector('[data-catalog-field="unit"]');
+      input.value = button.dataset.unit; input.dispatchEvent(new Event('input',{bubbles:true})); input.focus(); return;
+    }
+    if (action === 'restore-catalog-preview-name') {
+      var input = button.closest('.catalog-preview-editor').querySelector('[data-catalog-field="invoice_name"]');
+      input.value = button.dataset.name; input.dispatchEvent(new Event('input',{bubbles:true})); input.focus(); return;
+    }
+    if (action === 'review-catalog-import') { await reviewCatalogImport(button); return; }
     if (action === "confirm-catalog-import") await confirmCatalogImport(button);
     if (action === "new-batch") newBatch();
     if (action === "paste-orders") openPasteModal();

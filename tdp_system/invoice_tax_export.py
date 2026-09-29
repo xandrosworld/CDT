@@ -206,6 +206,10 @@ def build_invoice_workbook(
             for output_row, item in enumerate(rows, start=2):
                 code = str(item.get("product_code") or "").strip()
                 name = str(item.get("product_name") or "").strip()
+                from tdp_system.invoice_identity_policy import identity_error
+                identity_message = identity_error(code, name)
+                if identity_message:
+                    raise InvoiceTaxExportError(identity_message)
                 unit = str(item.get("unit") or "").strip()
                 contractor = str(item.get("contractor") or "").strip()
                 if not code or not name or not unit or not contractor:

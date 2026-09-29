@@ -1,5 +1,9 @@
 """Use the order's explicit BK marker and the catalog stock unit at every exit."""
 import unicodedata
+try:
+    from .invoice_identity_policy import identity_error
+except ImportError:
+    from invoice_identity_policy import identity_error
 
 
 def unit_key(value):
@@ -14,11 +18,19 @@ def unit_issues(conn, rows):
     weights = confirmed_weights(conn)
     catalog={r['code']:r['unit'] for r in conn.execute('SELECT code,unit FROM products')}
     invoice_units={r['product_code']:r['invoice_unit'] for r in conn.execute('SELECT product_code,invoice_unit FROM outgoing_product_units')}
+    names={r['code']:r['invoice_name'] or r['name'] for r in conn.execute('''SELECT p.code,p.name,n.invoice_name
+        FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code''')}
     issues={}
     for row in rows:
         code=row['product_code'];unit=row['unit'];expected=catalog.get(code,'')
         order_unit=row['order_unit'] if 'order_unit' in row.keys() else unit
         invoice_unit=invoice_units.get(code) or expected
+        identity_message = identity_error(code, names.get(code, ''))
+        if identity_message:
+            oid=row['order_id'] if 'order_id' in row.keys() else row['id']
+            issues[oid]={'order_id':oid,'product_code':code,'unit':order_unit,'catalog_unit':expected,
+                         'message':identity_message}
+            continue
         if not unit_key(unit) or unit_key(unit)!=unit_key(expected) or unit_key(order_unit)!=unit_key(unit):
             oid=row['order_id'] if 'order_id' in row.keys() else row['id']
             issues[oid]={'order_id':oid,'product_code':code,'unit':order_unit,'catalog_unit':expected,

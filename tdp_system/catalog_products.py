@@ -5,6 +5,11 @@ import re
 
 from flask import jsonify, request
 
+try:
+    from .invoice_identity_policy import identity_error
+except ImportError:
+    from invoice_identity_policy import identity_error
+
 SCHEMA = '''CREATE TABLE IF NOT EXISTS outgoing_product_units (
  product_code TEXT PRIMARY KEY REFERENCES products(code),
  invoice_unit TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -57,6 +62,9 @@ def save_product(conn, body, *, editing, ctx):
     if not isinstance(invoice_name,str) or len(invoice_name.strip())>255:
         raise CatalogError('Tên trên hóa đơn tối đa 255 ký tự.')
     invoice_name=invoice_name.strip()
+    identity_message = identity_error(code, invoice_name or name)
+    if identity_message:
+        raise CatalogError(identity_message)
     if not name or not unit or tax not in {'KKKNT','KCT','0','0.05','0.08','0.1'}:
         raise CatalogError('Tên hàng, đơn vị hoặc lựa chọn thuế không hợp lệ.')
     current=conn.execute("SELECT p.*,COALESCE(n.invoice_name,'') invoice_name,COALESCE(u.invoice_unit,'') invoice_unit FROM products p LEFT JOIN outgoing_product_names n ON n.product_code=p.code LEFT JOIN outgoing_product_units u ON u.product_code=p.code WHERE UPPER(p.code)=?",(code,)).fetchone()

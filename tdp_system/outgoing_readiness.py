@@ -404,6 +404,11 @@ def validate_draft_export_stock(conn, draft_id, invoice_date=""):
             raise OutgoingReadinessError(str(exc),code='contractor_not_selected') from None
     required = defaultdict(float)
     lines = conn.execute("SELECT id,product_code,product_name,unit,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    from tdp_system.invoice_identity_policy import identity_error
+    for line in lines:
+        message = identity_error(line['product_code'], line['product_name'])
+        if message:
+            raise OutgoingReadinessError(message, code='invoice_identity_mismatch')
     # Raw line IDs are not order IDs. Check stock units here and confirmed
     # invoice conversions through the actual order allocations below.
     catalog_units={r['code']:_normalized_unit(r['unit']) for r in conn.execute('SELECT code,unit FROM products')}
@@ -478,6 +483,11 @@ def validate_issued_draft_stock(conn, draft_id, invoice_date, invoice_series, in
     not deduct the same physical invoice twice. Other drafts keep their holds.
     """
     lines = conn.execute("SELECT product_code,product_name,qty,tax FROM outgoing_invoice_lines WHERE draft_id=?", (draft_id,)).fetchall()
+    from tdp_system.invoice_identity_policy import identity_error
+    for line in lines:
+        message = identity_error(line['product_code'], line['product_name'])
+        if message:
+            raise OutgoingReadinessError(message, code='invoice_identity_mismatch')
     policy_rows=draft_policy_rows(conn,draft_id)
     units=unit_issues(conn,policy_rows)
     if units:

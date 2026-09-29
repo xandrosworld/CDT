@@ -1,10 +1,18 @@
 """Catalog invoice labels apply to editable drafts, never issued source records."""
 import json
+try:
+    from .invoice_identity_policy import identity_error
+except ImportError:
+    from invoice_identity_policy import identity_error
 
 
 def invoice_name(conn, code, fallback):
     row=conn.execute('SELECT invoice_name FROM outgoing_product_names WHERE product_code=?',(code,)).fetchone()
-    return str(row['invoice_name']).strip() if row and str(row['invoice_name'] or '').strip() else fallback
+    name = str(row['invoice_name']).strip() if row and str(row['invoice_name'] or '').strip() else fallback
+    error = identity_error(code, name)
+    if error:
+        raise ValueError(error)
+    return name
 
 
 def refresh_editable_names(conn, timestamp, codes=None):
@@ -19,6 +27,9 @@ def refresh_editable_names(conn, timestamp, codes=None):
     changes=[]
     for row in rows:
         if selected is not None and row['product_code'] not in selected:continue
+        error = identity_error(row['product_code'], row['desired_name'])
+        if error:
+            raise ValueError(error)
         if row['product_name']==row['desired_name']:continue
         conn.execute('UPDATE outgoing_invoice_lines SET product_name=? WHERE id=?',(row['desired_name'],row['id']))
         changes.append({'line_id':row['id'],'draft_id':row['draft_id'],'product_code':row['product_code'],
