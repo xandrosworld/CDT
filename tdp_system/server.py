@@ -2745,6 +2745,10 @@ def api_bootstrap():
             )),
             "settings": {row["key"]: row["value"] for row in conn.execute("SELECT * FROM settings")},
         }
+        latest_catalog_import = conn.execute(
+            "SELECT metadata_json FROM audit_log WHERE event_type='catalog.bulk_import' AND status='ok' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        payload['master']['latest_catalog_import'] = json.loads(latest_catalog_import['metadata_json']) if latest_catalog_import else None
         payload["payments"] = rows_dict(conn.execute(
             "SELECT * FROM payments WHERE COALESCE(status,'posted')='posted' "
             "ORDER BY payment_date DESC,id DESC LIMIT 100"

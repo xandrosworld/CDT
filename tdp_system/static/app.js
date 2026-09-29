@@ -1243,6 +1243,17 @@
     ]);
   }
 
+  function catalogImportResultHtml(result) {
+    if (!result) return '';
+    var count = result.source_counts;
+    return '<div class="card" id="catalogImportResult" role="status"><div class="card-body"><h3>Lần nạp danh mục đã xác nhận gần nhất</h3><p>'+esc(result.filename || '')+' · Sheet '+esc(result.sheet || '')+
+      (result.confirmed_at ? ' · '+esc(result.confirmed_at) : '')+'</p>'+
+      (count ? '<p>Mã trong sheet: <strong>'+num(count.source_products)+'</strong> · Đã có trên hệ thống lúc nạp: '+num(count.source_existing_products)+' · Chưa có trên hệ thống lúc nạp: '+num(count.source_new_products)+'.</p>' : '<p>Lần nạp cũ chưa lưu số mã trong sheet. Chọn Nạp từ Excel để xem số mã trước khi xác nhận.</p>')+
+      '<p><strong>Đã thêm '+num(result.inserted_products || 0)+' mã mới</strong> · '+num(result.updated_products || 0)+' mã cập nhật thông tin.</p>'+
+      (count ? '<p>Mã cũ ngoài sheet được giữ: '+num(count.outside_file_products)+'.'+(count.additional_price_products ? ' Trong số mã đã thêm có '+num(count.additional_price_products)+' mã từ sheet Báo giá, ngoài sheet này.' : '')+'</p>' : '')+
+      (result.system_products_after != null ? '<p>Tổng mã trên hệ thống ngay sau lần nạp: <strong>'+num(result.system_products_after)+'</strong>. Số tổng phía trên là số hiện tại.</p>' : '')+'</div></div>';
+  }
+
   function catalogImportPreviewHtml() {
     var preview = state.catalogImportPreview;
     if (!preview) return "";
@@ -1272,9 +1283,15 @@
       ' · chỉ ghi sau khi người dùng xác nhận</p></div><button class="btn btn-small btn-outline" data-action="cancel-catalog-import">Bỏ file</button></div>',
       '<div class="card-body code-note">Phạm vi: ',preview.mode==='new_only'?'Thêm mã mới từ Danh mục hàng hóa và Báo giá có đủ Mã hàng, Tên hàng, ĐVT, Thuế; giữ nguyên các mã đã có.':preview.mode==='names_and_new'?'Thêm mã mới, cập nhật tên và ĐVT xuất hóa đơn; giữ thông tin kho của mã đã có.':'Cập nhật toàn bộ danh mục theo file.',
       (preview.ignored_non_product_rows || []).length?' Bỏ qua dòng không có thông tin hàng: '+preview.ignored_non_product_rows.join(', '):'', '</div>',
-      '<div class="card-body"><div class="status-bar">', count.unique_products, ' mã · ', count.new_products,
-      ' mã mới · ', count.update_products, ' cập nhật · ', count.retained_products,
-      ' mã cũ được giữ · ', count.new_names, ' tên hóa đơn mới · ', count.error, ' lỗi</div></div>',
+      '<div class="card-body" id="catalogImportCounts"><div class="stats-grid">',
+      statCard('Mã trong sheet', num(count.source_products), 'Đếm mã khác nhau, không đếm dòng trống hoặc lặp', '▤'),
+      statCard('Đã có trên hệ thống', num(count.source_existing_products), 'Trong số mã của sheet này', '✓'),
+      statCard('Chưa có trên hệ thống', num(count.source_new_products), 'Trong số mã của sheet này', '+'),
+      statCard('Mã cũ ngoài sheet', num(count.outside_file_products), 'Vẫn giữ trên hệ thống', '▤'),
+      '</div><p>Tổng mã trên hệ thống trước khi nạp: <strong>',num(count.system_products_before),'</strong>.</p>',
+      count.additional_price_products ? '<p>Có thêm <strong>'+num(count.additional_price_products)+'</strong> mã mới từ sheet Báo giá, ngoài sheet '+esc(preview.sheet)+'.</p>' : '',
+      '<p role="status">', count.error ? '<strong>Chưa ghi dữ liệu: còn '+num(count.error)+' dòng lỗi.</strong> Sửa dòng lỗi rồi bấm Kiểm tra lại để biết số mã sẽ thêm.' : 'Sau khi xác nhận: <strong>thêm '+num(count.new_products)+' mã mới</strong>; tổng mã trên hệ thống sẽ là <strong>'+num(count.system_products_before+count.new_products)+'</strong>.',
+      '</p><p class="muted">', num(count.update_products),' mã cập nhật thông tin · ',num(count.new_names),' tên hóa đơn mới · ',num(count.update_names),' tên hóa đơn cập nhật. Cập nhật tên hoặc ĐVT không làm tăng số mã.</p></div>',
       preview.mode==='new_only' && !count.new_products && !count.error ? '<div class="card-body code-note">Không tìm thấy mã mới trong Danh mục hàng hóa hoặc Báo giá. Kiểm tra mã hàng trong file; mỗi mã mới cần đủ Tên hàng, ĐVT và Thuế.</div>' : '',
       '<div class="card-body"><label>Phạm vi nạp <select id="catalogReviewMode">' + [['new_only','Chỉ thêm mã mới, giữ nguyên mã cũ'],['names_and_new','Giữ tên và ĐVT Thành Đạt Phát; cập nhật tên và ĐVT xuất hóa đơn'],['full','Cập nhật mã trong file; giữ mã ngoài file']].map(function(r){return '<option value="'+r[0]+'"'+(r[0]===preview.mode?' selected':'')+'>'+r[1]+'</option>';}).join('') + '</select></label><button class="btn btn-outline" data-action="review-catalog-import">Kiểm tra lại</button><p id="catalogReviewStatus" role="status">Có thể đổi Phạm vi nạp và sửa dòng ngay tại đây, không cần nạp lại file. ĐVT xuất hóa đơn khác ĐVT Thành Đạt Phát vẫn chờ quy đổi trước khi xuất.</p></div>',
       '<div class="table-wrap"><table style="table-layout:fixed;width:100%;min-width:760px"><colgroup><col style="width:6%"><col style="width:12%"><col style="width:18%"><col style="width:18%"><col style="width:46%"></colgroup><thead><tr><th>Dòng</th><th>Mã / nhóm</th><th>Tên Thành Đạt Phát</th><th>Tên xuất hóa đơn</th><th>Kiểm tra</th></tr></thead><tbody>',
@@ -4580,7 +4597,7 @@
     content.innerHTML = html([
       minvoiceCard,
       '<div class="stats-grid fade-in">',
-      statCard("Mã hàng", num(d.master.product_count), "Danh mục sản phẩm", "▤"),
+      statCard("Tổng mã trên hệ thống", num(d.master.product_count), "Gồm cả mã cũ ngoài file nạp", "▤"),
       statCard("Bếp", num(d.master.kitchens.length), "Có nhà thầu và địa chỉ", "⌂"),
       statCard("Nhà cung cấp", num(d.master.suppliers.length), "Danh mục đặt hàng", "⇄"),
       statCard("Nhóm nhà thầu", num(d.master.contractors.length), "Giá nhóm / giá theo ngày", "₫"),
@@ -4590,7 +4607,7 @@
       '<p class="code-note">Nạp file có Danh mục hàng hóa hoặc Báo giá với Mã hàng, Tên hàng, ĐVT, Thuế. Chế độ Chỉ thêm mã mới đọc cả hai nguồn; giữ nguyên mã cũ. Xem trước rồi xác nhận.</p>',
       '<form id="catalogSearchForm" class="catalog-search"><input class="input-date" name="q" aria-label="Tìm mã hoặc tên hàng" placeholder="Tìm toàn bộ mã hoặc tên hàng (có / không dấu)" value="',esc(state.catalogQuery),'"><button class="btn btn-outline" type="submit">Tìm</button></form><div id="catalogProducts"></div>',
       '<details class="code-note"><summary>Nạp dữ liệu khác</summary><div class="form-actions"><button class="btn btn-outline" data-action="choose-mapping-file" data-mapping-type="invoice_names">Nạp riêng tên hóa đơn từ Excel</button><button class="btn btn-outline" data-action="sync-master">Đọc lại bản Em Thành trên hệ thống</button></div><p>Bản Em Thành trên hệ thống được nạp lần cuối: ',esc(synced),'. Muốn dùng file vừa sửa trên máy, chọn Nạp từ Excel phía trên.</p></details></div></div>',
-      catalogImportPreviewHtml(), mappingPreviewHtml("invoice_names"),
+      catalogImportPreviewHtml(), catalogImportResultHtml(d.master.latest_catalog_import), mappingPreviewHtml("invoice_names"),
       '<div class="section-grid">',
       '<div class="card"><div class="card-head"><div><h3>Sao lưu dữ liệu</h3><p>Tải toàn bộ đơn, công nợ và thanh toán về máy</p></div></div>',
       '<div class="card-body"><div class="code-note">', backupLocation, '</div>',
@@ -5991,7 +6008,8 @@
       });
       state.catalogImportPreview = null;
       await loadData(state.batchId, true);
-      showToast("Đã cập nhật " + result.processed + " mã và tên xuất hóa đơn");
+      document.getElementById('catalogImportResult')?.scrollIntoView({block:'center'});
+      showToast("Đã thêm " + num(result.inserted_products) + " mã mới. Tổng mã sau lần nạp: " + num(result.system_products_after));
     } catch (error) {
       button.disabled = false;
       button.textContent = "Xác nhận cập nhật danh mục";

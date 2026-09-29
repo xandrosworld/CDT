@@ -1476,6 +1476,7 @@ def parse_catalog_workbook(conn, workbook, mode='full', *, price_fallback=True) 
     rows = []
     unique_items = {}
     source_signatures = {}
+    source_codes = set()
     scanned = 0
     ignored_rows=[]
     max_column = max(fields.values())
@@ -1492,6 +1493,8 @@ def parse_catalog_workbook(conn, workbook, mode='full', *, price_fallback=True) 
         code = mapping_cell_text(row[fields["product_code"] - 1]).upper()
         if mapping_key(worksheet.title) in {'baogia','banggia'} and all(isinstance(row[fields[k]-1],(int,float)) for k in ('product_code','product_name','unit','tax')):
             continue
+        if code:
+            source_codes.add(code)
         if mode == 'new_only' and code in existing_products:
             scanned += 1
             if scanned > MAPPING_IMPORT_MAX_ROWS:
@@ -1619,6 +1622,12 @@ def parse_catalog_workbook(conn, workbook, mode='full', *, price_fallback=True) 
     incoming_codes = {item["product_code"] for item in unique_rows}
     retained_codes = sorted(set(existing_products) - incoming_codes)
     counts = {
+        "source_products": len(source_codes),
+        "source_existing_products": len(source_codes & set(existing_products)),
+        "source_new_products": len(source_codes - set(existing_products)),
+        "outside_file_products": len(set(existing_products) - source_codes),
+        "system_products_before": len(existing_products),
+        "additional_price_products": sum(item['product_status'] == 'new' and item['product_code'] not in source_codes for item in unique_rows),
         "total": len(rows),
         "unique_products": len(unique_rows),
         "new_products": sum(item["product_status"] == "new" for item in unique_rows),
@@ -6638,6 +6647,11 @@ def register_contract_routes(app, ctx):
                             (code, invoice_name, timestamp),
                         )
                 result_counts = {
+                    "filename": pending['filename'],
+                    "sheet": pending['sheet'],
+                    "confirmed_at": timestamp,
+                    "source_counts": pending['counts'],
+                    "system_products_after": conn.execute('SELECT COUNT(*) FROM products').fetchone()[0],
                     "inserted_products": inserted_products,
                     "updated_products": updated_products,
                     "unchanged_products": unchanged_products,

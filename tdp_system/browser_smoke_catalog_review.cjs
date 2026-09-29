@@ -44,6 +44,7 @@ async function main() {
     await call('DOM.setFileInputFiles',{nodeId:node.nodeId,files:[path.join(output,'catalog-review.xlsx')]});
     await wait('document.getElementById("catalogReviewMode")','initial preview');
     assert.equal(uploads,1);
+    assert(await run('document.getElementById("catalogImportCounts").textContent.includes("Mã trong sheet")'));
     await run(`document.getElementById('catalogReviewMode').value='names_and_new';document.getElementById('catalogReviewMode').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-action="review-catalog-import"]').click()`);
     await wait('document.querySelectorAll("#catalogImportReview .row-error").length===4','four identity errors');
     assert(await run('document.querySelector("[data-action=confirm-catalog-import]").disabled'));
@@ -76,6 +77,28 @@ async function main() {
       assert.deepEqual(rows.map(r=>r.invoice_name),expected);
       assert.deepEqual(rows.map(r=>r.unit),['Lễ','Cốc','Bộ','Đĩa']);
       assert.deepEqual(rows.map(r=>r.invoice_unit),['Lễ','Cốc','Bộ','Đĩa']);
+      await wait('document.getElementById("catalogImportResult")','saved summary');
+      assert(await run('document.getElementById("catalogImportResult").textContent.includes("Đã thêm 0 mã mới")'));
+      const nextDoc=await call('DOM.getDocument');
+      const nextInput=await call('DOM.querySelector',{nodeId:nextDoc.root.nodeId,selector:'#catalogWorkbookInput'});
+      await call('DOM.setFileInputFiles',{nodeId:nextInput.nodeId,files:[path.join(output,'catalog-counts.xlsx')]});
+      await wait('document.getElementById("catalogImportCounts")','counts preview');
+      const counts=await run('document.getElementById("catalogImportCounts").textContent');
+      assert(counts.includes('thêm 1 mã mới'),counts);
+      assert(counts.includes('sẽ là 5'),counts);
+      for(const width of [1440,1024]){
+        await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});
+        await run('document.getElementById("catalogImportCounts").scrollIntoView({block:"center"})');await pause(200);
+        const shot=await call('Page.captureScreenshot',{format:'png'});
+        fs.writeFileSync(path.join(output,`catalog-counts-${width}.png`),Buffer.from(shot.data,'base64'));
+      }
+      await run('document.querySelector("[data-action=confirm-catalog-import]").click()');
+      await wait('!document.getElementById("catalogImportReview") && document.getElementById("catalogImportResult")?.textContent.includes("Đã thêm 1 mã mới")','actual addition');
+      await call('Page.reload');
+      await wait('document.querySelector("[data-view=settings]")','reloaded shell');await pause(3000);
+      await run('document.querySelector("[data-view=settings]").click()');
+      await wait('document.getElementById("catalogImportResult")','persisted summary');
+      assert(await run('document.getElementById("catalogImportResult").textContent.includes("Đã thêm 1 mã mới")'));
     } else {
       assert(!mutations.includes('/api/catalog/import/confirm'));
       await run('document.querySelector("[data-action=cancel-catalog-import]").click()');

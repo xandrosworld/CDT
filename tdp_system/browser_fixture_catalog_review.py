@@ -25,6 +25,12 @@ def main():
     s.append(['Mã hàng','Tên Thành Đạt Phát','Tên xuất hóa đơn','ĐVT Thành Đạt Phát','ĐVT Xuất HĐ','Thuế'])
     for code,name in CONFIRMED_DELIVERED_NAMES.items():s.append([code,name,'Rau muống','Kg','Kg','8%'])
     w.save(output/'catalog-review.xlsx');w.close()
+    w=Workbook();s=w.active;s.title='danh mục hh'
+    s.append(['Mã hàng','Tên Thành Đạt Phát','Tên xuất hóa đơn','ĐVT','Thuế'])
+    s.append(['N000006','Cau, trầu','Cau, trầu','Lễ','8%'])
+    s.append(['COUNT-NEW','Hàng mới','Hàng mới','Kg','8%'])
+    s.append(['COUNT-NEW','Hàng mới','Hàng mới','Kg','8%'])
+    w.save(output/'catalog-counts.xlsx');w.close()
     serve(server.app,host='127.0.0.1',port=int(sys.argv[2]),threads=4)
 
 

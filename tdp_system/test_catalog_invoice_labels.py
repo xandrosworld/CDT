@@ -32,6 +32,40 @@ class CatalogInvoiceLabelsTests(unittest.TestCase):
             batch,ids=support.OutgoingReadinessTests.add_batch(conn,'2026-09-01',[{'qty':7}])
         return batch,ids
 
+    def test_source_counts_include_existing_duplicates_and_invalid_new_codes(self):
+        rows = [['HH-01','Existing','Existing','Kg','8%'],
+                ['HH-01','Existing','Existing','Kg','8%'],
+                ['INVALID-COUNT','New','New','','8%'], ['', '', '', '', '8%']]
+        for mode in ('new_only', 'full', 'names_and_new'):
+            p = self.preview(rows, mode)
+            c = p['counts']
+            self.assertEqual((2,1,1), (c['source_products'],c['source_existing_products'],c['source_new_products']))
+            self.assertEqual(c['system_products_before']-1,c['outside_file_products'])
+            self.assertFalse(p['can_confirm'])
+            self.assertEqual(0,c['new_products'])
+
+    def test_confirm_reports_actual_additions_and_persists_summary(self):
+        p = self.preview([['HH-01','Existing','Existing','Kg','8%'],
+                          ['NEW-COUNT','New','New','Kg','8%']], 'new_only')
+        self.assertEqual(2,p['counts']['source_products'])
+        self.assertEqual(1,p['counts']['new_products'])
+        request = {'token':p['token'],'confirmed':True}
+        saved = self.client.post('/api/catalog/import/confirm',json=request)
+        self.assertEqual(200,saved.status_code,saved.json)
+        self.assertEqual(1,saved.json['inserted_products'])
+        self.assertEqual(p['counts']['system_products_before']+1,saved.json['system_products_after'])
+        self.assertEqual(saved.json,self.client.post('/api/catalog/import/confirm',json=request).json)
+        with server.db() as conn:
+            import json
+            last = json.loads(conn.execute("SELECT metadata_json FROM audit_log WHERE event_type='catalog.bulk_import' ORDER BY id DESC LIMIT 1").fetchone()[0])
+        self.assertEqual(p['counts'],last['source_counts'])
+        self.assertEqual(saved.json['system_products_after'],last['system_products_after'])
+        again = self.preview([['HH-01','Existing','Existing','Kg','8%'],
+                              ['NEW-COUNT','New','New','Kg','8%']], 'new_only')
+        self.assertEqual(2,again['counts']['source_products'])
+        self.assertEqual(2,again['counts']['source_existing_products'])
+        self.assertEqual(0,again['counts']['new_products'])
+
     def test_new_only_recovers_price_sheet_code_without_overwriting_catalog(self):
         book=self.book([])
         price=book.create_sheet('BÁO GIÁ')
@@ -45,6 +79,8 @@ class CatalogInvoiceLabelsTests(unittest.TestCase):
             self.assertEqual(before,list(conn.iterdump()))
             self.assertTrue(result['can_confirm'],result)
             self.assertEqual(1,result['counts']['new_products'])
+            self.assertEqual(0,result['counts']['source_products'])
+            self.assertEqual(1,result['counts']['additional_price_products'])
             item=result['items'][0]
             self.assertEqual(('C000030','Kg','KKKNT','BÁO GIÁ'),(item['product_code'],item['unit'],item['tax'],item['source_sheet']))
             price.append(['C000030','Thịt khác','Kg','KKKNT'])
