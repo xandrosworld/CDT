@@ -103,7 +103,12 @@ const {chromium} = require(process.env.TDP_PLAYWRIGHT_MODULE || 'playwright');
     await close();
     // Posted and unsafe source invoices are read-only even when the modal is open.
     for(const id of [ids.input_ids['1'],ids.input_ids['3']]) {
-      await open(id);assert.equal(await modal.locator('.review-code,.review-select,.review-split').count(),0);assert(await modal.locator('.review-group').isDisabled());await close();
+      await open(id);assert.equal(await modal.locator('.review-code,.review-select,.review-split').count(),0);assert(await modal.locator('.review-group').isDisabled());assert(await modal.locator('.review-group').isHidden());
+      if(id===ids.input_ids['1']) {
+        assert.match(await modal.locator('.review-footer').innerText(),/không cần gộp lại/);
+        assert.match(await modal.locator('.review-status').innerText(),/Đã ghi kho/);
+      }
+      await close();
     }
     // Paid + free goods keep their full quantity and original amount when grouped.
     await open(ids.promotion_invoice);

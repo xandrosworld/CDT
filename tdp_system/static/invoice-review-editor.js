@@ -34,6 +34,8 @@
     function groupButton() {
       const button = find('.review-group');
       button.textContent = 'Gộp ' + selected.size + ' dòng đã chọn';
+      button.hidden = !editable();
+      button.style.display = editable() ? '' : 'none';
       button.disabled = busy || !editable() || selected.size < 2 || selected.size > 100;
     }
     function lock(value) {
@@ -51,7 +53,12 @@
     function render() {
       ++revision;
       const allowed = editable(), summary = invoice.receipt_summary || {items:[],pending_lines:0};
-      find('.review-content').innerHTML = (!allowed ? '<p class="warning-summary">' + esc(invoice.error_message || 'Hóa đơn đã ghi kho hoặc nguồn cần kiểm tra. Chỉ xem các dòng và tổng đã lưu.') + '</p>' : '') +
+      const posted = invoice.receipt_status === 'posted';
+      find('.review-footer').textContent = posted
+        ? 'Hóa đơn đã ghi kho. Xem tổng lượng và giá nhập bình quân theo mã ở bảng trên; không cần gộp lại hoặc nhập kho lần nữa.'
+        : allowed ? 'Chọn ít nhất 2 dòng cùng hóa đơn để gộp. Lưu từng dòng hoặc Lưu và gộp, kiểm tra rồi xác nhận Nhập kho trên bảng.'
+        : 'Chỉ xem dữ liệu đã lưu. Cần xử lý trạng thái hóa đơn trước khi sửa mã, quy đổi hoặc gộp dòng.';
+      find('.review-content').innerHTML = (!allowed ? '<p class="warning-summary">' + esc(invoice.error_message || (posted ? 'Hóa đơn đã ghi kho nên không chọn dòng để gộp lại. Các dòng cùng mã đã được cộng trong bảng Tổng nhập theo mã đã lưu bên dưới, gồm cả hàng khuyến mại 0đ.' : 'Hóa đơn đang bị khóa hoặc nguồn cần kiểm tra. Chỉ xem các dòng và tổng đã lưu.')) + '</p>' : '') +
         (invoice.receipt_status==='posted' && invoice.sync_status==='synced' ? '<p><button class="btn btn-primary review-repair-conversion">Sửa quy đổi đã nhập kho</button></p>' : '') +
         warnings.map(g=>'<p class="warning-summary">' + esc(g.message) + (allowed ? ' <button type="button" class="btn btn-small btn-outline review-split" data-group="' + g.id + '">Bỏ nhóm cũ</button>' : '') + '</p>').join('') +
         '<p class="review-caption">Đủ ' + lines.length + ' dòng gốc · ' + (invoice.discount_available ? 'Tổng chưa thuế sau chiết khấu trên hóa đơn: <strong>' + money(invoice.discount_net_total == null ? invoice.subtotal : invoice.discount_net_total) + '</strong>' : 'Tổng tiền dòng chưa thuế: <strong>' + money(lines.reduce((sum,r)=>sum+Number(r.amount || 0),0)) + '</strong>') + '</p>' +
@@ -96,7 +103,7 @@
       lines = invoice.items.map(r => ({...r,issue:groups.has(r.id) ? groups.get(r.id).issue : all.get(r.id)?.issue || ''}));
       selected.forEach(id => { const r=lineFor(id); if(!r || groups.has(id) || !r.inventory_eligible || r.is_expense) selected.delete(id); });
       render();
-      find('.review-status').textContent = message || 'Sửa mã, quy đổi hoặc chọn các dòng để gộp.';
+      find('.review-status').textContent = editable() ? (message || 'Chọn ít nhất 2 dòng cùng hóa đơn để bật nút Gộp; hoặc sửa mã, quy đổi từng dòng.') : invoice.receipt_status === 'posted' ? 'Đã ghi kho · xem tổng theo mã bên dưới.' : 'Chỉ xem · hóa đơn chưa cho phép gộp dòng.';
     }
     async function refreshSaved(message) {
       try { await reload(message); await changed(); }
