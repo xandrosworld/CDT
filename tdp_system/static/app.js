@@ -3515,14 +3515,22 @@
     var party=pendingScope().contractor,enabled=(state.invoiceContractorChoices&&state.invoiceContractorChoices.items||[]).filter(function(r){return r.enabled;}).map(function(r){return r.code;});
     var rows=state.outgoingSourceReview.filter(function(r){return r.scope==='unresolved'||r.scope==='outside'||(party?r.contractor===party:enabled.includes(r.contractor));});
     if(!rows.length)return '';
-    return '<details id="invoiceSourceReview" '+(rows.some(function(r){return r.scope==='unresolved';})?'open':'')+'><summary>Hóa đơn đã ký · gồm hóa đơn xuất ngoài / chưa xác định · '+rows.length+' hóa đơn</summary><p>Hóa đơn xuất ngoài đơn trên web: chọn “Đơn riêng, chưa đưa vào phần mềm” rồi Lưu đối chiếu. Hóa đơn thuộc đơn trên web: chọn đúng nhà thầu để tránh xuất trùng.</p>'+rows.map(function(r){
+    var needsReview = rows.filter(function(r){return r.scope==='unresolved'||r.error;});
+    var matched = rows.filter(function(r){return r.scope!=='unresolved'&&!r.error;});
+    var stockPending = matched.filter(function(r){return r.stock_status!=='posted';}).length;
+    function renderSourceRow(r) {
       var status=r.scope==='outside'?'Đơn riêng · không trừ đơn đã duyệt':r.scope==='orders'?'Trừ đơn của '+r.contractor:'Chưa xác định đơn liên quan';
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
-        '<details><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Sửa phạm vi đối chiếu')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
+        '<details'+(r.scope==='unresolved'?' open':'')+'><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Sửa phạm vi đối chiếu')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
         '<label>Hóa đơn này thuộc<select name="choice" required><option value="">Chọn đúng nguồn đơn</option><option value="outside"'+(r.scope==='outside'?' selected':'')+'>Đơn riêng, chưa đưa vào phần mềm</option>'+state.data.master.contractors.map(function(c){return '<option value="'+esc(c.code)+'"'+(r.scope==='orders'&&r.contractor===c.code?' selected':'')+'>Đơn đã duyệt · '+esc(c.code)+'</option>';}).join('')+'</select></label>'+
         '<label>Lý do xác nhận<input name="note" required placeholder="Đối chiếu theo đơn / hóa đơn nào"></label><button type="submit" class="btn btn-outline">Lưu đối chiếu</button></form></details></div>';
-    }).join('')+'</details>';
+    }
+    return '<section id="invoiceSourceReview" class="code-note"><strong>Đối chiếu hóa đơn đã ký</strong>'+
+      (needsReview.length ? '<p>Còn <strong>'+needsReview.length+' hóa đơn cần kiểm tra nguồn đơn</strong>. Chọn đúng đơn liên quan, nhập Lý do xác nhận rồi bấm Lưu đối chiếu. Hóa đơn xuất ngoài đơn trên web chọn “Đơn riêng, chưa đưa vào phần mềm”.</p><div class="source-review-pending">'+needsReview.map(renderSourceRow).join('')+'</div>' :
+        '<p>Đã xác định nguồn đơn cho '+matched.length+' hóa đơn. Không cần lưu đối chiếu lại; tiếp tục chọn mặt hàng và kiểm tra tồn ở các bước phía trên.</p>')+
+      (stockPending ? '<p>Còn '+stockPending+' hóa đơn đã xác định nguồn đơn nhưng chưa ở trạng thái Đã ghi xuất kho. Mở danh sách bên dưới để xem hóa đơn; kiểm tra tại Hóa đơn đầu vào + đầu ra → Đầu ra.</p>' : '')+
+      (matched.length ? '<details class="source-review-matched"><summary>Xem '+matched.length+' hóa đơn đã đối chiếu · chỉ sửa khi gắn sai nguồn đơn</summary><p>Danh sách này để tra cứu hóa đơn đã ký, không phải hóa đơn mới cần xuất. Trạng thái ghi xuất kho được hiển thị riêng ở từng hóa đơn.</p>'+matched.map(renderSourceRow).join('')+'</details>' : '')+'</section>';
   }
 
   function conversionIssue(orderId) {
