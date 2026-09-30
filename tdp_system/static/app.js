@@ -3519,12 +3519,14 @@
     var matched = rows.filter(function(r){return r.scope!=='unresolved'&&!r.error;});
     var stockPending = matched.filter(function(r){return r.stock_status!=='posted';}).length;
     function renderSourceRow(r) {
+      var draft=(state.sourceScopeEdits||{})[r.id];
+      var choice=draft?draft.choice:r.scope==='outside'?'outside':r.scope==='orders'?r.contractor:'';
       var status=r.scope==='outside'?'Đơn riêng · không trừ đơn đã duyệt':r.scope==='orders'?'Trừ đơn của '+r.contractor:'Chưa xác định đơn liên quan';
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
         '<details'+(r.scope==='unresolved'?' open':'')+'><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Sửa phạm vi đối chiếu')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
-        '<label>Hóa đơn này thuộc<select name="choice" required><option value="">Chọn đúng nguồn đơn</option><option value="outside"'+(r.scope==='outside'?' selected':'')+'>Đơn riêng, chưa đưa vào phần mềm</option>'+state.data.master.contractors.map(function(c){return '<option value="'+esc(c.code)+'"'+(r.scope==='orders'&&r.contractor===c.code?' selected':'')+'>Đơn đã duyệt · '+esc(c.code)+'</option>';}).join('')+'</select></label>'+
-        '<label>Lý do xác nhận<input name="note" required placeholder="Đối chiếu theo đơn / hóa đơn nào"></label><button type="submit" class="btn btn-outline">Lưu đối chiếu</button></form></details></div>';
+        '<label>Hóa đơn này thuộc<select name="choice" required><option value="">Chọn đúng nguồn đơn</option><option value="outside"'+(choice==='outside'?' selected':'')+'>Đơn riêng, chưa đưa vào phần mềm</option>'+state.data.master.contractors.map(function(c){return '<option value="'+esc(c.code)+'"'+(choice===c.code?' selected':'')+'>Đơn đã duyệt · '+esc(c.code)+'</option>';}).join('')+'</select></label>'+
+        '<label>Lý do xác nhận<input name="note" required value="'+esc(draft&&draft.note||'')+'" placeholder="Đối chiếu theo đơn / hóa đơn nào"></label><button type="submit" class="btn btn-outline">Lưu đối chiếu</button></form></details></div>';
     }
     return '<section id="invoiceSourceReview" class="code-note"><strong>Đối chiếu hóa đơn đã ký</strong>'+
       (needsReview.length ? '<p>Còn <strong>'+needsReview.length+' hóa đơn cần kiểm tra nguồn đơn</strong>. Chọn đúng đơn liên quan, nhập Lý do xác nhận rồi bấm Lưu đối chiếu. Hóa đơn xuất ngoài đơn trên web chọn “Đơn riêng, chưa đưa vào phần mềm”.</p><div class="source-review-pending">'+needsReview.map(renderSourceRow).join('')+'</div>' :
@@ -3683,6 +3685,8 @@
   }
 
   function renderDocuments() {
+    state.sourceScopeEdits=state.sourceScopeEdits||{};
+    content.querySelectorAll('.source-order-scope').forEach(function(form){if(!form.dataset.saved)state.sourceScopeEdits[form.dataset.id]=Object.fromEntries(new FormData(form).entries());});
     if(state.view==='payment-request'){renderPaymentRequest();return;}
     if(state.view==='invoice-tools'){renderInvoiceTools();return;}
     if(state.view!=='documents')return;
@@ -6994,14 +6998,21 @@
     if(event.target.classList.contains('source-order-scope')) {
       event.preventDefault();
       var sourceForm=event.target,choice=new FormData(sourceForm).get('choice');
-      var scopeButton=event.submitter;scopeButton.disabled=true;
+      var scopeButton=event.submitter || sourceForm.querySelector('button[type=submit]');scopeButton.disabled=true;
       try {
         await api('/api/outgoing-invoices/source-scopes/'+sourceForm.dataset.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:sourceForm.dataset.token,scope:choice==='outside'?'outside':'orders',contractor:choice==='outside'?'':choice,note:new FormData(sourceForm).get('note')})});
+        sourceForm.dataset.saved='true';
+        if(state.sourceScopeEdits)delete state.sourceScopeEdits[sourceForm.dataset.id];
         var sourceDates=state.orderInvoiceFilters || {};
         state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?scope=unissued')).items;
         await loadUnissuedScope(true);
         showToast('Đã lưu phạm vi đối chiếu hóa đơn');
-      } catch(error) {showToast(error.message,true);} finally {renderDocuments();}
+      } catch(error) {
+        var scopeError=sourceForm.querySelector('.source-save-error');
+        if(!scopeError){scopeError=document.createElement('p');scopeError.className='source-save-error error-summary';scopeError.setAttribute('role','alert');sourceForm.appendChild(scopeError);}
+        scopeError.textContent=error.message+' Phần đang chọn và Lý do xác nhận được giữ nguyên; kiểm tra rồi bấm Lưu đối chiếu để thử lại.';
+        showToast(error.message,true);
+      } finally {scopeButton.disabled=false;}
       return;
     }
     if (event.target.id === 'unissuedForm') {

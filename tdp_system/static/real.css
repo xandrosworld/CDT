@@ -20,6 +20,10 @@
 .top-actions form .user-chip { width:auto; min-width:90px; height:40px; padding:8px 12px;
   border-radius:8px; white-space:nowrap; font-size:14px; }
 .document-contractor-form { flex-wrap:wrap; align-items:flex-end; }
+.source-order-scope.document-contractor-form { display:grid; grid-template-columns:minmax(0,1fr); width:100%; max-width:760px; gap:12px; }
+.source-order-scope.document-contractor-form label { min-width:0; width:100%; }
+.source-order-scope.document-contractor-form select,.source-order-scope.document-contractor-form input { min-width:0; width:100%; max-width:100%; box-sizing:border-box; }
+.source-order-scope.document-contractor-form button { justify-self:start; }
 .document-contractor-form label { display:flex; flex-direction:column; gap:6px; min-width:140px; }
 .document-contractor-form label:first-child { flex:1 1 240px; }
 .actual-weight-form .document-contractor-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); max-width:800px; align-items:start; }

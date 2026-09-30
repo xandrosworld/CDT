@@ -18,7 +18,10 @@ def resolve_scope(conn, invoice, profiles):
     parties=profiles.get(invoice['buyer_tax_code'].strip().upper(),[])
     if len(parties)==1:
         return parties[0], ''
-    return '', 'Hóa đơn '+invoice['invoice_number']+' chưa ghép duy nhất với nhà thầu; chưa trừ vào bảng cộng dồn.'
+    tax = invoice['buyer_tax_code'].strip()
+    reason = ('Mã số thuế '+tax+' chưa được gắn với nhà thầu nào trong Hồ sơ người mua.' if not parties else
+              'Mã số thuế '+tax+' đang được gắn với nhiều nhà thầu: '+', '.join(parties)+'.') if tax else 'Hóa đơn chưa có Mã số thuế người mua để đối chiếu.'
+    return '', reason+' Chọn Hóa đơn này thuộc, nhập Lý do xác nhận rồi bấm Lưu đối chiếu bên dưới. Hóa đơn chưa được trừ khỏi phần đơn chờ xuất; không cần xuất lại hóa đơn.'
 
 
 def review_token(invoice):
