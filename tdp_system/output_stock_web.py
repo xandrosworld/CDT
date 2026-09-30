@@ -46,17 +46,16 @@ def review_shortages(conn, start, end):
     items.sort(key=lambda item: (item['supplementary_allowed'], item['product_code']))
     catalog = [dict(r, closing_qty=stocks.get(r['code'], {}).get('closing_qty', 0))
                for r in snapshot['catalog']]
-    history = []
+    history, other_history = [], []
     for entry in conn.execute("SELECT id,created_at,entity_type,metadata_json FROM audit_log WHERE event_type='inventory.output.remap' AND status='ok' ORDER BY id DESC"):
         meta = json.loads(entry['metadata_json'])
-        if meta.get('from', '') > end or meta.get('to', '') < start:
-            continue
+        destination = other_history if meta.get('from', '') > end or meta.get('to', '') < start else history
         for change in meta.get('changes', []):
-            history.append(dict(id=entry['id'], saved_at=entry['created_at'], origin=entry['entity_type'],
+            destination.append(dict(id=entry['id'], saved_at=entry['created_at'], origin=entry['entity_type'],
                                 actor=meta.get('actor', ''), from_date=meta.get('from'), to_date=meta.get('to'),
                                 **{k:change.get(k) for k in ('old_code','old_name','new_code','new_name','qty','old_unit','unit')}))
     return dict(from_date=start, to_date=end, version=_source_hash(snapshot),
-                items=items, catalog=catalog, blocked_reason=blocked_reason, history=history)
+                items=items, catalog=catalog, blocked_reason=blocked_reason, history=history, other_history=other_history)
 
 
 def preview_web(conn, body):

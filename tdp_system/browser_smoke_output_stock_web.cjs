@@ -9,12 +9,12 @@ const base = 'http://127.0.0.1:18803';
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(base);
     await page.addScriptTag({url:base+'/static/output-stock-web.js'});
-    const open = () => page.evaluate(() => window.TdpOutputStockWeb({
-      from:'2026-08-01', to:'2026-08-31', code:'HH-01',
+    const open = (period = '2026-08') => page.evaluate(period => window.TdpOutputStockWeb({
+      from:period+'-01', to:period === '2026-08' ? '2026-08-31' : '2026-09-30', code:'HH-01',
       esc:value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
       api:async (url, opts) => { const r = await fetch(url, opts); const j = await r.json(); if (!r.ok || j.ok === false) throw Error(j.error); return j; },
       onApplied:async () => {}, onExcel:() => { window.excelOpened = true; }
-    }));
+    }), period);
     await open();
     let dialog = page.locator('.output-stock-web');
     await dialog.locator('[name=new_code]').fill('REMAP-B');
@@ -46,6 +46,11 @@ const base = 'http://127.0.0.1:18803';
     assert.equal(view.items.find(r => r.product_code === 'HH-01').closing_qty, -2);
     assert.equal(view.history.length, 1);
     await page.screenshot({path:'D:/TDP_RAILWAY_PRIVATE/stock-history-browser.png',fullPage:true});
+    await dialog.locator('[data-close]').click();
+    await open('2026-09');
+    await dialog.locator('[data-other-history] summary').click();
+    assert.match(await dialog.locator('[data-other-history]').innerText(), /Browser test/);
+    assert.match(await dialog.locator('[data-other-history]').innerText(), /2026-08-01/);
     assert.deepEqual(errors, []);
     console.log('PASS: switch/reopen preserves entries; explicit confirmation; history and stock updated once; Excel accessible.');
   } finally { await browser.close(); }

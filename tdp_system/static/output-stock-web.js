@@ -50,6 +50,13 @@ window.TdpOutputStockWeb = function (options) {
     el('[data-history]').innerHTML = '<details class="card"><summary><b>Điều chỉnh đã lưu: ' + history.length + ' dòng</b> · Bấm xem phần đã xác nhận trên web hoặc từ Excel</summary>' +
       '<p>Lịch sử các lần xác nhận có kỳ xử lý giao với khoảng ngày đang xem. Không nhập lại các lần đã lưu. Tồn kho hiện tại được tính ở bảng bên dưới.</p>' +
       (history.length ? '<div class="table-wrap"><table><thead><tr><th>Đã lưu lúc / Người xác nhận</th><th>Mã bị trừ nhầm</th><th>Mặt hàng thực tế đã xuất</th><th>Số lượng sửa</th><th>Cách lưu / Kỳ xử lý</th></tr></thead><tbody>' + history.map(row => '<tr><td>' + esc(row.saved_at + ' · ' + row.actor) + '</td><td>' + esc(row.old_code + ' · ' + row.old_name) + '</td><td>' + esc(row.new_code + ' · ' + row.new_name) + '</td><td>' + qty(row.qty) + ' ' + esc(row.unit) + '</td><td>' + esc((row.origin === 'web' ? 'Trên web' : 'Excel') + ' · ' + row.from_date + ' → ' + row.to_date) + '</td></tr>').join('') + '</tbody></table></div>' : '<p>Chưa tìm thấy lần xác nhận sửa mã nào trong kỳ này. Nếu chị đã sửa trong Excel nhưng chưa tải lên và xác nhận, mở Cách khác: sửa bằng Excel. Có thể đổi khoảng ngày để kiểm tra kỳ khác.</p>') + '</details>';
+    const others = data.other_history || [];
+    if (others.length) {
+      const latest = others[0];
+      el('[data-history]').innerHTML += '<details class="card" data-other-history><summary><b>Còn ' + others.length + ' dòng điều chỉnh đã lưu ở kỳ khác</b> · Bấm xem phần đã làm trước đây</summary>' +
+        '<p>Lần lưu gần nhất ở kỳ khác: ' + esc(latest.saved_at + ' · ' + latest.actor + ' · Kỳ ' + latest.from_date + ' → ' + latest.to_date) + '. Các dòng dưới đây là lịch sử đã xác nhận, không cần nhập lại cho kỳ hiện tại.</p>' +
+        '<div class="table-wrap"><table><thead><tr><th>Đã lưu lúc / Kỳ xử lý</th><th>Mã bị trừ nhầm</th><th>Mặt hàng thực tế đã xuất</th><th>Số lượng sửa</th><th>Người xác nhận / Cách lưu</th></tr></thead><tbody>' + others.map(row => '<tr><td>' + esc(row.saved_at + ' · ' + row.from_date + ' → ' + row.to_date) + '</td><td>' + esc(row.old_code + ' · ' + row.old_name) + '</td><td>' + esc(row.new_code + ' · ' + row.new_name) + '</td><td>' + qty(row.qty) + ' ' + esc(row.unit) + '</td><td>' + esc(row.actor + ' · ' + (row.origin === 'web' ? 'Trên web' : 'Excel')) + '</td></tr>').join('') + '</tbody></table></div></details>';
+    }
   }
   function renderList() {
     el('[data-list]').innerHTML = '<div class="table-wrap"><table><thead><tr><th>Mã / tên hàng</th><th>Tồn cuối kỳ</th><th>Xử lý</th></tr></thead><tbody>' +

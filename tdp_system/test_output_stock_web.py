@@ -42,7 +42,9 @@ class OutputStockWebTests(unittest.TestCase):
             self.assertEqual(1, len(history))
             self.assertEqual(('HH-01', 'REMAP-B', 22, 'web'),
                              tuple(history[0][key] for key in ('old_code','new_code','qty','origin')))
-            self.assertEqual([], review_shortages(conn, '2026-09-01', '2026-09-30')['history'])
+            next_period = review_shortages(conn, '2026-09-01', '2026-09-30')
+            self.assertEqual([], next_period['history'])
+            self.assertEqual(history, next_period['other_history'])
 
     def test_old_excel_confirmation_visible_in_history_even_after_shortage_resolved(self):
         fixture = fixtures.OutputStockRemapTests()
