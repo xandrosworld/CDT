@@ -3,19 +3,24 @@ const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
 const requests=[];let fail=false,slow=false;
 const server=http.createServer((req,res)=>{
  const u=new URL(req.url,'http://localhost');
- if(u.pathname==='/'){res.setHeader('Content-Type','text/html;charset=utf-8');return res.end('<script src="/document-preview.js"></script><div id="preview"></div>');}
+ if(u.pathname==='/'){res.setHeader('Content-Type','text/html;charset=utf-8');return res.end('<link rel="stylesheet" href="/real.css"><script src="/document-preview.js"></script><div id="preview"></div>');}
+ if(u.pathname==='/real.css'){res.setHeader('Content-Type','text/css');return res.end(fs.readFileSync(path.join(__dirname,'static/real.css')));}
  if(u.pathname==='/document-preview.js'){res.setHeader('Content-Type','text/javascript');return res.end(fs.readFileSync(path.join(__dirname,'static/document-preview.js')));}
  if(u.pathname==='/api/documents/preview'){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({token:'fixture',sheet_count:1,sheets:[{name:'Đề nghị thanh toán',width:800,html:'<table><tr><td>Preview</td></tr></table>'}]}));}
  if(u.pathname.startsWith('/api/export/invoice-pdfs/')){
   requests.push(req.url);
   if(slow)return;
   if(fail){res.statusCode=409;res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({error:'Phạm vi đã thay đổi'}));}
+  if(u.searchParams.get('format')==='pdf'){
+   res.setHeader('Content-Type','application/pdf');res.setHeader('X-Invoice-Count','4');res.setHeader('X-Print-Sides','duplex');
+   return res.end(fs.readFileSync(process.env.TDP_INVOICE_PRINT_FIXTURE));
+  }
   res.setHeader('Content-Type','application/zip');res.setHeader('Content-Disposition','attachment; filename="Hoa_don_SUPPY.zip"');return res.end('fixture-original-invoices');
  }
  res.statusCode=404;res.end();
 });
 (async()=>{
- await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({channel:'msedge',headless:true});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({channel:'chrome',headless:true});
  try{
   const p=await browser.newPage({acceptDownloads:true});const errors=[];p.on('pageerror',e=>errors.push(e.message));
   await p.goto('http://127.0.0.1:'+server.address().port);
@@ -36,6 +41,18 @@ const server=http.createServer((req,res)=>{
   assert.match(await p.locator('.document-error').innerText(),/Đã dừng chờ tải/);
   assert.equal(await p.locator('[data-sheet]:checked').count(),0);
   slow=false;const retried=p.waitForEvent('download');await p.getByRole('button',{name:'Thử lại tải PDF hóa đơn',exact:true}).click();assert.equal(await (await retried).failure(),null);
+  await p.waitForFunction(()=>!document.querySelector('[data-doc=invoice-print]').disabled);
+  await p.locator('[data-doc=invoice-print]').click();
+  await p.locator('.document-pdf iframe').waitFor();
+  const printUrl=new URL(requests.at(-1),'http://localhost');
+  assert.equal(printUrl.searchParams.get('layout'),'invoice-per-sheet');
+  assert.equal(printUrl.searchParams.get('scope_id'),body.scope_id);
+  const help=await p.locator('.document-pdf p').innerText();
+  assert.match(help,/mỗi hóa đơn bắt đầu trên tờ mới/);assert.match(help,/Không chọn bỏ qua trang trắng/);
+  assert.equal(await p.locator('[data-sheet]:checked').count(),0);
+  const actual=await p.locator('.document-pdf iframe').evaluate(async el=>Array.from(new Uint8Array(await (await fetch(el.src)).arrayBuffer())));
+  assert.deepEqual(Buffer.from(actual),fs.readFileSync(process.env.TDP_INVOICE_PRINT_FIXTURE));
+  if(process.env.TDP_INVOICE_PRINT_SCREENSHOT)await p.screenshot({path:process.env.TDP_INVOICE_PRINT_SCREENSHOT,fullPage:true});
   await p.evaluate(()=>TDPDocuments.open({kind:'deliveries'},'preview'));assert.equal(await button.count(),0);
   assert.deepEqual(errors,[]);console.log('INVOICE_PDF_BROWSER_PASS: scope, placement, independent selection, download, errors, payment only');
  }finally{await browser.close();server.close();}

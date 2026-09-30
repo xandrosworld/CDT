@@ -39,7 +39,7 @@
         '<button type="button" class="btn btn-small btn-outline" data-doc="pdf">Tải PDF đã chọn</button>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="view-pdf">Xem bản in</button>' +
         '<label>Khổ giấy <select class="document-paper" aria-label="Khổ giấy"><option value="A4">A4</option><option value="A5">A5 · biên nhận</option></select></label>' +
-        '<label>Cách in <select class="document-sides" aria-label="Cách in">'+(deliveries||purchases?'<option value="auto">Xếp trang tự động</option>':'')+'<option value="simplex">Một mặt</option><option value="duplex">Hai mặt · '+(deliveries?'mỗi đơn tờ riêng':'biên nhận tờ riêng')+'</option></select></label>' +
+        '<label>Cách in <select class="document-sides" aria-label="Cách in">'+(deliveries||purchases?'<option value="auto">Xếp trang tự động</option>':'')+'<option value="simplex">Một mặt</option><option value="duplex">Hai mặt'+(body.kind==='payment'?'':' · '+(deliveries?'mỗi đơn tờ riêng':'biên nhận tờ riêng'))+'</option></select></label>' +
         '<button type="button" class="btn btn-small btn-primary" data-doc="print">In phiếu đã chọn</button>' +
         '<label>Phóng to bản xem <select class="document-zoom" aria-label="Phóng to chứng từ"><option value="0.8">80%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>' +
         '<button type="button" class="btn btn-small btn-outline" data-doc="refresh">Đọc lại dữ liệu mới</button></div>' +
@@ -49,8 +49,9 @@
         (data.warnings || []).map(function (warning) { return '<p class="document-note tag-warn" role="alert">' + esc(warning) + '</p>'; }).join('') +
         '<div class="document-sheet-list" role="group" aria-label="Chọn từng chứng từ">' +
         data.sheets.map(function (sheet, i) { return '<div><input type="checkbox" checked data-sheet="' + i + '" aria-label="Chọn ' + esc(sheet.name) + '"><button type="button" class="btn btn-small btn-outline" data-open-sheet="' + i + '">' + esc(sheet.name) + '</button></div>'; }).join('') +
-        (body.kind === 'payment' ? '<button type="button" class="btn btn-small btn-primary" data-doc="invoice-pdfs" title="Tải PDF gốc của các hóa đơn đã phát hành trong kỳ của nhà thầu đang xem. Nhiều hóa đơn được đóng chung file ZIP.">Tải PDF hóa đơn</button><button type="button" class="btn btn-small btn-primary" data-doc="invoice-print" title="In các hóa đơn gốc thuộc đúng nhà thầu và kỳ đề nghị thanh toán đang xem.">In tất cả hóa đơn</button>' : '') +
-        '</div><div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
+        (body.kind === 'payment' ? '<button type="button" class="btn btn-small btn-primary" data-doc="invoice-pdfs" title="Tải PDF gốc của các hóa đơn đã phát hành trong kỳ của nhà thầu đang xem. Nhiều hóa đơn được đóng chung file ZIP.">Tải PDF hóa đơn</button><button type="button" class="btn btn-small btn-primary" data-doc="invoice-print" title="In A4 hai mặt, mỗi hóa đơn bắt đầu trên tờ riêng; giữ đủ các trang gốc.">In tất cả hóa đơn</button>' : '') +
+        '</div>' + (body.kind === 'payment' ? '<p class="document-note">In hóa đơn: A4 hai mặt · mỗi hóa đơn bắt đầu trên tờ riêng. Giữ đủ các trang như bản gốc; chèn mặt trắng khi cần để hai số hóa đơn không chung một tờ. Chọn Hai mặt, Lật cạnh dài và in tất cả trang, kể cả trang trắng. Cách in phía trên chỉ áp dụng cho In phiếu đã chọn.</p>' : '') +
+        '<div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false, paperTouched = false, cancelDownload = null;
       function invalidatePrint() {
         resolvedSides = '';
@@ -58,6 +59,7 @@
         host.querySelector('.document-error').textContent = '';
       }
       function printHelp() {
+        if(body.kind === 'payment') return 'In phiếu đã chọn: khổ A4. Chọn '+(host.querySelector('.document-sides').value === 'duplex' ? 'Hai mặt, lật cạnh dài' : 'Một mặt')+' trong hộp thoại máy in. Nút In tất cả hóa đơn bên dưới chuẩn bị bản in riêng: A4 hai mặt, mỗi hóa đơn bắt đầu trên tờ riêng.';
         if(deliveries){
           var sides=host.querySelector('.document-sides').value;
           if(sides==='auto'&&!resolvedSides)return 'Tự động: mỗi đơn một trang thì in một mặt; có đơn nhiều trang thì chuẩn bị hai mặt, mỗi đơn bắt đầu trên tờ riêng. Khi in, kiểm tra khổ A4 và chế độ hai mặt của máy in.';
@@ -132,7 +134,7 @@
         url += '&paper=' + host.querySelector('.document-paper').value;
         if(isPdf) url += '&sides=' + host.querySelector('.document-sides').value;
         if(originalInvoices) url = '/api/export/invoice-pdfs/' + encodeURIComponent(body.contractor) + '?from=' + encodeURIComponent(body.from) + '&to=' + encodeURIComponent(body.to) + '&scope_id=' + encodeURIComponent(body.scope_id || '');
-        if(invoicePrint)url += '&format=pdf';
+        if(invoicePrint)url += '&format=pdf&layout=invoice-per-sheet';
         var controller=new AbortController(),requestTimer=setTimeout(function(){controller.abort();},180000);
         var cancelledByUser=false;
         cancelDownload=function(){cancelledByUser=true;controller.abort();};
@@ -148,7 +150,7 @@
             panel.innerHTML = '<p>Đã mở bản in của phần đã chọn. Nếu hộp thoại chưa bật, bấm nút máy in trong khung PDF.</p><iframe title="Bản in các phiếu đã chọn"></iframe>';
             panel.querySelector('p').textContent = (type === 'print' ? 'Đã mở bản in. Nếu hộp thoại chưa bật, bấm nút máy in trong khung PDF. ' : 'Bản in đúng khổ giấy của phần đã chọn. ') + printHelp();
             if(invoicePrint){
-              panel.querySelector('p').textContent='Bản in gồm '+(response.headers.get('X-Invoice-Count')||'')+' hóa đơn gốc của '+body.contractor+' trong kỳ ĐNTT đang xem. Chọn in tất cả trang. Nếu hộp thoại chưa bật, bấm nút máy in trong khung PDF.';
+              panel.querySelector('p').textContent='Bản in gồm '+(response.headers.get('X-Invoice-Count')||'')+' hóa đơn của '+body.contractor+' trong kỳ ĐNTT đang xem. Giữ đủ các trang gốc; mỗi hóa đơn bắt đầu trên tờ mới. Hóa đơn có số trang lẻ được chèn mặt trắng trước hóa đơn tiếp theo. Trong hộp thoại máy in, chọn A4, Hai mặt, Lật cạnh dài, 1 trang trên mỗi mặt và in tất cả trang, kể cả trang trắng. Không chọn bỏ qua trang trắng. Bấm nút máy in trong khung PDF sau khi kiểm tra bản xem.';
               var openPdf=document.createElement('a');openPdf.href=blobUrl;openPdf.target='_blank';openPdf.rel='noopener';openPdf.className='btn btn-outline';openPdf.textContent='Mở bản in hóa đơn ở tab mới';panel.insertBefore(openPdf,panel.querySelector('iframe'));
               panel.querySelector('iframe').title='Bản in tất cả hóa đơn';
             }

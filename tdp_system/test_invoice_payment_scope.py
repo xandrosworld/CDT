@@ -569,6 +569,11 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         self.assertEqual('application/pdf', response.mimetype)
         self.assertEqual('2', response.headers['X-Invoice-Count'])
         self.assertEqual(2, len(PdfReader(io.BytesIO(response.data)).pages))
+        duplex = self.client.get(url + '&layout=invoice-per-sheet')
+        self.assertEqual(200, duplex.status_code)
+        self.assertEqual('invoice-per-sheet', duplex.headers['X-Invoice-Layout'])
+        self.assertEqual('duplex', duplex.headers['X-Print-Sides'])
+        self.assertEqual(3, len(PdfReader(io.BytesIO(duplex.data)).pages))
         self.assertEqual({'801','806'}, {call.kwargs['number'] for call in client.get_issued_invoice_pdf.call_args_list})
         client.get_issued_invoice_pdf.side_effect = [content, b'not a pdf']
         failed = self.client.get(url)

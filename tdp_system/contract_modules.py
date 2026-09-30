@@ -10852,7 +10852,7 @@ def register_contract_routes(app, ctx):
                         from .invoice_print_bundle import combined_invoice_pdf
                     except ImportError:
                         from invoice_print_bundle import combined_invoice_pdf
-                    merged_content, merged_pages = combined_invoice_pdf(files)
+                    merged_content, merged_pages = combined_invoice_pdf(files, layout=request.args.get('layout', 'pages'))
                 except ValueError as exc:
                     raise MinvoiceError(str(exc)) from exc
         except InvoicePaymentScopeError as exc:
@@ -10876,6 +10876,9 @@ def register_contract_routes(app, ctx):
         response.headers['X-Invoice-Count'] = str(len(files))
         if merged_pages:
             response.headers['X-Invoice-Pages'] = str(merged_pages)
+            response.headers['X-Invoice-Layout'] = request.args.get('layout', 'pages')
+            if request.args.get('layout') == 'invoice-per-sheet':
+                response.headers['X-Print-Sides'] = 'duplex'
         response.headers['Cache-Control'] = 'no-store'
         return response
 
