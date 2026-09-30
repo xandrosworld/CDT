@@ -368,6 +368,11 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
     safe_from, safe_to = _strict_date(date_from, 'Từ ngày'), _strict_date(date_to, 'Đến ngày')
     profile = conn.execute('SELECT * FROM outgoing_buyer_profiles WHERE UPPER(TRIM(contractor))=?', (party,)).fetchone()
     tax_code = _plain(dict(profile).get('tax_code')) if profile else ''
+    if not local and not tax_code:
+        raise InvoicePaymentScopeError(
+            (f'{party} chưa có Hồ sơ người mua. ' if not profile else f'Hồ sơ người mua của {party} thiếu Mã số thuế. ') +
+            'Bấm Bổ sung hồ sơ người mua, điền Tên pháp lý, Mã số thuế và Địa chỉ đúng trên hóa đơn rồi lưu; phần mềm sẽ tự kiểm tra lại.',
+            code='payment_buyer_profile_missing' if not profile else 'payment_buyer_tax_missing', status=409)
     sources = [dict(r) for r in conn.execute(
         "SELECT * FROM outgoing_source_invoices WHERE source='minvoice' "
         "AND UPPER(TRIM(buyer_tax_code))=? AND invoice_date BETWEEN ? AND ? ORDER BY invoice_date,id",
@@ -397,8 +402,11 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
                 'nằm ngoài kỳ. Hãy chọn lại Từ ngày / Đến ngày theo ngày hóa đơn rồi bấm Xem đề nghị thanh toán.',
                 code='issued_invoice_scope_empty', status=404)
         raise InvoicePaymentScopeError(
-            'Không có hóa đơn VAT đã phát hành trong kỳ của nhà thầu. Hãy tải hóa đơn đầu ra '
-            'và kiểm tra mã số thuế trong hồ sơ người mua.', code='issued_invoice_scope_empty', status=404)
+            (f'Các hóa đơn đã tải cho Mã số thuế {tax_code} trong kỳ vẫn là bản nháp; chưa có hóa đơn đã phát hành. '
+             'Nếu đã ký trên M-Invoice, tải lại hóa đơn đầu ra rồi kiểm tra lại.' if excluded_drafts else
+             f'Chưa tìm thấy hóa đơn đã phát hành trong dữ liệu đã tải cho Mã số thuế {tax_code}, kỳ {safe_from} đến {safe_to}. '
+             'Đối chiếu Mã số thuế trong Hồ sơ người mua với hóa đơn. Nếu đúng, tải hóa đơn đầu ra cho kỳ này rồi kiểm tra lại.'),
+            code='issued_invoice_scope_empty', status=404)
     profiles = conn.execute('SELECT contractor FROM outgoing_buyer_profiles WHERE UPPER(TRIM(tax_code))=?',
                             (tax_code.upper(),)).fetchall()
     if len(profiles) != 1:

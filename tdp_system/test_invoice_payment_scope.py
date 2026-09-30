@@ -157,8 +157,8 @@ class InvoicePaymentScopeTests(unittest.TestCase):
             self.add_invoice(conn, status="draft", invoice_number="DRAFT-1")
             self.add_invoice(conn, status="cancelled", invoice_number="CANCEL-1")
         response = self.scope()
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.get_json()["code"], "issued_invoice_scope_empty")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "payment_buyer_profile_missing")
 
     def test_local_issued_scope_preview_and_official_payment_bundle(self):
         with server.db() as conn:

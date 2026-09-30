@@ -3012,7 +3012,10 @@
     if (!scope) return "";
     if (scope.error) {
       return '<div class="card fade-in" style="margin-top:18px"><div class="card-body"><div class="error-summary">' +
-        esc(scope.error) + '</div></div></div>';
+        esc(scope.error) + '</div>' +
+        (['payment_buyer_profile_missing','payment_buyer_tax_missing','issued_invoice_scope_empty'].includes(scope.code) ?
+          '<p>Trong Hồ sơ người mua, điền Tên pháp lý, Mã số thuế và Địa chỉ đúng trên hóa đơn. Lưu xong phần mềm tự kiểm tra lại kỳ đã chọn.</p><button class="btn btn-primary" data-action="fix-payment-buyer" data-field="'+(scope.code==='payment_buyer_profile_missing'?'legal_name':'tax_code')+'">'+(scope.code==='issued_invoice_scope_empty'?'Kiểm tra hồ sơ người mua':'Bổ sung hồ sơ người mua')+'</button>' : '') +
+        (scope.code==='issued_invoice_scope_empty' ? ' <button class="btn btn-outline" data-action="payment-open-output">Mở hóa đơn đầu ra đúng kỳ</button>' : '') + '</div></div>';
     }
     var invoices = (scope.invoices || []).map(function (item) {
       var sourceText = item.verification_source === "synced_issued_source"
@@ -6889,6 +6892,9 @@
         if (state.buyerEdits) delete state.buyerEdits[buyerContractor];
         await fetchOutgoingInvoices();
         showToast('Đã lưu hồ sơ người mua');
+        if (state.view === 'payment-request' && state.paymentFilters.contractor === buyerContractor) {
+          document.getElementById('paymentRequestForm')?.requestSubmit();
+        }
       } catch (error) { showToast(error.message, true); }
     }
     if(event.target.id==='preparedDateForm') {
@@ -7049,7 +7055,7 @@
         }
       } catch (error) {
         if (!paymentScopeCurrent()) return;
-        state.invoicePaymentScope = { error: error.message };
+        state.invoicePaymentScope = { error: error.message, code: error.payload && error.payload.code };
         renderDocuments();
         showToast(error.message, true);
       } finally {
@@ -7926,6 +7932,22 @@
       navigate('documents'); await Promise.all([fetchOutgoingReadiness(), fetchOutgoingInvoices()]); return;
     }
     if (action === 'show-stock-cause') { await showStockCause(button); return; }
+    if (action === 'fix-payment-buyer') {
+      var fixForm = document.getElementById('buyerProfileForm');
+      if (!fixForm) { await fetchOutgoingInvoices(); fixForm = document.getElementById('buyerProfileForm'); }
+      if (fixForm) {
+        fixForm.closest('details').open = true;
+        fixForm.scrollIntoView({block:'center'});
+        fixForm.querySelector('[name="'+button.dataset.field+'"]').focus({preventScroll:true});
+      }
+      return;
+    }
+    if (action === 'payment-open-output') {
+      state.invoiceDirection = 'output'; state.invoiceFrom = state.paymentFilters.from; state.invoiceTo = state.paymentFilters.to;
+      state.invoiceStatus = 'all'; state.invoiceLineFilter = 'all'; state.invoicePending = false;
+      navigate('msmi');
+      return;
+    }
     if (action === 'edit-invoice-buyer') {
       paymentRequestFormHtml();
       state.paymentFilters = Object.assign({}, state.paymentFilters, {contractor:button.dataset.contractor});
