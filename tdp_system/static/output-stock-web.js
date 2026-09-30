@@ -30,14 +30,18 @@ window.TdpOutputStockWeb = function (options) {
     const target = field(name); if (target) { target.scrollIntoView({block:'center'}); target.focus(); }
   }
   function issues(items) {
-    el('[data-issues]').innerHTML = items.map((item, i) => '<p class="error-summary">' + esc(item.message) +
+    dialog.querySelectorAll('[data-issues],[data-edit-issues],[data-confirm-issues]').forEach(box => { box.innerHTML = ''; });
+    dialog.querySelectorAll('[aria-invalid]').forEach(control => control.removeAttribute('aria-invalid'));
+    const box = (items.some(item => item.field === 'actor' || item.field === 'confirmed') ? el('[data-confirm-issues]') : el('[data-edit-issues]')) || el('[data-issues]');
+    box.innerHTML = items.map((item, i) => '<p class="error-summary">' + esc(item.message) +
       ' <button type="button" class="btn btn-outline" data-fix="' + i + '">' +
       esc(item.field === 'reload' ? 'Cập nhật số liệu' : item.field === 'dates' ? 'Sửa khoảng ngày' : item.field === 'period' ? 'Mở kỳ kho' : 'Sửa tại đây') + '</button></p>').join('');
-    el('[data-issues]').querySelectorAll('[data-fix]').forEach(button => button.onclick = () => {
+    items.forEach(item => field(item.field)?.setAttribute('aria-invalid', 'true'));
+    box.querySelectorAll('[data-fix]').forEach(button => button.onclick = () => {
       const target = items[Number(button.dataset.fix)].field;
       if (target === 'reload') load(true); else focus(target);
     });
-    if (items.length) el('[data-issues]').scrollIntoView({block:'nearest'});
+    if (items.length) box.scrollIntoView({block:'nearest'});
   }
   function working(value) {
     busy = value;
@@ -78,13 +82,13 @@ window.TdpOutputStockWeb = function (options) {
       '<div class="form-actions"><button class="btn btn-outline" data-input>Kiểm tra hóa đơn đầu vào</button>' +
       (item.supplementary_allowed ? '<button class="btn btn-primary" data-supplement>Lập bảng kê bổ sung cho mặt hàng này</button>' : '') + '</div>' +
       (data.blocked_reason ? '<p class="error-summary">' + esc(data.blocked_reason) + '</p><button class="btn btn-outline" data-period>Mở kỳ kho</button>' : '') +
-      (!data.blocked_reason && !item.supplementary_allowed && item.sources.length ? '<form data-edit novalidate><h4>Sửa mã của dòng xuất bị trừ nhầm</h4>' +
+      (!data.blocked_reason && !item.supplementary_allowed && item.sources.length ? '<form data-edit novalidate><h4>Sửa mã của dòng xuất bị trừ nhầm</h4><p class="stock-save-help"><b>Chưa lưu vào kho.</b> Điền thông tin → bấm <b>1. Kiểm tra trước khi lưu</b> → đối chiếu và bấm <b>2. Lưu và cập nhật kho</b> ở bước tiếp theo.</p>' +
         '<label>Dòng xuất cần sửa<select name="ledger_id">' + item.sources.map(row => '<option value="' + row.ledger_id + '">' + esc(row.date + ' · HĐ ' + row.invoice + ' · ' + row.source_name + ' · ' + qty(row.qty) + ' ' + item.unit) + '</option>').join('') + '</select></label>' +
         '<p>Điền hàng xuất sang vào ô <b>Mặt hàng thực tế đã xuất</b>: chọn đúng hàng đã giao thực tế để sửa mã bị trừ nhầm.</p>' +
         '<label>Mặt hàng thực tế đã xuất<input name="new_code" list="stock-web-products" placeholder="Gõ mã hoặc tên để chọn trong danh mục" autocomplete="off"></label>' +
         '<datalist id="stock-web-products">' + data.catalog.filter(p => p.code !== item.product_code && p.unit.trim().toLocaleLowerCase() === item.unit.trim().toLocaleLowerCase()).map(p => '<option value="' + esc(p.code) + '">' + esc(p.name + ' · Tồn cuối kỳ: ' + qty(p.closing_qty) + ' ' + p.unit) + '</option>').join('') + '</datalist><p data-target></p>' +
         '<label>Số lượng sửa (' + unit + ')<input name="qty" type="number" step="any" min="0" value="' + Math.min(-item.closing_qty, item.sources[0].qty) + '"></label>' +
-        '<p>Chỉ sửa phần bị trừ nhầm, tối đa bằng phần còn âm và lượng của dòng xuất đã chọn. Mặt hàng nhận phải đúng hàng thực tế đã xuất, cùng đơn vị tính.</p><button class="btn btn-primary" type="submit">Xem trước thay đổi tồn kho</button></form>' :
+        '<p>Chỉ sửa phần bị trừ nhầm, tối đa bằng phần còn âm và lượng của dòng xuất đã chọn. Mặt hàng nhận phải đúng hàng thực tế đã xuất, cùng đơn vị tính.</p><div data-edit-issues role="alert"></div><div class="stock-save-actions"><button class="btn btn-primary" type="submit">1. Kiểm tra trước khi lưu</button><span>Kiểm tra xong sẽ hiện bước 2 để lưu. Kho chưa thay đổi.</span></div></form>' :
         (!item.supplementary_allowed && !data.blocked_reason ? '<p>Không có dòng hóa đơn đã ký, đã ghi kho có thể sửa mã trong kỳ này. Kiểm tra đầu vào hoặc đối chiếu tồn đầu kỳ; không tự cộng kho để xóa âm.</p>' : '')) + '</section>';
     el('[data-input]').onclick = async () => {
       working(true);
@@ -98,7 +102,7 @@ window.TdpOutputStockWeb = function (options) {
       if (saved) {
         ['ledger_id','new_code','qty'].forEach(key => { if (saved[key] != null) field(key).value = saved[key]; });
         const notice = document.createElement('p');
-        notice.textContent = 'Đã giữ phần đang nhập trong tab này. Đây là bản chưa xác nhận; xem trước và đối chiếu trước khi cập nhật kho.';
+        notice.textContent = 'Đã giữ phần đang nhập trong tab này, chưa lưu vào kho. Chị tiếp tục điền và bấm 1. Kiểm tra trước khi lưu.';
         el('[data-edit]').prepend(notice);
       }
       const targetInfo = () => {
@@ -120,24 +124,31 @@ window.TdpOutputStockWeb = function (options) {
   }
   async function check(event) {
     event.preventDefault(); if (busy) return;
-    invalidate(); working(true); el('[data-status]').textContent = 'Đang kiểm tra thay đổi. Kho chưa được ghi nhận…';
+    invalidate();
+    const entered = values(), missing = [];
+    if (!entered.ledger_id) missing.push({field:'ledger_id',message:'Chọn Dòng xuất cần sửa trước khi lưu.'});
+    if (!entered.new_code) missing.push({field:'new_code',message:'Chưa chọn Mặt hàng thực tế đã xuất. Gõ mã hoặc tên và chọn một mặt hàng trong danh mục.'});
+    if (!Number.isFinite(Number(entered.qty)) || Number(entered.qty) <= 0) missing.push({field:'qty',message:'Số lượng sửa phải lớn hơn 0. Nhập số lượng thực tế cần sửa rồi kiểm tra lại.'});
+    if (missing.length) { issues(missing); focus(missing[0].field); return; }
+    let nextField = null;
+    working(true); el('[data-status]').textContent = 'Đang kiểm tra trước khi lưu. Kho chưa thay đổi…';
     try {
       preview = await api('/api/inventory/output-remap/web-preview', post({from,to,version:data.version,product_code:activeCode,...values()}));
       issues(preview.issues);
-      if (!preview.can_confirm) { el('[data-status]').textContent = 'Chưa ghi nhận. Bấm Sửa tại đây ở thông báo để sửa, không cần nhập lại.'; return; }
+      if (!preview.can_confirm) { nextField = preview.issues[0]?.field; el('[data-status]').textContent = 'Chưa lưu vào kho. Bấm Sửa tại đây để sửa; thông tin đang nhập được giữ lại.'; return; }
       const c = preview.changes[0];
-      el('[data-preview]').innerHTML = '<section class="card"><h3>Xem trước · Kho chưa thay đổi</h3><p>Chuyển ' + qty(c.qty) + ' ' + esc(c.unit) + ' từ mã bị trừ nhầm sang mặt hàng thực tế đã xuất.</p>' +
+      el('[data-preview]').innerHTML = '<section class="card"><h3>Bước 2 · Đối chiếu và lưu vào kho</h3><p><b>Kiểm tra hợp lệ, chưa lưu.</b> Điền Người xác nhận, tích ô đã đối chiếu rồi bấm <b>2. Lưu và cập nhật kho</b>.</p><p>Chuyển ' + qty(c.qty) + ' ' + esc(c.unit) + ' từ mã bị trừ nhầm sang mặt hàng thực tế đã xuất.</p>' +
         '<table><thead><tr><th>Mặt hàng</th><th>Tồn cuối kỳ sau khi sửa</th></tr></thead><tbody><tr><td>' + esc(c.old_code + ' · ' + c.old_name) + '</td><td>' + qty(c.old_closing_after) + ' ' + esc(c.old_unit) + '</td></tr><tr><td>' + esc(c.new_code + ' · ' + c.new_name) + '</td><td>' + qty(c.new_closing_after) + ' ' + esc(c.unit) + '</td></tr></tbody></table>' +
         '<p>Thông tin trên hóa đơn đã ký giữ nguyên. Thay đổi này chỉ sửa mã hàng trừ kho nội bộ.</p>' +
         '<form data-confirm-form novalidate><label>Người xác nhận<input name="actor" maxlength="100" autocomplete="name"></label>' +
         '<label><input name="confirmed" type="checkbox"> Tôi đã đối chiếu đúng mặt hàng thực tế đã xuất và số lượng sửa.</label>' +
-        '<button class="btn btn-primary" data-confirm disabled>Xác nhận sửa và cập nhật kho</button></form></section>';
+        '<div data-confirm-issues role="alert"></div><p>Tích ô đã đối chiếu để bật nút 2. Lưu và cập nhật kho.</p><button class="btn btn-primary" data-confirm disabled>2. Lưu và cập nhật kho</button></form></section>';
       el('[data-status]').textContent = 'Kiểm tra tồn sau khi sửa rồi xác nhận ở dưới.';
       el('[data-confirm-form]').onsubmit = confirm;
       field('confirmed').onchange = () => { el('[data-confirm]').disabled = !field('confirmed').checked; };
       el('[data-preview]').scrollIntoView({block:'start'});
     } catch (error) { el('[data-status]').textContent = 'Chưa ghi nhận.'; issues([{field:'reload',message:error.message}]); }
-    finally { working(false); }
+    finally { working(false); if (nextField && field(nextField)) focus(nextField); }
   }
   async function confirm(event) {
     event.preventDefault(); if (busy || !preview || !field('confirmed').checked) return;
@@ -148,8 +159,9 @@ window.TdpOutputStockWeb = function (options) {
       await api('/api/inventory/output-remap/confirm', post({token:preview.token, actor, confirmed:true}));
       delete drafts[activeCode]; persistDrafts();
       invalidate(); el('[data-editor]').innerHTML = '';
-      el('[data-status]').textContent = 'Đã cập nhật kho. Hàng hết âm được bỏ khỏi danh sách; hàng còn âm hiển thị số còn thiếu.';
+      el('[data-status]').textContent = 'Đã lưu và cập nhật kho. Chị có thể xem lại trong Điều chỉnh đã lưu; không cần nhập lại lần sửa này.';
       await options.onApplied(); await load(false, true);
+      el('[data-status]').scrollIntoView({block:'center'});
     } catch (error) { issues([{field:'reload', message:error.message}]); }
     finally { working(false); }
   }
