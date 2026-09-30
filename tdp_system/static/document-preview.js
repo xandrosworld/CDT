@@ -51,7 +51,7 @@
         data.sheets.map(function (sheet, i) { return '<div><input type="checkbox" checked data-sheet="' + i + '" aria-label="Chọn ' + esc(sheet.name) + '"><button type="button" class="btn btn-small btn-outline" data-open-sheet="' + i + '">' + esc(sheet.name) + '</button></div>'; }).join('') +
         (body.kind === 'payment' ? '<button type="button" class="btn btn-small btn-primary" data-doc="invoice-pdfs" title="Tải PDF gốc của các hóa đơn đã phát hành trong kỳ của nhà thầu đang xem. Nhiều hóa đơn được đóng chung file ZIP.">Tải PDF hóa đơn</button><button type="button" class="btn btn-small btn-primary" data-doc="invoice-print" title="In các hóa đơn gốc thuộc đúng nhà thầu và kỳ đề nghị thanh toán đang xem.">In tất cả hóa đơn</button>' : '') +
         '</div><div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
-      var busy = false, modeTouched = false, paperTouched = false;
+      var busy = false, modeTouched = false, paperTouched = false, cancelDownload = null;
       function invalidatePrint() {
         resolvedSides = '';
         host.querySelector('.document-pdf').innerHTML = '';
@@ -123,6 +123,10 @@
           progressBox.textContent = (originalInvoices ? (invoicePrint?'Đang lấy hóa đơn gốc và ghép thành một bản in cho kỳ ĐNTT đang xem':'Đang tải PDF hóa đơn gốc từ M-Invoice · Nhiều hóa đơn sẽ nằm trong một file ZIP') : 'Đang tạo '+(isPdf?'PDF':'Excel')+' cho '+selected.size+' phiếu')+(seconds?' · Đã chờ '+seconds+' giây':'')+'. Các nút sẽ mở lại khi hoàn tất.';
         }
         progress();
+        var cancelButton = document.createElement('button');
+        cancelButton.type='button';cancelButton.className='btn btn-outline';cancelButton.textContent='Dừng chờ tải';
+        cancelButton.onclick=function(){if(cancelDownload)cancelDownload();};
+        progressBox.after(cancelButton);
         var progressTimer = setInterval(progress, 1000);
         var url = '/api/documents/' + data.token + '/' + (isPdf ? 'pdf' : 'excel') + '?sheets=' + Array.from(selected).sort(function(a,b){return a-b;}).join(',');
         url += '&paper=' + host.querySelector('.document-paper').value;
@@ -130,6 +134,8 @@
         if(originalInvoices) url = '/api/export/invoice-pdfs/' + encodeURIComponent(body.contractor) + '?from=' + encodeURIComponent(body.from) + '&to=' + encodeURIComponent(body.to) + '&scope_id=' + encodeURIComponent(body.scope_id || '');
         if(invoicePrint)url += '&format=pdf';
         var controller=new AbortController(),requestTimer=setTimeout(function(){controller.abort();},180000);
+        var cancelledByUser=false;
+        cancelDownload=function(){cancelledByUser=true;controller.abort();};
         try {
           var response = await checked(await fetch(url,{signal:controller.signal}));
           if(isPdf)resolvedSides=response.headers.get('X-Print-Sides')||'';
@@ -159,10 +165,10 @@
             anchor.click(); setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 30000);
           }
         } catch (error) { if (isCurrent()) {
-          errorBox.textContent = error.name==='AbortError'?(invoicePrint?'Lấy bản in quá lâu. Bấm Thử lại in hóa đơn; lựa chọn và dữ liệu vẫn được giữ.':'Tạo chứng từ quá lâu. Hãy bấm tải hoặc in để thử lại; lựa chọn vẫn được giữ.'):error.message;
-          if(invoicePrint){var retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.dataset.doc=error.code==='stale_invoice_payment_scope'?'payment-refresh':'invoice-print';retry.textContent=error.code==='stale_invoice_payment_scope'?'Đọc lại dữ liệu mới':'Thử lại in hóa đơn';errorBox.appendChild(retry);}
+          errorBox.textContent = error.name==='AbortError'?(cancelledByUser?'Đã dừng chờ tải. Lựa chọn và dữ liệu vẫn được giữ.':originalInvoices?'M-Invoice chưa trả đủ PDF trong 3 phút. Bấm Thử lại tải PDF hóa đơn hoặc chọn kỳ ngắn hơn; không cần xuất lại hóa đơn.':'Tạo chứng từ quá lâu. Hãy bấm tải hoặc in để thử lại; lựa chọn vẫn được giữ.'):error.message;
+          if(originalInvoices){var retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.dataset.doc=error.code==='stale_invoice_payment_scope'?'payment-refresh':type;retry.textContent=error.code==='stale_invoice_payment_scope'?'Đọc lại dữ liệu mới':invoicePrint?'Thử lại in hóa đơn':'Thử lại tải PDF hóa đơn';errorBox.appendChild(retry);}
         } }
-        finally { clearTimeout(requestTimer);clearInterval(progressTimer); progressBox.textContent=''; busy = false; if (isCurrent()) update(); }
+        finally { clearTimeout(requestTimer);clearInterval(progressTimer); cancelDownload=null;cancelButton.remove();progressBox.textContent=''; busy = false; if (isCurrent()) update(); }
       }
       host.onclick = function (event) {
         var sheet = event.target.closest('[data-open-sheet]');

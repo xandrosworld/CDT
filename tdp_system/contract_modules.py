@@ -10813,8 +10813,12 @@ def register_contract_routes(app, ctx):
             client = factory() if callable(factory) else None
             if not callable(getattr(client, 'get_issued_invoice_pdf', None)):
                 raise MinvoiceError('Kết nối M-Invoice hiện tại chưa hỗ trợ tải PDF hóa đơn gốc.')
-            files, total_size = [], 0
-            for item, source in rows:
+            # Authenticate once before bounded parallel reads, as in portal listing.
+            from concurrent.futures import ThreadPoolExecutor
+            if callable(getattr(client, '_ensure_login', None)):
+                client._ensure_login()
+            def read_invoice_pdf(row):
+                item, source = row
                 try:
                     content = client.get_issued_invoice_pdf(
                         remote_id=source['remote_id'], series=item['invoice_series'],
@@ -10823,12 +10827,18 @@ def register_contract_routes(app, ctx):
                         **{k: item[k] for k in ('subtotal', 'tax_amount', 'total_amount')})
                 except MinvoiceError as exc:
                     raise MinvoiceError(f"Hóa đơn {item['invoice_series']}/{item['invoice_number']}: {exc}") from None
-                total_size += len(content)
-                if total_size > 100 * 1024 * 1024:
-                    raise MinvoiceError('Tổng PDF vượt 100 MB; hãy chọn kỳ nhỏ hơn.')
                 filename = re.sub(r'[^A-Za-z0-9_-]', '_',
                     f"{item['invoice_date']}_{item['invoice_series']}_{item['invoice_number']}") + '.pdf'
-                files.append((filename, content))
+                return filename, content
+            files, total_size = [], 0
+            # Four requests at a time; preserve order and never return an incomplete ZIP.
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                for offset in range(0, len(rows), 4):
+                    for filename, content in pool.map(read_invoice_pdf, rows[offset:offset + 4]):
+                        total_size += len(content)
+                        if total_size > 100 * 1024 * 1024:
+                            raise MinvoiceError('Tổng PDF vượt 100 MB; hãy chọn kỳ nhỏ hơn.')
+                        files.append((filename, content))
             with db_factory() as conn:
                 conn.execute('PRAGMA query_only=ON')
                 latest = issued_invoice_payment_scope(conn, contractor, period_from, period_to)

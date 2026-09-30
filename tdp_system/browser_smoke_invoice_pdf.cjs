@@ -1,6 +1,6 @@
 const fs=require('fs'),path=require('path'),http=require('http'),assert=require('assert/strict');
 const {chromium}=require(process.env.TDP_PLAYWRIGHT_MODULE||'playwright');
-const requests=[];let fail=false;
+const requests=[];let fail=false,slow=false;
 const server=http.createServer((req,res)=>{
  const u=new URL(req.url,'http://localhost');
  if(u.pathname==='/'){res.setHeader('Content-Type','text/html;charset=utf-8');return res.end('<script src="/document-preview.js"></script><div id="preview"></div>');}
@@ -8,6 +8,7 @@ const server=http.createServer((req,res)=>{
  if(u.pathname==='/api/documents/preview'){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({token:'fixture',sheet_count:1,sheets:[{name:'Đề nghị thanh toán',width:800,html:'<table><tr><td>Preview</td></tr></table>'}]}));}
  if(u.pathname.startsWith('/api/export/invoice-pdfs/')){
   requests.push(req.url);
+  if(slow)return;
   if(fail){res.statusCode=409;res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({error:'Phạm vi đã thay đổi'}));}
   res.setHeader('Content-Type','application/zip');res.setHeader('Content-Disposition','attachment; filename="Hoa_don_SUPPY.zip"');return res.end('fixture-original-invoices');
  }
@@ -29,6 +30,12 @@ const server=http.createServer((req,res)=>{
   assert.deepEqual(Object.fromEntries(requested.searchParams),{from:body.from,to:body.to,scope_id:body.scope_id});
   fail=true;await button.click();await p.waitForFunction(()=>document.querySelector('.document-error').textContent.includes('Phạm vi đã thay đổi'));
   assert(await button.isEnabled());assert.equal(await p.locator('[data-sheet]:checked').count(),0);
+  assert.equal(await p.getByRole('button',{name:'Thử lại tải PDF hóa đơn',exact:true}).count(),1);
+  fail=false;slow=true;await button.click();await p.getByRole('button',{name:'Dừng chờ tải',exact:true}).click();
+  await p.waitForFunction(()=>!document.querySelector('[data-doc=invoice-pdfs]').disabled);
+  assert.match(await p.locator('.document-error').innerText(),/Đã dừng chờ tải/);
+  assert.equal(await p.locator('[data-sheet]:checked').count(),0);
+  slow=false;const retried=p.waitForEvent('download');await p.getByRole('button',{name:'Thử lại tải PDF hóa đơn',exact:true}).click();assert.equal(await (await retried).failure(),null);
   await p.evaluate(()=>TDPDocuments.open({kind:'deliveries'},'preview'));assert.equal(await button.count(),0);
   assert.deepEqual(errors,[]);console.log('INVOICE_PDF_BROWSER_PASS: scope, placement, independent selection, download, errors, payment only');
  }finally{await browser.close();server.close();}

@@ -518,6 +518,23 @@ class InvoicePaymentScopeTests(unittest.TestCase):
     def pdf_download(self, scope_id):
         return self.client.get('/api/export/invoice-pdfs/NT-A?from=2026-09-01&to=2026-09-30&scope_id=' + scope_id)
 
+    def test_pdf_download_uses_bounded_parallel_reads_and_preserves_order(self):
+        import threading
+        client, content = self.pdf_fixture()
+        with server.db() as conn:
+            for number in range(801,809):
+                self.add_direct_source(conn, invoice_number=str(number))
+        barrier = threading.Barrier(4, timeout=5)
+        def read(**kwargs):
+            barrier.wait()
+            return content
+        client.get_issued_invoice_pdf.side_effect = read
+        response = self.pdf_download(self.scope().json['scope_id'])
+        self.assertEqual(response.status_code,200,response.data[:100])
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            self.assertEqual([name.rsplit('_',1)[-1] for name in archive.namelist()],
+                             [str(n)+'.pdf' for n in range(801,809)])
+
     def test_original_pdfs_scope_required_and_bundle_preserves_provider_bytes(self):
         client, content = self.pdf_fixture()
         with server.db() as conn:
