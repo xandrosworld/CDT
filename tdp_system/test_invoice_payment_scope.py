@@ -207,10 +207,10 @@ class InvoicePaymentScopeTests(unittest.TestCase):
             statement_name = next(name for name in names if name.startswith("Bang_tong_hop_giao_nhan"))
             statement = load_workbook(io.BytesIO(archive.read(statement_name)), data_only=True, keep_links=False)
             try:
-                self.assertIn("BẢNG TỔNG HỢP GIAO NHẬN", statement["Bảng kê giao hàng"]["A5"].value)
-                self.assertEqual(216, statement["Bảng kê giao hàng"]["J11"].value)
-                self.assertEqual(216, statement["Bảng kê giao hàng"]["J12"].value)
-                self.assertEqual(statement["Đối chiếu hóa đơn"].cell(4, 10).value, 0)
+                self.assertIn("BẢNG TỔNG HỢP GIAO NHẬN", statement.active['A5'].value)
+                self.assertEqual(216, statement.active['I11'].value)
+                self.assertEqual(216, statement.active['I12'].value)
+                self.assertEqual('hidden', statement['Đối chiếu hóa đơn'].sheet_state)
             finally:
                 statement.close()
 
@@ -269,13 +269,12 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         self.assertIn("Bang_tong_hop_giao_nhan_NT-A", response.headers["Content-Disposition"])
         workbook = load_workbook(io.BytesIO(response.data), data_only=False, keep_links=False)
         try:
-            detail = workbook["Bảng kê giao hàng"]
+            detail = workbook.active
             reconcile = workbook["Đối chiếu hóa đơn"]
-            self.assertEqual(detail.max_row, 17)
-            self.assertEqual(reconcile.max_row, 5)
-            self.assertEqual([detail.cell(row, 10).value for row in (11, 12)], [216, 216])
-            self.assertEqual(detail.cell(13, 10).value, 432)
-            self.assertEqual([reconcile.cell(row, 10).value for row in (4, 5)], [0, 0])
+            self.assertEqual(reconcile.max_row, 3)
+            self.assertEqual(detail['I11'].value, 432)
+            self.assertEqual(detail['I12'].value, 432)
+            self.assertEqual([reconcile.cell(row, 6).value for row in (2, 3)], [216,216])
             self.assertTrue(all("0000003" not in str(cell.value) for row in reconcile for cell in row))
             self.assertNotIn("Q-008", detail["A2"].value)
         finally:
@@ -391,9 +390,9 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(bundle.data)) as archive:
             statement = next(n for n in archive.namelist() if n.startswith('Bang_ke_hoa_don_VAT'))
             book = load_workbook(io.BytesIO(archive.read(statement)))
-            self.assertEqual(book.worksheets[0]['G4'].value, 216)
-            self.assertEqual(book.worksheets[0]['G5'].value, 216)
-            self.assertEqual(book.worksheets[1]['G4'].value, 200)
+            self.assertEqual(book.worksheets[0]['I11'].value, 216)
+            self.assertEqual(book.worksheets[0]['I12'].value, 216)
+            self.assertEqual(book.worksheets[1]['D2'].value, 200)
             self.assertNotIn('Bảng kê giao hàng', book.sheetnames)
             book.close()
         with server.db() as conn:

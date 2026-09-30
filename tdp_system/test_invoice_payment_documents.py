@@ -155,11 +155,15 @@ class InvoicePaymentDocumentTests(unittest.TestCase):
         from .invoice_payment_documents import synced_invoice_statement_workbook
         scope = self.payment_scope()
         scope.update(warning='', source_lines=[dict(invoice_date='2026-08-29', invoice_series='1C26TDP',
-            invoice_number='00001234', source_item_name='Hàng', source_unit='Kg', qty=1,
+            invoice_number='00001234', invoice_id=11, source_item_name='Hàng', source_unit='Kg', qty=1,
             unit_price=100, amount=100, tax_rate=rate, validation_note='') for rate in ('-2','-2.0','KKKNT','8%','-1')])
+        scope['invoices'][0].update(draft_id=None,subtotal=500,tax_amount=8,total_amount=508)
+        scope['totals'] = dict(subtotal=500,tax_amount=8,total_amount=508)
         before = deepcopy(scope)
         book = synced_invoice_statement_workbook(scope)
-        self.assertEqual(['KKKNT','KKKNT','KKKNT','8%','KCT'], [book['Chi tiết hóa đơn'].cell(r,8).value for r in range(4,9)])
+        self.assertEqual(['KKKNT','8%','KCT'], [book.active.cell(r,7).value for r in range(11,14)])
+        self.assertEqual(3, book.active['D11'].value)
+        self.assertEqual(508, book.active['I14'].value)
         self.assertEqual(before, scope)
         book.close()
 

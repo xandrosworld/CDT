@@ -453,6 +453,11 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
         snapshot = source_snapshot
         items = [dict(r) for r in conn.execute(
             'SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index', (source['id'],))]
+        try:
+            from .invoice_line_tax import annotate_invoice_tax
+        except ImportError:
+            from invoice_line_tax import annotate_invoice_tax
+        annotate_invoice_tax({'items': items, 'tax_amount': source['tax_amount']}, source['raw_json'])
         if not items or abs(sum(_number(r['amount'], 'Tiền dòng hóa đơn') for r in items) - source['subtotal']) > 1:
             raise InvoicePaymentScopeError('Thiếu chi tiết hoặc tiền chi tiết lệch tổng hóa đơn nguồn; tải lại và đối chiếu.',
                                            code='invoice_source_total_mismatch')

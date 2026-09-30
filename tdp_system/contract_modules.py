@@ -12452,26 +12452,12 @@ def invoice_delivery_statement_workbook(
 
 
 def invoice_delivery_statement_scope_workbook(scope: dict):
-    """Render a verified scope while retaining each invoice's provenance."""
-    if scope.get('statement_kind') == 'invoices':
-        try:
-            from .invoice_payment_documents import synced_invoice_statement_workbook
-        except ImportError:
-            from invoice_payment_documents import synced_invoice_statement_workbook
-        return synced_invoice_statement_workbook(scope)
-    provenance = {int(item["draft_id"]): item for item in scope["invoices"]}
-    drafts = []
-    for source_draft in scope["drafts"]:
-        draft = dict(source_draft)
-        proof = provenance[int(draft["id"])]
-        draft["verification_source"] = proof["verification_source"]
-        draft["source_invoice_id"] = proof.get("source_invoice_id")
-        drafts.append(draft)
-    return invoice_delivery_statement_workbook(
-        scope["lines"], drafts,
-        contractor=scope["contractor"], scope_id=scope["scope_id"],
-        period_from=scope["date_from"], period_to=scope["date_to"],
-    )
+    """Use one customer-approved layout for local and synced invoices alike."""
+    try:
+        from .invoice_payment_documents import synced_invoice_statement_workbook
+    except ImportError:
+        from invoice_payment_documents import synced_invoice_statement_workbook
+    return synced_invoice_statement_workbook(scope)
 
 
 def payment_request_document(company: str, recipient: str, requester: str, bank_name: str,

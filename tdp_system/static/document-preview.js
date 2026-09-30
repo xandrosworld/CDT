@@ -206,6 +206,10 @@
     } catch (error) {
       if (isCurrent()) {
         host.innerHTML = '<div class="document-error" role="alert">' + esc(error.message) + '</div>';
+        if (body.kind === 'payment' && error.code === 'payment_statement_line_totals_mismatch') {
+          host.innerHTML += '<button type="button" class="btn btn-primary" data-action="payment-open-output">Mở hóa đơn đầu ra đúng kỳ</button> <button type="button" class="btn btn-outline" data-payment-retry>Kiểm tra lại bảng kê</button>';
+          host.querySelector('[data-payment-retry]').onclick = () => open(body, hostId, false);
+        }
         if (body.kind === 'purchases' && ['purchase_document_selection_required','receipt_daily_limit_exceeded'].includes(error.code)) {
           var batchIds = (body.selections || []).map(function (s) { return Number(s.batch_id); }).filter(Number.isFinite);
           host.innerHTML += '<p>Mở tại đây để kiểm tra người bán và lượng hàng được chọn. Nếu đã sửa người bán trong Excel, cập nhật file ở mục “Cập nhật người bán từ Excel” rồi lưu để bản in dùng thông tin mới.</p>' +
