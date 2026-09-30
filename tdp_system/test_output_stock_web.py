@@ -38,6 +38,23 @@ class OutputStockWebTests(unittest.TestCase):
             self.assertNotIn('HH-01', [r['product_code'] for r in review_shortages(conn,'2026-08-01','2026-08-31')['items']])
             audit = conn.execute("SELECT entity_type FROM audit_log WHERE entity_id=?", (preview['token'],)).fetchone()
             self.assertEqual('web', audit['entity_type'])
+            history = review_shortages(conn, '2026-08-01', '2026-08-31')['history']
+            self.assertEqual(1, len(history))
+            self.assertEqual(('HH-01', 'REMAP-B', 22, 'web'),
+                             tuple(history[0][key] for key in ('old_code','new_code','qty','origin')))
+            self.assertEqual([], review_shortages(conn, '2026-09-01', '2026-09-30')['history'])
+
+    def test_old_excel_confirmation_visible_in_history_even_after_shortage_resolved(self):
+        fixture = fixtures.OutputStockRemapTests()
+        fixture.file = self.file
+        with server.db() as conn:
+            preview = fixtures.preview_workbook(conn, fixture.edited())
+            confirm_preview(conn, preview['token'], 'Excel cũ', server.now_iso())
+            view = review_shortages(conn, '2026-08-01', '2026-08-31')
+            self.assertNotIn('HH-01', [r['product_code'] for r in view['items']])
+            self.assertEqual(1, len(view['history']))
+            self.assertEqual('excel', view['history'][0]['origin'])
+            self.assertEqual('Excel cũ', view['history'][0]['actor'])
 
     def test_invalid_fields_have_actionable_targets_and_no_writes(self):
         with server.db() as conn:

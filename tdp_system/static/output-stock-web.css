@@ -1,5 +1,8 @@
 .output-stock-web { width: min(1080px, 95vw); max-height: 92vh; overflow: auto; }
 .output-stock-web [data-list] .table-wrap { max-height: 230px; overflow: auto; }
+.output-stock-web [data-history] .table-wrap { max-height: 280px; overflow: auto; }
+.output-stock-web [data-history] .card { margin: 12px 0; padding: 12px; }
+.output-stock-web [data-history] summary { cursor: pointer; }
 .output-stock-web section.card { margin-top: 18px; padding: 18px; }
 .output-stock-web [data-edit] { display: grid; gap: 12px; }
 .output-stock-web label { display: block; margin: 10px 0; }

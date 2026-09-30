@@ -7,10 +7,17 @@ window.TdpOutputStockWeb = function (options) {
   dialog.innerHTML = '<div class="inventory-totals-heading"><h3>Xử lý hàng âm</h3><button class="btn btn-outline" data-close>Đóng</button></div>' +
     '<p>Kỳ ' + esc(from) + ' → ' + esc(to) + '. Chọn đúng mặt hàng để xem nguyên nhân và xử lý ngay tại đây.</p>' +
     '<div class="form-actions"><button class="btn btn-outline" data-reload>Cập nhật số liệu</button><button class="btn btn-outline" data-excel>Cách khác: sửa bằng Excel</button></div>' +
-    '<div data-status role="status"></div><div data-issues role="alert"></div>' +
+    '<p>Đã làm trước đây: xem <b>Điều chỉnh đã lưu</b> bên dưới trước khi nhập lại. Nếu mới sửa file Excel, bấm <b>Cách khác: sửa bằng Excel</b> để tải lên chính file đã sửa và kiểm tra trước khi xác nhận.</p>' +
+    '<div data-status role="status"></div><div data-issues role="alert"></div><div data-history></div>' +
     '<div data-list></div><div data-editor></div><div data-preview></div>';
   document.body.appendChild(dialog); dialog.showModal();
   let data, activeCode = options.code || '', busy = false, preview = null;
+  // Keep unfinished entries for this tab/period; never restore posting consent.
+  const draftKey = 'tdp-stock-correction-drafts:' + from + ':' + to;
+  let drafts = {};
+  try { drafts = JSON.parse(sessionStorage.getItem(draftKey) || '{}') || {}; } catch (_) {}
+  function persistDrafts() { try { sessionStorage.setItem(draftKey, JSON.stringify(drafts)); } catch (_) {} }
+  function remember() { const current = values(); if (current && activeCode) { drafts[activeCode] = current; persistDrafts(); } }
   const el = selector => dialog.querySelector(selector);
   const qty = value => Number(value || 0).toLocaleString('vi-VN', {maximumFractionDigits:6});
   const field = name => el('[name="' + name + '"]');
@@ -38,12 +45,18 @@ window.TdpOutputStockWeb = function (options) {
     if (!value && el('[data-confirm]')) el('[data-confirm]').disabled = !field('confirmed').checked;
   }
   function invalidate() { preview = null; el('[data-preview]').innerHTML = ''; issues([]); }
+  function renderHistory() {
+    const history = data.history || [];
+    el('[data-history]').innerHTML = '<details class="card"><summary><b>Điều chỉnh đã lưu: ' + history.length + ' dòng</b> · Bấm xem phần đã xác nhận trên web hoặc từ Excel</summary>' +
+      '<p>Lịch sử các lần xác nhận có kỳ xử lý giao với khoảng ngày đang xem. Không nhập lại các lần đã lưu. Tồn kho hiện tại được tính ở bảng bên dưới.</p>' +
+      (history.length ? '<div class="table-wrap"><table><thead><tr><th>Đã lưu lúc / Người xác nhận</th><th>Mã bị trừ nhầm</th><th>Mặt hàng thực tế đã xuất</th><th>Số lượng sửa</th><th>Cách lưu / Kỳ xử lý</th></tr></thead><tbody>' + history.map(row => '<tr><td>' + esc(row.saved_at + ' · ' + row.actor) + '</td><td>' + esc(row.old_code + ' · ' + row.old_name) + '</td><td>' + esc(row.new_code + ' · ' + row.new_name) + '</td><td>' + qty(row.qty) + ' ' + esc(row.unit) + '</td><td>' + esc((row.origin === 'web' ? 'Trên web' : 'Excel') + ' · ' + row.from_date + ' → ' + row.to_date) + '</td></tr>').join('') + '</tbody></table></div>' : '<p>Chưa tìm thấy lần xác nhận sửa mã nào trong kỳ này. Nếu chị đã sửa trong Excel nhưng chưa tải lên và xác nhận, mở Cách khác: sửa bằng Excel. Có thể đổi khoảng ngày để kiểm tra kỳ khác.</p>') + '</details>';
+  }
   function renderList() {
     el('[data-list]').innerHTML = '<div class="table-wrap"><table><thead><tr><th>Mã / tên hàng</th><th>Tồn cuối kỳ</th><th>Xử lý</th></tr></thead><tbody>' +
       data.items.map(item => '<tr><td>' + esc(item.product_code + ' · ' + item.product_name) + '</td><td>' + qty(item.closing_qty) + ' ' + esc(item.unit) + '</td><td><button class="btn btn-primary" data-item="' + esc(item.product_code) + '">Xem nguyên nhân và xử lý</button></td></tr>').join('') +
       (!data.items.length ? '<tr><td colspan="3">Không có hàng âm trong kỳ đã chọn.</td></tr>' : '') + '</tbody></table></div>';
     el('[data-list]').querySelectorAll('[data-item]').forEach(button => button.onclick = () => {
-      activeCode = button.dataset.item; renderEditor();
+      remember(); activeCode = button.dataset.item; renderEditor(drafts[activeCode]);
     });
   }
   function renderEditor(saved) {
@@ -60,6 +73,7 @@ window.TdpOutputStockWeb = function (options) {
       (data.blocked_reason ? '<p class="error-summary">' + esc(data.blocked_reason) + '</p><button class="btn btn-outline" data-period>Mở kỳ kho</button>' : '') +
       (!data.blocked_reason && !item.supplementary_allowed && item.sources.length ? '<form data-edit novalidate><h4>Sửa mã của dòng xuất bị trừ nhầm</h4>' +
         '<label>Dòng xuất cần sửa<select name="ledger_id">' + item.sources.map(row => '<option value="' + row.ledger_id + '">' + esc(row.date + ' · HĐ ' + row.invoice + ' · ' + row.source_name + ' · ' + qty(row.qty) + ' ' + item.unit) + '</option>').join('') + '</select></label>' +
+        '<p>Điền hàng xuất sang vào ô <b>Mặt hàng thực tế đã xuất</b>: chọn đúng hàng đã giao thực tế để sửa mã bị trừ nhầm.</p>' +
         '<label>Mặt hàng thực tế đã xuất<input name="new_code" list="stock-web-products" placeholder="Gõ mã hoặc tên để chọn trong danh mục" autocomplete="off"></label>' +
         '<datalist id="stock-web-products">' + data.catalog.filter(p => p.code !== item.product_code && p.unit.trim().toLocaleLowerCase() === item.unit.trim().toLocaleLowerCase()).map(p => '<option value="' + esc(p.code) + '">' + esc(p.name + ' · Tồn cuối kỳ: ' + qty(p.closing_qty) + ' ' + p.unit) + '</option>').join('') + '</datalist><p data-target></p>' +
         '<label>Số lượng sửa (' + unit + ')<input name="qty" type="number" step="any" min="0" value="' + Math.min(-item.closing_qty, item.sources[0].qty) + '"></label>' +
@@ -74,7 +88,12 @@ window.TdpOutputStockWeb = function (options) {
     if (el('[data-supplement]')) el('[data-supplement]').onclick = () => options.onSupplement(activeCode, () => load(true));
     if (el('[data-period]')) el('[data-period]').onclick = () => options.onPeriod();
     if (el('[data-edit]')) {
-      if (saved) ['ledger_id','new_code','qty'].forEach(key => { if (saved[key] != null) field(key).value = saved[key]; });
+      if (saved) {
+        ['ledger_id','new_code','qty'].forEach(key => { if (saved[key] != null) field(key).value = saved[key]; });
+        const notice = document.createElement('p');
+        notice.textContent = 'Đã giữ phần đang nhập trong tab này. Đây là bản chưa xác nhận; xem trước và đối chiếu trước khi cập nhật kho.';
+        el('[data-edit]').prepend(notice);
+      }
       const targetInfo = () => {
         const target = data.catalog.find(p => p.code === field('new_code').value.trim());
         el('[data-target]').textContent = target ? target.name + ' · Tồn cuối kỳ: ' + qty(target.closing_qty) + ' ' + target.unit : '';
@@ -83,7 +102,7 @@ window.TdpOutputStockWeb = function (options) {
       field('ledger_id').onchange = () => {
         const source = item.sources.find(r => String(r.ledger_id) === field('ledger_id').value);
         if (source) field('qty').value = Math.min(-item.closing_qty, source.qty);
-        invalidate();
+        invalidate(); remember();
       };
       el('[data-edit]').onsubmit = check;
       requestAnimationFrame(() => focus(saved ? 'new_code' : 'ledger_id'));
@@ -120,6 +139,7 @@ window.TdpOutputStockWeb = function (options) {
     working(true);
     try {
       await api('/api/inventory/output-remap/confirm', post({token:preview.token, actor, confirmed:true}));
+      delete drafts[activeCode]; persistDrafts();
       invalidate(); el('[data-editor]').innerHTML = '';
       el('[data-status]').textContent = 'Đã cập nhật kho. Hàng hết âm được bỏ khỏi danh sách; hàng còn âm hiển thị số còn thiếu.';
       await options.onApplied(); await load(false, true);
@@ -128,12 +148,13 @@ window.TdpOutputStockWeb = function (options) {
   }
   async function load(preserve = true, afterSave = false) {
     if (busy && !afterSave) return;
-    const saved = preserve ? values() : null;
+    if (preserve) remember();
+    const saved = preserve ? drafts[activeCode] : null;
     working(true);
     try {
       const result = await api('/api/inventory/output-remap/shortages?' + new URLSearchParams({from,to}));
       if (!dialog.isConnected) return;
-      data = result; renderList(); renderEditor(saved);
+      data = result; renderHistory(); renderList(); renderEditor(saved);
       if (!afterSave) el('[data-status]').textContent = data.items.length + ' mặt hàng còn âm. Cập nhật số liệu không thay đổi kho.';
     } catch (error) { issues([{field:/Từ ngày|Đến ngày|ngày đầu|ngày cuối/.test(error.message) ? 'dates' : 'reload',message:error.message}]); }
     finally { working(false); }
@@ -141,8 +162,8 @@ window.TdpOutputStockWeb = function (options) {
   el('[data-close]').onclick = () => { if (!busy) dialog.close(); };
   el('[data-reload]').onclick = () => load(true);
   el('[data-excel]').onclick = () => options.onExcel(() => load(true));
-  dialog.addEventListener('input', event => { if (event.target.closest('[data-edit]')) invalidate(); });
+  dialog.addEventListener('input', event => { if (event.target.closest('[data-edit]')) { invalidate(); remember(); } });
   dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('close', () => { remember(); dialog.remove(); });
   load();
 };
