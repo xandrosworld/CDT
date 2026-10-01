@@ -20,6 +20,8 @@ class CustomerStatementTests(unittest.TestCase):
                         self.assertGreaterEqual(cell.font.sz,14)
                         self.assertFalse(cell.alignment.shrinkToFit)
         ws=customer_statement(scope).active
+        self.assertEqual(len(ws.row_breaks.brk),0)
+        self.assertEqual(ws.page_setup.fitToHeight,0)
         self.assertIn('Bằng chữ:',ws['A14'].value)
         self.assertIn('A14:I14',str(ws.merged_cells))
 

@@ -379,7 +379,8 @@ def _keep_delivery_footer_with_items(rendered, sources, *, paper, render_dir):
     for index, item in enumerate(rendered):
         receipt = is_receipt_sheet(item.get('sheet', ''))
         payment_request = item.get('sheet','').strip().casefold() == 'đề nghị thanh toán'
-        if (item['document_type'] != 'deliveries' and not receipt and not payment_request) or item['pages'] < 2:
+        payment_statement = item.get('sheet','').strip().casefold() == 'bảng tổng hợp giao nhận'
+        if (item['document_type'] != 'deliveries' and not receipt and not payment_request and not payment_statement) or item['pages'] < 2:
             result.append(item); continue
         source = next(s for s in sources if s['path'].name == item['workbook'])
         book = load_workbook(source['path'])
@@ -389,6 +390,10 @@ def _keep_delivery_footer_with_items(rendered, sources, *, paper, render_dir):
                 end = next((r for r in range(15, sheet.max_row+1) if sheet.cell(r,3).value == 'TỔNG'), 15)
                 rows = [r for r in range(15, end) if sheet.cell(r,3).value]
                 name_column = 3
+            elif payment_statement:
+                rows = [r for r in range(11,sheet.max_row+1)
+                        if type(sheet.cell(r,1).value) is int and sheet.cell(r,2).value]
+                name_column = 2
             elif payment_request:
                 rows = [r for r in range(11,sheet.max_row+1)
                         if type(sheet.cell(r,2).value) is int and sheet.cell(r,4).value is not None]

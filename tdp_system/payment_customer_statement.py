@@ -125,7 +125,8 @@ def customer_statement(scope):
     ws.page_setup.orientation='portrait';ws.page_setup.paperSize=ws.PAPERSIZE_A4
     ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=0
     readable_payment_layout(ws, statement=True)
-    keep_payment_footer(ws,total_row,total_row+6)
+    # Paginate using the rendered A4 geometry, not unscaled Excel row heights.
+    # Explicit estimated breaks leave large empty areas after fitting the width.
     # Avoid Excel's trailing decimal dot for integral amounts, without dropping
     # fractional quantities or provider VAT decimals.
     for row in ws:
