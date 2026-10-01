@@ -25,7 +25,9 @@ const out=process.env.TDP_BK_PROOF||'D:/TDP_RAILWAY_PRIVATE/simple-day-proof';
    await preview.locator('[data-doc="print-'+type+'"]').click();
    const response=await result;assert(response.ok());
    const url=new URL(response.url());assert.equal(url.searchParams.get('paper'),type==='summary'?'A4':'A5');
-   fs.writeFileSync(out+'/'+type+'.pdf',await response.body());
+   const file=await page.request.get(response.url(),{timeout:240000});assert(file.ok());
+   const bytes=await file.body();assert(bytes.length>100&&bytes.subarray(0,4).toString()==='%PDF');
+   fs.writeFileSync(out+'/'+type+'.pdf',bytes);
    await preview.locator('iframe').waitFor();
    assert.deepEqual(writes,[]);assert.deepEqual(errors,[]);await page.close();
   }
