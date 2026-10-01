@@ -214,6 +214,31 @@ class InvoicePaymentScopeTests(unittest.TestCase):
             finally:
                 statement.close()
 
+    def test_payment_uses_issued_lines_not_tax_rounded_on_daily_allocations(self):
+        from .invoice_payment_scope import issued_invoice_payment_scope
+        from .payment_customer_statement import customer_statement
+        with server.db() as conn:
+            draft,_,_=self.add_invoice(conn)
+            line=conn.execute('SELECT id FROM outgoing_invoice_lines WHERE draft_id=?',(draft,)).fetchone()[0]
+            for n in range(25):
+                _,_,order=self.add_invoice(conn,status='draft',invoice_number=f'DRAFT-{n}')
+                conn.execute('INSERT INTO outgoing_line_allocations(line_id,order_id,qty,amount,source_unit_price) VALUES(?,?,.08,8,100)',(line,order))
+            self.add_direct_source(conn,invoice_number='SOURCE-2')
+            scope=issued_invoice_payment_scope(conn,'NT-A','2026-09-01','2026-09-30')
+            self.assertEqual(25,len(scope['lines']))
+            self.assertEqual(1,len(scope['invoice_lines']))
+            book=customer_statement(scope)
+            self.assertEqual(432,scope['totals']['total_amount'])
+            self.assertEqual(32,sum(book.active.cell(r,8).value for r in (11,12)))
+            conn.execute('UPDATE outgoing_invoice_lines SET product_name=? WHERE id=?',('Tên trên hóa đơn đã cập nhật',line))
+            changed=issued_invoice_payment_scope(conn,'NT-A','2026-09-01','2026-09-30')
+            self.assertNotEqual(scope['scope_id'],changed['scope_id'])
+        response=self.scope();self.assertEqual(200,response.status_code)
+        self.assertNotIn('invoice_lines',response.get_json())
+        preview=self.client.post('/api/documents/preview',json={'kind':'payment','contractor':'NT-A',
+            'from':'2026-09-01','to':'2026-09-30','scope_id':response.get_json()['scope_id']})
+        self.assertEqual(200,preview.status_code,preview.get_json())
+
     def test_synced_issued_source_is_provenance_and_bad_source_states_are_blocked(self):
         with server.db() as conn:
             self.add_invoice(conn)

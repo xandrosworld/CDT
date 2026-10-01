@@ -281,7 +281,7 @@ def _local_issued_payment_scope(
             code="issued_invoice_lines_missing",
         )
     invoice_lines = [dict(r) for r in conn.execute(
-        f'SELECT * FROM outgoing_invoice_lines WHERE draft_id IN ({placeholders})',tuple(draft_ids))]
+        f'SELECT * FROM outgoing_invoice_lines WHERE draft_id IN ({placeholders}) ORDER BY draft_id,id',tuple(draft_ids))]
     _verify_lines(drafts, invoice_lines)
 
     invoices = []
@@ -313,6 +313,10 @@ def _local_issued_payment_scope(
         "date_from": safe_from,
         "date_to": safe_to,
         "invoices": invoices,
+        # Payment statements use issued invoice lines. Daily allocations may
+        # split one invoice line across many orders; rounding VAT on those
+        # pieces changes the sum even though the issued invoice is correct.
+        "invoice_lines": invoice_lines,
         "line_fingerprint": [
             {
                 "draft_id": int(line["draft_id"]),
@@ -480,6 +484,7 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
         'totals': {k: sum(i[k] for i in invoices) for k in ('subtotal', 'tax_amount', 'total_amount')},
         'snapshot': snapshot, 'drafts': local['drafts'] if local else [], 'lines': local['lines'] if local else [],
         'source_lines': source_lines, 'statement_kind': 'invoices',
+        'invoice_lines': local['invoice_lines'] if local else [],
         'excluded_draft_count': excluded_drafts,
         'template_status': 'official_customer_xlsx', 'official_template_ready': True,
         'warning': 'Số tiền lấy từ hóa đơn VAT đã phát hành. Thông tin nhận tiền là cấu hình tại lúc lập đề nghị. '
@@ -494,7 +499,7 @@ def public_payment_scope(scope: dict[str, Any]) -> dict[str, Any]:
     """Remove internal rendering rows while keeping the full proof summary."""
     return {
         key: value for key, value in scope.items()
-        if key not in {"drafts", "lines", "snapshot", "line_fingerprint", "source_lines"}
+        if key not in {"drafts", "lines", "snapshot", "line_fingerprint", "source_lines", "invoice_lines"}
     }
 
 

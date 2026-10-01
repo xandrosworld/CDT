@@ -26,7 +26,8 @@ def customer_statement(scope):
         return parsed
 
     groups, actual = OrderedDict(), defaultdict(lambda: [Decimal(0), Decimal(0), Decimal(0)])
-    lines = [(r, True) for r in scope.get('source_lines', [])] + [(r, False) for r in scope.get('lines', [])]
+    local_lines = scope.get('invoice_lines', scope.get('lines', []))
+    lines = [(r, True) for r in scope.get('source_lines', [])] + [(r, False) for r in local_lines]
     for row, source in lines:
         name, unit = (row['source_item_name'], row['source_unit']) if source else (row['product_name'],row['unit'])
         tax = tax_fields({'tax_rate':row.get('tax_rate') if source else row.get('tax'), 'amount':row['amount']})

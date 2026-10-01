@@ -16,6 +16,11 @@ def main():
         with server.db() as conn:
             fixture.add_direct_source(conn,invoice_number='853')
             fixture.add_direct_source(conn,invoice_number='854')
+            draft,_,_=fixture.add_invoice(conn,invoice_number='813')
+            line=conn.execute('SELECT id FROM outgoing_invoice_lines WHERE draft_id=?',(draft,)).fetchone()[0]
+            for n in range(25):
+                _,_,order=fixture.add_invoice(conn,status='draft',invoice_number=f'DRAFT-{n}')
+                conn.execute('INSERT INTO outgoing_line_allocations(line_id,order_id,qty,amount,source_unit_price) VALUES(?,?,.08,8,100)',(line,order))
         serve(server.app,host='127.0.0.1',port=18804,threads=4)
 
 
