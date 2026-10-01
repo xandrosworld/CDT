@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover
 class InvoicePaymentDocumentTests(unittest.TestCase):
     def test_short_request_fits_one_page_but_long_request_keeps_pagination(self):
         from copy import deepcopy
-        for count,expected in ((14,1),(60,0)):
+        for count,expected in ((14,1),(21,1),(60,0)):
             scope=self.payment_scope();original=scope['invoices'][0]
             scope['invoices']=[dict(deepcopy(original),invoice_number=str(800+i),draft_id=i+1,source_invoice_id=i+1) for i in range(count)]
             scope['totals']={k:v*count for k,v in scope['totals'].items()}

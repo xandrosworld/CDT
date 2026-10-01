@@ -281,27 +281,29 @@ def invoice_payment_request_workbook(
     write(f'C{total_row + 1}', number_to_vietnamese(totals['total_amount']) + './.')
     write(f'A{total_row + 3}', f"        Tên tài khoản: {snapshot['company_name_snapshot'].upper()}")
     write(f'A{total_row + 4}', f"        Số tài khoản: {snapshot['payment_bank_account_snapshot']} Tại {snapshot['payment_bank_name_snapshot']}")
-    # Grow narrative rows for long customer names; keep the invoice table compact.
-    for row in (7, 8):
-        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0,
-                                            math.ceil(len(ws.cell(row, 1).value or '') / 110) * 15)
     try:
-        from .payment_print_layout import readable_payment_layout, keep_payment_footer
+        from .payment_print_layout import readable_payment_layout
     except ImportError:
-        from payment_print_layout import readable_payment_layout, keep_payment_footer
+        from payment_print_layout import readable_payment_layout
     readable_payment_layout(ws)
-    for row in (1, 6, 7, 8):
-        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0,
-                                            math.ceil(len(ws.cell(row, 1).value or '') / 85) * 20)
-    ws.row_dimensions[1].height = max(40, math.ceil(len(ws['A1'].value or '') / 36) * 18)
-    for row in range(10, total_row + 1):
-        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0, 32 if row == 10 else 21)
-    ws.row_dimensions[total_row + 1].height = max(40, math.ceil(len(ws.cell(total_row + 1, 3).value or '') / 65) * 20)
+    # Replace oversized template spacers with content-sized rows. Keep 14pt
+    # source type and let genuinely long narratives grow instead of clipping.
+    for row in (6, 7, 8):
+        ws.row_dimensions[row].height = max(18, math.ceil(len(ws.cell(row, 1).value or '') / 85) * 18)
+    ws.row_dimensions[1].height = max(36, math.ceil(len(ws['A1'].value or '') / 36) * 18)
+    ws.row_dimensions[4].height = 6
+    ws.row_dimensions[9].height = 8
+    ws.row_dimensions[10].height = 32
+    for row in range(11, total_row):
+        ws.row_dimensions[row].height = 19
+    ws.row_dimensions[total_row].height = 24
+    ws.row_dimensions[total_row + 1].height = max(36, math.ceil(len(ws.cell(total_row + 1, 3).value or '') / 65) * 18)
     for row in range(total_row + 2, total_row + 11):
-        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0, 20)
+        ws.row_dimensions[row].height = 18
     for row in (total_row + 2, total_row + 3, total_row + 4):
         ws.row_dimensions[row].height = max(ws.row_dimensions[row].height,
-                                            math.ceil(len(ws.cell(row, 1).value or '') / 80) * 20)
+                                            math.ceil(len(ws.cell(row, 1).value or '') / 80) * 18)
+    ws.row_dimensions[total_row + 7].height = 8
     ws.print_area = f'A1:H{total_row + 10}'
     # Let the actual Excel/Calc renderer paginate after fitting the width.
     # Estimating in unscaled worksheet points forced premature page breaks.
