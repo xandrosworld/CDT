@@ -138,8 +138,10 @@ def print_source_status(conn, body):
     kind=body.get('kind')
     if kind=='saved-purchases':
         rows=saved_rows(conn,body.get('from'),body.get('to'),body.get('document_ids'))
+        chosen=set(body.get('document_ids',[]))
+        old=any(r['origin']=='order' and r['id'] in chosen for r in documents(conn,body.get('from'),body.get('to')))
         return dict(source='saved',title='Bảng đã ghi kho — in lại',
-            message='Đang in lại các dòng mua đã xác nhận nhập kho. Xem, tải và in không ghi thêm kho; không cần xác nhận nhập kho lần nữa.',
+            message=('Có dữ liệu cũ đã ghi kho từ duyệt đơn; đây không phải xác nhận đã lập bảng bổ sung cho ngày này. ' if old else '')+'Đang in lại các dòng mua đã xác nhận nhập kho. Xem, tải và in không ghi thêm kho; không cần xác nhận nhập kho lần nữa.',
             from_date=min(r['document_date'] for r in rows),to_date=max(r['document_date'] for r in rows),items=[])
     if kind!='purchases':return None
     try:

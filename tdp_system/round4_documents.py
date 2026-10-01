@@ -197,7 +197,8 @@ def register_document_routes(app, context_factory):
             with context_factory()['db']() as conn:
                 conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
                 items=documents(conn,request.args.get('from'),request.args.get('to'))
-            return jsonify(ok=True,items=items,writesInventory=False)
+            return jsonify(ok=True,items=[r for r in items if r['origin']!='order'],
+                           legacy_items=[r for r in items if r['origin']=='order'],writesInventory=False)
         except ValueError as exc:
             return jsonify(ok=False,error=str(exc)),400
 

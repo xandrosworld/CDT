@@ -92,6 +92,19 @@ class SavedHistoryTests(unittest.TestCase):
         self.assertIn('Hàng BK',str(result.get_json()['sheets']))
         self.assertNotIn('Changed catalogue',str(result.get_json()['sheets']))
 
+    def test_order_generated_history_is_separate_without_changing_stock(self):
+        body=self.print_body()
+        with server.db() as c:
+            batch=c.execute("INSERT INTO batches(work_date,status,created_at) VALUES('2026-08-01','approved','test')").lastrowid
+            c.execute("INSERT INTO batch_bk_approvals VALUES(?,?,'test','test')",(batch,body['document_ids'][0]))
+        before=self.database()
+        data=self.history().get_json()
+        self.assertEqual([],data['items'])
+        self.assertEqual(body['document_ids'],[r['id'] for r in data['legacy_items']])
+        from .bk_history import saved_rows
+        with server.db() as c:self.assertTrue(saved_rows(c,body['from'],body['to'],body['document_ids']))
+        self.assertEqual(before,self.database())
+
     def test_receipt_limit_names_seller_and_day_without_blocking_saved_summary(self):
         with server.db() as c:
             c.execute('UPDATE bk_import_lines SET amount=6000000,unit_cost=3000000')
