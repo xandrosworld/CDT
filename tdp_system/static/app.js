@@ -4408,7 +4408,7 @@
     content.innerHTML = html([
       '<div class="print-workspace-heading"><button class="btn btn-outline" data-view="home">← Đơn hàng - bảng kê</button><h3>',
       {deliveries:'In đơn hàng đi giao', purchases:'In bảng kê và biên nhận', suppliers:'In đơn đặt nhà cung cấp', report:'In báo cáo tổng hợp'}[state.printingDocument], '</h3></div>',
-      state.printingDocument === 'purchases' ? '<section class="card"><div class="card-head"><div><h3>Lập và in bảng kê bổ sung cuối tháng</h3><p>Đối chiếu tồn cả tháng, chọn hàng còn âm và kiểm tra ngày mua, người bán thực tế. Sau đó xem bảng kê, in hoặc tải Excel ngay trong bản xem.</p></div></div><div class="card-body"><div class="compact-controls"><label>Tháng đối chiếu <input id="bkPrintMonth" type="month" required value="'+esc(state.bkPrintMonth||(state.printingTo||currentWorkDate()).slice(0,7))+'"></label><button class="btn btn-primary" data-action="open-monthly-bk">Lập bảng kê bổ sung từ tồn âm</button></div><p class="muted">Không cần tích ngày ở danh sách đơn hàng. Ngày mua vẫn theo từng dòng thực tế; xem, in và tải file chưa ghi nhập kho.</p></div></section><details id="purchaseLegacyPrint" class="operation-details"'+(state.purchaseLegacyPrintOpen?' open':'')+'><summary>Bảng kê theo đơn trước đây / phần chờ đã lưu</summary><div class="operation-details-body"><p>Dùng để xem lại hoặc sửa lựa chọn theo đơn đã lưu trước đây. Phần này không tự lọc hàng âm cuối tháng.</p>' : '',
+      state.printingDocument === 'purchases' ? '<section class="card"><div class="card-head"><div><h3>In bảng kê theo tháng</h3><p>Đã làm bảng kê trước đây: chọn tháng rồi bấm Xem bảng kê đã lưu. Không cần nạp lại Excel hoặc chọn hàng tồn âm.</p></div></div><div class="card-body"><div class="compact-controls"><label>Tháng cần in <input id="bkPrintMonth" type="month" required value="'+esc(state.bkPrintMonth||(state.printingTo||currentWorkDate()).slice(0,7))+'"></label><button class="btn btn-primary" data-action="open-saved-bk">Xem bảng kê đã lưu</button><button class="btn btn-outline" data-action="open-monthly-bk">Lập bảng kê bổ sung từ tồn âm</button></div><p class="muted">In lại dùng ngày mua, mặt hàng, lượng và tiền đã lưu. Chỉ lập bổ sung khi còn hàng thực mua chưa ghi kho.</p></div></section><div id="bkSavedHistory"></div><details id="purchaseLegacyPrint" class="operation-details"'+(state.purchaseLegacyPrintOpen?' open':'')+'><summary>Bảng kê theo đơn trước đây / phần chờ đã lưu</summary><div class="operation-details-body"><p>Dùng để xem lại hoặc sửa lựa chọn theo đơn đã lưu trước đây. Phần này không tự lọc hàng âm cuối tháng.</p>' : '',
       '<div class="card print-selection-card fade-in"><div class="card-head"><div><h3>',
       state.printingDocument === "deliveries" ? 'Chọn bếp cần in phiếu giao' : 'Chọn ngày cần lấy giấy tờ', '</h3>',
       '<p>Chọn phiếu, xem ngay tại đây hoặc in phần đã chọn. Bảng kê/biên nhận có thể chọn tiếp từng sheet trong bản xem.</p></div>',
@@ -7260,6 +7260,12 @@
       renderDocuments();
       return;
     }
+    if(event.target.id==='bkPrintMonth'){
+      state.bkPrintMonth=event.target.value;
+      var historyHost=document.getElementById('bkSavedHistory');
+      if(historyHost){historyHost.dataset.historySerial='changed';historyHost.innerHTML='<p role="status">Tháng cần in đã đổi. Bấm Xem bảng kê đã lưu phía trên để xem đúng tháng mới.</p>';}
+      return;
+    }
     if (event.target.id === 'supplierFrom' || event.target.id === 'supplierTo') {
       state[event.target.id] = event.target.value;
       state.purchaseOrderPreview = null; state.purchaseOrderBatchId = null;
@@ -8170,11 +8176,15 @@
         to:state.view === 'printing' ? state.printingTo : state.inventoryTo});
       return;
     }
-    if (action === "open-monthly-bk") {
+    if (action === "open-monthly-bk" || action === "open-saved-bk") {
       var monthField=content.querySelector('#bkPrintMonth');
       if(!monthField||!monthField.reportValidity())return;
       var month=monthField.value,parts=month.split('-'),lastDay=new Date(Number(parts[0]),Number(parts[1]),0).getDate();
       state.bkPrintMonth=month;
+      if(action==='open-saved-bk'){
+        await window.TdpBkHistory({hostId:'bkSavedHistory',api:api,esc:esc,from:month+'-01',to:month+'-'+lastDay});
+        return;
+      }
       window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,onStockReview:openSupplementStockReview,
         from:month+'-01',to:month+'-'+lastDay,onSaved:function(){loadBkDocuments(true);}});
       return;

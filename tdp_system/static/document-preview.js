@@ -26,7 +26,7 @@
       if (!isCurrent()) return;
       function receiptAt(i) { return /(?:^| · )biên nhận(?:\s+\d+)?$/.test(data.sheets[i].name.trim().toLowerCase()); }
       function summaryAt(i) { return /(?:^| · )bảng kê tổng$/.test(data.sheets[i].name.trim().toLowerCase()); }
-      var purchases = body.kind === 'purchases' && data.sheets.some(function(_,i){return receiptAt(i);});
+      var purchases = ['purchases','saved-purchases'].includes(body.kind) && data.sheets.some(function(_,i){return receiptAt(i);});
       var selected = new Set(data.sheets.map(function (_, i) { return i; }).filter(function(i){return !purchases || receiptAt(i);}));
       var deliveries = body.kind === 'deliveries', resolvedSides = '';
       var current = selected.values().next().value || 0;
@@ -206,6 +206,11 @@
     } catch (error) {
       if (isCurrent()) {
         host.innerHTML = '<div class="document-error" role="alert">' + esc(error.message) + '</div>';
+        if(body.kind==='saved-purchases'){
+          host.innerHTML+='<button type="button" class="btn btn-outline" data-saved-back>Quay lại danh sách bảng kê</button> <button type="button" class="btn btn-primary" data-saved-retry>Kiểm tra lại bản in</button>';
+          host.querySelector('[data-saved-retry]').onclick=function(){open(body,hostId,false);};
+          host.querySelector('[data-saved-back]').onclick=function(){var field=host.parentElement.querySelector('[data-history-id]');if(field){field.scrollIntoView({block:'center'});field.focus();}};
+        }
         if (body.kind === 'payment' && error.code === 'payment_statement_line_totals_mismatch') {
           host.innerHTML += '<button type="button" class="btn btn-primary" data-action="payment-open-output">Mở hóa đơn đầu ra đúng kỳ</button> <button type="button" class="btn btn-outline" data-payment-retry>Kiểm tra lại bảng kê</button>';
           host.querySelector('[data-payment-retry]').onclick = () => open(body, hostId, false);

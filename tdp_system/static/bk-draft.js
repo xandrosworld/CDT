@@ -11,6 +11,7 @@
       '<label>Đến ngày<input name="to" type="date" value="' + esc(options.to) + '"></label>' +
       '<label>Nhóm hàng<select name="tax"><option value="KKKNT">KKKNT</option><option value="all">Tất cả hàng tồn âm</option></select></label>' +
       '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div>' +
+      '<div class="bk-quick-fill"><strong>Muốn in lại bảng kê đã làm?</strong> Không cần chọn hàng tồn âm. <button type="button" class="btn btn-primary" data-bk="history">Xem bảng kê đã lưu trong kỳ này</button></div><div class="bk-history-host"></div>' +
       '<div class="bk-draft-controls"><label>Số bảng kê<input name="reference" maxlength="100" aria-describedby="bk-reference-help"><small id="bk-reference-help">Đã gợi ý sẵn; có thể sửa theo cách đánh số đang dùng.</small></label></div>' +
       '<div class="bk-quick-fill"><div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label></div><p>Chọn cùng một ngày ở Từ ngày và Đến ngày: dùng sẵn ngày đó cho các dòng đã tích còn trống ngày. Chọn nhiều ngày: chọn Ngày mua thực tế một lần tại đây. Kiểm tra đúng ngày thực mua; có thể sửa tại ô này. Ngày đã có từ nguồn mua được giữ nguyên.</p></div>' +
       '<details class="bk-quick-seller"><summary>Điền nhanh người bán (không bắt buộc)</summary><p>Chỉ điền Người bán / NCC còn trống của những dòng đã tích chọn.</p><div class="bk-draft-controls"><label>Người bán / NCC<input name="source_party" list="bk-supplement-sellers" maxlength="150"></label><button class="btn btn-outline" data-bk="apply-common">Điền người bán cho dòng đã chọn</button></div></details><datalist id="bk-supplement-sellers"></datalist>' +
@@ -172,6 +173,11 @@
     async function action(name) {
       if (name==='close') {dialog.close();return;}
       if (busy) return;
+      if(name==='history'){
+        var history=dialog.querySelector('.bk-history-host');
+        if(!history.id)history.id='bk-history-'+crypto.randomUUID();
+        await root.TdpBkHistory({hostId:history.id,api:options.api,esc:esc,from:field('from').value,to:field('to').value});return;
+      }
       clearIssues();focusAfterAction=null;
       busy=true; dialog.querySelectorAll('button').forEach(function(b){if(b.dataset.bk!=='close')b.disabled=true;});
       dialog.querySelectorAll('input,select').forEach(function(el){el.disabled=true;});

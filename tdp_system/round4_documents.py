@@ -78,6 +78,12 @@ def selected_workbooks(conn, body, ctx):
                 if not any(row.get('exportable') for row in rows): continue
                 name,payload=ctx['quote_workbook_payload'](conn,contractor['code'],rows,meta,mode)
                 result.append((name,load_workbook(io.BytesIO(payload))))
+        elif kind == 'saved-purchases':
+            try:
+                from .bk_history import workbook
+            except ImportError:
+                from bk_history import workbook
+            result.append((f'Bang_ke_da_luu_{body.get("from")}_{body.get("to")}.xlsx',workbook(conn,body,ctx)))
         elif kind == 'payment':
             scope = issued_invoice_payment_scope(conn, body.get('contractor'), body.get('from'), body.get('to'))
             if body.get('scope_id') and body['scope_id'] != scope['scope_id']:
@@ -180,6 +186,20 @@ def snapshot_selection(root, token, raw):
 
 def register_document_routes(app, context_factory):
     def root(): return context_factory()['DATA_DIR'] / 'document_previews'
+
+    @app.get('/api/bk-import/history')
+    def saved_purchase_history():
+        try:
+            try:
+                from .bk_history import documents
+            except ImportError:
+                from bk_history import documents
+            with context_factory()['db']() as conn:
+                conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
+                items=documents(conn,request.args.get('from'),request.args.get('to'))
+            return jsonify(ok=True,items=items,writesInventory=False)
+        except ValueError as exc:
+            return jsonify(ok=False,error=str(exc)),400
 
     @app.get('/api/documents/list')
     def document_list():
