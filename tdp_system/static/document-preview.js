@@ -53,6 +53,16 @@
         '</div>' + (body.kind === 'payment' ? '<p class="document-note">In hóa đơn: A4 hai mặt · mỗi hóa đơn bắt đầu trên tờ riêng. Giữ đủ các trang như bản gốc; chèn mặt trắng khi cần để hai số hóa đơn không chung một tờ. Chọn Hai mặt, Lật cạnh dài và in tất cả trang, kể cả trang trắng. Cách in phía trên chỉ áp dụng cho In phiếu đã chọn.</p>' : '') +
         '<div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false, paperTouched = false, cancelDownload = null;
+      if(body.kind==='saved-purchases'&&!body.receipts){
+        var receiptLink=document.createElement('button');
+        receiptLink.className='btn btn-primary';receiptLink.dataset.savedReceipts='';
+        receiptLink.textContent='Xem biên nhận của các bảng kê đã chọn';
+        receiptLink.onclick=function(){open(Object.assign({},body,{receipts:true}),hostId,false);};
+        var receiptNote=document.createElement('p');receiptNote.className='document-note';
+        receiptNote.textContent='Đang xem riêng bảng kê tổng. Muốn in biên nhận, bấm nút bên dưới; giữ nguyên các bảng kê đã chọn.';
+        receiptNote.appendChild(document.createElement('br'));receiptNote.appendChild(receiptLink);
+        host.querySelector('.document-toolbar').after(receiptNote);
+      }
       function invalidatePrint() {
         resolvedSides = '';
         host.querySelector('.document-pdf').innerHTML = '';

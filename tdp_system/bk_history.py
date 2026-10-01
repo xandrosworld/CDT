@@ -84,7 +84,9 @@ def workbook(conn, body, ctx):
             # Apply by document only once; retain every other saved source row.
             by_document[revision['document_id']]=revised
     rows=sorted((row for group in by_document.values() for row in group),key=lambda r:r['work_date'])
-    kwargs=dict(template_path=ctx['MASTER_SOURCE'],date_from=start,date_to=end)
+    # The search month is not the date range of the selected printed purchases.
+    kwargs=dict(template_path=ctx['MASTER_SOURCE'],date_from=min(r['work_date'] for r in rows),
+                date_to=max(r['work_date'] for r in rows))
     if body.get('receipts'):
         rows=enrich_receipt_identity_rows(conn,rows)
         daily=defaultdict(Decimal);names={}

@@ -23,16 +23,23 @@ const out=process.env.TDP_BK_PROOF||'D:/TDP_RAILWAY_PRIVATE/bk-history-proof';
   const count=await page.locator('[data-history-id]').count();assert(count>0);
   await page.screenshot({path:out+'/02-bang-ke-thang-8-da-luu.png'});
   if(!process.env.TDP_BK_LIVE){
-   await page.locator('[data-history-id]').first().uncheck();await page.locator('[data-history=summary]').click();
+   await page.locator('[data-history=none]').click();await page.locator('[data-history=summary]').click();
    assert((await page.locator('.bk-history-error').innerText()).includes('Chọn ít nhất'));
    assert.equal(await page.evaluate(()=>document.activeElement.hasAttribute('data-history-id')),true);
-   await page.locator('[data-history-id]').first().check();
+   await page.locator('[data-history=all]').click();
   }
   await page.locator('[data-history=summary]').click();
   const preview=page.locator('#bkSavedHistory-preview');
   await preview.locator('[data-open-sheet]').first().waitFor();
   assert.equal(await preview.locator('.document-error').innerText(),'');
   assert((await preview.innerText()).includes('2026'));
+  if(!process.env.TDP_BK_LIVE){
+   assert((await preview.innerText()).includes('Từ ngày 01/08/2026 đến ngày 01/08/2026'));
+   await preview.locator('[data-saved-receipts]').click();
+   await preview.locator('[data-doc=receipts]').waitFor();
+   assert.equal(await page.locator('[data-history-id]:checked').count(),count);
+   await preview.locator('[data-doc=summary]').click();
+  }
   await preview.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/03-xem-bang-ke-thang-8.png'});
   const excel=page.waitForEvent('download');await preview.locator('[data-doc=excel]').click();await (await excel).saveAs(out+'/Bang-ke-thang-8.xlsx');
   const pdf=page.waitForEvent('download',{timeout:240000});await preview.locator('[data-doc=pdf]').click();await (await pdf).saveAs(out+'/Bang-ke-thang-8.pdf');

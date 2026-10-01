@@ -50,7 +50,11 @@ class SavedHistoryTests(unittest.TestCase):
             output=self.client.get('/api/documents/'+data['token']+'/excel')
             self.assertEqual(200,output.status_code)
             book=load_workbook(io.BytesIO(output.data))
-            self.assertIn('bảng kê tổng',book.sheetnames);book.close()
+            self.assertIn('bảng kê tổng',book.sheetnames)
+            text=str(list(book['bảng kê tổng'].values))
+            self.assertIn('Từ ngày 01/08/2026 đến ngày 01/08/2026',text)
+            self.assertNotIn('31/08/2026',text)
+            book.close()
         self.assertEqual(before,self.database())
 
     def test_period_and_reversed_document_are_not_silently_reprinted(self):
