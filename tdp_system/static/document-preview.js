@@ -85,7 +85,7 @@
         var advanced=document.createElement('details');advanced.className='document-note';advanced.innerHTML='<summary>Chi tiết từng phiếu / tải file</summary>';
         var toolbar=host.querySelector('.document-toolbar');toolbar.before(advanced);advanced.appendChild(toolbar);
         host.querySelectorAll('.document-note,.document-sheet-list').forEach(function(el){
-          if(el!==advanced&&!el.dataset.purchaseSource&&!advanced.contains(el))advanced.appendChild(el);
+          if(el!==advanced&&!el.dataset.purchaseSource&&el.getAttribute('role')!=='alert'&&!advanced.contains(el))advanced.appendChild(el);
         });
         var simple=document.createElement('div');simple.className='document-toolbar';simple.dataset.simplePrint='';
         simple.innerHTML='<button class="btn btn-outline" data-doc="summary">Xem bảng kê A4</button><button class="btn btn-outline" data-doc="receipts">Xem biên nhận A5</button><button class="btn btn-primary" data-doc="print-summary">In bảng kê A4</button><button class="btn btn-primary" data-doc="print-receipts">In biên nhận A5</button>';

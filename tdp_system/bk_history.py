@@ -110,6 +110,7 @@ def workbook(conn, body, ctx):
     # The search month is not the date range of the selected printed purchases.
     kwargs=dict(template_path=ctx['MASTER_SOURCE'],date_from=min(r['work_date'] for r in rows),
                 date_to=max(r['work_date'] for r in rows))
+    reprint_warnings=[]
     if body.get('receipts'):
         rows=enrich_receipt_identity_rows(conn,rows)
         daily=defaultdict(Decimal);names={}
@@ -117,12 +118,10 @@ def workbook(conn, body, ctx):
             key=(row['work_date'],row['cccd']);daily[key]+=Decimal(str(row['amount']));names[key]=row['seller']
         over=[(key,total) for key,total in daily.items() if total>RECEIPT_MAX_DAILY_AMOUNT]
         if over:
-            detail='; '.join(f"{names[key]}, ngày {'/'.join(reversed(key[0].split('-')))}: {total:,.0f}đ" for key,total in over[:8])
-            raise ReceiptExportError('Bảng kê tổng vẫn in được. Biên nhận cần đối chiếu vì tổng của cùng người bán trong ngày vượt 5.000.000đ: '+detail+
-                (f'; còn {len(over)-8} trường hợp.' if len(over)>8 else '.')+
-                ' Bấm Xem bảng kê tổng để in trước; kiểm tra chứng từ mua và người bán thực tế trước khi lập biên nhận. Không đổi ngày hoặc chia lại tiền để bỏ qua kiểm tra.',
-                code='receipt_daily_limit_exceeded')
+            reprint_warnings.append('In lại đúng dữ liệu đã ghi kho. Các khoản dưới đây vượt ngưỡng kiểm tra 5.000.000đ/người/ngày của phần mềm; cần đối chiếu chứng từ mua và thanh toán. Việc in lại không xác nhận tính hợp lệ của chứng từ và không ghi thêm kho.')
+            reprint_warnings.extend(f"{names[key]}, ngày {'/'.join(reversed(key[0].split('-')))}: {total:,.0f}đ." for key,total in over)
         book=build_purchase_documents_workbook(rows,**kwargs,
+            saved_reprint=True,
             buyer_name=ctx['setting_get'](conn,'purchase_receipt_buyer_name',''),
             buyer_title=ctx['setting_get'](conn,'purchase_receipt_buyer_title',''),
             company_name=ctx['setting_get'](conn,'company',''),company_address=ctx['setting_get'](conn,'company_address',''),
@@ -130,6 +129,7 @@ def workbook(conn, body, ctx):
     else:
         book=build_purchase_summary_workbook(rows,**kwargs)
     book._tdp_warnings=['In lại bảng kê đã ghi kho theo ngày mua đã lưu. Không nhập thêm kho. Thông tin định danh người bán lấy từ danh mục hiện tại; dùng bản sửa người bán đã lưu nếu có.']
+    book._tdp_warnings.extend(reprint_warnings)
     return book
 
 

@@ -181,7 +181,7 @@ def enrich_receipt_identity_rows(
 def group_receipt_rows(
     rows: Iterable[Mapping[str, Any]],
     *,
-    max_daily_amount: Decimal = RECEIPT_MAX_DAILY_AMOUNT,
+    max_daily_amount: Decimal | None = RECEIPT_MAX_DAILY_AMOUNT,
 ) -> list[dict[str, Any]]:
     """Create exactly one receipt for each legal seller on each purchase day."""
 
@@ -225,7 +225,7 @@ def group_receipt_rows(
     for key in sorted(grouped, key=lambda value: (value[0], _key(grouped[value]["seller"]), value[1])):
         group = grouped[key]
         total = sum((Decimal(str(item["amount"])) for item in group["items"]), Decimal("0"))
-        if total > max_daily_amount:
+        if max_daily_amount is not None and total > max_daily_amount:
             raise ReceiptExportError(
                 "Tổng biên nhận của một người bán trong ngày vượt 5.000.000 đồng",
                 code="receipt_daily_limit_exceeded",
@@ -643,9 +643,12 @@ def build_purchase_documents_workbook(
     company_address: str = "",
     location: str = "Hải Phòng",
     expected_sha256: str = EM_THANH_SHA256,
+    saved_reprint: bool = False,
 ) -> Any:
     materialized = [_row_dict(row) for row in rows]
-    receipt_groups = group_receipt_rows(materialized)
+    # Only the verified, posted-history caller enables this. New documents
+    # retain the daily limit; identity validation always remains active.
+    receipt_groups = group_receipt_rows(materialized, max_daily_amount=None if saved_reprint else RECEIPT_MAX_DAILY_AMOUNT)
     workbook = build_purchase_summary_workbook(
         materialized,
         template_path=template_path,

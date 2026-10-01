@@ -112,9 +112,13 @@ class SavedHistoryTests(unittest.TestCase):
         summary=self.client.post('/api/documents/preview',json=self.print_body())
         self.assertEqual(200,summary.status_code,summary.get_json())
         receipt=self.client.post('/api/documents/preview',json=self.print_body(receipts=True))
-        self.assertEqual(422,receipt.status_code)
-        self.assertIn('Seller Test, ngày 01/08/2026',receipt.get_json()['error'])
-        self.assertIn('Bảng kê tổng vẫn in được',receipt.get_json()['error'])
+        self.assertEqual(200,receipt.status_code)
+        self.assertIn('Seller Test, ngày 01/08/2026',' '.join(receipt.get_json()['warnings']))
+        self.assertIn('6,000,000',' '.join(receipt.get_json()['warnings']))
+        output=self.client.get('/api/documents/'+receipt.get_json()['token']+'/excel')
+        book=load_workbook(io.BytesIO(output.data))
+        self.assertTrue(any(c.value==6000000 for row in book['biên nhận'] for c in row))
+        book.close()
         self.assertEqual(before,self.database())
 
     def test_saved_seller_revision_keeps_amount_and_is_printed(self):
