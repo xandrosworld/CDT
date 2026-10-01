@@ -54,6 +54,7 @@
         '<div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false, paperTouched = false, cancelDownload = null;
       if(data.purchase_source){
+        host.classList.add('bk-history-preview');
         var provenance=data.purchase_source,sourcePanel=document.createElement('section');
         sourcePanel.className='document-note tag-warn';sourcePanel.dataset.purchaseSource=provenance.source;
         sourcePanel.innerHTML='<strong>'+esc(provenance.title)+'</strong><p>'+esc(provenance.message)+'</p>'+
