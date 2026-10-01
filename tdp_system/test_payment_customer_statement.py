@@ -11,6 +11,7 @@ class CustomerStatementTests(unittest.TestCase):
         scope=self.scope()
         for build in (customer_statement, invoice_payment_request_workbook):
             ws=build(scope).active
+            self.assertEqual(ws.page_setup.orientation,'portrait')
             self.assertIn(ws.page_setup.fitToHeight,(0,1))
             self.assertLess(sum(d.width for d in ws.column_dimensions.values()),140)
             for row in ws:
