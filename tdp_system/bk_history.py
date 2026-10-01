@@ -21,7 +21,14 @@ def documents(conn, start, end):
         FROM bk_import_documents d JOIN bk_import_lines l ON l.document_id=d.id
         WHERE d.status='posted' AND l.document_date BETWEEN ? AND ?
         GROUP BY d.id ORDER BY date_from,d.id''',(start,end))
-    return [dict(r) for r in rows]
+    items=[dict(r) for r in rows]
+    linked=set()
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='batch_bk_approvals'").fetchone():
+        linked={r[0] for r in conn.execute('SELECT document_id FROM batch_bk_approvals')}
+    for item in items:
+        item['origin']='order' if item['id'] in linked else 'import'
+        item['origin_label']='Bảng cũ từ duyệt đơn' if item['origin']=='order' else 'Bảng bổ sung / nhập Excel đã ghi kho'
+    return items
 
 
 def saved_rows(conn, start, end, ids):

@@ -21,6 +21,11 @@ const out=process.env.TDP_BK_PROOF||'D:/TDP_RAILWAY_PRIVATE/bk-history-proof';
   await page.locator('[data-action=open-saved-bk]').click();
   await page.locator('[data-history-id]').first().waitFor();
   const count=await page.locator('[data-history-id]').count();assert(count>0);
+  await page.locator('[data-history-supplement]').click();
+  assert.equal(await page.locator('.bk-draft-dialog [name=from]').inputValue(),'2026-08-01');
+  assert.equal(await page.locator('.bk-draft-dialog [name=to]').inputValue(),'2026-08-31');
+  await page.locator('[data-bk=close]').click();
+  assert.equal(await page.locator('[data-history-id]:checked').count(),count);
   await page.screenshot({path:out+'/02-bang-ke-thang-8-da-luu.png'});
   if(!process.env.TDP_BK_LIVE){
    await page.locator('[data-history=none]').click();await page.locator('[data-history=summary]').click();

@@ -39,6 +39,7 @@ class SavedHistoryTests(unittest.TestCase):
         listing=self.history().get_json()
         self.assertEqual(1,len(listing['items']))
         self.assertEqual(200,listing['items'][0]['amount_total'])
+        self.assertEqual('import',listing['items'][0]['origin'])
         with server.db() as c:
             # Existing later-period opening must not block a historical print.
             c.execute("INSERT INTO inventory_transactions(txn_date,product_code,qty_in,qty_out,unit_cost,source_type,source_id,source_line,status,created_at,updated_at) VALUES('2026-09-01','BK-P1',2,0,100,'OPENING','2026-09','BK-P1','posted','test','test')")
@@ -95,6 +96,8 @@ class SavedHistoryTests(unittest.TestCase):
                       product_name='Hàng BK',unit='kg',quantity=2,buy_price=100,amount=200)]
         with server.db() as c:
             c.execute("INSERT INTO batch_bk_approvals VALUES(999,?,'test','test')",(doc,))
+            from .bk_history import documents
+            self.assertEqual('order',documents(c,'2026-08-01','2026-08-31')[0]['origin'])
             c.execute("INSERT INTO purchase_seller_revisions VALUES(999,1,'test','[]',?,'test','test','test','test','test')",(json.dumps(revised),))
             book=workbook(c,body,vars(server))
             values=str([r for r in book.active.values]);book.close()
