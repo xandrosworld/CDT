@@ -24,6 +24,17 @@ except ImportError:  # pragma: no cover
 
 
 class InvoicePaymentDocumentTests(unittest.TestCase):
+    def test_short_request_fits_one_page_but_long_request_keeps_pagination(self):
+        from copy import deepcopy
+        for count,expected in ((14,1),(60,0)):
+            scope=self.payment_scope();original=scope['invoices'][0]
+            scope['invoices']=[dict(deepcopy(original),invoice_number=str(800+i),draft_id=i+1,source_invoice_id=i+1) for i in range(count)]
+            scope['totals']={k:v*count for k,v in scope['totals'].items()}
+            book=invoice_payment_request_workbook(scope);ws=book.active
+            self.assertEqual(expected,ws.page_setup.fitToHeight)
+            self.assertEqual([],ws.row_breaks.brk)
+            self.assertEqual(count,len([r for r in range(11,11+count) if ws.cell(r,4).value]))
+            self.assertEqual(216*count,ws.cell(11+count,7).value);book.close()
     @staticmethod
     def drafts(total=216):
         return [{

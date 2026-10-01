@@ -293,9 +293,9 @@ def invoice_payment_request_workbook(
     for row in (1, 6, 7, 8):
         ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0,
                                             math.ceil(len(ws.cell(row, 1).value or '') / 85) * 20)
-    ws.row_dimensions[1].height = max(60, math.ceil(len(ws['A1'].value or '') / 36) * 20)
+    ws.row_dimensions[1].height = max(40, math.ceil(len(ws['A1'].value or '') / 36) * 18)
     for row in range(10, total_row + 1):
-        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0, 32 if row == 10 else 25)
+        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0, 32 if row == 10 else 21)
     ws.row_dimensions[total_row + 1].height = max(40, math.ceil(len(ws.cell(total_row + 1, 3).value or '') / 65) * 20)
     for row in range(total_row + 2, total_row + 11):
         ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0, 20)
@@ -303,13 +303,19 @@ def invoice_payment_request_workbook(
         ws.row_dimensions[row].height = max(ws.row_dimensions[row].height,
                                             math.ceil(len(ws.cell(row, 1).value or '') / 80) * 20)
     ws.print_area = f'A1:H{total_row + 10}'
-    keep_payment_footer(ws,total_row,total_row+10)
+    # Let the actual Excel/Calc renderer paginate after fitting the width.
+    # Estimating in unscaled worksheet points forced premature page breaks.
+    # The PDF renderer keeps final invoice rows with an orphaned footer.
     ws.print_title_rows = '10:10'
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.orientation = 'portrait'
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 0
+    # One A4 page only when fitting the vertical content keeps 14pt source
+    # text at roughly 12pt or larger. Long requests remain multi-page.
+    content_height=sum(ws.row_dimensions[r].height or 15 for r in range(1,total_row+11))
+    usable_height=841.89-72*(ws.page_margins.top+ws.page_margins.bottom)-12
+    ws.page_setup.fitToHeight = 1 if content_height <= usable_height*14/12 else 0
     ws.print_options.horizontalCentered = True
 
     proof = workbook.create_sheet("Đối chiếu hóa đơn")
