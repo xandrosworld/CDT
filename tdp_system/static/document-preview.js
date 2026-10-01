@@ -210,6 +210,7 @@
           host.innerHTML+='<button type="button" class="btn btn-outline" data-saved-back>Quay lại danh sách bảng kê</button> <button type="button" class="btn btn-primary" data-saved-retry>Kiểm tra lại bản in</button>';
           host.querySelector('[data-saved-retry]').onclick=function(){open(body,hostId,false);};
           host.querySelector('[data-saved-back]').onclick=function(){var field=host.parentElement.querySelector('[data-history-id]');if(field){field.scrollIntoView({block:'center'});field.focus();}};
+          if(body.receipts){var summary=document.createElement('button');summary.className='btn btn-primary';summary.textContent='Xem bảng kê tổng';summary.onclick=function(){open(Object.assign({},body,{receipts:false}),hostId,false);};host.appendChild(summary);}
         }
         if (body.kind === 'payment' && error.code === 'payment_statement_line_totals_mismatch') {
           host.innerHTML += '<button type="button" class="btn btn-primary" data-action="payment-open-output">Mở hóa đơn đầu ra đúng kỳ</button> <button type="button" class="btn btn-outline" data-payment-retry>Kiểm tra lại bảng kê</button>';

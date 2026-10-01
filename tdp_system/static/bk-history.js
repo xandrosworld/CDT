@@ -3,6 +3,7 @@
   root.TdpBkHistory=async function(options){
     var host=document.getElementById(options.hostId),esc=options.esc;
     if(!host)return;
+    host.classList.add('bk-history-container');
     var serial=String(Date.now())+Math.random();host.dataset.historySerial=serial;
     var current=function(){return host.isConnected&&host.dataset.historySerial===serial;};
     host.innerHTML='<p role="status">Đang tìm bảng kê đã lưu theo ngày mua…</p>';
@@ -15,6 +16,7 @@
         (items.length?'<p><strong>'+items.length+' bảng kê đã lưu</strong>. Đã tích sẵn tất cả; bỏ tích bảng không cần in.</p><div class="table-wrap"><table><thead><tr><th>Chọn</th><th>Bảng kê đã lưu</th><th>Ngày mua</th><th>Dòng trong kỳ</th><th>Thành tiền trong kỳ</th></tr></thead><tbody>'+items.map(function(r){return '<tr><td><input type="checkbox" data-history-id="'+r.id+'" aria-label="Chọn bảng kê '+r.id+'" checked></td><td>#'+r.id+' · '+esc(r.filename)+'</td><td>'+esc(r.date_from.split('-').reverse().join('/'))+' – '+esc(r.date_to.split('-').reverse().join('/'))+'</td><td>'+r.row_count+'</td><td>'+Number(r.amount_total).toLocaleString('vi-VN')+' đ</td></tr>';}).join('')+'</tbody></table></div><div class="bk-history-actions"><button class="btn btn-primary" data-history="summary">Xem bảng kê tổng</button><button class="btn btn-outline" data-history="receipts">Xem biên nhận</button><span class="bk-history-count" role="status"></span></div>':'<p role="status">Kỳ này chưa có bảng kê đã ghi kho. Kiểm tra lại tháng cần in; nếu chưa lập bảng kê, dùng Lập bảng kê bổ sung từ tồn âm và kiểm tra thông tin mua thực tế.</p>')+
         '<div class="bk-history-error" role="alert" hidden></div></div></section><div id="'+previewId+'"></div>';
       function selected(){return Array.from(host.querySelectorAll('[data-history-id]:checked')).map(function(el){return Number(el.dataset.historyId);});}
+      document.getElementById(previewId).classList.add('bk-history-preview');
       function counts(){var ids=selected(),count=host.querySelector('.bk-history-count');if(count)count.textContent='Đã chọn '+ids.length+'/'+items.length+' bảng kê · '+items.filter(function(r){return ids.includes(r.id);}).reduce(function(t,r){return t+Number(r.amount_total);},0).toLocaleString('vi-VN')+' đ';}
       host.onchange=function(e){if(e.target.matches('[data-history-id]'))counts();};counts();
       host.onclick=async function(e){

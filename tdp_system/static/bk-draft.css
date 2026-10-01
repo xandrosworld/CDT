@@ -1,6 +1,7 @@
 .bk-draft-dialog{width:min(1560px,96vw);max-width:96vw;max-height:94vh;box-sizing:border-box;border:1px solid #b8c8cf;border-radius:12px;padding:20px;color:#183240;background:white}
 .bk-draft-dialog::backdrop{background:#122b3c80}
 .bk-history-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;position:sticky;bottom:0;background:#fff;padding:14px 0;border-top:1px solid #b8c8cf;z-index:2}
+.bk-history-container,.bk-history-preview{scroll-margin-top:110px}.bk-draft-dialog .bk-history-container,.bk-draft-dialog .bk-history-preview{scroll-margin-top:16px}
 .bk-saved-history .table-wrap{max-height:38vh;overflow:auto}.bk-saved-history th{position:sticky;top:0;background:#edf5f5}.bk-saved-history input[type=checkbox]{width:20px;height:20px}.bk-history-error{color:#a12727;margin-top:12px}
 .bk-price-source{max-width:190px;font-size:12px;white-space:normal;margin-top:5px}
 .bk-draft-table th{color:#183240}

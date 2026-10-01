@@ -14,6 +14,7 @@ const out=process.env.TDP_BK_PROOF||'D:/TDP_RAILWAY_PRIVATE/bk-history-proof';
    await page.locator('[name=username]').fill(a.username);await page.locator('[name=password]').fill(a.password);await page.locator('button[type=submit]').click();
   }
   await page.waitForFunction(()=>window.TdpBkHistory);await page.locator('.loading-panel').waitFor({state:'detached'});
+  await page.screenshot({path:out+'/00-vao-muc-in-bang-ke.png'});
   await page.locator('[data-action=open-print-workspace][data-document=purchases]').click();
   await page.locator('#bkPrintMonth').fill('2026-08');
   await page.screenshot({path:out+'/01-chon-thang-8.png'});
@@ -35,14 +36,26 @@ const out=process.env.TDP_BK_PROOF||'D:/TDP_RAILWAY_PRIVATE/bk-history-proof';
   await preview.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/03-xem-bang-ke-thang-8.png'});
   const excel=page.waitForEvent('download');await preview.locator('[data-doc=excel]').click();await (await excel).saveAs(out+'/Bang-ke-thang-8.xlsx');
   const pdf=page.waitForEvent('download',{timeout:240000});await preview.locator('[data-doc=pdf]').click();await (await pdf).saveAs(out+'/Bang-ke-thang-8.pdf');
-  await preview.locator('[data-doc=print]').click();await preview.locator('iframe').waitFor();
-  await page.screenshot({path:out+'/04-mo-ban-in-A4.png'});
   if(!process.env.TDP_BK_LIVE){
+   await page.route('**/api/documents/preview',route=>{
+    const body=route.request().postDataJSON();
+    if(body.kind==='saved-purchases'&&body.receipts)return route.fulfill({status:422,json:{ok:false,code:'receipt_daily_limit_exceeded',error:'Seller Test, ngày 01/08/2026: 6.000.000đ. Bảng kê tổng vẫn in được.'}});
+    return route.continue();
+   });
+   await page.locator('[data-history=receipts]').click();
+   await preview.locator('[data-saved-back]').waitFor();
+   assert((await preview.locator('.document-error').innerText()).includes('Seller Test'));
+   await preview.getByRole('button',{name:'Xem bảng kê tổng',exact:true}).click();
+   await preview.locator('[data-open-sheet]').first().waitFor();
+   assert.equal(await page.locator('[data-history-id]:checked').count(),count);
+   await page.unroute('**/api/documents/preview');
    await page.locator('[data-action=open-monthly-bk]').click();
    await page.locator('[data-bk=history]').click();
    await page.locator('.bk-history-host [data-history=summary]').waitFor();
    await page.locator('[data-bk=close]').click();
   }
+  await preview.locator('[data-doc=print]').click();await preview.locator('iframe').waitFor();
+  await page.screenshot({path:out+'/04-mo-ban-in-A4.png'});
   assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);
   console.log('PASS: August saved history, '+count+' documents, Excel + PDF downloaded and print frame opened; no inventory confirmation requests.');
  }finally{await browser.close();}

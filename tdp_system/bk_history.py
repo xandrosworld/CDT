@@ -41,10 +41,10 @@ def saved_rows(conn, start, end, ids):
 def workbook(conn, body, ctx):
     try:
         from .purchase_summary_export import build_purchase_summary_workbook, _key
-        from .receipt_export import enrich_receipt_identity_rows, build_purchase_documents_workbook
+        from .receipt_export import enrich_receipt_identity_rows, build_purchase_documents_workbook, ReceiptExportError, RECEIPT_MAX_DAILY_AMOUNT
     except ImportError:
         from purchase_summary_export import build_purchase_summary_workbook, _key
-        from receipt_export import enrich_receipt_identity_rows, build_purchase_documents_workbook
+        from receipt_export import enrich_receipt_identity_rows, build_purchase_documents_workbook, ReceiptExportError, RECEIPT_MAX_DAILY_AMOUNT
     start,end=period(body.get('from'),body.get('to'))
     saved=saved_rows(conn,start,end,body.get('document_ids'))
     people=defaultdict(list)
@@ -87,6 +87,16 @@ def workbook(conn, body, ctx):
     kwargs=dict(template_path=ctx['MASTER_SOURCE'],date_from=start,date_to=end)
     if body.get('receipts'):
         rows=enrich_receipt_identity_rows(conn,rows)
+        daily=defaultdict(Decimal);names={}
+        for row in rows:
+            key=(row['work_date'],row['cccd']);daily[key]+=Decimal(str(row['amount']));names[key]=row['seller']
+        over=[(key,total) for key,total in daily.items() if total>RECEIPT_MAX_DAILY_AMOUNT]
+        if over:
+            detail='; '.join(f"{names[key]}, ngày {'/'.join(reversed(key[0].split('-')))}: {total:,.0f}đ" for key,total in over[:8])
+            raise ReceiptExportError('Bảng kê tổng vẫn in được. Biên nhận cần đối chiếu vì tổng của cùng người bán trong ngày vượt 5.000.000đ: '+detail+
+                (f'; còn {len(over)-8} trường hợp.' if len(over)>8 else '.')+
+                ' Bấm Xem bảng kê tổng để in trước; kiểm tra chứng từ mua và người bán thực tế trước khi lập biên nhận. Không đổi ngày hoặc chia lại tiền để bỏ qua kiểm tra.',
+                code='receipt_daily_limit_exceeded')
         book=build_purchase_documents_workbook(rows,**kwargs,
             buyer_name=ctx['setting_get'](conn,'purchase_receipt_buyer_name',''),
             buyer_title=ctx['setting_get'](conn,'purchase_receipt_buyer_title',''),

@@ -70,6 +70,18 @@ class SavedHistoryTests(unittest.TestCase):
         self.assertIn('Hàng BK',str(result.get_json()['sheets']))
         self.assertNotIn('Changed catalogue',str(result.get_json()['sheets']))
 
+    def test_receipt_limit_names_seller_and_day_without_blocking_saved_summary(self):
+        with server.db() as c:
+            c.execute('UPDATE bk_import_lines SET amount=6000000,unit_cost=3000000')
+        before=self.database()
+        summary=self.client.post('/api/documents/preview',json=self.print_body())
+        self.assertEqual(200,summary.status_code,summary.get_json())
+        receipt=self.client.post('/api/documents/preview',json=self.print_body(receipts=True))
+        self.assertEqual(422,receipt.status_code)
+        self.assertIn('Seller Test, ngày 01/08/2026',receipt.get_json()['error'])
+        self.assertIn('Bảng kê tổng vẫn in được',receipt.get_json()['error'])
+        self.assertEqual(before,self.database())
+
     def test_saved_seller_revision_keeps_amount_and_is_printed(self):
         from .bk_history import workbook
         body=self.print_body();doc=body['document_ids'][0]
