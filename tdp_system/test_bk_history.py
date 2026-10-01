@@ -47,6 +47,8 @@ class SavedHistoryTests(unittest.TestCase):
             result=self.client.post('/api/documents/preview',json=self.print_body(receipts=receipts))
             self.assertEqual(200,result.status_code,result.get_json())
             data=result.get_json();self.assertEqual(2 if receipts else 1,len(data['sheets']))
+            self.assertEqual('saved',data['purchase_source']['source'])
+            self.assertIn('đã ghi kho',data['purchase_source']['title'])
             output=self.client.get('/api/documents/'+data['token']+'/excel')
             self.assertEqual(200,output.status_code)
             book=load_workbook(io.BytesIO(output.data))

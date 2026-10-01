@@ -53,6 +53,23 @@
         '</div>' + (body.kind === 'payment' ? '<p class="document-note">In hóa đơn: A4 hai mặt · mỗi hóa đơn bắt đầu trên tờ riêng. Giữ đủ các trang như bản gốc; chèn mặt trắng khi cần để hai số hóa đơn không chung một tờ. Chọn Hai mặt, Lật cạnh dài và in tất cả trang, kể cả trang trắng. Cách in phía trên chỉ áp dụng cho In phiếu đã chọn.</p>' : '') +
         '<div class="document-progress" role="status" aria-live="polite"></div><div class="document-error" role="alert"></div><div class="document-scroll" tabindex="0" aria-label="Nội dung chứng từ"></div><div class="document-pdf"></div></section>';
       var busy = false, modeTouched = false, paperTouched = false, cancelDownload = null;
+      if(data.purchase_source){
+        var provenance=data.purchase_source,sourcePanel=document.createElement('section');
+        sourcePanel.className='document-note tag-warn';sourcePanel.dataset.purchaseSource=provenance.source;
+        sourcePanel.innerHTML='<strong>'+esc(provenance.title)+'</strong><p>'+esc(provenance.message)+'</p>'+
+          provenance.items.map(function(item){return '<p>'+esc(item.message)+'</p>';}).join('');
+        if(provenance.source==='orders'){
+          var savedButton=document.createElement('button');savedButton.className='btn btn-primary';
+          savedButton.textContent='Kiểm tra bảng đã ghi kho';savedButton.dataset.checkSavedPurchases='';
+          var savedHost=document.createElement('div');savedHost.id=hostId+'-source-history';
+          savedButton.onclick=function(){window.TdpBkHistory({hostId:savedHost.id,esc:esc,
+            api:async function(url){return (await checked(await fetch(url))).json();},
+            from:provenance.from_date,to:provenance.to_date});};
+          sourcePanel.appendChild(savedButton);
+          sourcePanel.appendChild(savedHost);
+        }
+        host.querySelector('.document-preview').prepend(sourcePanel);
+      }
       if(body.kind==='saved-purchases'&&!body.receipts){
         var receiptLink=document.createElement('button');
         receiptLink.className='btn btn-primary';receiptLink.dataset.savedReceipts='';

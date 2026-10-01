@@ -108,3 +108,31 @@ def workbook(conn, body, ctx):
         book=build_purchase_summary_workbook(rows,**kwargs)
     book._tdp_warnings=['In lại bảng kê đã ghi kho theo ngày mua đã lưu. Không nhập thêm kho. Thông tin định danh người bán lấy từ danh mục hiện tại; dùng bản sửa người bán đã lưu nếu có.']
     return book
+
+
+def print_source_status(conn, body):
+    """Describe provenance, never infer stock posting from order approval."""
+    kind=body.get('kind')
+    if kind=='saved-purchases':
+        rows=saved_rows(conn,body.get('from'),body.get('to'),body.get('document_ids'))
+        return dict(source='saved',title='Bảng đã ghi kho — in lại',
+            message='Đang in lại các dòng mua đã xác nhận nhập kho. Xem, tải và in không ghi thêm kho; không cần xác nhận nhập kho lần nữa.',
+            from_date=min(r['document_date'] for r in rows),to_date=max(r['document_date'] for r in rows),items=[])
+    if kind!='purchases':return None
+    try:
+        from .batch_bk_approval import linked_document
+    except ImportError:
+        from batch_bk_approval import linked_document
+    items=[]
+    for batch_id in sorted({int(s['batch_id']) for s in body['selections']}):
+        batch=conn.execute('SELECT work_date FROM batches WHERE id=?',(batch_id,)).fetchone()
+        doc=linked_document(conn,batch_id)
+        posted=bool(doc and doc['status']=='posted')
+        day=batch['work_date'];date_text='/'.join(reversed(day.split('-')))
+        state='Đã có bảng kê liên kết ghi kho; mở Bảng đã ghi kho để in đúng dữ liệu đã lưu.' if posted else (
+            'Bảng kê liên kết đã hoàn tác; bản xem này không xác nhận nhập kho.' if doc and doc['status']=='reversed' else
+            'Chưa có bảng kê liên kết đã ghi kho. Không suy ra đã nhập kho từ trạng thái đơn đã duyệt.')
+        items.append(dict(batch_id=batch_id,date=day,posted=posted,message=date_text+' · '+state))
+    return dict(source='orders',title='Bản xem từ đơn hàng — không phải xác nhận nhập kho',
+        message='Phần mềm dựng bảng kê và biên nhận từ dữ liệu đơn hàng. Có bản xem không có nghĩa đã mua hàng, đã trả tiền hoặc đã nhập kho. Xem, tải và in không làm hết hàng âm. Kiểm tra Bảng đã ghi kho trước; chỉ lập bổ sung khi xác định hàng thực mua chưa ghi kho.',
+        from_date=min(i['date'] for i in items),to_date=max(i['date'] for i in items),items=items)

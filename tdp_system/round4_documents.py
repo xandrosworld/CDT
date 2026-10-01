@@ -249,7 +249,14 @@ def register_document_routes(app, context_factory):
                 conn.execute('PRAGMA query_only=ON')
                 conn.execute('BEGIN')
                 books = selected_workbooks(conn, body, ctx)
-            return jsonify(create_snapshot(root(), books))
+                try:
+                    from .bk_history import print_source_status
+                except ImportError:
+                    from bk_history import print_source_status
+                source_status=print_source_status(conn,body)
+            result=create_snapshot(root(), books)
+            if source_status:result['purchase_source']=source_status
+            return jsonify(result)
         except (ValueError, RuntimeError) as exc:
             return jsonify(ok=False, error=str(exc), code=getattr(exc, 'code', 'document_preview_invalid')), getattr(exc, 'status', 422)
         finally:
