@@ -25,3 +25,4 @@
 .bk-seller-details{font-size:12px;line-height:1.45;margin:6px 0;max-width:270px;color:#254d52}.bk-draft-table td small{display:block}
 
 .bk-seller-details{font-size:12px;line-height:1.45;margin:6px 0;max-width:270px;color:#254d52}.bk-draft-table td small{display:block}
+#bkPrintDayLabel[hidden],#bkPrintMonthLabel[hidden]{display:none!important}
