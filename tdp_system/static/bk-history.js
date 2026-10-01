@@ -22,6 +22,7 @@
           var row=host.querySelector('[data-history-id="'+item.id+'"]').closest('tr');
           if(item.origin!==previousOrigin){
             var group=document.createElement('tr'),cell=document.createElement('th');cell.colSpan=5;
+            cell.style.color='#173c4a';cell.style.backgroundColor='#dcefeb';cell.style.textAlign='left';
             cell.textContent=item.origin_label+' · '+items.filter(function(r){return r.origin===item.origin;}).length+' bảng';
             group.appendChild(cell);tbody.insertBefore(group,row);previousOrigin=item.origin;
           }
