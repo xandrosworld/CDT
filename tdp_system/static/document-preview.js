@@ -59,7 +59,7 @@
         host.querySelector('.document-error').textContent = '';
       }
       function printHelp() {
-        if(body.kind === 'payment') return 'In phiếu đã chọn: khổ A4. Chọn '+(host.querySelector('.document-sides').value === 'duplex' ? 'Hai mặt, lật cạnh dài' : 'Một mặt')+' trong hộp thoại máy in. Nút In tất cả hóa đơn bên dưới chuẩn bị bản in riêng: A4 hai mặt, mỗi hóa đơn bắt đầu trên tờ riêng.';
+        if(body.kind === 'payment') return 'In phiếu đã chọn: bảng tổng hợp giao nhận A4 ngang; đề nghị thanh toán A4 dọc. Chọn tỷ lệ 100% / Kích thước thực, 1 trang trên mỗi mặt giấy. Bảng dài tự sang trang để giữ chữ dễ đọc. '+(host.querySelector('.document-sides').value === 'duplex' ? 'Khi in hai mặt, chọn riêng từng phiếu: bảng ngang lật cạnh ngắn; tờ dọc lật cạnh dài. ' : 'Chọn Một mặt trong hộp thoại máy in. ')+'Phóng to bản xem chỉ đổi hiển thị trên web. Nút In tất cả hóa đơn dùng bản hóa đơn gốc riêng.';
         if(deliveries){
           var sides=host.querySelector('.document-sides').value;
           if(sides==='auto'&&!resolvedSides)return 'Tự động: mỗi đơn một trang thì in một mặt; có đơn nhiều trang thì chuẩn bị hai mặt, mỗi đơn bắt đầu trên tờ riêng. Khi in, kiểm tra khổ A4 và chế độ hai mặt của máy in.';

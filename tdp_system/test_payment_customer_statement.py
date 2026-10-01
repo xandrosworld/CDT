@@ -2,11 +2,26 @@ from copy import deepcopy, copy
 import unittest
 from .test_invoice_payment_documents import InvoicePaymentDocumentTests as Fixtures
 from .payment_customer_statement import customer_statement
-from .invoice_payment_documents import InvoicePaymentDocumentError
+from .invoice_payment_documents import InvoicePaymentDocumentError, invoice_payment_request_workbook
 from .document_preview import white_print_style, sheet_preview
 
 
 class CustomerStatementTests(unittest.TestCase):
+    def test_both_payment_forms_keep_readable_fonts_and_allow_more_pages(self):
+        scope=self.scope()
+        for build in (customer_statement, invoice_payment_request_workbook):
+            ws=build(scope).active
+            self.assertEqual(0,ws.page_setup.fitToHeight)
+            self.assertLess(sum(d.width for d in ws.column_dimensions.values()),140)
+            for row in ws:
+                for cell in row:
+                    if cell.value is not None:
+                        self.assertGreaterEqual(cell.font.sz,14)
+                        self.assertFalse(cell.alignment.shrinkToFit)
+        ws=customer_statement(scope).active
+        self.assertIn('Bằng chữ:',ws['A14'].value)
+        self.assertIn('A14:I14',str(ws.merged_cells))
+
     def scope(self):
         scope=Fixtures.payment_scope()
         scope['lines']=Fixtures.lines()

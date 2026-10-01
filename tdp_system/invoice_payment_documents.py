@@ -285,7 +285,25 @@ def invoice_payment_request_workbook(
     for row in (7, 8):
         ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0,
                                             math.ceil(len(ws.cell(row, 1).value or '') / 110) * 15)
-    ws.print_area = f'A1:H{total_row + 14}'
+    try:
+        from .payment_print_layout import readable_payment_layout, keep_payment_footer
+    except ImportError:
+        from payment_print_layout import readable_payment_layout, keep_payment_footer
+    readable_payment_layout(ws)
+    for row in (1, 6, 7, 8):
+        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0,
+                                            math.ceil(len(ws.cell(row, 1).value or '') / 85) * 20)
+    ws.row_dimensions[1].height = max(60, math.ceil(len(ws['A1'].value or '') / 36) * 20)
+    for row in range(10, total_row + 1):
+        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0, 32 if row == 10 else 25)
+    ws.row_dimensions[total_row + 1].height = max(40, math.ceil(len(ws.cell(total_row + 1, 3).value or '') / 65) * 20)
+    for row in range(total_row + 2, total_row + 11):
+        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 0, 20)
+    for row in (total_row + 2, total_row + 3, total_row + 4):
+        ws.row_dimensions[row].height = max(ws.row_dimensions[row].height,
+                                            math.ceil(len(ws.cell(row, 1).value or '') / 80) * 20)
+    ws.print_area = f'A1:H{total_row + 10}'
+    keep_payment_footer(ws,total_row,total_row+10)
     ws.print_title_rows = '10:10'
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.orientation = 'portrait'

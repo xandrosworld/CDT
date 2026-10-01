@@ -18,6 +18,11 @@ const base='http://127.0.0.1:18804',out='D:/TDP_RAILWAY_PRIVATE/payment-customer
   await p.screenshot({path:out+'/preview.png',fullPage:true});
   const pdf=p.waitForEvent('download',{timeout:180000});await p.locator('[data-doc=pdf]').click();await (await pdf).saveAs(out+'/statement.pdf');
   assert.equal(await p.locator('.document-error').innerText(),'');
+  assert((await p.locator('.document-print-help').innerText()).includes('1 trang trên mỗi mặt giấy'));
+  await p.locator('[data-doc=all]').click();
+  const both=p.waitForEvent('download',{timeout:180000});await p.locator('[data-doc=pdf]').click();await (await both).saveAs(out+'/both-forms.pdf');
+  await p.locator('[data-doc=view-pdf]').click();
+  await p.locator('iframe[title="Bản in các phiếu đã chọn"]').waitFor();
   let failOnce=true;
   await p.route('**/api/documents/preview',route=>{
    if(failOnce){failOnce=false;return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({ok:false,code:'payment_statement_line_totals_mismatch',error:'Tiền thuế chưa khớp hóa đơn 853'})});}

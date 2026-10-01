@@ -4,6 +4,7 @@ from copy import copy
 from decimal import Decimal
 from pathlib import Path
 import math
+import textwrap
 
 from openpyxl import Workbook, load_workbook
 
@@ -12,9 +13,11 @@ def customer_statement(scope):
     try:
         from .invoice_payment_documents import _strict_date, _excel_text, number_to_vietnamese, InvoicePaymentDocumentError
         from .invoice_line_tax import tax_fields, number
+        from .payment_print_layout import readable_payment_layout, keep_payment_footer
     except ImportError:
         from invoice_payment_documents import _strict_date, _excel_text, number_to_vietnamese, InvoicePaymentDocumentError
         from invoice_line_tax import tax_fields, number
+        from payment_print_layout import readable_payment_layout, keep_payment_footer
 
     def numeric(value, label):
         parsed = number(value)
@@ -89,18 +92,31 @@ def customer_statement(scope):
             write(f'{chr(64+column)}{row}',value)
         for column in (4,5):ws.cell(row,column).number_format='#,##0.######'
         for column in (6,8,9):ws.cell(row,column).number_format='#,##0.##'
-        ws.row_dimensions[row].height=max(22,math.ceil(len(name)/30)*15)
+        ws.row_dimensions[row].height=max(25,len(textwrap.wrap(name,width=26))*20)
     for cell,key in [('F','subtotal'),('H','tax_amount'),('I','total_amount')]:
         write(f'{cell}{total_row}',scope['totals'][key]);ws[f'{cell}{total_row}'].number_format='#,##0.##'
     write(f'B{total_row+1}',number_to_vietnamese(scope['totals']['total_amount'])+'./.')
+    # The original label occupied the wide STT column. Keep it on a full
+    # line now that that column is appropriately narrow for an A4 table.
+    words = f"Bằng chữ: {ws.cell(total_row+1,2).value}"
+    ws.unmerge_cells(f'B{total_row+1}:I{total_row+1}')
+    ws.cell(total_row+1,2).value = None
+    ws.merge_cells(f'A{total_row+1}:I{total_row+1}')
+    write(f'A{total_row+1}', words)
     write(f'E{total_row+2}',f'Hải Phòng, ngày {end.day:02d} tháng {end.month:02d} năm {end.year}')
-    for row in (7,8):ws.row_dimensions[row].height=max(22,math.ceil(len(ws.cell(row,1).value)/105)*16)
-    ws.row_dimensions[total_row+1].height=max(29,math.ceil(len(ws.cell(total_row+1,2).value)/100)*16)
+    for row in (1,2,7,8):ws.row_dimensions[row].height=max(25,math.ceil(len(ws.cell(row,1).value or '')/80)*20)
+    ws.row_dimensions[total_row+1].height=max(38,math.ceil(len(words)/75)*20)
+    ws.row_dimensions[10].height=42
+    ws.row_dimensions[total_row].height=28
+    ws.row_dimensions[total_row+2].height=40
+    ws.row_dimensions[total_row+3].height=38
     ws.sheet_view.showGridLines=False;ws.freeze_panes='A11';ws.print_title_rows='10:10'
     ws.print_area=f'A1:I{total_row+6}'
     ws.sheet_properties.pageSetUpPr.fitToPage=True
     ws.page_setup.orientation='portrait';ws.page_setup.paperSize=ws.PAPERSIZE_A4
     ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=0
+    readable_payment_layout(ws, statement=True)
+    keep_payment_footer(ws,total_row,total_row+6)
     # Avoid Excel's trailing decimal dot for integral amounts, without dropping
     # fractional quantities or provider VAT decimals.
     for row in ws:
