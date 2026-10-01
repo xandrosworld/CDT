@@ -6,7 +6,7 @@ from openpyxl.worksheet.page import PageMargins
 def readable_payment_layout(sheet, *, statement=False):
     # Keep the customer's columns, merges and content, but do not shrink the
     # oversized source spreadsheet to fit A4. Long forms paginate downwards.
-    widths = (5, 22, 6, 8, 11, 13, 7, 12, 14) if statement else (2, 6, 14, 12, 19, 16, 21, 2)
+    widths = (5, 22, 6, 8, 11, 13, 9, 12, 14) if statement else (2, 6, 14, 12, 19, 16, 21, 2)
     for index, width in enumerate(widths):
         sheet.column_dimensions[chr(65 + index)].width = width
     sheet.page_margins = PageMargins(left=.25, right=.25, top=.4, bottom=.4, header=.15, footer=.15)
