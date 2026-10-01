@@ -47,22 +47,38 @@ def saved_rows(conn, start, end, ids):
 
 def workbook(conn, body, ctx):
     try:
-        from .purchase_summary_export import build_purchase_summary_workbook, _key
+        from .purchase_summary_export import build_purchase_summary_workbook, _key, _resolved_identity
         from .receipt_export import enrich_receipt_identity_rows, build_purchase_documents_workbook, ReceiptExportError, RECEIPT_MAX_DAILY_AMOUNT
     except ImportError:
-        from purchase_summary_export import build_purchase_summary_workbook, _key
+        from purchase_summary_export import build_purchase_summary_workbook, _key, _resolved_identity
         from receipt_export import enrich_receipt_identity_rows, build_purchase_documents_workbook, ReceiptExportError, RECEIPT_MAX_DAILY_AMOUNT
     start,end=period(body.get('from'),body.get('to'))
     saved=saved_rows(conn,start,end,body.get('document_ids'))
     people=defaultdict(list)
     for p in conn.execute('SELECT * FROM people'):people[_key(p['name'])].append(dict(p))
+    linked={r['document_id']:r['batch_id'] for r in conn.execute('SELECT document_id,batch_id FROM batch_bk_approvals')} if conn.execute("SELECT 1 FROM sqlite_master WHERE name='batch_bk_approvals'").fetchone() else {}
     rows=[];missing=set()
     for r in saved:
-        matches=people[_key(r['source_party'])]
+        batch_id=linked.get(r['document_id'])
+        if batch_id is not None:
+            canonical=conn.execute('SELECT 1 FROM purchase_workbook_lines WHERE batch_id=? LIMIT 1',(batch_id,)).fetchone()
+            table='purchase_workbook_lines' if canonical else 'orders'
+            source=conn.execute(f'SELECT * FROM {table} WHERE batch_id=? AND id=?',(batch_id,r['source_line'])).fetchone()
+            if not source or source['product_code']!=r['product_code'] or source['work_date']!=r['document_date']:
+                # Saved seller revisions are applied below when available.
+                matches=people[_key(r['source_party'])]
+            else:
+                source=dict(source)
+                order=conn.execute('SELECT * FROM orders WHERE batch_id=? AND id=?',(batch_id,source.get('order_id'))).fetchone() if canonical else source
+                product=conn.execute('SELECT * FROM products WHERE code=?',(r['product_code'],)).fetchone()
+                seller,identity,address,issues=_resolved_identity(dict(order) if order else None,dict(product) if product else None,people)
+                matches=[] if issues else [dict(name=seller,cccd=identity,address=address)]
+        else:
+            matches=people[_key(r['source_party'])]
         if len(matches)!=1:
             missing.add(r['source_party'] or '(chưa có tên người bán)');continue
         p=matches[0]
-        rows.append(dict(work_date=r['document_date'],seller=r['source_party'],cccd=p['cccd'],address=p['address'],
+        rows.append(dict(work_date=r['document_date'],seller=p['name'],cccd=p['cccd'],address=p['address'],
             product_name=r['product_name_snapshot'],unit=r['unit_snapshot'],quantity=r['qty'],buy_price=r['unit_cost'],
             amount=r['amount'],source_ref=r['source_line'],reference=r['source_reference'],supplier=r['source_party']))
     if missing:

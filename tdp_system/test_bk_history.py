@@ -69,6 +69,21 @@ class SavedHistoryTests(unittest.TestCase):
         result=self.client.post('/api/documents/preview',json=body)
         self.assertEqual(422,result.status_code);self.assertIn('hoàn tác',result.get_json()['error'])
 
+    def test_legacy_supplier_is_not_receipt_seller_and_saved_amount_is_kept(self):
+        from .bk_history import workbook
+        body=self.print_body(receipts=True)
+        with server.db() as c:
+            batch=c.execute("INSERT INTO batches(work_date,status,created_at) VALUES('2026-08-01','approved','test')").lastrowid
+            order=c.execute("INSERT INTO orders(batch_id,work_date,product_code,product_name,unit,seller,supplier,actual_received,buy_price,updated_at) VALUES(?,'2026-08-01','BK-P1','Hàng BK','kg','Seller Test','Supplier alias',999,999,'test')",(batch,)).lastrowid
+            c.execute("UPDATE bk_import_lines SET source_line=?,source_party='Supplier alias'",(order,))
+            c.execute("INSERT INTO batch_bk_approvals VALUES(?,?,'test','test')",(batch,body['document_ids'][0]))
+        before=self.database()
+        with server.db() as c:
+            book=workbook(c,body,vars(server));values=str(list(book['bảng kê tổng'].values))
+            self.assertIn('Seller Test',values);self.assertNotIn('Supplier alias',values)
+            self.assertNotIn('999',values);book.close()
+        self.assertEqual(before,self.database())
+
     def test_print_uses_saved_product_name_not_changed_catalog(self):
         with server.db() as c:
             c.execute("UPDATE products SET name='Changed catalogue',unit='other',buy_price=999")

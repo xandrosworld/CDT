@@ -81,6 +81,16 @@
         receiptNote.appendChild(document.createElement('br'));receiptNote.appendChild(receiptLink);
         host.querySelector('.document-toolbar').after(receiptNote);
       }
+      if(body.simple_print){
+        var advanced=document.createElement('details');advanced.className='document-note';advanced.innerHTML='<summary>Chi tiết từng phiếu / tải file</summary>';
+        var toolbar=host.querySelector('.document-toolbar');toolbar.before(advanced);advanced.appendChild(toolbar);
+        host.querySelectorAll('.document-note,.document-sheet-list').forEach(function(el){
+          if(el!==advanced&&!el.dataset.purchaseSource&&!advanced.contains(el))advanced.appendChild(el);
+        });
+        var simple=document.createElement('div');simple.className='document-toolbar';simple.dataset.simplePrint='';
+        simple.innerHTML='<button class="btn btn-outline" data-doc="summary">Xem bảng kê A4</button><button class="btn btn-outline" data-doc="receipts">Xem biên nhận A5</button><button class="btn btn-primary" data-doc="print-summary">In bảng kê A4</button><button class="btn btn-primary" data-doc="print-receipts">In biên nhận A5</button>';
+        advanced.before(simple);
+      }
       function invalidatePrint() {
         resolvedSides = '';
         host.querySelector('.document-pdf').innerHTML = '';
@@ -123,6 +133,7 @@
         host.querySelectorAll('[data-doc="invoice-pdfs"],[data-doc="invoice-print"]').forEach(function (b) { b.disabled = busy; });
         host.querySelectorAll('[data-sheet]').forEach(function (c) { c.checked = selected.has(Number(c.dataset.sheet)); });
         host.querySelectorAll('[data-sheet],[data-doc="all"],[data-doc="none"],[data-doc="refresh"],[data-doc="receipts"],[data-doc="summary"]').forEach(function(c) { c.disabled=busy; });
+        host.querySelectorAll('[data-doc="print-summary"],[data-doc="print-receipts"]').forEach(function(c){c.disabled=busy||!data.sheets.some(function(_,i){return c.dataset.doc==='print-summary'?summaryAt(i):receiptAt(i);});});
       }
       function show(index) {
         current = index;
@@ -206,6 +217,12 @@
         var action = event.target.closest('[data-doc]');
         if (!action) return;
         if (busy) return;
+        if(['print-summary','print-receipts'].includes(action.dataset.doc)){
+          var receiptPrint=action.dataset.doc==='print-receipts';invalidatePrint();selected.clear();
+          data.sheets.forEach(function(_,i){if(receiptPrint?receiptAt(i):summaryAt(i))selected.add(i);});
+          paperTouched=true;modeTouched=false;host.querySelector('.document-paper').value=receiptPrint?'A5':'A4';
+          update();if(selected.size){show(selected.values().next().value);output('print');}return;
+        }
         if(action.dataset.doc==='payment-refresh'){var form=document.getElementById('paymentRequestForm');if(form)form.requestSubmit();return;}
         if (action.dataset.doc === 'refresh') { if (!busy) open(body, hostId, false); }
         if (action.dataset.doc === 'all') { invalidatePrint();paperTouched=false;data.sheets.forEach(function (_,i) { selected.add(i); }); update(); }
@@ -237,7 +254,8 @@
         if(body.kind==='saved-purchases'){
           host.innerHTML+='<button type="button" class="btn btn-outline" data-saved-back>Quay lại danh sách bảng kê</button> <button type="button" class="btn btn-primary" data-saved-retry>Kiểm tra lại bản in</button>';
           host.querySelector('[data-saved-retry]').onclick=function(){open(body,hostId,false);};
-          host.querySelector('[data-saved-back]').onclick=function(){var field=host.parentElement.querySelector('[data-history-id]');if(field){field.scrollIntoView({block:'center'});field.focus();}};
+          if(body.simple_print)host.querySelector('[data-saved-back]').textContent='Chọn lại ngày cần in';
+          host.querySelector('[data-saved-back]').onclick=function(){var field=body.simple_print?document.getElementById('bkPrintDay'):host.parentElement.querySelector('[data-history-id]');if(field){field=field.parentElement.querySelector('.localized-date-display')||field;field.scrollIntoView({block:'center'});field.focus();}};
           if(body.receipts){var summary=document.createElement('button');summary.className='btn btn-primary';summary.textContent='Xem bảng kê tổng';summary.onclick=function(){open(Object.assign({},body,{receipts:false}),hostId,false);};host.appendChild(summary);}
         }
         if (body.kind === 'payment' && error.code === 'payment_statement_line_totals_mismatch') {

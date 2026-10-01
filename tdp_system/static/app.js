@@ -4414,7 +4414,7 @@
     content.innerHTML = html([
       '<div class="print-workspace-heading"><button class="btn btn-outline" data-view="home">← Đơn hàng - bảng kê</button><h3>',
       {deliveries:'In đơn hàng đi giao', purchases:'In bảng kê và biên nhận', suppliers:'In đơn đặt nhà cung cấp', report:'In báo cáo tổng hợp'}[state.printingDocument], '</h3></div>',
-      state.printingDocument === 'purchases' ? '<section class="card"><div class="card-head"><div><h3>Lập bổ sung hoặc in lại bảng kê</h3><p>Cần xử lý hàng âm: bấm Lập bảng kê bổ sung từ tồn âm, kiểm tra hàng thực mua rồi xác nhận nhập kho. Cần in giấy đã làm: bấm Xem bảng kê đã lưu.</p></div></div><div class="card-body"><div class="compact-controls">'+purchasePrintScopeControls()+'<button class="btn btn-primary" data-action="open-saved-bk">Xem bảng kê đã lưu</button><button class="btn btn-outline" data-action="open-monthly-bk">Lập bảng kê bổ sung từ tồn âm</button></div><p class="muted">In lại dùng ngày mua, mặt hàng, lượng và tiền đã lưu. Chỉ lập bổ sung khi còn hàng thực mua chưa ghi kho.</p></div></section><div id="bkSavedHistory"></div><details id="purchaseLegacyPrint" class="operation-details"'+(state.purchaseLegacyPrintOpen?' open':'')+'><summary>Bản xem từ đơn hàng / phần chờ — kiểm tra trạng thái kho</summary><div class="operation-details-body"><p>Bản xem được dựng từ đơn hàng, có thể xuất hiện trước khi xác nhận nhập kho. Có bảng kê hoặc biên nhận không có nghĩa đã ghi kho; xem và in không làm hết hàng âm. Trạng thái liên kết nhập kho được hiển thị trên bản xem.</p>' : '',
+      state.printingDocument === 'purchases' ? '<section class="card"><div class="card-head"><div><h3>Lập bổ sung hoặc in lại bảng kê</h3><p>Cần xử lý hàng âm: bấm Lập bảng kê bổ sung từ tồn âm, kiểm tra hàng thực mua rồi xác nhận nhập kho. Cần in giấy đã làm: chọn ngày rồi bấm Xem bảng kê và biên nhận.</p></div></div><div class="card-body"><div class="compact-controls">'+purchasePrintScopeControls()+'<button class="btn btn-primary" data-action="open-saved-bk">Xem bảng kê và biên nhận</button><button class="btn btn-outline" data-action="open-monthly-bk">Lập bảng kê bổ sung từ tồn âm</button></div><p class="muted">In lại dùng ngày mua, mặt hàng, lượng và tiền đã lưu. Chỉ lập bổ sung khi còn hàng thực mua chưa ghi kho.</p></div></section><div id="bkSavedHistory"></div><details id="purchaseLegacyPrint" class="operation-details"'+(state.purchaseLegacyPrintOpen?' open':'')+'><summary>Bản xem từ đơn hàng / phần chờ — kiểm tra trạng thái kho</summary><div class="operation-details-body"><p>Bản xem được dựng từ đơn hàng, có thể xuất hiện trước khi xác nhận nhập kho. Có bảng kê hoặc biên nhận không có nghĩa đã ghi kho; xem và in không làm hết hàng âm. Trạng thái liên kết nhập kho được hiển thị trên bản xem.</p>' : '',
       '<div class="card print-selection-card fade-in"><div class="card-head"><div><h3>',
       state.printingDocument === "deliveries" ? 'Chọn bếp cần in phiếu giao' : 'Chọn ngày cần lấy giấy tờ', '</h3>',
       '<p>Chọn phiếu, xem ngay tại đây hoặc in phần đã chọn. Bảng kê/biên nhận có thể chọn tiếp từng sheet trong bản xem.</p></div>',
@@ -8197,6 +8197,11 @@
       var scopeFrom=monthly?month+'-01':dayField.value,scopeTo=monthly?month+'-'+lastDay:dayField.value;
       state.bkPrintMonth=month;
       if(action==='open-saved-bk'){
+        if(!monthly){
+          await window.TdpBkDayPrint({hostId:'bkSavedHistory',api:api,esc:esc,day:scopeFrom,
+            onSupplement:function(){window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,onStockReview:openSupplementStockReview,
+              from:scopeFrom,to:scopeTo,onSaved:function(){loadBkDocuments(true);}});}});return;
+        }
         await window.TdpBkHistory({hostId:'bkSavedHistory',api:api,esc:esc,from:scopeFrom,to:scopeTo,
           onSupplement:function(){window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,onStockReview:openSupplementStockReview,
             from:scopeFrom,to:scopeTo,onSaved:function(){loadBkDocuments(true);}});}});
