@@ -17,6 +17,7 @@ def main():
             fixture.add_direct_source(conn,invoice_number='853')
             fixture.add_direct_source(conn,invoice_number='854')
             draft,_,_=fixture.add_invoice(conn,invoice_number='813')
+            conn.execute('UPDATE outgoing_invoice_lines SET tax=? WHERE draft_id=?',('0.08',draft))
             line=conn.execute('SELECT id FROM outgoing_invoice_lines WHERE draft_id=?',(draft,)).fetchone()[0]
             for n in range(25):
                 _,_,order=fixture.add_invoice(conn,status='draft',invoice_number=f'DRAFT-{n}')

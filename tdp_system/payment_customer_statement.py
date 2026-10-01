@@ -14,10 +14,12 @@ def customer_statement(scope):
         from .invoice_payment_documents import _strict_date, _excel_text, number_to_vietnamese, InvoicePaymentDocumentError
         from .invoice_line_tax import tax_fields, number
         from .payment_print_layout import readable_payment_layout, keep_payment_footer
+        from .invoice_payment_scope import _tax_percent
     except ImportError:
         from invoice_payment_documents import _strict_date, _excel_text, number_to_vietnamese, InvoicePaymentDocumentError
         from invoice_line_tax import tax_fields, number
         from payment_print_layout import readable_payment_layout, keep_payment_footer
+        from invoice_payment_scope import _tax_percent
 
     def numeric(value, label):
         parsed = number(value)
@@ -30,7 +32,13 @@ def customer_statement(scope):
     lines = [(r, True) for r in scope.get('source_lines', [])] + [(r, False) for r in local_lines]
     for row, source in lines:
         name, unit = (row['source_item_name'], row['source_unit']) if source else (row['product_name'],row['unit'])
-        tax = tax_fields({'tax_rate':row.get('tax_rate') if source else row.get('tax'), 'amount':row['amount']})
+        # Local invoices store 8% as either "8%", 8 or the ratio 0.08.
+        # Use the same interpretation as issued-invoice validation. Provider
+        # rates retain their source-specific interpretation and actual VAT.
+        local_rate = _tax_percent(row.get('tax')) if not source else None
+        rate_value = row.get('tax_rate') if source else (
+            'KKKNT' if local_rate == -2 else 'KCT' if local_rate == -1 else f'{local_rate:g}%')
+        tax = tax_fields({'tax_rate':rate_value, 'amount':row['amount']})
         if 'line_tax_amount' in row:
             tax['line_tax_amount'] = row['line_tax_amount']
         amount = numeric(row['amount'], 'Thành tiền')

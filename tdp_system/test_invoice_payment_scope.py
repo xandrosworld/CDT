@@ -219,6 +219,7 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         from .payment_customer_statement import customer_statement
         with server.db() as conn:
             draft,_,_=self.add_invoice(conn)
+            conn.execute('UPDATE outgoing_invoice_lines SET tax=? WHERE draft_id=?',('0.08',draft))
             line=conn.execute('SELECT id FROM outgoing_invoice_lines WHERE draft_id=?',(draft,)).fetchone()[0]
             for n in range(25):
                 _,_,order=self.add_invoice(conn,status='draft',invoice_number=f'DRAFT-{n}')

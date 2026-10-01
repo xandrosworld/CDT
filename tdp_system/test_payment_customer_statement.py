@@ -50,6 +50,16 @@ class CustomerStatementTests(unittest.TestCase):
         book=customer_statement(scope)
         self.assertEqual((100,50),(book.active['E11'].value,book.active['E12'].value))
 
+    def test_local_ratio_tax_matches_issued_invoice_tax_validation(self):
+        for rate in ('8%', '8', 8, '0.08', .08):
+            with self.subTest(rate=rate):
+                scope=self.scope()
+                for line in scope['lines']:line['tax']=rate
+                ws=customer_statement(scope).active
+                self.assertEqual('8%',ws['G11'].value)
+                self.assertEqual(8,ws['H11'].value)
+                self.assertEqual(216,ws['I13'].value)
+
     def test_source_vat_amount_is_used_and_mismatch_does_not_create_balancing_values(self):
         scope=self.scope();scope['lines'][0]['line_tax_amount']=6
         with self.assertRaisesRegex(InvoicePaymentDocumentError,'chưa khớp'):
