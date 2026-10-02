@@ -89,6 +89,18 @@ class BkDraftTests(unittest.TestCase):
         self.assertEqual(confirmed.status_code,200,confirmed.get_json())
         after=self.client.get('/api/bk-import/shortages?from=2026-08-01&to=2026-09-30&day=2026-09-01').get_json()
         self.assertEqual(after['items'][0]['suggested_qty'],10)
+        # NXT permits carried shortages for KKKNT. Both products have no
+        # source orders: inclusion must come from stock, never a BK marker.
+        with server.db() as conn:
+            conn.execute("UPDATE products SET tax='KKKNT'")
+        before=self.counts()
+        query='from=2026-09-01&to=2026-09-30'
+        nxt=self.client.get('/api/invoice-valuation?'+query).get_json()
+        self.assertTrue(nxt['ok'],nxt)
+        shortages=self.client.get('/api/bk-import/shortages?'+query+'&tax=all').get_json()
+        self.assertEqual({r['product_code']:r['closing_qty'] for r in shortages['items']},
+                         {r['product_code']:r['closing_qty'] for r in nxt['items'] if r['closing_qty'] < -0.000001})
+        self.assertEqual(self.counts(),before)
 
     def test_reject_bad_dates_numbers_codes_without_writes(self):
         before=self.counts()

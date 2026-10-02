@@ -4414,7 +4414,7 @@
     content.innerHTML = html([
       '<div class="print-workspace-heading"><button class="btn btn-outline" data-view="home">← Đơn hàng - bảng kê</button><h3>',
       {deliveries:'In đơn hàng đi giao', purchases:'In bảng kê và biên nhận', suppliers:'In đơn đặt nhà cung cấp', report:'In báo cáo tổng hợp'}[state.printingDocument], '</h3></div>',
-      state.printingDocument === 'purchases' ? '<section class="card"><div class="card-head"><div><h3>Lập bổ sung hoặc in lại bảng kê</h3><p>Chọn ngày → kiểm tra hàng còn thiếu → lập bổ sung nếu có hàng thực mua chưa ghi kho → xác nhận nhập kho. In lại bảng đã ghi kho bằng nút riêng.</p></div></div><div class="card-body"><div class="compact-controls">'+purchasePrintScopeControls()+'<button class="btn btn-primary" data-action="open-monthly-bk">Kiểm tra / lập bảng kê bổ sung</button><button class="btn btn-outline" data-action="open-saved-bk">Xem / in bảng kê đã ghi kho</button></div><p class="muted">In lại dùng ngày mua, mặt hàng, lượng và tiền đã lưu. Chỉ lập bổ sung khi còn hàng thực mua chưa ghi kho.</p></div></section><div id="bkSavedHistory"></div><details id="purchaseLegacyPrint" class="operation-details"'+(state.purchaseLegacyPrintOpen?' open':'')+'><summary>Bản xem từ đơn hàng / phần chờ — kiểm tra trạng thái kho</summary><div class="operation-details-body"><p>Bản xem được dựng từ đơn hàng, có thể xuất hiện trước khi xác nhận nhập kho. Có bảng kê hoặc biên nhận không có nghĩa đã ghi kho; xem và in không làm hết hàng âm. Trạng thái liên kết nhập kho được hiển thị trên bản xem.</p>' : '',
+      state.printingDocument === 'purchases' ? '<section class="card"><div class="card-head"><div><h3>Lập bổ sung hoặc in lại bảng kê</h3><p>Lập bổ sung: đối chiếu hàng âm của cả tháng chứa ngày đã chọn → kiểm tra hàng thực mua → xác nhận nhập kho. Ngày mua thực tế điền riêng. In lại bảng đã ghi kho theo đúng ngày / tháng bằng nút riêng.</p></div></div><div class="card-body"><div class="compact-controls">'+purchasePrintScopeControls()+'<button class="btn btn-primary" data-action="open-monthly-bk">Kiểm tra / lập bảng kê bổ sung</button><button class="btn btn-outline" data-action="open-saved-bk">Xem / in bảng kê đã ghi kho</button></div><p class="muted">In lại dùng ngày mua, mặt hàng, lượng và tiền đã lưu. Chỉ lập bổ sung khi còn hàng thực mua chưa ghi kho.</p></div></section><div id="bkSavedHistory"></div><details id="purchaseLegacyPrint" class="operation-details"'+(state.purchaseLegacyPrintOpen?' open':'')+'><summary>Bản xem từ đơn hàng / phần chờ — kiểm tra trạng thái kho</summary><div class="operation-details-body"><p>Bản xem được dựng từ đơn hàng, có thể xuất hiện trước khi xác nhận nhập kho. Có bảng kê hoặc biên nhận không có nghĩa đã ghi kho; xem và in không làm hết hàng âm. Trạng thái liên kết nhập kho được hiển thị trên bản xem.</p>' : '',
       '<div class="card print-selection-card fade-in"><div class="card-head"><div><h3>',
       state.printingDocument === "deliveries" ? 'Chọn bếp cần in phiếu giao' : 'Chọn ngày cần lấy giấy tờ', '</h3>',
       '<p>Chọn phiếu, xem ngay tại đây hoặc in phần đã chọn. Bảng kê/biên nhận có thể chọn tiếp từng sheet trong bản xem.</p></div>',
@@ -8193,17 +8193,17 @@
         visibleField.focus();visibleField.setCustomValidity(monthly?'Chọn Tháng cần làm / in trước khi tiếp tục.':'Chọn Ngày cần làm / in trước khi tiếp tục.');visibleField.reportValidity();return;
       }
       if(!chosenField||!chosenField.reportValidity())return;
-      var month=monthField.value,parts=month.split('-'),lastDay=new Date(Number(parts[0]),Number(parts[1]),0).getDate();
+      var month=monthly?monthField.value:dayField.value.slice(0,7),parts=month.split('-'),lastDay=new Date(Number(parts[0]),Number(parts[1]),0).getDate();
       var scopeFrom=monthly?month+'-01':dayField.value,scopeTo=monthly?month+'-'+lastDay:dayField.value;
       state.bkPrintMonth=month;
       if(action==='open-saved-bk'){
         await window.TdpBkHistory({hostId:'bkSavedHistory',api:api,esc:esc,from:scopeFrom,to:scopeTo,
           onSupplement:function(){window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,onStockReview:openSupplementStockReview,
-            from:scopeFrom,to:scopeTo,onSaved:function(){loadBkDocuments(true);}});}});
+            from:month+'-01',to:month+'-'+lastDay,onSaved:function(){loadBkDocuments(true);}});}});
         return;
       }
       window.TdpBkDraft({api:api,downloadFile:downloadFile,esc:esc,quantity:stockQty,onStockReview:openSupplementStockReview,
-        from:scopeFrom,to:scopeTo,onSaved:function(){loadBkDocuments(true);}});
+        from:month+'-01',to:month+'-'+lastDay,onSaved:function(){loadBkDocuments(true);}});
       return;
     }
     if (action === "open-bk-draft") {
