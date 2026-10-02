@@ -7271,7 +7271,7 @@
       document.getElementById('bkPrintDayLabel').hidden=state.bkPrintScope==='month';
       document.getElementById('bkPrintMonthLabel').hidden=state.bkPrintScope!=='month';
       var historyHost=document.getElementById('bkSavedHistory');
-      if(historyHost){historyHost.dataset.historySerial='changed';historyHost.innerHTML='<p role="status">Phạm vi đã đổi. Bấm Xem bảng kê đã lưu để xem đúng ngày hoặc tháng vừa chọn.</p>';}
+      if(historyHost){historyHost.dataset.historySerial='changed';historyHost.innerHTML='<p role="status">Đã đổi ngày / tháng. Bấm Kiểm tra / lập bảng kê bổ sung để kiểm tra hàng còn thiếu, hoặc Xem / in bảng kê đã ghi kho để in lại.</p>';}
       return;
     }
     if (event.target.id === 'supplierFrom' || event.target.id === 'supplierTo') {
@@ -8190,7 +8190,7 @@
       var chosenField=monthly?monthField:dayField;
       if(chosenField&&!chosenField.value){
         var visibleField=chosenField.parentElement.querySelector('.localized-date-display')||chosenField;
-        visibleField.focus();visibleField.setCustomValidity(monthly?'Chọn Tháng cần in trước khi xem.':'Chọn Ngày cần in trước khi xem.');visibleField.reportValidity();return;
+        visibleField.focus();visibleField.setCustomValidity(monthly?'Chọn Tháng cần làm / in trước khi tiếp tục.':'Chọn Ngày cần làm / in trước khi tiếp tục.');visibleField.reportValidity();return;
       }
       if(!chosenField||!chosenField.reportValidity())return;
       var month=monthField.value,parts=month.split('-'),lastDay=new Date(Number(parts[0]),Number(parts[1]),0).getDate();
