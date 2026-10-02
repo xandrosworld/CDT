@@ -56,7 +56,7 @@
         error.hidden=true;
         host.querySelectorAll('[data-history]').forEach(function(b){b.disabled=true;});
         try{
-          await root.TDPDocuments.open({kind:'saved-purchases',from:options.from,to:options.to,document_ids:ids,receipts:button.dataset.history==='receipts'},previewId);
+          await root.TDPDocuments.open({kind:'saved-purchases',from:options.from,to:options.to,document_ids:ids,receipts:button.dataset.history==='receipts',simple_print:true},previewId);
           if(current()){var preview=document.getElementById(previewId);preview.scrollIntoView({block:'start'});}
         }finally{if(current())host.querySelectorAll('[data-history]').forEach(function(b){b.disabled=false;});}
       };

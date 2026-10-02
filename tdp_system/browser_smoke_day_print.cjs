@@ -7,6 +7,7 @@ const out=process.env.TDP_BK_PROOF||'D:/TDP_RAILWAY_PRIVATE/simple-day-proof';
  try{
   for(const type of ['summary','receipts']){
    const page=await browser.newPage({viewport:{width:1440,height:1050}});page.setDefaultTimeout(90000);
+   if(process.env.TDP_BK_LOCAL_ASSETS)for(const f of ['app.js','bk-draft.js','bk-history.js'])await page.route('**/static/'+f+'*',r=>r.fulfill({contentType:'application/javascript',body:fs.readFileSync('tdp_system/static/'+f,'utf8')}));
    const writes=[],errors=[];page.on('pageerror',e=>errors.push(e.message));
    page.on('request',r=>{if(r.method()==='POST'&&/\/(confirm|approve|reversal)(\?|$)/.test(r.url()))writes.push(r.url());});
    await page.goto(base);
