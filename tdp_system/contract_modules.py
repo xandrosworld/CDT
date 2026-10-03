@@ -3709,8 +3709,22 @@ def purchase_order_payload(conn, batch_id: int, *, for_sending=False) -> dict:
     )]
     plan_source = conn.execute("SELECT * FROM supplier_plan_sources WHERE batch_id=?", (batch_id,)).fetchone()
     source_issues = json.loads(plan_source['issues_json']) if plan_source else []
+    price_issues = []
     if plan_source:
         canonical_sources = [{**item, 'status': 'planned'} for item in json.loads(plan_source['items_json'])]
+        # Price is not printed on supplier instructions. Keep the stored errors
+        # intact for accounting, including plans imported before this change.
+        if for_sending:
+            goods_rows = {int(item['source_row']) for item in canonical_sources
+                          if item.get('line_kind', 'goods') == 'goods'}
+            blocking = []
+            for issue in source_issues:
+                match = re.fullmatch(r'Dòng (\d+): Giá mua không phải là số', issue)
+                if match and int(match[1]) in goods_rows:
+                    price_issues.append(issue)
+                else:
+                    blocking.append(issue)
+            source_issues = blocking
     if canonical_sources:
         for item in canonical_sources:
             base_qty = as_number(item["base_qty"])
@@ -3908,6 +3922,7 @@ def purchase_order_payload(conn, batch_id: int, *, for_sending=False) -> dict:
         "source_sheet": plan_source['source_sheet'] if plan_source else '',
         "source_name": plan_source['source_name'] if plan_source else '',
         "source_issues": source_issues,
+        "price_issues": price_issues,
         "formula": "Số đặt NCC do người dùng chốt sau khi trừ tồn tủ thực tế",
         "ordered_qty": ordered_total, "required_qty": required_total,
         "physical_stock_used": physical_total, "total_amount": amount_total,

@@ -139,6 +139,36 @@ class SupplierPlanSourceTests(unittest.TestCase):
             'batch_id': str(bid), 'plan_only': '1', 'file': (io.BytesIO(self.file(missing=True)), 'source.xlsx')})
         self.assertEqual(bad.status_code, 400)
 
+    def test_text_price_keeps_supplier_instructions_but_blocks_accounting(self):
+        wb = load_workbook(io.BytesIO(self.file()))
+        wb['đặt hàng'].cell(3, 8, 'Kiểm tra')
+        stream = io.BytesIO(); wb.save(stream); wb.close()
+        bid = self.daily(stream.getvalue())
+        before = self.protected()
+        plan = self.needs(bid)
+        self.assertTrue(plan['send_available'])
+        self.assertEqual(len(plan['rows']), 1)
+        self.assertEqual(plan['rows'][0]['order_qty'], 5)
+        self.assertEqual(len(plan['price_issues']), 1)
+        exported = self.client.get(f'/api/export/suppliers/{bid}')
+        self.assertEqual(exported.status_code, 200)
+        exported_wb = load_workbook(io.BytesIO(exported.data))
+        self.assertEqual(exported_wb.active['J3'].value, 'Chưa có giá')
+        exported_wb.close()
+        with server.db() as conn:
+            financial = server.purchase_order_payload(conn, bid)
+            self.assertTrue(financial['source_issues'])
+            self.assertFalse(financial['send_available'])
+        self.assertFalse(self.preview(bid, stream.getvalue(), plan=False)['can_confirm'])
+        self.assertEqual(self.protected(), before)
+        # An independent date error must still prevent using the plan.
+        with server.db() as conn:
+            import json
+            issues = financial['source_issues'] + ['Dòng 3: Ngày dòng đặt hàng không khớp phiên đang chọn']
+            conn.execute('UPDATE supplier_plan_sources SET issues_json=? WHERE batch_id=?',
+                         (json.dumps(issues), bid))
+        self.assertFalse(self.needs(bid)['send_available'])
+
     def test_stale_preview_cannot_overwrite_new_plan(self):
         bid = self.daily(self.file())
         first = self.preview(bid, self.file(8))

@@ -3829,6 +3829,8 @@ def export_supplier_orders(conn, batch, orders):
         from .document_totals import quantity_cell
     ws = wb.active
     payload = purchase_order_payload(conn, int(batch["id"]))
+    if payload['source_issues']:
+        payload = purchase_order_payload(conn, int(batch["id"]), for_sending=True)
     if payload['source_issues'] or (not payload['send_available'] and conn.execute(
         'SELECT 1 FROM daily_workdays WHERE batch_id=?', (batch['id'],),
     ).fetchone()):
@@ -3874,6 +3876,11 @@ def export_supplier_orders(conn, batch, orders):
             f"=F{row_number}+L{row_number}-K{row_number}-M{row_number}-N{row_number}",
             f"=IFERROR(O{row_number}*J{row_number},0)", row_key,
         ]
+        if f"Dòng {item.get('source_row')}: Giá mua không phải là số" in payload.get('price_issues', []):
+            # Export the quantities for ordering, without turning an unknown
+            # purchase price into a valid zero-cost accounting record.
+            values[9] = 'Chưa có giá'
+            values[15] = None
         if item.get("line_kind") == "replacement_deduction":
             values[14] = 0
             values[15] = item["amount"]

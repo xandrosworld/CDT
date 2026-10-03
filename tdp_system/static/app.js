@@ -1880,6 +1880,7 @@
     var sourceBanner = '<section class="supplier-day" data-batch-id="' + needs.batch_id + '" data-work-date="' + esc(needs.work_date) + '">' +
       '<div class="card supplier-plan-source"><div class="card-body"><h3>Ngày ' + dateVN(needs.work_date) + '</h3><strong>' +
       esc(needs.source_message || '') + '</strong><div class="form-actions"><button class="btn btn-outline" data-action="choose-supplier-plan-file"' + batchAttr + '>Nạp sheet đặt hàng ngày này</button><button class="btn btn-outline" data-action="preview-supplier-documents"' + batchAttr + '>Xem / In đơn đặt NCC</button></div>' +
+      ((needs.price_issues || []).length ? '<div class="code-note">Đơn đặt NCC đã hiển thị theo số lượng. Có ' + needs.price_issues.length + ' dòng Giá mua chưa hợp lệ; tiền đang hiển thị chưa phải tổng đầy đủ. Trước khi tính công nợ, sửa Giá mua thành số trong file đặt hàng. <details><summary>Xem các dòng cần sửa Giá mua</summary>' + needs.price_issues.map(esc).join('<br>') + '</details></div>' : '') +
       (preview && preview.plan_only ? purchaseOrderPreviewHtml() : '') + '</div></div>';
     var checklistCounts = needs.checklist_counts || { pending: 0, reopened: 0, ordered: 0 };
     var checklistOpen = n(checklistCounts.pending) + n(checklistCounts.reopened);
