@@ -1,6 +1,13 @@
 (function (root) {
   'use strict';
   root.TdpBkDraft = function (options) {
+    // Older pages can still call this entry point with the reprint day.
+    // Stock reconciliation opens the full month; purchase dates stay separate.
+    options=Object.assign({},options);
+    if(options.from===options.to&&/^\d{4}-\d{2}-\d{2}$/.test(options.from||'')){
+      var month=options.from.slice(0,7),parts=month.split('-');
+      options.from=month+'-01';options.to=month+'-'+new Date(Number(parts[0]),Number(parts[1]),0).getDate();
+    }
     var esc = options.esc, dialog = document.createElement('dialog'), rows = [], loadedPeriod = null, review = null, periodDrafts = {};
     dialog.className = 'bk-draft-dialog';
     dialog.setAttribute('aria-label', 'Lập bảng kê bổ sung');
@@ -10,7 +17,7 @@
       '<div class="bk-draft-controls"><label>Từ ngày<input name="from" type="date" value="' + esc(options.from) + '"></label>' +
       '<label>Đến ngày<input name="to" type="date" value="' + esc(options.to) + '"></label>' +
       '<label>Nhóm hàng<select name="tax"><option value="all">Tất cả hàng tồn âm</option><option value="KKKNT">Chỉ KKKNT</option></select></label>' +
-      '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div>' +
+      '<button class="btn btn-outline" data-bk="load">Xem hàng tồn âm</button></div><div class="bk-period-notice" role="status"></div>' +
       '<div class="bk-quick-fill"><strong>Muốn in lại bảng kê đã làm?</strong> Không cần chọn hàng tồn âm. <button type="button" class="btn btn-primary" data-bk="history">Xem / in bảng kê đã ghi kho</button></div><div class="bk-history-host"></div>' +
       '<div class="bk-draft-controls"><label>Số bảng kê<input name="reference" maxlength="100" aria-describedby="bk-reference-help"><small id="bk-reference-help">Đã gợi ý sẵn; có thể sửa theo cách đánh số đang dùng.</small></label></div>' +
       '<div class="bk-quick-fill"><div class="bk-draft-controls"><label>Ngày mua thực tế<input name="document_date" type="date"></label></div><p>Chọn cùng một ngày ở Từ ngày và Đến ngày: dùng sẵn ngày đó cho các dòng đã tích còn trống ngày. Chọn nhiều ngày: chọn Ngày mua thực tế một lần tại đây. Kiểm tra đúng ngày thực mua; có thể sửa tại ô này. Ngày đã có từ nguồn mua được giữ nguyên.</p></div>' +
@@ -26,7 +33,7 @@
       '<button class="btn btn-outline" data-bk="none">Bỏ chọn</button>' +
       '<button class="btn btn-outline" data-bk="excel">Tải Excel để nhập lại</button>' +
       '<button class="btn btn-primary" data-bk="preview">Xem bảng kê tổng & biên nhận</button></div>' +
-      '<p class="muted">Thiếu thông tin vẫn tải Excel để điền tiếp. Để in bộ bảng kê, cần đủ ngày mua thực tế, số bảng kê, người bán trong danh mục, lượng và giá. Hạn mức cộng chung 5.000.000đ/người/ngày với các bảng kê đã ghi kho.</p>' +
+      '<p class="muted bk-draft-print-help">Thiếu thông tin vẫn tải Excel để điền tiếp. Để in bộ bảng kê, cần đủ ngày mua thực tế, số bảng kê, người bán trong danh mục, lượng và giá. Hạn mức cộng chung 5.000.000đ/người/ngày với các bảng kê đã ghi kho.</p>' +
       '<div class="bk-draft-preview"></div>';
     document.body.appendChild(dialog); dialog.showModal();
     function fitPapers() {
@@ -142,6 +149,17 @@
     }
     function render() {
       syncCommonDate();
+      var empty=loadedPeriod&&!rows.length;
+      [field('reference').parentElement.parentElement,field('document_date').closest('.bk-quick-fill'),
+        dialog.querySelector('.bk-quick-seller'),dialog.querySelector('.bk-row-summary'),
+        dialog.querySelector('.bk-draft-print-help'),dialog.querySelector('.bk-draft-table'),dialog.querySelector('[data-bk="all"]').parentElement].forEach(function(el){el.style.display=empty?'none':'';});
+      var notice=dialog.querySelector('.bk-period-notice');
+      if(loadedPeriod){
+        var m=loadedPeriod.to.slice(0,7),p=m.split('-'),last=m+'-'+new Date(Number(p[0]),Number(p[1]),0).getDate();
+        notice.innerHTML=loadedPeriod.from===m+'-01'&&loadedPeriod.to===last
+          ? '<p><strong>Đang đối chiếu cả tháng '+esc(m.split('-').reverse().join('/'))+'.</strong> Ngày mua thực tế không thay đổi khoảng đối chiếu này.</p>'
+          : '<p class="error-summary"><strong>Đang đối chiếu một phần tháng, đến '+esc(loadedPeriod.to.split('-').reverse().join('/'))+'.</strong> Hàng âm giữa tháng có thể đã được bổ sung vào ngày sau. Để lập bổ sung cuối tháng, hãy đối chiếu cả tháng trước.</p><button type="button" class="btn btn-primary" data-bk="whole-month">Đối chiếu cả tháng '+esc(m.split('-').reverse().join('/'))+'</button>';
+      }
       dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Ngày mua thực tế</th><th>Tồn cuối ngày '+esc(loadedPeriod ? loadedPeriod.to.split('-').reverse().join('/') : '')+'</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
         return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'<br><button type="button" class="btn btn-outline" data-bk-source="'+i+'">Xem / chọn nguồn mua</button>'+purchaseHistoryHtml(r)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" '+(r.common_date?'readonly ':'')+'aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small data-date-hint="'+i+'"></small><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'<small class="bk-stock-explanation">'+esc(r.stock_explanation||'')+'</small></td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
@@ -186,6 +204,12 @@
         collect();
         if(['load','file','add','next','confirm'].indexOf(name)>=0){var sourcePanel=dialog.querySelector('.bk-source-panel');sourcePanel.hidden=true;sourcePanel.innerHTML='';}
         if(['load','file','add','all','none','preview'].indexOf(name)>=0){review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';}
+        if(name==='whole-month'){
+          var month=field('to').value.slice(0,7),parts=month.split('-');
+          field('from').value=month+'-01';field('to').value=month+'-'+new Date(Number(parts[0]),Number(parts[1]),0).getDate();
+          field('from').dispatchEvent(new Event('change'));field('to').dispatchEvent(new Event('change'));
+          setTimeout(function(){action('load');},0);return;
+        }
         if (name==='load') {
           if(loadedPeriod)periodDrafts[loadedPeriod.from+'|'+loadedPeriod.to+'|'+loadedPeriod.tax]={rows:rows,date:field('document_date').value,reference:field('reference').value,seller:field('source_party').value};
           status('Đang đối chiếu sổ kho…');
@@ -203,6 +227,7 @@
           field('document_date').value=kept?kept.date:(result.from===result.to?result.from:'');field('reference').value=kept?kept.reference:('BKBS-'+result.to.slice(0,7).replace('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase());field('source_party').value=kept?kept.seller:'';
           field('document_date').dispatchEvent(new Event('change'));
           render(); status(result.items.length+' mã hàng còn thiếu đến hết '+result.to.split('-').reverse().join('/')+'. Lượng thiếu được phân gợi ý theo nguồn mua, không cộng lặp giữa các ngày. Dòng lượng 0 chưa cần bổ sung. Bấm Chọn tất cả hoặc chọn từng dòng đã mua cần bổ sung chứng từ.'+(kept?' Đã giữ thông tin đang nhập; kiểm tra lại lượng mua với tồn mới.':''));
+          if(!rows.length)status('Không còn hàng tồn âm trong Nhóm hàng đã chọn đến hết '+result.to.split('-').reverse().join('/')+'. Không có dòng cần lập bổ sung từ tồn âm. Muốn in lại, bấm Xem / in bảng kê đã ghi kho. Nếu còn hàng thực mua chưa ghi nhận, kiểm tra chứng từ trước khi thêm hàng ngoài danh sách tồn âm.');
           dialog.querySelector('.bk-draft-preview').innerHTML='';
           if(result.source_warnings&&result.source_warnings.length){var warning=document.createElement('p');warning.className='error-summary';warning.textContent=result.source_warnings.join(' | ');dialog.querySelector('.bk-draft-table').prepend(warning);}
           if(options.productCode){
