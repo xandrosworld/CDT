@@ -56,6 +56,18 @@ def summary_row(**overrides):
 
 
 class PurchaseSummaryExportTests(unittest.TestCase):
+    def test_print_hides_internal_references_but_preserves_source_and_customer_reference(self):
+        references = ['TDP-BATCH-5', 'TDP-BK-HD-DAU-RA-515', 'Phiếu mua 123']
+        rows = [summary_row(reference=reference) for reference in references]
+        book = build_purchase_summary_workbook(rows, template_path=GOLDEN,
+            date_from='2026-09-02', date_to='2026-09-02')
+        try:
+            self.assertEqual(book.active['J11'].value, 'Phiếu mua 123')
+            self.assertEqual(book.active['I11'].value, 600)
+            self.assertEqual([r['reference'] for r in rows], references)
+        finally:
+            book.close()
+
     def test_same_item_and_legal_seller_merge_across_supplier_and_kitchen(self):
         rows = [
             summary_row(quantity=2, amount=200, supplier="NCC A", kitchen="BEP-A"),
