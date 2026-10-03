@@ -1,5 +1,6 @@
 """Prepare supplementary BK files and printouts without posting inventory."""
 import io
+import calendar
 import math
 import threading
 import time
@@ -94,7 +95,7 @@ def suggested_prices(conn, end, codes):
     return result
 
 
-def shortage_rows(conn, start, end, tax='KKKNT', day=None):
+def shortage_rows(conn, start, end, tax='KKKNT', day=None, remaining_month=False):
     start, end = period(start, end)
     cutoff = end
     if day:
@@ -105,15 +106,24 @@ def shortage_rows(conn, start, end, tax='KKKNT', day=None):
         raise ValueError('Bộ lọc thuế không hợp lệ.')
     # Quantity projection also works when a negative item has no usable cost.
     report = invoice_stock_rows(conn, as_of=cutoff)
+    month_end = cutoff[:8] + str(calendar.monthrange(int(cutoff[:4]), int(cutoff[5:7]))[1])
+    month_stock = {r['product_code']: r['closing_qty'] for r in
+                   (report if cutoff == month_end else invoice_stock_rows(conn, as_of=month_end))} if remaining_month else {}
     products = {r['code']: dict(r) for r in conn.execute('SELECT code,name,unit,tax FROM products')}
     items = []
     for row in report:
         product = products.get(row['product_code'], {})
         if row['closing_qty'] >= -0.000001 or (tax == 'KKKNT' and not is_kkknt(product.get('tax'))):
             continue
+        suggested = -row['closing_qty']
+        if remaining_month:
+            suggested = min(suggested, max(0, -month_stock.get(row['product_code'], 0)))
+            if suggested <= 0.000001:
+                continue
         items.append({'product_code': row['product_code'], 'product_name': product.get('name', row['product_name']),
                       'unit': product.get('unit', row['unit']), 'tax': product.get('tax', ''),
-                      'closing_qty': round(row['closing_qty'],6), 'suggested_qty': round(-row['closing_qty'],6),
+                      'closing_qty': round(row['closing_qty'],6), 'suggested_qty': round(suggested,6),
+                      'month_closing_qty': round(month_stock.get(row['product_code'],row['closing_qty']),6),
                       'stock_explanation': 'Tồn đầu: {0:g} · Nhập đã ghi kho: {1:g} · Xuất đã ghi kho: {2:g} · Hoàn tác: {3:g}'.format(
                           round(row['opening_qty'],6), round(row['input_qty'],6), round(row['output_qty'],6), round(row['reversal_qty'],6))})
     prices = suggested_prices(conn, cutoff, [r['product_code'] for r in items])
@@ -127,6 +137,7 @@ def shortage_rows(conn, start, end, tax='KKKNT', day=None):
     for item in items:
         item['purchase_sources'] = [r for r in sources[item['product_code']] if mapping_key(r['unit']) == mapping_key(item['unit'])]
     return {'ok': True, 'from': start, 'to': end, 'day': cutoff,
+            'remaining_month': bool(remaining_month), 'month_end': month_end,
             'items': items, 'source_warnings': warnings, 'writesInventory': False}
 
 
@@ -248,7 +259,7 @@ def register_bk_draft_routes(app, ctx):
         try:
             with ctx['db']() as conn:
                 conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
-                return jsonify(shortage_rows(conn, request.args.get('from'), request.args.get('to'),request.args.get('tax','KKKNT'),request.args.get('day')))
+                return jsonify(shortage_rows(conn, request.args.get('from'), request.args.get('to'),request.args.get('tax','KKKNT'),request.args.get('day'),request.args.get('remaining_month')=='1'))
         except (ValueError, InvoiceInventoryError) as error:
             return jsonify(ok=False,error=str(error)),400
 

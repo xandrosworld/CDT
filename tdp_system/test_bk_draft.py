@@ -102,6 +102,34 @@ class BkDraftTests(unittest.TestCase):
                          {r['product_code']:r['closing_qty'] for r in nxt['items'] if r['closing_qty'] < -0.000001})
         self.assertEqual(self.counts(),before)
 
+    def test_daily_remaining_excludes_later_replenished_items_and_caps_quantity(self):
+        with server.db() as conn:
+            cid=conn.execute("""INSERT INTO invoice_inventory_confirmations(
+                confirmation_key,direction,source_invoice_table,source_invoice_id,action,confirmed,note,created_at)
+                VALUES('DAILY-REMAINING','output','outgoing_source_invoices',999,'post',1,'test',?)""",(fixture.NOW,)).lastrowid
+            for i,(code,day,qty) in enumerate([('BK-P1','2026-08-01',-5),('BK-P2','2026-08-01',-3),
+                    ('BK-P1','2026-08-02',3),('BK-P2','2026-08-02',3),('BK-P1','2026-09-01',-10)]):
+                conn.execute("""INSERT INTO invoice_inventory_ledger(
+                    event_key,direction,event_type,source_invoice_table,source_invoice_id,source_line_id,
+                    source_line_index,product_code,txn_date,qty_delta,unit_cost,confirmation_id,status,created_at)
+                    VALUES(?,?,'POST','outgoing_source_invoices',999,?,?,?,?,?,100,?,'posted',?)""",
+                    (f'DAILY-{i}','input' if qty>0 else 'output',i+1,i+1,code,day,qty,cid,fixture.NOW))
+        before=self.counts()
+        url='/api/bk-import/shortages?from=2026-08-01&to=2026-08-01&tax=all'
+        raw=self.client.get(url).get_json()
+        self.assertEqual(len(raw['items']),2)
+        result=self.client.get(url+'&remaining_month=1').get_json()
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['month_end'],'2026-08-31')
+        self.assertEqual([(r['product_code'],r['closing_qty'],r['suggested_qty']) for r in result['items']],
+                         [('BK-P1',-5,2)])
+        self.assertEqual(before,self.counts())
+        body=self.body(True);body['document_date']='2026-08-01'
+        blob=self.client.post('/api/bk-import/draft/excel',json=body)
+        self.assertEqual(self.confirm(self.preview(blob.data).get_json()).status_code,200)
+        after=self.client.get(url+'&remaining_month=1').get_json()
+        self.assertEqual(after['items'],[])
+
     def test_reject_bad_dates_numbers_codes_without_writes(self):
         before=self.counts()
         for change in [{'from':'2026-09-01'},{'document_date':'2026-02-30'},{'rows':[]},
