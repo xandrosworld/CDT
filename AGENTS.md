@@ -12,4 +12,4 @@ The user prioritizes convenience and clear Vietnamese wording for customers.
 ## Customer-approved printing workflow
 
 - Preserve the delivery-print screen's date range, kitchen selection list, and selected view/print/download actions. The customer explicitly approved this layout; do not redesign it as part of unrelated fixes.
-- Keep internal source identifiers (for example TDP-BATCH-* and TDP-BK-HD-DAU-RA-*) in stored traceability data, not in customer-facing printed notes.
+- Preserve source references (including TDP-BATCH-* and TDP-BK-HD-DAU-RA-*) in the printed Ghi chú column. The customer explicitly wants these references visible for logical source reconciliation; do not hide them as technical clutter.

@@ -10,7 +10,6 @@ diagnostic metadata.
 from __future__ import annotations
 
 import math
-import re
 try:
     from seller_identity_catalog import is_excluded_seller
 except ImportError:
@@ -628,10 +627,6 @@ def build_purchase_summary_workbook(
         for offset, item in enumerate(grouped):
             row = TABLE_FIRST_ROW + offset
             _apply_row_snapshot(sheet, row, item_style)
-            # Source identifiers remain in the saved rows for traceability;
-            # they are not customer notes and must not clutter printed forms.
-            printed_reference = ', '.join(part for part in item['reference'].split(', ')
-                if not re.fullmatch(r'TDP-(?:BATCH-\d+(?:-AFTER-\d+)?|BK-HD-DAU-RA-[A-Z0-9-]+)', part, re.I))
             values = (
                 _display_date(item["work_date"]),
                 item["seller"],
@@ -642,7 +637,7 @@ def build_purchase_summary_workbook(
                 item["quantity"],
                 item["unit_price"],
                 item["amount"],
-                printed_reference,
+                item["reference"],
             )
             for column, value in enumerate(values, start=1):
                 write_literal(sheet, sheet.cell(row, column).coordinate, value)
@@ -653,7 +648,7 @@ def build_purchase_summary_workbook(
             sheet.cell(row, 9).number_format = "#,##0"
             sheet.row_dimensions[row].height = max(sheet.row_dimensions[row].height or 22,
                 17 * max(math.ceil(len(str(item['product_name'])) / 26), math.ceil(len(str(item['address'])) / 30),
-                         math.ceil(len(str(item['seller'])) / 22), math.ceil(len(printed_reference) / 18)))
+                         math.ceil(len(str(item['seller'])) / 22), math.ceil(len(str(item['reference'])) / 18)))
             for column in (2, 3, 5, 10):
                 alignment = copy(sheet.cell(row, column).alignment)
                 alignment.wrap_text = True
