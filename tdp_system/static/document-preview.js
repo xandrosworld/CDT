@@ -59,6 +59,29 @@
         sourcePanel.className='document-note tag-warn';sourcePanel.dataset.purchaseSource=provenance.source;
         sourcePanel.innerHTML='<strong>'+esc(provenance.title)+'</strong><p>'+esc(provenance.message)+'</p>'+
           provenance.items.map(function(item){return '<p>'+esc(item.message)+'</p>';}).join('');
+        if(provenance.amount_breakdown){
+          var allIds=body.source_scope_ids||body.document_ids;
+          var amounts=document.createElement('div');amounts.dataset.purchaseAmounts='';
+          function cash(value){return Number(value).toLocaleString('vi-VN',{maximumFractionDigits:2})+' đ';}
+          amounts.innerHTML='<table><thead><tr><th>Phần đang xem / in</th><th>Số tiền</th></tr></thead><tbody>'+
+            provenance.amount_breakdown.map(function(group){return '<tr><td>'+esc(group.label)+'</td><td>'+esc(cash(group.amount))+'</td></tr>';}).join('')+
+            '</tbody><tfoot><tr><th>Tổng các bảng đang xem / in</th><th>'+esc(cash(provenance.amount_total))+'</th></tr></tfoot></table>'+
+            '<p>Tổng này gồm các phần liệt kê ở trên. Khi đối chiếu phần lập thêm, chọn riêng Bảng bổ sung. Tồn âm hiện tại đã tính các khoản nhập kho đã ghi; cần đối chiếu cùng thời điểm và đơn giá, không so tiền đã lập với tiền âm còn lại.</p>';
+          provenance.amount_breakdown.forEach(function(group){
+            if(provenance.amount_breakdown.length<2)return;
+            var button=document.createElement('button');button.type='button';button.className='btn btn-outline';
+            button.dataset.purchaseGroup=group.key;button.textContent='Chỉ xem '+group.label.toLocaleLowerCase();
+            button.onclick=function(){open(Object.assign({},body,{document_ids:group.document_ids,source_scope_ids:allIds}),hostId,false);};
+            amounts.appendChild(button);
+          });
+          if(body.source_scope_ids){
+            var allButton=document.createElement('button');allButton.type='button';allButton.className='btn btn-outline';
+            allButton.dataset.purchaseGroup='all';allButton.textContent='Xem đầy đủ các bảng đã chọn';
+            allButton.onclick=function(){open(Object.assign({},body,{document_ids:allIds,source_scope_ids:null}),hostId,false);};
+            amounts.appendChild(allButton);
+          }
+          sourcePanel.appendChild(amounts);
+        }
         if(provenance.source==='orders'){
           var savedButton=document.createElement('button');savedButton.className='btn btn-primary';
           savedButton.textContent='Kiểm tra bảng đã ghi kho';savedButton.dataset.checkSavedPurchases='';

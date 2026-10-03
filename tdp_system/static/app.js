@@ -4354,6 +4354,8 @@
       var saved=(results[0].items||[]).concat(results[0].legacy_items||[]),count=results[1].items.length;
       create.disabled=!count;print.disabled=!saved.length;
       box.textContent=(saved.length?'Đã có '+saved.length+' bảng ghi kho trong ngày / tháng đã chọn. ':'Chưa có bảng ghi kho trong ngày / tháng đã chọn. ')+(count?'Còn '+count+' mã âm trong phạm vi đã chọn và còn thiếu cuối tháng; chỉ lập phần thực mua chưa ghi kho.':'Không có dòng cần lập bổ sung từ tồn âm trong phạm vi đã chọn sau khi đối chiếu cuối tháng.');
+      (results[0].amount_breakdown||[]).forEach(function(group){var line=document.createElement('div');line.textContent=group.label+': '+Number(group.amount).toLocaleString('vi-VN',{maximumFractionDigits:2})+' đ';box.appendChild(line);});
+      if(saved.length){var timing=document.createElement('p');timing.textContent='Tồn âm hiện tại đã tính các khoản nhập kho đã ghi. Không so tổng tiền bảng kê đã lập với tiền âm còn lại để suy ra lập thừa.';box.appendChild(timing);}
       create.className='btn '+(count?'btn-primary':'btn-outline');print.className='btn '+(saved.length&&!count?'btn-primary':'btn-outline');
     }catch(error){
       if(serial!==purchaseActionSerial||!box.isConnected)return;

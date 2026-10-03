@@ -60,6 +60,28 @@ class SavedHistoryTests(unittest.TestCase):
             book.close()
         self.assertEqual(before,self.database())
 
+    def test_amounts_and_filtered_print_keep_old_and_supplement_separate(self):
+        old_id = self.print_body()['document_ids'][0]
+        with server.db() as conn:
+            conn.execute("INSERT INTO batch_bk_approvals VALUES(999,?,'test','test')", (old_id,))
+        result = self.confirm(self.preview(self.body(reference='SUP-SECOND', qty=3)))
+        self.assertEqual(result.status_code, 200, result.get_json())
+        new_id = result.get_json()['documentId']
+        before = self.database()
+        body = dict(kind='saved-purchases', document_ids=[old_id, new_id],
+                    **{'from':'2026-08-01','to':'2026-08-31'})
+        preview = self.client.post('/api/documents/preview', json=body).get_json()
+        source = preview['purchase_source']
+        self.assertEqual(source['amount_total'], 500)
+        self.assertEqual({r['key']: r['amount'] for r in source['amount_breakdown']},
+                         {'order':200, 'supplement':300})
+        self.assertEqual(self.history().get_json()['amount_breakdown'], source['amount_breakdown'])
+        body['document_ids'] = [new_id]
+        filtered = self.client.post('/api/documents/preview', json=body).get_json()
+        self.assertEqual(filtered['purchase_source']['amount_total'], 300)
+        self.assertEqual(filtered['purchase_source']['amount_breakdown'][0]['document_ids'], [new_id])
+        self.assertEqual(before, self.database())
+
     def test_period_and_reversed_document_are_not_silently_reprinted(self):
         body=self.print_body()
         self.assertEqual([],self.history('2026-09-01','2026-09-30').get_json()['items'])

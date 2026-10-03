@@ -45,6 +45,20 @@ def saved_rows(conn, start, end, ids):
         ORDER BY l.document_date,l.document_id,l.id''',(*sorted(set(ids)),start,end))]
 
 
+def amount_breakdown(docs):
+    groups = {
+        'order': dict(key='order', label='Bảng kê cũ từ đơn hàng', document_ids=[], amount=Decimal(0)),
+        'supplement': dict(key='supplement', label='Bảng bổ sung', document_ids=[], amount=Decimal(0)),
+        'import': dict(key='import', label='Bảng nhập Excel khác', document_ids=[], amount=Decimal(0)),
+    }
+    for doc in docs:
+        key = 'order' if doc['origin'] == 'order' else (
+            'supplement' if doc['filename'].startswith('BK_BO_SUNG_') else 'import')
+        groups[key]['document_ids'].append(doc['id'])
+        groups[key]['amount'] += Decimal(str(doc['amount_total']))
+    return [{**group, 'amount': float(group['amount'])} for group in groups.values() if group['document_ids']]
+
+
 def workbook(conn, body, ctx):
     try:
         from .purchase_summary_export import build_purchase_summary_workbook, _key, _resolved_identity
@@ -139,10 +153,13 @@ def print_source_status(conn, body):
     if kind=='saved-purchases':
         rows=saved_rows(conn,body.get('from'),body.get('to'),body.get('document_ids'))
         chosen=set(body.get('document_ids',[]))
-        old=any(r['origin']=='order' and r['id'] in chosen for r in documents(conn,body.get('from'),body.get('to')))
+        selected_docs=[r for r in documents(conn,body.get('from'),body.get('to')) if r['id'] in chosen]
+        old=any(r['origin']=='order' for r in selected_docs)
         return dict(source='saved',title='Bảng đã ghi kho — in lại',
             message=('Có dữ liệu cũ đã ghi kho từ duyệt đơn; đây không phải xác nhận đã lập bảng bổ sung cho ngày này. ' if old else '')+'Đang in lại các dòng mua đã xác nhận nhập kho. Xem, tải và in không ghi thêm kho; không cần xác nhận nhập kho lần nữa.',
-            from_date=min(r['document_date'] for r in rows),to_date=max(r['document_date'] for r in rows),items=[])
+            from_date=min(r['document_date'] for r in rows),to_date=max(r['document_date'] for r in rows),items=[],
+            amount_breakdown=amount_breakdown(selected_docs),
+            amount_total=float(sum((Decimal(str(r['amount'])) for r in rows),Decimal(0))))
     if kind!='purchases':return None
     try:
         from .batch_bk_approval import linked_document
