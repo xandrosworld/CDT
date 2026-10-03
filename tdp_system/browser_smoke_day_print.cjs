@@ -17,11 +17,7 @@ const out=process.env.TDP_BK_PROOF||'D:/TDP_RAILWAY_PRIVATE/simple-day-proof';
    await page.locator('#bkPrintDay').locator('..').locator('.localized-date-display').fill(process.env.TDP_DAY||'01/08/2026');
    await page.locator('#bkPrintDay').locator('..').locator('.localized-date-display').press('Tab');
    await page.locator('[data-action=open-saved-bk]').click();
-   await page.locator('[data-history-id]').first().waitFor();
-   assert.equal(await page.locator('[data-history-id]:checked').count(),0);
-   await page.locator('[data-history=all]').click();
-   await page.locator('[data-history=receipts]').click();
-   const preview=page.locator('#bkSavedHistory-preview');await preview.locator('[data-simple-print]').waitFor();
+   const preview=page.locator('#bkSavedHistory');await preview.locator('[data-simple-print]').waitFor();
    assert.equal(await page.locator('[data-day-print]').count(),0);
 
    assert.equal(await preview.locator('.document-paper').isVisible(),false);

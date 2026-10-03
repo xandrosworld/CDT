@@ -35,13 +35,6 @@
         selection.innerHTML='<button class="btn btn-outline" data-history="all">Chọn tất cả bảng kê</button><button class="btn btn-outline" data-history="none">Bỏ chọn tất cả</button><span>Có thể chọn nhiều ngày để in cùng một lần. Ngày trên bản in theo các dòng mua đã chọn.</span>';
         host.querySelector('.table-wrap').before(selection);
       }
-      var explanation=document.createElement('div');explanation.className='document-note tag-warn';
-      explanation.innerHTML='<strong>Đây là lịch sử để in lại, không phải danh sách hàng còn âm.</strong><p>Bảng cũ từ duyệt đơn đã được lưu theo quy trình trước đây. Bảng bổ sung / nhập Excel là các bảng đã xác nhận ghi kho riêng. Có các bảng này không có nghĩa đã đủ hàng mua hoặc đã hết tồn âm. Không lập lại các dòng đã ghi kho.</p>';
-      if(options.onSupplement){
-        var supplement=document.createElement('button');supplement.className='btn btn-primary';supplement.dataset.historySupplement='';
-        supplement.textContent='Kiểm tra / lập bảng kê bổ sung';supplement.onclick=options.onSupplement;explanation.appendChild(supplement);
-      }
-      host.querySelector('.card-body').prepend(explanation);
       function selected(){return Array.from(host.querySelectorAll('[data-history-id]:checked')).map(function(el){return Number(el.dataset.historyId);});}
       document.getElementById(previewId).classList.add('bk-history-preview');
       function counts(){var ids=selected(),count=host.querySelector('.bk-history-count');if(count)count.textContent='Đã chọn '+ids.length+'/'+items.length+' bảng kê · '+items.filter(function(r){return ids.includes(r.id);}).reduce(function(t,r){return t+Number(r.amount_total);},0).toLocaleString('vi-VN')+' đ';}

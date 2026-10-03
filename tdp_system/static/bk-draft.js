@@ -35,6 +35,7 @@
       '<button class="btn btn-primary" data-bk="preview">Xem bảng kê tổng & biên nhận</button></div>' +
       '<p class="muted bk-draft-print-help">Thiếu thông tin vẫn tải Excel để điền tiếp. Để in bộ bảng kê, cần đủ ngày mua thực tế, số bảng kê, người bán trong danh mục, lượng và giá. Hạn mức cộng chung 5.000.000đ/người/ngày với các bảng kê đã ghi kho.</p>' +
       '<div class="bk-draft-preview"></div>';
+    if(options.monthlyOnly){['from','to'].forEach(function(name){dialog.querySelector('[name='+name+']').readOnly=true;});}
     document.body.appendChild(dialog); dialog.showModal();
     function fitPapers() {
       dialog.querySelectorAll('.bk-draft-paper .document-sheet').forEach(function(table){
