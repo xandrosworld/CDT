@@ -789,6 +789,7 @@
   async function api(url, options) {
     var response,controller,timer;
     options=Object.assign({},options||{});
+    var syncWaitStarted=options._syncWaitStarted||Date.now();delete options._syncWaitStarted;
     if((url.indexOf('/api/outgoing-invoices/')===0||url==='/api/minvoice/series')&&!options.signal){
       controller=new AbortController();options.signal=controller.signal;
       timer=setTimeout(function(){controller.abort();},options.method&&options.method!=='GET'?180000:60000);
@@ -802,6 +803,12 @@
       throw new Error(friendlyErrorMessage(error && error.message));
     } finally {if(timer)clearTimeout(timer);}
     if (!response.ok || (payload && payload.ok === false)) {
+      if(payload && payload.code==='source_refresh_busy' &&
+          ['/api/outgoing-invoices/prepare','/api/outgoing-invoices/sync-issued'].includes(url) && Date.now()-syncWaitStarted<600000){
+        if(controller)delete options.signal;
+        await new Promise(function(resolve){setTimeout(resolve,1500);});
+        return api(url,Object.assign({},options,{_syncWaitStarted:syncWaitStarted}));
+      }
       var error = new Error(friendlyErrorMessage(payload && payload.error, response.status));
       error.status = response.status;
       error.payload = payload;
@@ -3471,6 +3478,8 @@
 
   async function prepareSelectedInvoices(invoiceDate) {
     state.invoiceExportDiagnostic=null;
+    state.orderInvoiceExportResult='Đang cập nhật hóa đơn đã ký và kiểm tra tồn. Nếu có lượt cập nhật khác, hệ thống sẽ chờ rồi tự tiếp tục. Chị không cần bấm lại; lựa chọn đã lưu được giữ nguyên.';
+    renderDocuments();
     var body=Object.assign({},orderInvoiceScope(),{invoice_date:invoiceDate||(activePreparedInvoice()||{}).invoice_date||currentWorkDate(),review_confirmed:true,
       review_rows:((state.unissued&&state.unissued.line_choices)||[]).map(function(r){return {order_id:r.order_id,token:r.token};})});
     try {

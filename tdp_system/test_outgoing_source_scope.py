@@ -157,6 +157,20 @@ class SourceScopeTests(unittest.TestCase):
         self.assertIn('OTHER',str(report['warnings']))
         self.assertEqual(self.request().status_code,409)
 
+    def test_prepare_sync_busy_is_retryable_without_creating_drafts(self):
+        from .outgoing_source_refresh import SourceRefreshBusy
+        self.seed(stock=12)
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('minvoice_active_connection','fixture')")
+        with patch('tdp_system.outgoing_source_refresh.refresh_sources',side_effect=SourceRefreshBusy('Updating')):
+            response=self.client.post('/api/outgoing-invoices/prepare',json={
+                'scope':'approved_range','from':'2026-09-01','to':'2026-09-03',
+                'contractor':'NT-A','invoice_date':'2026-09-03','review_confirmed':True})
+        self.assertEqual(response.status_code,409,response.json)
+        self.assertEqual(response.json['code'],'source_refresh_busy')
+        with server.db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM outgoing_invoice_drafts').fetchone()[0],0)
+
     def test_signed_other_buyer_hold_is_settled_before_shared_stock_export(self):
         self.seed(stock=12)
         self.assertEqual(self.request().status_code,200)

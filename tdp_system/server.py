@@ -4733,7 +4733,7 @@ def api_sync_issued_orders():
         end=max(requested_end,business_today())
         return jsonify(ok=True,**refresh_sources(db,create_minvoice_client,now_iso,start,end))
     except (ValueError,MinvoiceError) as exc:
-        return jsonify(ok=False,error='Chưa cập nhật đủ hóa đơn đã ký; chưa được xuất file mới. '+str(exc)),409
+        return jsonify(ok=False,error='Chưa cập nhật đủ hóa đơn đã ký; chưa được xuất file mới. '+str(exc),code=getattr(exc,'code','issued_sync_required')),409
 
 
 @app.get('/api/outgoing-invoices/source-scopes')
@@ -4806,7 +4806,7 @@ def api_export_order_invoices():
             try:
                 refresh_sources(db,create_minvoice_client,now_iso,sync_start,max(end,business_today()))
             except (ValueError,MinvoiceError) as exc:
-                raise InvoiceTaxExportError('Chưa cập nhật đủ hóa đơn đã ký từ M-Invoice; chưa tạo file để tránh xuất trùng. '+str(exc),code='issued_sync_required') from exc
+                raise InvoiceTaxExportError('Chưa cập nhật đủ hóa đơn đã ký từ M-Invoice; chưa tạo file để tránh xuất trùng. '+str(exc),code=getattr(exc,'code','issued_sync_required')) from exc
         output = io.BytesIO()
         pending, selected_orders, blocked = [], [], []
         with db() as conn:

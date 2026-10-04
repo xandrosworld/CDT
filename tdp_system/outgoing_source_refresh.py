@@ -2,8 +2,15 @@
 import threading
 import time
 import json
+import copy
 
 REFRESH_LOCK = threading.RLock()
+REFRESH_WAIT_SECONDS = 45
+_LAST_REFRESH = None
+
+
+class SourceRefreshBusy(ValueError):
+    code = 'source_refresh_busy'
 
 
 class SourceSnapshot:
@@ -68,10 +75,22 @@ except ImportError:
 
 
 def refresh_sources(db_factory, client_factory, now_iso, start, end):
-    if not REFRESH_LOCK.acquire(timeout=3):
-        raise ValueError('Đang có lượt cập nhật M-Invoice khác. Chờ lượt đó hoàn tất rồi bấm lại “4. Kiểm tra tồn và tạo file”; chưa gửi thêm bản nháp.')
+    global _LAST_REFRESH
+    requested_at = time.monotonic()
+    with db_factory() as conn:
+        database = tuple(tuple(r) for r in conn.execute('PRAGMA database_list'))
+    if not REFRESH_LOCK.acquire(timeout=REFRESH_WAIT_SECONDS):
+        raise SourceRefreshBusy('Đang cập nhật hóa đơn đã ký từ M-Invoice. Hệ thống đang chờ để tự tiếp tục; lựa chọn đã lưu được giữ nguyên.')
     try:
-        return _refresh_sources(db_factory, client_factory, now_iso, start, end)
+        previous = _LAST_REFRESH
+        if (previous and previous['database'] == database and previous['finished'] > requested_at
+                and previous['result'].get('from','9999') <= start
+                and previous['result'].get('to','') >= end):
+            return copy.deepcopy(previous['result'])
+        _LAST_REFRESH = None
+        result = _refresh_sources(db_factory, client_factory, now_iso, start, end)
+        _LAST_REFRESH = {'database':database,'finished':time.monotonic(),'result':copy.deepcopy(result)}
+        return result
     finally:
         REFRESH_LOCK.release()
 
