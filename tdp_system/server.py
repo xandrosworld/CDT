@@ -4658,7 +4658,11 @@ def api_outgoing_unissued():
                     from .outgoing_waiting import refresh_waiting
                 except ImportError:
                     from outgoing_waiting import refresh_waiting
-                refreshed=refresh_waiting(conn,now_iso())
+                refresh_order_ids={r[0] for r in conn.execute('''SELECT o.id FROM orders o
+                    JOIN batches b ON b.id=o.batch_id WHERE b.status='approved'
+                    AND o.work_date BETWEEN ? AND ? AND (?='' OR o.contractor=?)''',
+                    (start or '0001-01-01',cutoff,party,party))}
+                refreshed=refresh_waiting(conn,now_iso(),contractor=party,order_ids=refresh_order_ids)
             payload=unissued_payload(conn,cutoff,party,respect_export_choices=True,start=start)
             if request.path.endswith(('unissued-template.zip','unissued.xlsx')) and payload.get('queue_archived_order_rows') and not payload['details'] and not payload['skipped_details']:
                 raise ValueError('Không còn phần chưa xuất để tải trong phạm vi này. Phần cũ đã được bỏ khỏi chờ xuất; bấm “Bỏ phần cũ / Khôi phục” nếu cần đưa lại.')
