@@ -4664,6 +4664,11 @@ def api_outgoing_unissued():
                     (start or '0001-01-01',cutoff,party,party))}
                 refreshed=refresh_waiting(conn,now_iso(),contractor=party,order_ids=refresh_order_ids)
             payload=unissued_payload(conn,cutoff,party,respect_export_choices=True,start=start)
+            try:
+                from .outgoing_export_receipts import annotate
+            except ImportError:
+                from outgoing_export_receipts import annotate
+            payload=annotate(conn,payload)
             if request.path.endswith(('unissued-template.zip','unissued.xlsx')) and payload.get('queue_archived_order_rows') and not payload['details'] and not payload['skipped_details']:
                 raise ValueError('Không còn phần chưa xuất để tải trong phạm vi này. Phần cũ đã được bỏ khỏi chờ xuất; bấm “Bỏ phần cũ / Khôi phục” nếu cần đưa lại.')
             if request.path.endswith('unissued-template.zip') and portion!='waiting':
@@ -4981,6 +4986,13 @@ def api_export_order_invoices():
         output.seek(0)
         name = f'XUAT_BU_UP_M_INVOICE_DEN_{end}.zip' if catch_up else f'BANG_KE_UP_M_INVOICE_{start}_{end}.zip'
         response=send_file(output,as_attachment=True,download_name=name,mimetype='application/zip')
+        try:
+            from .outgoing_export_receipts import create as create_receipt
+        except ImportError:
+            from outgoing_export_receipts import create as create_receipt
+        with db() as receipt_conn:
+            receipt=create_receipt(receipt_conn,draft_ids,output.getvalue(),name,now_iso())
+        response.headers['X-Export-Receipt']=receipt
         response.headers['X-Invoice-Files']=str(len(draft_ids))
         response.headers['X-Pending-Order-Lines']=str(len(pending))
         response.headers['X-Blocked-Contractors']=str(len(blocked))
@@ -5056,13 +5068,26 @@ def api_export(kind, batch_id):
                         raise InvoiceTaxExportError('Chưa cập nhật đủ hóa đơn đã ký. '+str(exc),code='issued_sync_required') from exc
                 conn.execute('BEGIN IMMEDIATE')
                 payload = export_invoices_zip(conn, batch, orders)
+                try:
+                    from .outgoing_export_receipts import create as create_receipt
+                    from .outgoing_contractors import excluded_codes
+                except ImportError:
+                    from outgoing_export_receipts import create as create_receipt
+                    from outgoing_contractors import excluded_codes
+                excluded=excluded_codes(conn)
+                ids=[r['id'] for r in conn.execute("""SELECT id,contractor FROM outgoing_invoice_drafts
+                    WHERE batch_id=? AND status='draft' AND COALESCE(minvoice_status,'not_sent')
+                    NOT IN ('saved','saving','unknown')""",(batch['id'],)) if r['contractor'] not in excluded]
+                receipt=create_receipt(conn,ids,payload.getvalue(),f'File_tai_phan_mem_trung_gian_{stamp}.zip',now_iso())
             except InvoiceTaxExportError as error:
                 return jsonify({"ok": False, "error": str(error), "code": error.code}), error.status
-            return send_file(
+            response=send_file(
                 payload, as_attachment=True,
                 download_name=f"File_tai_phan_mem_trung_gian_{stamp}.zip",
                 mimetype="application/zip",
             )
+            response.headers['X-Export-Receipt']=receipt
+            return response
         return jsonify({"ok": False, "error": "Loại file không hợp lệ"}), 404
 
 
@@ -5842,6 +5867,11 @@ try:
 except ImportError:
     from outgoing_download_archive import register_routes as register_download_archive
 register_download_archive(app, globals())
+try:
+    from .outgoing_export_receipts import register_routes as register_export_receipts
+except ImportError:
+    from outgoing_export_receipts import register_routes as register_export_receipts
+register_export_receipts(app, globals())
 try:
     from .outgoing_queue_archive import register_routes as register_queue_archive
 except ImportError:

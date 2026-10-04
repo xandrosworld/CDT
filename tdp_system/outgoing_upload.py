@@ -408,8 +408,14 @@ def register(app, ctx):
                         metadata={'draft_ids':ids,'order_ids':[r['order_id'] for r in requested],
                                   'retired_draft_ids':[d['id'] for d in plan['old']],'sale_recorded_again':False})
                 data=export_archive(conn,ids,ctx['TAX_TEMPLATE_DIR'],ctx['invoice_tax_percent'],timestamp)
+                try:
+                    from .outgoing_export_receipts import create as create_receipt
+                except ImportError:
+                    from outgoing_export_receipts import create as create_receipt
+                receipt=create_receipt(conn,ids,data,f'BANG_KE_TU_FILE_{token[:8]}.zip',timestamp)
             response=send_file(BytesIO(data),as_attachment=True,download_name=f'BANG_KE_TU_FILE_{token[:8]}.zip',mimetype='application/zip')
             response.headers['X-Invoice-Files']=str(len(ids))
+            response.headers['X-Export-Receipt']=receipt
             response.headers['X-Waiting-Rows']=str(result['waiting_count'])
             return response
         except (ValueError,InvalidOperation) as exc:return jsonify(ok=False,error=str(exc)),409
