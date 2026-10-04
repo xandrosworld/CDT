@@ -56,12 +56,31 @@ def set_scope(conn, invoice_id, body, timestamp):
     return {'invoice_id':invoice_id,'scope':scope,'contractor':contractor}
 
 
-def scope_report(conn, start, end):
+def scope_report(conn, start, end, contractor='', *, order_scope=False):
+    relevant_ids = None
+    if order_scope:
+        try:
+            from .outgoing_unissued import issued_allocations, warning_applies_to_order
+            from .outgoing_contractors import selected_orders
+        except ImportError:
+            from outgoing_unissued import issued_allocations, warning_applies_to_order
+            from outgoing_contractors import selected_orders
+        orders = selected_orders(conn, [dict(r) for r in conn.execute('''SELECT o.* FROM orders o
+            JOIN batches b ON b.id=o.batch_id WHERE b.status='approved' AND o.work_date BETWEEN ? AND ?
+            AND (?='' OR o.contractor=?)''', (start,end,contractor,contractor))])
+        ids = {o['id'] for o in orders}
+        allocations = {}
+        _, warnings = issued_allocations(conn, source_order_allocations=allocations)
+        relevant_ids = {sid for sid, linked in allocations.items() if ids.intersection(linked)}
+        relevant_ids.update(w['invoice_id'] for w in warnings if w.get('invoice_id')
+                            and any(warning_applies_to_order(w,o) for o in orders))
+        start,end='0001-01-01','9999-12-31'
     profiles=defaultdict(list)
     for r in conn.execute("SELECT contractor,tax_code FROM outgoing_buyer_profiles WHERE TRIM(COALESCE(tax_code,''))!=''"):
         profiles[r['tax_code'].strip().upper()].append(r['contractor'])
     rows=[]
     for source in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND invoice_date BETWEEN ? AND ? ORDER BY invoice_date,id",(start,end)):
+        if relevant_ids is not None and source['id'] not in relevant_ids:continue
         if source['source_status_class']!='issued':continue
         party,error=resolve_scope(conn,source,profiles)
         rows.append({'id':source['id'],'number':source['invoice_series']+' / '+source['invoice_number'],

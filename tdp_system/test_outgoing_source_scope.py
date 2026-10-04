@@ -32,6 +32,55 @@ class SourceScopeTests(unittest.TestCase):
         with server.db() as c:
             return Fixture.add_posted_source(c,source='minvoice',qty=qty,product_code=code,invoice_date='2026-09-03',number='789')
 
+    def test_order_scoped_review_excludes_old_unknown_sources_but_keeps_later_settlement(self):
+        self.seed(stock=30);sid=self.source()
+        with server.db() as c:self.add_batch(c,'2026-10-01',[{'qty':3}])
+        url='/api/outgoing-invoices/source-scopes?order_scope=1&scope=approved_range&contractor=NT-A'
+        october=self.client.get(url+'&from=2026-10-01&to=2026-10-31')
+        self.assertEqual(october.status_code,200,october.json)
+        self.assertEqual(october.json['items'],[])
+        september=self.client.get(url+'&from=2026-09-01&to=2026-09-02')
+        self.assertEqual([r['id'] for r in september.json['items']],[sid])
+        self.assign(sid)
+        self.assertEqual([r['id'] for r in self.client.get(url+'&from=2026-09-01&to=2026-09-02').json['items']],[sid])
+        other=self.client.get(url.replace('NT-A','NT-B')+'&from=2026-09-01&to=2026-09-02')
+        self.assertEqual(other.json['items'],[])
+
+    def test_new_period_export_preserves_old_drafts_with_unresolved_source(self):
+        self.seed(stock=30)
+        self.assertEqual(self.request().status_code,200)
+        with server.db() as c:
+            old=[tuple(r) for r in c.execute('SELECT * FROM outgoing_invoice_drafts')]
+            holds=[tuple(r) for r in c.execute("SELECT * FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT'")]
+            self.add_batch(c,'2026-10-01',[{'qty':3}])
+        self.source()
+        response=self.client.post('/api/export/order-invoices',json={'scope':'approved_range','from':'2026-10-01','to':'2026-10-31','contractor':'NT-A'})
+        self.assertEqual(response.status_code,200,response.get_json(silent=True))
+        period={'from':'2026-10-01','to':'2026-10-31','contractor':'NT-A'}
+        choices=self.client.get('/api/outgoing-invoices/unissued',query_string=period).json['line_choices']
+        prepared=self.client.post('/api/outgoing-invoices/prepare',json={**period,'scope':'approved_range',
+            'invoice_date':'2026-10-01','review_confirmed':True,
+            'review_rows':[{'order_id':r['order_id'],'token':r['token']} for r in choices]})
+        self.assertEqual(prepared.status_code,200,prepared.json)
+        self.assertFalse(prepared.json['remote_write'])
+        with server.db() as c:
+            self.assertEqual(old,[tuple(c.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?',(r[0],)).fetchone()) for r in old])
+            self.assertEqual(holds,[tuple(c.execute('SELECT * FROM inventory_transactions WHERE id=?',(r[0],)).fetchone()) for r in holds])
+
+    def test_mixed_period_draft_keeps_old_source_hold_and_is_not_rewritten(self):
+        from .outgoing_waiting import refresh_waiting
+        self.seed(stock=30)
+        with server.db() as c:
+            _,ids=self.add_batch(c,'2026-10-01',[{'qty':3}])
+        combined=self.client.post('/api/export/order-invoices',json={'from':'2026-09-01','to':'2026-10-01','contractor':'NT-A'})
+        self.assertEqual(combined.status_code,200,combined.get_json(silent=True))
+        self.source()
+        with server.db() as c:
+            before=c.serialize()
+            result=refresh_waiting(c,server.now_iso(),fill=False,contractor='NT-A',order_ids=set(ids))
+            self.assertTrue(result['warnings'])
+            self.assertEqual(before,c.serialize())
+
     def assign(self,sid,scope='orders',party='NT-A'):
         with server.db() as c:
             row=c.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(sid,)).fetchone()

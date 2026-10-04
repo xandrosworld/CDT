@@ -3,14 +3,14 @@ from collections import defaultdict
 from decimal import Decimal, ROUND_DOWN
 
 try:
-    from .outgoing_unissued import issued_allocations
+    from .outgoing_unissued import issued_allocations, warning_applies_to_order
     from .outgoing_consolidation import _write_draft, decimal, export_quantity
     from .outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from .stock_tax_policy import exempt_order_codes, is_kkknt
     from .outgoing_line_policy import unit_issues, draft_policy_rows
     from .outgoing_price_guard import same_price, price_message
 except ImportError:
-    from outgoing_unissued import issued_allocations
+    from outgoing_unissued import issued_allocations, warning_applies_to_order
     from outgoing_consolidation import _write_draft, decimal, export_quantity
     from outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_demand_orders, OutgoingReadinessError
     from stock_tax_policy import exempt_order_codes, is_kkknt
@@ -18,7 +18,7 @@ except ImportError:
     from outgoing_price_guard import same_price, price_message
 
 
-def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
+def refresh_waiting(conn, timestamp, *, fill=True, contractor='', order_ids=None):
     """Caller owns the transaction. Downloads/refreshes never mark invoices issued."""
     try:
         from .outgoing_contractors import excluded_codes, release_disabled_drafts, selected_orders
@@ -35,17 +35,32 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
     external={}
     issued,warnings=issued_allocations(conn,external_quantities=external)
     warnings=[w for w in warnings if w['contractor'] not in excluded and (not contractor or not w['contractor'] or w['contractor']==contractor)]
-    if warnings:
-        return {'created':[], 'replaced':[], 'warnings':warnings}
     orders=[dict(r) for r in conn.execute("""SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id
         WHERE b.status='approved' AND (?='' OR o.contractor=?) ORDER BY o.work_date,o.id""",(contractor,contractor))]
     orders=selected_orders(conn,orders)
+    if order_ids is not None:
+        order_ids=set(order_ids)
+        # Keep a mixed-date draft indivisible: include its complete lineage
+        # before checking warnings or changing any holds.
+        links=defaultdict(set)
+        for r in conn.execute('''SELECT a.draft_id,a.order_id FROM outgoing_order_allocations a
+            JOIN outgoing_invoice_drafts d ON d.id=a.draft_id WHERE d.status='draft'
+            AND (?='' OR d.contractor=?)''',(contractor,contractor)):
+            links[r['draft_id']].add(r['order_id'])
+        while True:
+            expanded=order_ids.union(*(ids for ids in links.values() if ids & order_ids))
+            if expanded==order_ids:break
+            order_ids=expanded
+        orders=[o for o in orders if o['id'] in order_ids]
+        warnings=[w for w in warnings if any(warning_applies_to_order(w,o) for o in orders)]
+    if warnings:
+        return {'created':[], 'replaced':[], 'warnings':warnings}
     need={r['id']:max(decimal(r['actual_delivered'])-decimal(r['customer_return_qty'])-decimal(issued.get(r['id'],0)),Decimal(0)) for r in orders}
     settled={r['order_id']:r['external_issued_qty'] for r in conn.execute('SELECT * FROM outgoing_waiting_settlements')}
-    if contractor:
-        order_ids={r['id'] for r in orders}
-        external={oid:q for oid,q in external.items() if oid in order_ids}
-        settled={oid:q for oid,q in settled.items() if oid in order_ids}
+    if contractor or order_ids is not None:
+        settlement_ids={r['id'] for r in orders}
+        external={oid:q for oid,q in external.items() if oid in settlement_ids}
+        settled={oid:q for oid,q in settled.items() if oid in settlement_ids}
     consume={oid:max(decimal(q)-decimal(settled.get(oid,0)),Decimal(0)) for oid,q in external.items()}
     old=[];replacement=[];created=[]
     # Remote saved drafts cannot be rewritten. Allocate their holds first.
@@ -53,6 +68,8 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor=''):
         AND (?='' OR contractor=?)
         ORDER BY CASE WHEN minvoice_status IN ('saved','saving','unknown') THEN 0 ELSE 1 END,id""",(contractor,contractor))]
     drafts=[r for r in drafts if r['contractor'] not in excluded]
+    if order_ids is not None:
+        drafts=[r for r in drafts if links[r['id']] & order_ids]
     try:from .outgoing_queue_archive import archived_order_ids
     except ImportError:from outgoing_queue_archive import archived_order_ids
     archived=archived_order_ids(conn)

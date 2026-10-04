@@ -4748,8 +4748,8 @@ def api_outgoing_source_scopes(invoice_id=None):
                 if not isinstance(body,dict):raise ValueError('Dữ liệu xác nhận không hợp lệ.')
                 conn.execute('BEGIN IMMEDIATE')
                 return jsonify(ok=True,**set_scope(conn,invoice_id,body,now_iso()))
-            start,end,_,_=resolve_scope(conn,request.args,valid_iso_date)
-            return jsonify(ok=True,items=scope_report(conn,start,end))
+            start,end,party,_=resolve_scope(conn,request.args,valid_iso_date)
+            return jsonify(ok=True,items=scope_report(conn,start,end,party,order_scope=request.args.get('order_scope')=='1'))
     except ValueError as exc:
         return jsonify(ok=False,error=str(exc)),409
     except sqlite3.OperationalError as exc:
@@ -4855,7 +4855,7 @@ def api_export_order_invoices():
             for party in parties:
                 conn.execute('SAVEPOINT reconcile_export_party')
                 try:
-                    refresh_waiting(conn,now_iso(),fill=False,contractor=party)
+                    refresh_waiting(conn,now_iso(),fill=False,contractor=party,order_ids={o['id'] for o in selected_orders if o['contractor']==party})
                 except (ValueError,InvoiceTaxExportError,OutgoingReadinessError):
                     conn.execute('ROLLBACK TO reconcile_export_party')
                     # The ordinary per-buyer handler below reports the error.
@@ -4866,7 +4866,7 @@ def api_export_order_invoices():
             def prepare_party(party):
                 conn.execute('SAVEPOINT export_contractor')
                 try:
-                    refreshed=refresh_waiting(conn,now_iso(),fill=False,contractor=party)
+                    refreshed=refresh_waiting(conn,now_iso(),fill=False,contractor=party,order_ids={o['id'] for o in selected_orders if o['contractor']==party})
                     if refreshed['warnings']:
                         raise InvoiceTaxExportError(refreshed['warnings'][0]['message'],code='issued_source_unresolved')
                     party_orders=[r for r in selected_orders if r['contractor']==party and r['id'] not in held_issues]

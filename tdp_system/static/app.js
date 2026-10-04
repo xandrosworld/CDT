@@ -3074,6 +3074,10 @@
     var f=orderInvoiceScope();return {from:f.from,to:f.to,contractor:f.contractor==='*'?'':f.contractor};
   }
 
+  function sourceReviewUrl(scope) {
+    return '/api/outgoing-invoices/source-scopes?'+new URLSearchParams(Object.assign({},scope||pendingScope(),{order_scope:'1',scope:'approved_range'})).toString();
+  }
+
   function invoiceReviewKey() {
     return JSON.stringify([pendingScope(),((state.unissued && state.unissued.line_choices)||[]).map(function(r){return [r.order_id,r.token];})]);
   }
@@ -3099,7 +3103,7 @@
         f=pendingScope();key=JSON.stringify(f);state.unissuedLoadKey=key;
       }
       var d=await api('/api/outgoing-invoices/unissued'+(refresh?'/refresh':'')+'?'+new URLSearchParams(f).toString(),refresh?{method:'POST'}:undefined);
-      var extra=await Promise.all([api('/api/outgoing-invoices/review-notes?'+new URLSearchParams(f).toString()),api('/api/outgoing-invoices/prepared?'+new URLSearchParams(f).toString()),api('/api/outgoing-invoices/source-scopes?scope=unissued')]);
+      var extra=await Promise.all([api('/api/outgoing-invoices/review-notes?'+new URLSearchParams(f).toString()),api('/api/outgoing-invoices/prepared?'+new URLSearchParams(f).toString()),api(sourceReviewUrl(f))]);
       var notes=extra[0],preparedList=extra[1];
       if(preparedList.items.length && !(state.minvoiceSeries||[]).length){state.minvoiceSeries=(await api('/api/minvoice/series')).items||[];}
       if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope())){
@@ -7015,9 +7019,9 @@
           state.invoiceReviewedKey='';
           orderExportButton.textContent='Đang cập nhật hóa đơn đã ký…';
           var syncedSource=await api('/api/outgoing-invoices/sync-issued',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
-          state.outgoingSourceReview=syncedSource.sources;
-          state.orderInvoiceExportResult='Đã cập nhật hóa đơn ký đến '+dateVN(syncedSource.to)+'. '+(syncedSource.waiting.warnings.length?'Còn hóa đơn cần đối chiếu bên dưới; chưa xuất lại phần cũ.':'Đã đối chiếu phần đã phát hành với đơn đã duyệt.');
           await loadUnissuedScope(false);
+          state.orderInvoiceExportResult='Đã cập nhật hóa đơn ký đến '+dateVN(syncedSource.to)+'. '+((state.unissued&&state.unissued.warnings||[]).length?'Còn hóa đơn liên quan đến phạm vi đang chọn cần đối chiếu bên dưới.':'Không có cảnh báo đối chiếu hóa đơn trong phạm vi đang chọn.');
+          renderDocuments();
           return;
         }
         var exported = await downloadFile('/api/export/order-invoices', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedOrderScope)});
@@ -7047,7 +7051,7 @@
         sourceForm.dataset.saved='true';
         if(state.sourceScopeEdits)delete state.sourceScopeEdits[sourceForm.dataset.id];
         var sourceDates=state.orderInvoiceFilters || {};
-        state.outgoingSourceReview=(await api('/api/outgoing-invoices/source-scopes?scope=unissued')).items;
+        state.outgoingSourceReview=(await api(sourceReviewUrl())).items;
         await loadUnissuedScope(true);
         showToast('Đã lưu phạm vi đối chiếu hóa đơn');
       } catch(error) {
@@ -7278,6 +7282,7 @@
       }
       state.orderInvoiceFilters=Object.fromEntries(new FormData(event.target.form).entries());
       try{localStorage.setItem('tdp.invoice.review.scope',JSON.stringify(state.orderInvoiceFilters));}catch(_){}
+      state.outgoingSourceReview=null;state.invoiceExportDiagnostic=null;
       state.unissued=null;state.unissuedLoadKey='';state.unissuedError='';state.unissuedExportResult='';state.orderInvoiceExportResult='';state.invoiceReviewedKey='';state.invoiceReviewPreview=null;state.invoiceReviewMessage='';state.invoiceNoteMessage='';state.invoiceReviewOpen=false;
       renderDocuments();return;
     }

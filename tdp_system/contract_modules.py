@@ -4892,12 +4892,12 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
         )
     }
     try:
-        from .outgoing_unissued import issued_allocations
+        from .outgoing_unissued import issued_allocations, warning_applies_to_order
     except ImportError:
-        from outgoing_unissued import issued_allocations
+        from outgoing_unissued import issued_allocations, warning_applies_to_order
     issued, source_warnings = issued_allocations(conn)
     selected_parties={item['contractor'] for item in orders}
-    source_warnings=[w for w in source_warnings if not w['contractor'] or w['contractor'] in selected_parties]
+    source_warnings=[w for w in source_warnings if any(warning_applies_to_order(w,o) for o in orders)]
     if source_warnings:
         raise OutgoingReadinessError(
             'Cần đối chiếu hóa đơn đã phát hành trước khi lập tiếp để tránh xuất trùng. '+source_warnings[0]['message'],
