@@ -64,6 +64,22 @@ class MissingDraftTests(unittest.TestCase):
         self.sync()
         self.assertEqual(self.c.execute('SELECT COUNT(*) FROM outgoing_missing_drafts').fetchone()[0],1)
 
+    def test_month_close_excludes_only_missing_unsigned_blocked_drafts(self):
+        from datetime import date
+        from .inventory_period_close import inventory_period_close_preview, init_inventory_period_close_schema
+        init_inventory_period_close_schema(self.c)
+        def count():
+            return inventory_period_close_preview(self.c, '2026-08', today=date(2026, 10, 4))['unposted_output_count']
+        before = count()
+        self.assertEqual(before, 2)
+        self.sync()
+        self.assertEqual(count(), before - 1)
+        # A source marker alone must not hide a numbered or active invoice.
+        self.c.execute("UPDATE outgoing_source_invoices SET invoice_number='999' WHERE id=?", (self.draft_id,))
+        self.assertEqual(count(), before)
+        self.c.execute("UPDATE outgoing_source_invoices SET invoice_number='',stock_status='ready' WHERE id=?", (self.draft_id,))
+        self.assertEqual(count(), before)
+
     def test_reappearing_draft_and_then_signed_document_are_restored(self):
         self.sync()
         self.rows.append(self.draft)

@@ -632,7 +632,7 @@ def build_purchase_summary_workbook(
             # unchanged. A batch number must never be labelled an invoice.
             printed_reference = ', '.join(re.sub(
                 r'^TDP-BATCH-(\d+)(-AFTER-\d+)?$',
-                r'TDP-BK-DON-HANG-\1\2', part, flags=re.I)
+                r'TDP-BK-DON-HANG-\1\2 (mã đơn)', part, flags=re.I)
                 for part in item['reference'].split(', '))
             values = (
                 _display_date(item["work_date"]),

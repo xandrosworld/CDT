@@ -63,7 +63,7 @@ class PurchaseSummaryExportTests(unittest.TestCase):
             date_from='2026-09-02', date_to='2026-09-02')
         try:
             self.assertEqual(set(book.active['J11'].value.split(', ')),
-                {'TDP-BK-DON-HANG-5', *references[1:]})
+                {'TDP-BK-DON-HANG-5 (mã đơn)', *references[1:]})
             self.assertEqual(book.active['I11'].value, 600)
             self.assertEqual([r['reference'] for r in rows], references)
         finally:
