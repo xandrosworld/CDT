@@ -86,7 +86,7 @@ class OutgoingUploadTests(unittest.TestCase):
         self.assertEqual(p['ready_count'],1,p)
         self.assertEqual(self.export(p['token']).status_code,200)
 
-    def test_stock_only_limits_kkknt_and_preserves_orders(self):
+    def test_stock_preview_allows_kkknt_negative_stock_and_preserves_orders(self):
         with server.db() as c:
             c.execute("UPDATE orders SET tax='KKKNT',actual_delivered=12,qty=12 WHERE id=?",(self.oids[0],))
             c.execute("UPDATE orders SET tax='KKKNT' WHERE id=?",(self.oids[1],))
@@ -94,13 +94,32 @@ class OutgoingUploadTests(unittest.TestCase):
         response=self.client.post('/api/outgoing-invoice-upload/stock-preview?to=2026-09-13&contractor=NT-A')
         self.assertEqual(200,response.status_code,response.json)
         plan=response.json
-        self.assertEqual(10,sum(r['ready_qty'] for r in plan['items']))
-        self.assertEqual(7,sum(r['waiting_qty'] for r in plan['items']))
+        self.assertEqual(17,sum(r['ready_qty'] for r in plan['items']))
+        self.assertEqual(0,sum(r['waiting_qty'] for r in plan['items']))
         self.assertEqual(before,self.business())
         exported=self.export(plan['token'])
         self.assertEqual(200,exported.status_code,exported.get_json(silent=True))
         self.assertEqual(before,self.business())
         self.assertEqual(200,self.export(plan['token']).status_code)
+
+    def test_stock_preview_kkknt_zero_and_negative_stock_do_not_bypass_vat_limit(self):
+        for opening in (0,-5):
+            with self.subTest(opening=opening):
+                self.setUp()
+                with server.db() as c:
+                    c.execute("UPDATE orders SET tax='KKKNT' WHERE id=?",(self.oids[0],))
+                    c.execute("UPDATE orders SET tax='8%' WHERE id=?",(self.oids[1],))
+                    c.execute("UPDATE inventory_transactions SET qty_in=?,qty_out=? WHERE source_type='OPENING'",(max(opening,0),max(-opening,0)))
+                before=self.business()
+                r=self.client.post('/api/outgoing-invoice-upload/stock-preview?to=2026-09-13&contractor=NT-A')
+                self.assertEqual(r.status_code,200,r.json)
+                rows={i['order_id']:i for i in r.json['items']}
+                self.assertEqual(rows[self.oids[0]]['ready_qty'],3)
+                self.assertEqual(rows[self.oids[1]]['ready_qty'],0)
+                exported=self.file_rows(self.export(r.json['token']))
+                self.assertEqual(sum(row[3] for row in exported),3)
+                self.assertTrue(all(row[9]==-2 for row in exported))
+                self.assertEqual(before,self.business())
 
     def workbook(self, edit=None):
         r=self.client.get('/api/outgoing-invoice-upload/template.xlsx?to=2026-09-13&contractor=NT-A')

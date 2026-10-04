@@ -226,12 +226,12 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
     for group,rows in ordered_groups:
         code=group[1];want=sum((min(decimal(r['qty']),held[r['id']]) for r in rows),Decimal(0))
         have=max(capacity.get(code,Decimal(0)),Decimal(0))
-        keep=export_quantity(want if not stock_only and (is_kkknt(group[3]) or code in exempt[group[0]]) else min(want,have),group[2],group[3])
+        keep=export_quantity(want if is_kkknt(group[3]) or (not stock_only and code in exempt[group[0]]) else min(want,have),group[2],group[3])
         planned[group]=keep;capacity[code]=have-keep
     for group,rows in ordered_groups:
         code=group[1];total=sum((decimal(r['qty']) for r in rows),Decimal(0))
         have=max(capacity.get(code,Decimal(0)),Decimal(0));keep=planned[group]
-        can=export_quantity(total if not stock_only and (is_kkknt(group[3]) or code in exempt[group[0]]) else min(total,keep+have),group[2],group[3])
+        can=export_quantity(total if is_kkknt(group[3]) or (not stock_only and code in exempt[group[0]]) else min(total,keep+have),group[2],group[3])
         planned[group]=can;capacity[code]=have-(can-keep)
     by_id = {i['order_id']:i for i in items}; ready = []
     for group, rows in ordered_groups:
@@ -252,7 +252,8 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
                 if money(kg*price)!=decimal(item['amount']):raise ValueError(f'{code}: cần đối chiếu kg để giữ đúng thành tiền.')
                 item['invoice_qty']=float(kg);item['invoice_price']=float(price)
             if item['waiting_qty']>1e-8:
-                item['reason']='Chưa đủ tồn khả dụng hoặc còn phần lẻ theo bước xuất; phần này tiếp tục chờ.'
+                item['reason']=('Còn phần lẻ chưa đủ bước xuất; không bị chặn do tồn kho.' if is_kkknt(group[3]) else
+                                'Chưa đủ tồn khả dụng hoặc còn phần lẻ theo bước xuất; phần này tiếp tục chờ.')
             if take>0: ready.append({**o,'qty':float(take)})
     # No eligible quantity means no draft or reservation is touched.
     fingerprint=digest({'items':items,'reconciliation_issues':list(reconciliation_issues.values()),'orders':[order_snapshot(sources[i['order_id']]) for i in items],
