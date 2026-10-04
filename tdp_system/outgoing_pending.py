@@ -14,6 +14,10 @@ except ImportError:
 
 def explain_pending(conn, orders, details, units, warnings, stock):
     """Keep readiness conservative: available but unallocated stock needs refresh."""
+    try:
+        from .outgoing_unissued import warning_applies_to_order
+    except ImportError:
+        from outgoing_unissued import warning_applies_to_order
     by_id = {o['id']: o for o in orders}
     known = {r['code'] for r in conn.execute('SELECT code FROM products')}
     exempt = {party: exempt_order_codes(conn, [o for o in orders if o['contractor'] == party])
@@ -39,7 +43,7 @@ def explain_pending(conn, orders, details, units, warnings, stock):
             continue
         o = by_id[r['order_id']]
         relevant = list(dict.fromkeys(w['message'] for w in warnings
-                        if not w['contractor'] or w['contractor'] == r['contractor']))
+                        if warning_applies_to_order(w, o)))
         reasons = relevant[:1]
         codes = ['source_review'] if relevant else []
         if len(relevant)>1:

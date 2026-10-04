@@ -14,7 +14,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 try:
     from .outgoing_contractors import assert_order_enabled, selected_orders
-    from .outgoing_unissued import issued_allocations
+    from .outgoing_unissued import issued_allocations, warning_applies_to_order
     from .outgoing_line_policy import unit_issues
     from .outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_draft_export_stock
     from .outgoing_consolidation import _write_draft, decimal, export_quantity, money
@@ -25,7 +25,7 @@ try:
     from .template_workbook import safe_workbook_bytes
 except ImportError:
     from outgoing_contractors import assert_order_enabled, selected_orders
-    from outgoing_unissued import issued_allocations
+    from outgoing_unissued import issued_allocations, warning_applies_to_order
     from outgoing_line_policy import unit_issues
     from outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_draft_export_stock
     from outgoing_consolidation import _write_draft, decimal, export_quantity, money
@@ -158,7 +158,7 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
     external = {}
     issued, warnings = issued_allocations(conn, external_quantities=external)
     weights = confirmed_weights(conn)
-    items = []; eligible = {}
+    items = []; eligible = {}; reconciliation_issues = {}
     for req in requests:
         oid = req['order_id']; o = sources.get(oid); v = req['values']
         if not o or o['batch_status'] != 'approved':
@@ -173,7 +173,10 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
         remaining = max(o['actual_delivered']-o['customer_return_qty']-issued.get(oid,0),0)
         if req['qty'] > remaining+1e-8:
             raise ValueError(f'Dòng đơn {oid}: còn {remaining:g} {o["unit"]} sau đối trừ hóa đơn đã ký; file đề nghị {req["qty"]:g}. Tải mẫu mới.')
-        reasons = [w['message'] for w in warnings if not w['contractor'] or w['contractor']==o['contractor']]
+        relevant = [w for w in warnings if warning_applies_to_order(w, o)]
+        for warning in relevant:
+            reconciliation_issues[(warning['contractor'], warning['message'])] = warning
+        reasons = ['Cần đối chiếu hóa đơn đã xuất. Bấm Xem lý do chung.'] if relevant else []
         units = unit_issues(conn,[o])
         if oid in units: reasons.append(units[oid]['message'])
         for issue in invoice_order_issues([o]): reasons.extend(issue['messages'])
@@ -184,7 +187,8 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
         item = {'order_id':oid,'contractor':o['contractor'],'date':o['work_date'],'kitchen':o['kitchen'],
             'product_code':o['product_code'],'invoice_name':name,'unit':o['unit'],'invoice_unit':o['invoice_unit'],
             'requested_qty':req['qty'],'remaining_qty':remaining,'ready_qty':0,'waiting_qty':req['qty'],
-            'invoice_qty':0,'invoice_price':0,'amount':0,'reason':' · '.join(dict.fromkeys(reasons))}
+            'invoice_qty':0,'invoice_price':0,'amount':0,'reason':' · '.join(dict.fromkeys(reasons)),
+            'needs_source_review':bool(relevant)}
         items.append(item)
         if not reasons: eligible[oid] = {**o,'order_id':oid,'qty':req['qty'],'_source_price':decimal(o['sell_price'] or 0)}
     ids = json.dumps(sorted(eligible))
@@ -251,18 +255,18 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
                 item['reason']='Chưa đủ tồn khả dụng hoặc còn phần lẻ theo bước xuất; phần này tiếp tục chờ.'
             if take>0: ready.append({**o,'qty':float(take)})
     # No eligible quantity means no draft or reservation is touched.
-    fingerprint=digest({'items':items,'orders':[order_snapshot(sources[i['order_id']]) for i in items],
+    fingerprint=digest({'items':items,'reconciliation_issues':list(reconciliation_issues.values()),'orders':[order_snapshot(sources[i['order_id']]) for i in items],
         'weights':{oid:weights[oid]['revision'] for oid in eligible if oid in weights},
         'old':old,'old_rows':all_old_rows,
         'stock':{code:stock.get(code) for code in {o['product_code'] for o in eligible.values()}}})
-    return {'items':items,'ready_rows':ready,'outside':outside,'old':old,'fingerprint':fingerprint,
+    return {'items':items,'reconciliation_issues':list(reconciliation_issues.values()),'ready_rows':ready,'outside':outside,'old':old,'fingerprint':fingerprint,
         'external':{oid:external.get(oid,0) for oid in eligible},
         'ready_count':sum(i['ready_qty']>1e-8 for i in items),'waiting_count':sum(i['waiting_qty']>1e-8 for i in items),
         'amount':sum(i['amount'] for i in items)}
 
 
 def public_plan(plan):
-    return {k:plan[k] for k in ('items','ready_count','waiting_count','amount')}
+    return {k:plan[k] for k in ('items','ready_count','waiting_count','amount','reconciliation_issues')}
 
 
 def create_plan_drafts(conn, plan, timestamp, tax_percent):

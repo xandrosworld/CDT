@@ -14,6 +14,16 @@ except ImportError:
     from outgoing_line_policy import unit_issues
 
 
+def warning_applies_to_order(warning, order):
+    if warning['contractor'] and warning['contractor'] != order['contractor']:
+        return False
+    # FIFO above never applies a source invoice to an order after its issue date.
+    # Only a verified, posted FIFO remainder has this bound. Unknown status,
+    # explicit allocation mismatches and remaps retain their conservative hold.
+    through = warning.get('order_date_through')
+    return not through or not order['work_date'] or order['work_date'] <= through
+
+
 def _identity(r,local=False):
     return (str(r['issued_invoice_series'] if local else r['invoice_series']).strip().upper(),
             str(r['issued_invoice_number'] if local else r['invoice_number']).strip(),
@@ -165,7 +175,10 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
                 if external_quantities is not None:external_quantities[o['id']]=external_quantities.get(o['id'],0)+take
                 if remaining<=1e-8:break
             if remaining>1e-8:
-                warnings.append({'contractor':party,'message':'Hóa đơn '+s['invoice_number']+': còn '+format(remaining,'.10g')+' '+line['unit']+' mã '+line['product_code']+' đã xuất chưa khớp đơn đã duyệt. Kiểm tra đúng mã hàng hoặc phạm vi đơn trước khi xuất tiếp.'})
+                warnings.append({'contractor':party,'code':'unmatched_posted_quantity',
+                    'invoice_id':s['id'],'invoice_number':s['invoice_number'],
+                    'invoice_date':s['invoice_date'],'order_date_through':s['invoice_date'],
+                    'message':'Hóa đơn '+s['invoice_number']+': còn '+format(remaining,'.10g')+' '+line['unit']+' mã '+line['product_code']+' đã xuất chưa khớp đơn đã duyệt. Kiểm tra đúng mã hàng hoặc phạm vi đơn trước khi xuất tiếp.'})
     return dict(quantities),warnings
 
 
@@ -247,7 +260,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
         done=issued.get(o['id'],0);left=max(q-done,0)
         r={'order_id':o['id'],'work_date':o['work_date'],'contractor':o['contractor'],'product_code':o['product_code'],
            'product_name':o['product_name'],'invoice_name':invoice_names.get(o['product_code'],o['product_name']),'unit':o['unit'],'approved_qty':q,'issued_qty':done,'drafted_qty':drafted.get(o['id'],0),'unissued_qty':left,'unit_price':o['sell_price'],
-           'ready_qty':min(ready.get(o['id'],0),left) if not any(not w['contractor'] or w['contractor']==o['contractor'] for w in warnings) else 0,
+           'ready_qty':min(ready.get(o['id'],0),left) if not any(warning_applies_to_order(w,o) for w in warnings) else 0,
            'tax':o['tax'],'invoice_nature':str(o.get('invoice_nature') or '1')}
         r['waiting_qty']=max(left-r['ready_qty'],0)
         r['pending_reason']=units[o['id']]['message'] if o['id'] in units else ''
@@ -295,7 +308,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
     totals=defaultdict(lambda:defaultdict(float))
     for r in grouped.values():
         for field in ('approved_qty','issued_qty','drafted_qty','unissued_qty','ready_qty','waiting_qty'):totals[r['unit'].strip().casefold()][field]+=r[field]
-    warnings=[w for w in warnings if not contractor or not w['contractor'] or w['contractor']==contractor]
+    warnings=[w for w in warnings if any(warning_applies_to_order(w,o) for o in orders)]
     try:
         from .outgoing_signed_stock_review import signed_stock_issues
     except ImportError:

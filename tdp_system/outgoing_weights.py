@@ -64,10 +64,10 @@ def _lock(conn, order_id):
 def workbench(conn, cutoff, contractor='', start=''):
     from_module = __package__
     if from_module:
-        from .outgoing_unissued import issued_allocations
+        from .outgoing_unissued import issued_allocations, warning_applies_to_order
         from .outgoing_contractors import excluded_codes, excluded_order_ids
     else:
-        from outgoing_unissued import issued_allocations
+        from outgoing_unissued import issued_allocations, warning_applies_to_order
         from outgoing_contractors import excluded_codes, excluded_order_ids
     issued, warnings = issued_allocations(conn)
     excluded=excluded_codes(conn)
@@ -99,7 +99,7 @@ def workbench(conn, cutoff, contractor='', start=''):
             reason = f'Đơn/kho ghi {row["stock_unit"]}, hóa đơn ghi {row["invoice_unit"]}. Cần xác nhận cách gọi/quy cách tương ứng trước khi đổi ĐVT hoặc số lượng.'
         elif lock:
             reason = f'Đã dùng trong dự thảo {lock[0]} hoặc hóa đơn. Cần đối chiếu file đã tải trước khi đổi kg.'
-        elif any(not w['contractor'] or w['contractor'] == row['contractor'] for w in warnings):
+        elif any(warning_applies_to_order(w,row) for w in warnings):
             reason = 'Cần cập nhật/đối chiếu hóa đơn đã ký để xác định đúng phần chưa xuất.'
         kg = float(dec(remaining)*dec(confirmed['actual_kg'])/dec(confirmed['base_qty'])) if confirmed else None
         amount = int((dec(remaining)*dec(row['sell_price'] or 0)).quantize(Decimal('1'), rounding=ROUND_HALF_UP))

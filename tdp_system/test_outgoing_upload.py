@@ -40,6 +40,36 @@ class OutgoingUploadTests(unittest.TestCase):
                 ['orders','batches','products','receivable_ledger_lines','payable_ledger_lines',
                  'invoice_inventory_ledger','outgoing_source_invoices','outgoing_source_invoice_items']}
 
+    def test_old_posted_remainder_holds_old_orders_but_not_later_orders(self):
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,legal_name,tax_code,address,updated_at) VALUES('NT-A','Test','0101234567','Test','2026-09-01')")
+            c.execute("INSERT INTO products(code,name,unit) VALUES('OTHER','Other','kg')")
+            sid=fixtures.OutgoingReadinessTests.add_posted_source(c,source='minvoice',number='839',invoice_date='2026-09-01',product_code='OTHER',qty=1)
+            c.execute("UPDATE outgoing_source_invoices SET buyer_tax_code='0101234567' WHERE id=?",(sid,))
+            fixtures.OutgoingReadinessTests.add_batch(c,'2026-09-02',[{'qty':2,'sell_price':20000}])
+        before=self.business()
+        mixed=self.client.post('/api/outgoing-invoice-upload/stock-preview?from=2026-09-01&to=2026-09-13&contractor=NT-A')
+        self.assertEqual(mixed.status_code,200,mixed.json)
+        old=[r for r in mixed.json['items'] if r['date']=='2026-09-01']
+        self.assertTrue(all(r['ready_qty']==0 and r['needs_source_review'] for r in old))
+        self.assertEqual(len(mixed.json['reconciliation_issues']),1)
+        self.assertTrue(all('Hóa đơn 839' not in r['reason'] for r in old))
+        new=self.client.post('/api/outgoing-invoice-upload/stock-preview?from=2026-09-02&to=2026-09-13&contractor=NT-A')
+        self.assertEqual(new.status_code,200,new.json)
+        self.assertEqual(new.json['ready_count'],1)
+        self.assertEqual(new.json['reconciliation_issues'],[])
+        self.assertEqual(before,self.business())
+        exported=self.export(new.json['token'])
+        self.assertEqual(exported.status_code,200,exported.get_json(silent=True))
+        self.assertEqual(before,self.business())
+
+    def test_unknown_date_warning_remains_blocking(self):
+        warning={'contractor':'NT-A','message':'Cần đối chiếu nguồn chưa xác định'}
+        with patch.object(outgoing_upload,'issued_allocations',return_value=({},[warning])):
+            p=self.preview().json
+        self.assertEqual(p['ready_count'],0)
+        self.assertEqual(p['reconciliation_issues'],[warning])
+
     def test_stock_only_limits_kkknt_and_preserves_orders(self):
         with server.db() as c:
             c.execute("UPDATE orders SET tax='KKKNT',actual_delivered=12,qty=12 WHERE id=?",(self.oids[0],))

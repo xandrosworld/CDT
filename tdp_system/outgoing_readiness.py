@@ -418,13 +418,13 @@ def validate_draft_export_stock(conn, draft_id, invoice_date=""):
     policy_rows=draft_policy_rows(conn,draft_id)
     # A legacy download or remote-draft action must not bypass reconciliation.
     try:
-        from .outgoing_unissued import issued_allocations
+        from .outgoing_unissued import issued_allocations, warning_applies_to_order
     except ImportError:
-        from outgoing_unissued import issued_allocations
+        from outgoing_unissued import issued_allocations, warning_applies_to_order
     external={}
     issued,warnings=issued_allocations(conn,external_quantities=external)
     parties={r['contractor'] for r in policy_rows}
-    relevant=[w for w in warnings if not w['contractor'] or w['contractor'] in parties]
+    relevant=[w for w in warnings if any(warning_applies_to_order(w,r) for r in policy_rows)]
     if relevant:
         raise OutgoingReadinessError(relevant[0]['message'],code='issued_source_unresolved')
     held_by_order={r['order_id']:r['qty'] for r in conn.execute("""SELECT a.order_id,SUM(a.qty) qty
