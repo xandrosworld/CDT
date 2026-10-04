@@ -175,7 +175,7 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
             raise ValueError(f'Dòng đơn {oid}: còn {remaining:g} {o["unit"]} sau đối trừ hóa đơn đã ký; file đề nghị {req["qty"]:g}. Tải mẫu mới.')
         relevant = [w for w in warnings if warning_applies_to_order(w, o)]
         for warning in relevant:
-            reconciliation_issues[(warning['contractor'], warning['message'])] = warning
+            reconciliation_issues[packed(warning)] = warning
         reasons = ['Cần đối chiếu hóa đơn đã xuất. Bấm Xem lý do chung.'] if relevant else []
         units = unit_issues(conn,[o])
         if oid in units: reasons.append(units[oid]['message'])

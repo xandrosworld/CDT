@@ -17,9 +17,12 @@ except ImportError:
 def warning_applies_to_order(warning, order):
     if warning['contractor'] and warning['contractor'] != order['contractor']:
         return False
-    # FIFO above never applies a source invoice to an order after its issue date.
-    # Only a verified, posted FIFO remainder has this bound. Unknown status,
-    # explicit allocation mismatches and remaps retain their conservative hold.
+    # Explicit order lineage takes precedence, including exceptional later orders.
+    order = dict(order)
+    if order.get('order_id', order.get('id')) in warning.get('order_ids', []):
+        return True
+    # FIFO never applies a source invoice to an order after its issue date.
+    # Missing date evidence remains blocking; never infer a date from a message.
     through = warning.get('order_date_through')
     return not through or not order['work_date'] or order['work_date'] <= through
 
@@ -70,6 +73,7 @@ def _stock_only_remap_sources(conn):
 
 def _remap_review_warning(invoice,contractor):
     return {'contractor':contractor,'code':'stock_remap_requires_order_review','invoice_id':invoice['id'],
+            'invoice_date':invoice['invoice_date'],'order_date_through':invoice['invoice_date'],
             'message':'Hóa đơn '+invoice['invoice_number']+' đã đổi mã trừ kho nội bộ. '
             'Cần đối chiếu mặt hàng trên hóa đơn với đơn đã bán trước khi trừ phần đã xuất; '
             'chưa tự đối trừ theo mã kho mới.'}
@@ -90,15 +94,17 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
     by_identity=defaultdict(list)
     for s in sources:by_identity[_identity(s)].append(s)
     for d in conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE status='issued' AND COALESCE(issued_invoice_date,invoice_date)<=?",(asof,)):
+        local_scope = {'order_date_through':d['issued_invoice_date'] or d['invoice_date'],
+                       'order_ids':[r[0] for r in conn.execute('SELECT order_id FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],))]}
         matching=by_identity.get(_identity(d,True),[])
         if matching and all(s['id'] in money_invoices for s in matching):
             continue
         if matching and any(s['source_status_class'] in ('cancelled','replaced','adjusted') for s in matching):
-            warnings.append({'contractor':d['contractor'],'message':'Hóa đơn '+str(d['issued_invoice_number'])+' đã thay đổi trạng thái trên M-Invoice; cần đối chiếu.'})
+            warnings.append({**local_scope,'contractor':d['contractor'],'message':'Hóa đơn '+str(d['issued_invoice_number'])+' đã thay đổi trạng thái trên M-Invoice; cần đối chiếu.'})
             linked.update(s['id'] for s in matching);continue
         # A confirmed local issue carries exact order lineage. Same invoice is not counted again.
         if matching:
-            warnings.extend(_remap_review_warning(s,d['contractor']) for s in matching if s['id'] in remapped_sources)
+            warnings.extend({**_remap_review_warning(s,d['contractor']),**local_scope} for s in matching if s['id'] in remapped_sources)
             local=defaultdict(float)
             for r in conn.execute('SELECT product_code,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
                 local[r['product_code']]+=r['qty']
@@ -127,7 +133,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
                     WHERE direction='output' AND status='posted' AND source_invoice_table='outgoing_source_invoices'
                     AND source_invoice_id=? GROUP BY product_code""",(s['id'],))}
                 if s['source_status_class']!='issued' or s['sync_status']!='synced' or set(expected_stock)!=set(posted) or any(abs(q-posted.get(code,0))>1e-8 for code,q in expected_stock.items()):
-                    warnings.append({'contractor':d['contractor'],'message':'Hóa đơn '+str(d['issued_invoice_number'])+' chưa khớp trạng thái/lượng giữa xác nhận và M-Invoice; số chưa xuất cần đối chiếu.'})
+                    warnings.append({**local_scope,'contractor':d['contractor'],'message':'Hóa đơn '+str(d['issued_invoice_number'])+' chưa khớp trạng thái/lượng giữa xác nhận và M-Invoice; số chưa xuất cần đối chiếu.'})
         linked.update(s['id'] for s in matching)
         for r in conn.execute('SELECT order_id,qty FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],)):
             quantities[r['order_id']]+=r['qty']
@@ -144,18 +150,20 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
     seen=set()
     for s in sources:
         if s['id'] in linked or s['invoice_date']<earliest or s['source_status_class'] in ('draft','cancelled','replaced'):continue
+        source_scope = {'invoice_id':s['id'],'invoice_date':s['invoice_date'],
+                        'invoice_number':s['invoice_number'],'order_date_through':s['invoice_date']}
         party,scope_error=resolve_scope(conn,s,profiles)
         if scope_error:
-            if s['source_status_class']=='issued':warnings.append({'contractor':'','message':scope_error})
+            if s['source_status_class']=='issued':warnings.append({**source_scope,'contractor':'','message':scope_error})
             continue
         if party is None:continue
         if not any(o['contractor']==party and o['work_date']<=s['invoice_date'] for o in orders):continue
         identity=_identity(s)
         if identity in seen:
-            warnings.append({'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' trùng định danh nguồn; cần đối chiếu.'});continue
+            warnings.append({**source_scope,'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' trùng định danh nguồn; cần đối chiếu.'});continue
         seen.add(identity)
         if s['source_status_class']!='issued' or s['sync_status']!='synced' or s['stock_status'] not in ('posted','not_inventory'):
-            warnings.append({'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' chưa đủ đối chiếu mã/lượng để trừ khỏi đơn.'});continue
+            warnings.append({**source_scope,'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' chưa đủ đối chiếu mã/lượng để trừ khỏi đơn.'});continue
         if s['id'] in remapped_sources:
             warnings.append(_remap_review_warning(s,party));continue
         # The posted stock ledger already includes reviewed conversions and reversals.

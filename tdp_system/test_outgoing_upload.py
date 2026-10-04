@@ -70,6 +70,22 @@ class OutgoingUploadTests(unittest.TestCase):
         self.assertEqual(p['ready_count'],0)
         self.assertEqual(p['reconciliation_issues'],[warning])
 
+    def test_warning_scope_preserves_explicit_later_order_links_and_earlier_holds(self):
+        from .outgoing_unissued import warning_applies_to_order
+        w={'contractor':'NT-A','order_date_through':'2026-09-30','order_ids':[10]}
+        self.assertTrue(warning_applies_to_order(w,{'id':10,'contractor':'NT-A','work_date':'2026-10-01'}))
+        self.assertFalse(warning_applies_to_order(w,{'id':11,'contractor':'NT-A','work_date':'2026-10-01'}))
+        self.assertTrue(warning_applies_to_order(w,{'id':11,'contractor':'NT-A','work_date':'2026-09-30'}))
+        self.assertTrue(warning_applies_to_order({**w,'contractor':''},{'id':11,'contractor':'NT-B','work_date':'2026-09-01'}))
+
+    def test_old_unknown_buyer_does_not_block_new_orders(self):
+        with server.db() as c:
+            fixtures.OutgoingReadinessTests.add_posted_source(c,source='minvoice',number='866',invoice_date='2026-09-01',qty=1)
+            fixtures.OutgoingReadinessTests.add_batch(c,'2026-09-02',[{'qty':2,'sell_price':20000}])
+        p=self.client.post('/api/outgoing-invoice-upload/stock-preview?from=2026-09-02&to=2026-09-13&contractor=NT-A').json
+        self.assertEqual(p['ready_count'],1,p)
+        self.assertEqual(self.export(p['token']).status_code,200)
+
     def test_stock_only_limits_kkknt_and_preserves_orders(self):
         with server.db() as c:
             c.execute("UPDATE orders SET tax='KKKNT',actual_delivered=12,qty=12 WHERE id=?",(self.oids[0],))
