@@ -157,6 +157,26 @@ class SourceScopeTests(unittest.TestCase):
         self.assertIn('OTHER',str(report['warnings']))
         self.assertEqual(self.request().status_code,409)
 
+    def test_signed_other_buyer_hold_is_settled_before_shared_stock_export(self):
+        self.seed(stock=12)
+        self.assertEqual(self.request().status_code,200)
+        sid=self.source(qty=10);self.assign(sid)
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO products(code,name,unit) VALUES('OTHER','Other','kg')")
+            self.add_batch(c,'2026-09-02',[{'qty':2,'contractor':'NT-B'}])
+        with server.db() as c:
+            other=Fixture.add_posted_source(c,source='minvoice',qty=3,product_code='OTHER',invoice_date='2026-09-03',number='790')
+        self.assign(other)
+        with server.db() as c:
+            ledger=[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')]
+        response=self.request(contractor='NT-B')
+        self.assertEqual(response.status_code,200,response.get_json(silent=True))
+        with server.db() as c:
+            self.assertEqual(ledger,[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')])
+            self.assertEqual(c.execute("SELECT SUM(t.qty_out) FROM inventory_transactions t JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id WHERE t.source_type='OUTGOING_DRAFT' AND t.status='reserved' AND d.contractor='NT-B'").fetchone()[0],2)
+            self.assertFalse(c.execute("SELECT 1 FROM inventory_transactions t JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id WHERE t.source_type='OUTGOING_DRAFT' AND t.status='reserved' AND d.contractor='NT-A'").fetchone())
+        self.assertFalse(self.report()['reconciliation_complete'])
+
     def test_known_other_contractor_conflict_does_not_block_selected_export(self):
         self.seed(stock=30)
         with server.db() as c:

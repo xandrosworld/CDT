@@ -18,7 +18,25 @@ except ImportError:
     from outgoing_price_guard import same_price, price_message
 
 
-def refresh_waiting(conn, timestamp, *, fill=True, contractor='', order_ids=None):
+def reconcile_shared_issued_holds(conn, orders, timestamp):
+    """Reconcile only editable holds sharing stock and proven newly issued orders."""
+    codes={o['product_code'] for o in orders}
+    external={}
+    issued_allocations(conn, external_quantities=external)
+    settled={r['order_id']:r['external_issued_qty'] for r in conn.execute(
+        'SELECT order_id,external_issued_qty FROM outgoing_waiting_settlements')}
+    candidates=defaultdict(set)
+    for row in conn.execute("""SELECT d.contractor,a.order_id,a.product_code
+        FROM outgoing_order_allocations a JOIN outgoing_invoice_drafts d ON d.id=a.draft_id
+        WHERE d.status='draft' AND COALESCE(d.minvoice_status,'not_sent')
+        NOT IN ('saved','saving','unknown')"""):
+        if row['product_code'] in codes and external.get(row['order_id'],0)>settled.get(row['order_id'],0)+1e-8:
+            candidates[row['contractor']].add(row['order_id'])
+    for party, ids in candidates.items():
+        refresh_waiting(conn,timestamp,fill=False,contractor=party,order_ids=ids,settle_shared=True)
+
+
+def refresh_waiting(conn, timestamp, *, fill=True, contractor='', order_ids=None, settle_shared=False):
     """Caller owns the transaction. Downloads/refreshes never mark invoices issued."""
     try:
         from .outgoing_contractors import excluded_codes, release_disabled_drafts, selected_orders
@@ -53,6 +71,14 @@ def refresh_waiting(conn, timestamp, *, fill=True, contractor='', order_ids=None
             order_ids=expanded
         orders=[o for o in orders if o['id'] in order_ids]
         warnings=[w for w in warnings if any(warning_applies_to_order(w,o) for o in orders)]
+    if settle_shared:
+        if fill or order_ids is None:
+            raise ValueError('Shared settlement requires explicit orders and cannot add quantities')
+        # This only reduces existing holds using exact issued allocations. An
+        # unmatched DIFFERENT code still blocks new exports for that buyer,
+        # but must not prevent settling a proven line in another tax draft.
+        scope_codes={o['product_code'] for o in orders}
+        warnings=[w for w in warnings if not w.get('product_code') or w['product_code'] in scope_codes]
     if warnings:
         return {'created':[], 'replaced':[], 'warnings':warnings}
     need={r['id']:max(decimal(r['actual_delivered'])-decimal(r['customer_return_qty'])-decimal(issued.get(r['id'],0)),Decimal(0)) for r in orders}

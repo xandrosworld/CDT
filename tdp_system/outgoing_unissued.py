@@ -184,6 +184,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
                 if remaining<=1e-8:break
             if remaining>1e-8:
                 warnings.append({'contractor':party,'code':'unmatched_posted_quantity',
+                    'product_code':line['product_code'],
                     'invoice_id':s['id'],'invoice_number':s['invoice_number'],
                     'invoice_date':s['invoice_date'],'order_date_through':s['invoice_date'],
                     'message':'Hóa đơn '+s['invoice_number']+': còn '+format(remaining,'.10g')+' '+line['unit']+' mã '+line['product_code']+' đã xuất chưa khớp đơn đã duyệt. Kiểm tra đúng mã hàng hoặc phạm vi đơn trước khi xuất tiếp.'})

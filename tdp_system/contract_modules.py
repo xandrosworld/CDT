@@ -4819,6 +4819,14 @@ def create_partial_outgoing_drafts(conn, batch_id: int, now_iso, *, contractor_f
         raise ValueError("Phiên không còn lượng thực giao dương để lập hóa đơn")
     validate_demand_orders(conn, orders)
 
+    # A different buyer's already signed invoice may still have an editable
+    # hold. Reconcile its proven issued quantities before budgeting shared stock.
+    try:
+        from .outgoing_waiting import reconcile_shared_issued_holds
+    except ImportError:
+        from outgoing_waiting import reconcile_shared_issued_holds
+    reconcile_shared_issued_holds(conn, orders, now_iso())
+
     replaceable = [dict(row) for row in conn.execute(
         """SELECT * FROM outgoing_invoice_drafts
            WHERE batch_id=? AND status='draft' AND (? = '' OR contractor=?)
