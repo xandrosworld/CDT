@@ -129,6 +129,13 @@ CREATE TABLE IF NOT EXISTS outgoing_source_order_scopes (
     note TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS outgoing_source_order_periods (
+    invoice_id INTEGER PRIMARY KEY REFERENCES outgoing_source_invoices(id) ON DELETE CASCADE,
+    date_from TEXT NOT NULL,
+    date_to TEXT NOT NULL,
+    identity_snapshot TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS outgoing_source_invoice_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_id INTEGER NOT NULL REFERENCES outgoing_source_invoices(id) ON DELETE CASCADE,

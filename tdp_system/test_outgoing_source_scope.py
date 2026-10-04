@@ -157,6 +157,46 @@ class SourceScopeTests(unittest.TestCase):
         self.assertIn('OTHER',str(report['warnings']))
         self.assertEqual(self.request().status_code,409)
 
+    def test_confirmed_order_period_does_not_consume_previous_month(self):
+        from .outgoing_unissued import issued_allocations,warning_applies_to_order
+        self.seed(stock=30)
+        with server.db() as c:
+            _,ids=self.add_batch(c,'2026-10-01',[{'qty':4}])
+            sid=Fixture.add_posted_source(c,source='minvoice',qty=4,invoice_date='2026-10-04',number='867')
+            source=c.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(sid,)).fetchone()
+            ledger=[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')]
+            set_scope(c,sid,{'token':review_token(source),'scope':'orders','contractor':'NT-A',
+                'date_from':'2026-10-01','date_to':'2026-10-31','note':'Customer confirmed October'},server.now_iso())
+            quantities,warnings=issued_allocations(c)
+            self.assertEqual(quantities,{ids[0]:4})
+            self.assertFalse(warnings)
+            self.assertEqual(ledger,[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')])
+            warning={'contractor':'NT-A','order_date_from':'2026-10-01','order_date_through':'2026-10-04'}
+            self.assertFalse(warning_applies_to_order(warning,{'id':1,'contractor':'NT-A','work_date':'2026-09-30'}))
+            with self.assertRaises(ValueError):
+                set_scope(c,sid,{'token':review_token(source),'scope':'orders','contractor':'NT-A',
+                    'date_from':'2026-10-31','date_to':'2026-10-01','note':'Invalid'},server.now_iso())
+
+    def test_unchanged_excel_invoice_uses_unique_export_lineage_only(self):
+        from .outgoing_source_scope import order_period
+        self.seed(stock=30)
+        with server.db() as c:
+            batch,ids=self.add_batch(c,'2026-10-01',[{'qty':4}])
+        self.assertEqual(self.client.post(f'/api/outgoing-invoices/draft/{batch}').status_code,200)
+        with server.db() as c:
+            draft=c.execute('SELECT * FROM outgoing_invoice_drafts WHERE batch_id=?',(batch,)).fetchone()
+            sid=Fixture.add_posted_source(c,source='minvoice',qty=4,invoice_date='2026-10-04',number='867')
+            c.execute('UPDATE outgoing_source_invoices SET subtotal=?,total_amount=? WHERE id=?',
+                      (draft['subtotal'],draft['total_amount'],sid))
+            source=c.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(sid,)).fetchone()
+            set_scope(c,sid,{'token':review_token(source),'scope':'orders','contractor':'NT-A','note':'Known buyer'},server.now_iso())
+            c.execute('''INSERT INTO outgoing_source_invoice_items
+                (invoice_id,line_index,source_item_code,source_item_name,source_unit,qty,unit_price,amount,tax_rate,source_nature)
+                VALUES(?,1,'HH-01','Name','kg',4,20,80,'0%','1')''',(sid,))
+            self.assertEqual(order_period(c,source),('2026-10-01','2026-10-01'))
+            c.execute('UPDATE outgoing_source_invoice_items SET qty=3 WHERE invoice_id=?',(sid,))
+            self.assertEqual(order_period(c,source),('',''))
+
     def test_prepare_sync_busy_is_retryable_without_creating_drafts(self):
         from .outgoing_source_refresh import SourceRefreshBusy
         self.seed(stock=12)

@@ -3546,10 +3546,14 @@
       var draft=(state.sourceScopeEdits||{})[r.id];
       var choice=draft?draft.choice:r.scope==='outside'?'outside':r.scope==='orders'?r.contractor:'';
       var status=r.scope==='outside'?'Đơn riêng · không trừ đơn đã duyệt':r.scope==='orders'?'Trừ đơn của '+r.contractor:'Chưa xác định đơn liên quan';
+      if(r.date_from)status+=' · Ngày đơn '+dateVN(r.date_from)+' – '+dateVN(r.date_to);
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
-        '<details'+(r.scope==='unresolved'?' open':'')+'><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Sửa phạm vi đối chiếu')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
+        '<details'+(r.scope==='unresolved'||r.error?' open':'')+'><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Sửa phạm vi đối chiếu')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
         '<label>Hóa đơn này thuộc<select name="choice" required><option value="">Chọn đúng nguồn đơn</option><option value="outside"'+(choice==='outside'?' selected':'')+'>Đơn riêng, chưa đưa vào phần mềm</option>'+state.data.master.contractors.map(function(c){return '<option value="'+esc(c.code)+'"'+(choice===c.code?' selected':'')+'>Đơn đã duyệt · '+esc(c.code)+'</option>';}).join('')+'</select></label>'+
+        '<label>Từ ngày đơn<input type="date" name="date_from" value="'+esc(draft?draft.date_from||'':r.date_from||'')+'"></label>'+
+        '<label>Đến ngày đơn<input type="date" name="date_to" value="'+esc(draft?draft.date_to||'':r.date_to||'')+'"></label>'+
+        '<p>Nhập cả hai ngày để chỉ đối trừ đơn trong khoảng đã xác nhận. Đổi bộ lọc xem bảng không tự đổi nguồn của hóa đơn.</p>'+
         '<label>Lý do xác nhận<input name="note" required value="'+esc(draft&&draft.note||'')+'" placeholder="Đối chiếu theo đơn / hóa đơn nào"></label><button type="submit" class="btn btn-outline">Lưu đối chiếu</button></form></details></div>';
     }
     return '<section id="invoiceSourceReview" class="code-note"><strong>Đối chiếu hóa đơn đã ký</strong>'+
@@ -7056,7 +7060,7 @@
       var sourceForm=event.target,choice=new FormData(sourceForm).get('choice');
       var scopeButton=event.submitter || sourceForm.querySelector('button[type=submit]');scopeButton.disabled=true;
       try {
-        await api('/api/outgoing-invoices/source-scopes/'+sourceForm.dataset.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:sourceForm.dataset.token,scope:choice==='outside'?'outside':'orders',contractor:choice==='outside'?'':choice,note:new FormData(sourceForm).get('note')})});
+        await api('/api/outgoing-invoices/source-scopes/'+sourceForm.dataset.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:sourceForm.dataset.token,scope:choice==='outside'?'outside':'orders',contractor:choice==='outside'?'':choice,note:new FormData(sourceForm).get('note'),date_from:new FormData(sourceForm).get('date_from'),date_to:new FormData(sourceForm).get('date_to')})});
         sourceForm.dataset.saved='true';
         if(state.sourceScopeEdits)delete state.sourceScopeEdits[sourceForm.dataset.id];
         var sourceDates=state.orderInvoiceFilters || {};

@@ -7,10 +7,10 @@ import json
 from openpyxl import Workbook
 from openpyxl.styles import Font,PatternFill
 try:
-    from .outgoing_source_scope import resolve_scope
+    from .outgoing_source_scope import resolve_scope, order_period
     from .outgoing_line_policy import unit_issues
 except ImportError:
-    from outgoing_source_scope import resolve_scope
+    from outgoing_source_scope import resolve_scope, order_period
     from outgoing_line_policy import unit_issues
 
 
@@ -24,6 +24,8 @@ def warning_applies_to_order(warning, order):
     # FIFO never applies a source invoice to an order after its issue date.
     # Missing date evidence remains blocking; never infer a date from a message.
     through = warning.get('order_date_through')
+    if warning.get('order_date_from') and order['work_date'] and order['work_date'] < warning['order_date_from']:
+        return False
     return not through or not order['work_date'] or order['work_date'] <= through
 
 
@@ -152,6 +154,9 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
         if s['id'] in linked or s['invoice_date']<earliest or s['source_status_class'] in ('draft','cancelled','replaced'):continue
         source_scope = {'invoice_id':s['id'],'invoice_date':s['invoice_date'],
                         'invoice_number':s['invoice_number'],'order_date_through':s['invoice_date']}
+        period_from,period_to=order_period(conn,s)
+        if period_from:
+            source_scope.update(order_date_from=period_from,order_date_through=min(period_to,s['invoice_date']))
         party,scope_error=resolve_scope(conn,s,profiles)
         if scope_error:
             if s['source_status_class']=='issued':warnings.append({**source_scope,'contractor':'','message':scope_error})
@@ -175,6 +180,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
             candidates=indexed.get((party,line['product_code'],line['unit'].strip().casefold()),[])
             for o in candidates:
                 if o['work_date']>s['invoice_date']:continue
+                if period_from and not period_from<=o['work_date']<=period_to:continue
                 need=max(o['actual_delivered']-o['customer_return_qty']-quantities[o['id']],0)
                 take=min(need,remaining);quantities[o['id']]+=take;remaining-=take
                 if take and source_order_allocations is not None:
@@ -186,7 +192,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
                 warnings.append({'contractor':party,'code':'unmatched_posted_quantity',
                     'product_code':line['product_code'],
                     'invoice_id':s['id'],'invoice_number':s['invoice_number'],
-                    'invoice_date':s['invoice_date'],'order_date_through':s['invoice_date'],
+                    **source_scope,
                     'message':'Hóa đơn '+s['invoice_number']+': còn '+format(remaining,'.10g')+' '+line['unit']+' mã '+line['product_code']+' đã xuất chưa khớp đơn đã duyệt. Kiểm tra đúng mã hàng hoặc phạm vi đơn trước khi xuất tiếp.'})
     return dict(quantities),warnings
 
