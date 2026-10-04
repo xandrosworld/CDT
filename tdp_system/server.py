@@ -2811,6 +2811,14 @@ def api_import_analyze():
             expanded_size = sum(item.file_size for item in entries)
             if len(entries) > ORDER_IMPORT_MAX_ENTRIES or expanded_size > ORDER_IMPORT_MAX_UNCOMPRESSED_BYTES:
                 raise ValueError("File Excel có cấu trúc quá lớn để đọc an toàn")
+        try:
+            from .order_workbook_compat import compatible_order_bytes
+        except ImportError:
+            from order_workbook_compat import compatible_order_bytes
+        original_payload = temp.read_bytes()
+        compatible_payload = compatible_order_bytes(original_payload)
+        if compatible_payload != original_payload:
+            temp.write_bytes(compatible_payload)
         strict_analysis = strict_daily_preview(temp, upload.filename, continuous=request.form.get('continuous') == '1')
         sheets = (
             strict_analysis["daySheets"] + strict_analysis["purchaseSheets"]

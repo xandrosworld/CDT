@@ -222,6 +222,22 @@ class DailyWorkbookImportTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         return response.get_json()
 
+    def test_wps_sort_metadata_in_reference_sheet_does_not_block_order_import(self):
+        import zipfile
+        raw = self.workbook_bytes()
+        stream = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(raw)) as source, zipfile.ZipFile(stream, 'w') as target:
+            for entry in source.infolist():
+                data = source.read(entry.filename)
+                if entry.filename == 'xl/worksheets/sheet1.xml':
+                    data = data.replace(b'</worksheet>', b'<sortState ref="3:875"><sortCondition ref="C3"/></sortState></worksheet>')
+                target.writestr(entry, data)
+        analyzed = self.analyze_api(stream.getvalue())
+        response = self.confirm_api(analyzed)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(len(response.json['orders']), 2)
+        self.assertEqual(sum(row['qty'] for row in response.json['orders']), 5)
+
     def confirm_api(self, analyzed: dict, *, sheets=None, state_hash=None):
         return self.client.post(
             "/api/import/confirm",
