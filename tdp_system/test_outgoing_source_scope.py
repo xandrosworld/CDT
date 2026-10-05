@@ -157,6 +157,21 @@ class SourceScopeTests(unittest.TestCase):
         self.assertIn('OTHER',str(report['warnings']))
         self.assertEqual(self.request().status_code,409)
 
+    def test_review_summarizes_warnings_without_changing_allocations(self):
+        from .outgoing_source_scope import scope_report
+        self.seed(stock=20)
+        with server.db() as c:c.execute("INSERT OR REPLACE INTO products(code,name,unit) VALUES('OTHER','Other','kg')")
+        sid=self.source(code='OTHER');self.assign(sid)
+        with server.db() as c:
+            before=c.serialize()
+            row=next(r for r in scope_report(c,'2026-09-01','2026-09-30','NT-A',order_scope=True) if r['id']==sid)
+            self.assertEqual(row['scope_error'],'')
+            self.assertEqual(len(row['review_details']),1)
+            self.assertIn('OTHER',row['review_details'][0])
+            self.assertNotIn('OTHER',row['error'])
+            self.assertEqual(c.serialize(),before)
+            self.assertEqual(scope_report(c,'2026-10-01','2026-10-31','NT-A',order_scope=True),[])
+
     def test_confirmed_order_period_does_not_consume_previous_month(self):
         from .outgoing_unissued import issued_allocations,warning_applies_to_order
         self.seed(stock=30)

@@ -161,12 +161,15 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
         if relevant_ids is not None and source['id'] not in relevant_ids:continue
         if source['source_status_class']!='issued':continue
         party,error=resolve_scope(conn,source,profiles)
+        scope_error=error
+        details=list(dict.fromkeys(source_warnings[source['id']]))
         if not error and source_warnings[source['id']]:
-            error=' '.join(source_warnings[source['id']])
+            error=f'Có {len(details)} thông tin chưa khớp với đơn đã duyệt. Mở Chi tiết cần đối chiếu để kiểm tra mã hàng, số lượng và nguồn đơn. Không xuất lại hóa đơn này.'
         period_from,period_to=order_period(conn,source)
         rows.append({'id':source['id'],'number':source['invoice_series']+' / '+source['invoice_number'],
                      'date':source['invoice_date'],'buyer':source['buyer_name'],'contractor':party or '',
                      'scope':'outside' if party is None else 'orders' if party else 'unresolved',
                      'stock_status':source['stock_status'],'error':error,'token':review_token(source),
+                     'scope_error':scope_error,'review_details':details,
                      'date_from':period_from,'date_to':period_to})
     return rows
