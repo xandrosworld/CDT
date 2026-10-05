@@ -3276,7 +3276,11 @@
   function invoiceGroupPortionsHtml() {
     var rows=invoiceGroupRows(),downloaded=rows.filter(function(r){return Number(r.downloaded_qty||0)>=Number(r.qty)-1e-8;}).length;
     var ready=rows.filter(function(r){return r.enabled&&Number(r.ready_qty||0)>Number(r.downloaded_qty||0)+1e-8;}).length,waiting=rows.length-downloaded-ready;
-    return '<div class="code-note" role="status"><strong>'+ready+' dòng được xuất · '+waiting+' dòng chưa xuất · '+downloaded+' dòng đã kết xuất Excel, chưa ký.</strong><button type="button" class="btn btn-outline" data-invoice-show-waiting>Xem Chưa xuất của nhóm này ('+waiting+')</button></div>';
+    return '<div class="code-note" role="status">'+
+      (downloaded?'<p><strong>'+esc(invoiceSelectedGroup().label)+' có '+downloaded+' dòng đã tải bảng kê Excel, chưa xuất hóa đơn.</strong></p><p>Chị có thể tải lại bảng kê hoặc chọn lại mặt hàng nếu chưa muốn lên hóa đơn.</p><button type="button" class="btn btn-outline" data-invoice-reopen-file>Tải lại bảng kê</button> <button type="button" class="btn btn-outline" data-invoice-rechoose>Chọn lại mặt hàng</button>':'')+
+      (ready?'<p>Còn '+ready+' dòng có thể lập bảng kê.</p>':'')+
+      (waiting?'<p>Còn '+waiting+' dòng đang để lại hoặc cần xử lý trước khi lập bảng kê.</p><button type="button" class="btn btn-outline" data-invoice-show-waiting>Xem '+waiting+' dòng còn lại</button>':'')+
+      (!rows.length?'<p>Không còn dòng chưa xuất hóa đơn trong nhóm này.</p>':'')+'</div>';
   }
   function selectInvoiceGroup(key) {
     state.invoiceGroup=key;state.invoiceGroupScope=JSON.stringify(pendingScope());
@@ -7495,6 +7499,14 @@
     if (event.target.closest('.invoice-mapping-input')) closeMsmiProductOptions();
   });
   content.addEventListener("click", function (event) {
+    if(event.target.closest('[data-invoice-rechoose]')){
+      state.invoiceLinesSkipped=true;state.invoiceLineSearch='';state.invoiceLinePage=0;openInvoiceGroupChoices();return;
+    }
+    if(event.target.closest('[data-invoice-reopen-file]')){
+      var files=content.querySelector('#downloadedInvoiceFiles');
+      if(files){files.open=true;files.scrollIntoView({block:'center'});var link=files.querySelector('a');if(link)link.focus({preventScroll:true});}
+      return;
+    }
     if(event.target.closest('[data-invoice-show-waiting]')){
       state.unissuedGroup=invoiceSelectedGroup().key;state.unissuedView='skipped';state.unissuedSearch='';state.unissuedPage=0;state.invoiceUnissuedOpen=true;
       renderDocuments();var section=content.querySelector('#invoiceUnissuedDetails');if(section){section.setAttribute('tabindex','-1');section.scrollIntoView({block:'start'});section.focus({preventScroll:true});}return;
