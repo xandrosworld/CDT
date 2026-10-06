@@ -8,6 +8,29 @@ from .minvoice_read_pool import DetailReadPool
 
 
 class DetailReadPoolTests(unittest.TestCase):
+    def test_real_response_read_reuses_socket(self):
+        from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
+        from http.client import HTTPConnection
+        from threading import Thread
+        ports=[]
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version='HTTP/1.1'
+            def do_GET(self):
+                ports.append(self.client_address[1])
+                self.send_response(200);self.send_header('Content-Type','application/json')
+                self.send_header('Content-Length','2');self.end_headers();self.wfile.write(b'{}')
+            def log_message(self,*args):pass
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        thread=Thread(target=server.serve_forever,daemon=True);thread.start()
+        pool=DetailReadPool('tenant.minvoice.net',CookieJar())
+        try:
+            with patch('tdp_system.minvoice_read_pool.HTTPSConnection',side_effect=lambda host,timeout:HTTPConnection('127.0.0.1',server.server_port,timeout=timeout)):
+                for _ in range(3):
+                    with pool.open(self.request(),5) as response:self.assertEqual(response.read(),b'{}')
+            self.assertEqual(len(set(ports)),1)
+        finally:
+            pool.close();server.shutdown();server.server_close();thread.join(2)
+
     def request(self,host='tenant.minvoice.net',method='GET'):
         return Request('https://'+host+'/api/api/app/invoice/abc/detail',method=method)
 
