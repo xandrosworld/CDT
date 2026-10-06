@@ -108,7 +108,7 @@ class PortalTests(unittest.TestCase):
         import threading
         c=client();c._token='fixture'
         docs=[dict(document(),id=f'00000000-0000-0000-0000-{n:012d}',invoiceNumber=n) for n in range(1,9)]
-        barrier=threading.Barrier(4,timeout=5)
+        barrier=threading.Barrier(8,timeout=5)
         active=0;peak=0;lock=threading.Lock()
         def read(method,path,**kw):
             nonlocal active,peak
@@ -121,7 +121,7 @@ class PortalTests(unittest.TestCase):
         c._portal_json=read
         result=c.get_outgoing_invoices('2026-08-01','2026-08-31','1C26TYY')
         self.assertEqual([r['invoiceNumber'] for r in result['data']],list(range(1,9)))
-        self.assertEqual(peak,4)
+        self.assertEqual(peak,8)
         def changed(method,path,**kw):
             if path=='app/invoice':return {'items':docs,'totalCount':len(docs)}
             d=next(d for d in docs if d['id'] in path)

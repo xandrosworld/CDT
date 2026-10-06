@@ -113,6 +113,8 @@ def match_output_catalog_codes(conn, *, tenant, now_iso, invoice_id=None,
         "JOIN outgoing_source_invoices i ON i.id=li.invoice_id WHERE " + " AND ".join(clauses),
         args,
     ).fetchall()
+    if not rows:
+        return {"matched_lines": 0, "unit_review_lines": 0}
     matched = 0
     unit_review = 0
     restored_invoices = set()
@@ -123,7 +125,7 @@ def match_output_catalog_codes(conn, *, tenant, now_iso, invoice_id=None,
             restored_invoices.add(parent_id)
     if restored_invoices:
         refresh_linked_batches(conn, 'output', restored_invoices, now_iso())
-    canonical, names = _catalog_names(conn)
+    canonical, names = _catalog_names(conn) if any(not str(r['source_item_code'] or '').strip() for r in rows) else ({}, {})
     evidence = _confirmed_names(conn, tenant, {
         (_normalized(r['source_item_name']), _normalized(r['source_unit']))
         for r in rows if not str(r['source_item_code'] or '').strip()

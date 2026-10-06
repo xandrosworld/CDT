@@ -3,6 +3,9 @@ import threading
 import time
 import json
 import copy
+import logging
+
+log=logging.getLogger(__name__)
 
 REFRESH_LOCK = threading.RLock()
 REFRESH_WAIT_SECONDS = 45
@@ -96,6 +99,7 @@ def refresh_sources(db_factory, client_factory, now_iso, start, end):
 
 
 def _refresh_sources(db_factory, client_factory, now_iso, start, end):
+    started=time.monotonic()
     # Source sync is committed independently of export. A blocked export must
     # not discard newly discovered signed invoices and allow the next retry.
     with db_factory() as conn:
@@ -106,6 +110,7 @@ def _refresh_sources(db_factory, client_factory, now_iso, start, end):
         known={r[0] for r in conn.execute("""SELECT identity_key FROM outgoing_source_invoices
             WHERE source='minvoice' AND source_status_class='issued' AND invoice_date BETWEEN ? AND ?""",(start,end))}
     snapshot=SourceSnapshot(client_factory(),start,end)
+    downloaded=time.monotonic()
     if not known.issubset(snapshot.identities):
         raise ValueError('M-Invoice chưa trả đủ hóa đơn đã ký từng được đối chiếu trong kỳ. Chưa dùng danh sách thiếu để tính phần chưa xuất.')
     with db_factory() as conn:
@@ -131,6 +136,7 @@ def _refresh_sources(db_factory, client_factory, now_iso, start, end):
                 conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',(json.dumps(raw,ensure_ascii=False),row['id']))
     if not result['complete']:
         raise ValueError('M-Invoice chưa tải hết hóa đơn. Bấm cập nhật tiếp trước khi xuất file mới.')
+    synced=time.monotonic()
     with db_factory() as conn:
         conn.execute('BEGIN IMMEDIATE')
         postings=[];blocked=[]
@@ -144,5 +150,7 @@ def _refresh_sources(db_factory, client_factory, now_iso, start, end):
         blocked.extend(sent['blocked'])
         waiting=refresh_waiting(conn,now_iso(),fill=False)
         sources=scope_report(conn,start,end)
+    log.warning('TDP source refresh timing: provider=%.3fs local_sync=%.3fs reconcile=%.3fs total=%.3fs invoices=%d',
+        downloaded-started,synced-downloaded,time.monotonic()-synced,time.monotonic()-started,len(snapshot.identities))
     return {'sync':result,'posted':postings,'blocked':blocked,'linked_drafts':sent['linked'],'waiting':waiting,'sources':sources,
             'from':start,'to':end,'checked_at':now_iso()}

@@ -14,6 +14,8 @@ from http.cookiejar import Cookie, CookieJar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, quote
 from urllib.request import Request, build_opener, HTTPCookieProcessor, HTTPRedirectHandler
+from urllib.request import getproxies
+from http.client import HTTPException
 
 try:
     from .minvoice_client import MinvoiceClient, MinvoiceError
@@ -76,6 +78,7 @@ class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
         self._cookies = CookieJar()
         self._can_create = False
         self._opener = build_opener(HTTPCookieProcessor(self._cookies), _NoRedirect())
+        self._detail_read_pool = None
 
     @property
     def supports_remote_drafts(self):
@@ -105,13 +108,14 @@ class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
             body = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
         try:
-            with self._opener.open(Request(url, data=body, headers=headers, method=method), timeout=self.timeout) as response:
+            opener=self._detail_read_pool if self._detail_read_pool is not None and method=='GET' and path.startswith('app/invoice/') and path.endswith('/detail') else self._opener
+            with opener.open(Request(url, data=body, headers=headers, method=method), timeout=self.timeout) as response:
                 if "json" not in response.headers.get("Content-Type", "").lower():
                     raise MinvoiceError("Portal M-Invoice trả trang web thay vì dữ liệu; cần kiểm tra lại phiên đăng nhập")
                 result = json.loads(response.read().decode("utf-8-sig"))
         except HTTPError as error:
             raise MinvoiceError(f"Portal M-Invoice trả lỗi HTTP {error.code}") from None
-        except (URLError, OSError):
+        except (URLError, OSError, HTTPException):
             raise MinvoiceError("Không kết nối được portal M-Invoice") from None
         except (UnicodeDecodeError, ValueError):
             raise MinvoiceError("Portal M-Invoice trả dữ liệu không hợp lệ") from None
@@ -273,8 +277,20 @@ class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
                 raise MinvoiceError("Portal M-Invoice thiếu chi tiết hóa đơn")
             return normalize_portal_document(detail)
         if include_details and len(rows) > 1:
-            with ThreadPoolExecutor(max_workers=4, thread_name_prefix='minvoice-read') as pool:
-                output = list(pool.map(read_row, rows))
+            try:
+                from .minvoice_read_pool import DetailReadPool
+            except ImportError:
+                from minvoice_read_pool import DetailReadPool
+            # Keep configured proxy behavior. Direct TLS connections otherwise
+            # reuse the verified session within this complete page only.
+            connections=None if getproxies().get('https') else DetailReadPool(self._host,self._cookies)
+            self._detail_read_pool=connections
+            try:
+                with ThreadPoolExecutor(max_workers=8, thread_name_prefix='minvoice-read') as pool:
+                    output = list(pool.map(read_row, rows))
+            finally:
+                self._detail_read_pool=None
+                if connections:connections.close()
         else:
             output = [read_row(row) for row in rows]
         return {"ok": True, "code": "00", "data": output, "total": total}
