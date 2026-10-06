@@ -119,6 +119,13 @@ def set_scope(conn, invoice_id, body, timestamp):
         conn.execute('DELETE FROM outgoing_source_order_periods WHERE invoice_id=?',(invoice_id,))
     conn.execute("INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at) VALUES('outgoing.source.order_scope','outgoing_source_invoice',?,'ok',?,?,?)",
                  (str(invoice_id),note,json.dumps({'scope':scope,'contractor':contractor,'date_from':start,'date_to':end}),timestamp))
+    if body.get('item_reviews') is not None:
+        if scope!='orders':raise ValueError('Đổi mặt hàng chỉ đối chiếu với đơn đã duyệt.')
+        try:
+            from .outgoing_source_item_review import save_review
+        except ImportError:
+            from outgoing_source_item_review import save_review
+        save_review(conn,source,contractor,start,end,body['item_reviews'],note,timestamp)
     if scope=='orders' and start:
         try:
             from .outgoing_waiting import refresh_waiting
@@ -166,10 +173,16 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
         if not error and source_warnings[source['id']]:
             error=f'Có {len(details)} thông tin chưa khớp với đơn đã duyệt. Mở Chi tiết cần đối chiếu để kiểm tra mã hàng, số lượng và nguồn đơn. Không xuất lại hóa đơn này.'
         period_from,period_to=order_period(conn,source)
+        try:
+            from .outgoing_source_item_review import reviewed_items
+        except ImportError:
+            from outgoing_source_item_review import reviewed_items
+        item_reviews,review_stale=reviewed_items(conn,source['id'])
         rows.append({'id':source['id'],'number':source['invoice_series']+' / '+source['invoice_number'],
                      'date':source['invoice_date'],'buyer':source['buyer_name'],'contractor':party or '',
                      'scope':'outside' if party is None else 'orders' if party else 'unresolved',
                      'stock_status':source['stock_status'],'error':error,'token':review_token(source),
                      'scope_error':scope_error,'review_details':details,
+                     'item_reviews':item_reviews,'item_review_stale':review_stale,
                      'date_from':period_from,'date_to':period_to})
     return rows

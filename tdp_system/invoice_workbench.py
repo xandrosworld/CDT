@@ -136,6 +136,13 @@ CREATE TABLE IF NOT EXISTS outgoing_source_order_periods (
     identity_snapshot TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS outgoing_source_item_reviews (
+    invoice_id INTEGER PRIMARY KEY REFERENCES outgoing_source_invoices(id) ON DELETE CASCADE,
+    items_json TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    note TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS outgoing_source_invoice_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_id INTEGER NOT NULL REFERENCES outgoing_source_invoices(id) ON DELETE CASCADE,

@@ -3561,6 +3561,7 @@
       var status=r.scope==='outside'?'Đơn riêng · không trừ đơn đã duyệt':r.scope==='orders'?'Trừ đơn của '+r.contractor:'Chưa xác định đơn liên quan';
       if(r.date_from)status+=' · Ngày đơn '+dateVN(r.date_from)+' – '+dateVN(r.date_to);
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>Ngày hóa đơn: '+esc(dateVN(r.date))+'</p><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
+        ((r.item_reviews||[]).length?'<p>'+ (r.item_review_stale?'Xác nhận đổi mặt hàng cần kiểm tra lại.':'Đã xác nhận đổi mặt hàng trên hóa đơn; đối trừ theo các dòng đơn gốc đã xác nhận.')+' Mã trên hóa đơn: '+r.item_reviews.map(function(x){return esc(x.source_code);}).join(', ')+'.</p>':'')+
         (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
         ((r.review_details||[]).length?'<details class="source-review-details"><summary>Chi tiết cần đối chiếu · '+r.review_details.length+' thông tin</summary><div style="max-height:280px;overflow:auto"><ul>'+r.review_details.map(function(message){return '<li>'+esc(message)+'</li>';}).join('')+'</ul></div></details>':'')+
         '<details'+(r.scope==='unresolved'||r.scope_error?' open':'')+'><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Kiểm tra / sửa nguồn đơn')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+

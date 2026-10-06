@@ -172,6 +172,25 @@ class SourceScopeTests(unittest.TestCase):
             self.assertEqual(c.serialize(),before)
             self.assertEqual(scope_report(c,'2026-10-01','2026-10-31','NT-A',order_scope=True),[])
 
+    def test_confirmed_changed_item_allocates_only_named_orders_and_invalidates_on_edit(self):
+        from .outgoing_unissued import issued_allocations
+        self.seed(stock=20)
+        with server.db() as c:
+            c.execute('DELETE FROM outgoing_source_item_reviews')
+            c.execute("INSERT OR REPLACE INTO products(code,name,unit) VALUES('OTHER','Other','kg')")
+            order=c.execute("SELECT * FROM orders WHERE contractor='NT-A' ORDER BY work_date,id LIMIT 1").fetchone()
+            oid=order['id'];qty=order['actual_delivered']-order['customer_return_qty']
+        sid=self.source(qty=qty,code='OTHER')
+        with server.db() as c:
+            source=c.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(sid,)).fetchone()
+            before={t:[tuple(r) for r in c.execute('SELECT * FROM '+t)] for t in ['orders','invoice_inventory_ledger','outgoing_source_invoice_items']}
+            set_scope(c,sid,{'token':review_token(source),'scope':'orders','contractor':'NT-A','note':'Customer confirmed changed item',
+                'date_from':'2026-09-01','date_to':'2026-09-03','item_reviews':[{'source_code':'OTHER','order_ids':[oid]}]},server.now_iso())
+            q,w=issued_allocations(c);self.assertEqual(q[oid],qty);self.assertFalse([x for x in w if x.get('invoice_id')==sid])
+            for t,rows in before.items():self.assertEqual(rows,[tuple(r) for r in c.execute('SELECT * FROM '+t)])
+            c.execute('UPDATE orders SET sell_price=sell_price+1 WHERE id=?',(oid,))
+            q,w=issued_allocations(c);self.assertEqual(q.get(oid,0),0);self.assertTrue([x for x in w if x.get('invoice_id')==sid])
+
     def test_confirmed_order_period_does_not_consume_previous_month(self):
         from .outgoing_unissued import issued_allocations,warning_applies_to_order
         self.seed(stock=30)

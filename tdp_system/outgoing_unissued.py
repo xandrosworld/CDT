@@ -171,6 +171,14 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
             warnings.append({**source_scope,'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' chưa đủ đối chiếu mã/lượng để trừ khỏi đơn.'});continue
         if s['id'] in remapped_sources:
             warnings.append(_remap_review_warning(s,party));continue
+        try:
+            from .outgoing_source_item_review import reviewed_items
+        except ImportError:
+            from outgoing_source_item_review import reviewed_items
+        reviewed,stale=reviewed_items(conn,s['id'])
+        if stale:
+            warnings.append({**source_scope,'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' hoặc đơn gốc đã thay đổi sau xác nhận đổi mặt hàng; cần đối chiếu lại.'});continue
+        reviewed_by_code={r['source_code']:set(r['order_ids']) for r in reviewed}
         # The posted stock ledger already includes reviewed conversions and reversals.
         lines=conn.execute("""SELECT il.product_code,p.unit,-SUM(il.qty_delta) qty FROM invoice_inventory_effective_ledger il
             JOIN products p ON p.code=il.product_code WHERE il.direction='output' AND il.status='posted'
@@ -178,6 +186,8 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
         for line in lines:
             remaining=max(float(line['qty']),0)
             candidates=indexed.get((party,line['product_code'],line['unit'].strip().casefold()),[])
+            if line['product_code'] in reviewed_by_code:
+                candidates=[o for o in orders if o['id'] in reviewed_by_code[line['product_code']] and o['contractor']==party]
             for o in candidates:
                 if o['work_date']>s['invoice_date']:continue
                 if period_from and not period_from<=o['work_date']<=period_to:continue
