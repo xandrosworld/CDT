@@ -3274,13 +3274,10 @@
     return row.enabled&&!downloaded;
   }
   function invoiceGroupPortionsHtml() {
-    var rows=invoiceGroupRows(),downloaded=rows.filter(function(r){return Number(r.downloaded_qty||0)>=Number(r.qty)-1e-8;}).length;
-    var ready=rows.filter(function(r){return r.enabled&&Number(r.ready_qty||0)>Number(r.downloaded_qty||0)+1e-8;}).length,waiting=rows.length-downloaded-ready;
+    var rows=invoiceGroupRows(),downloaded=rows.filter(function(r){return Number(r.downloaded_qty||0)>1e-8;}).length;
     return '<div class="code-note" role="status">'+
-      (downloaded?'<p><strong>'+esc(invoiceSelectedGroup().label)+' có '+downloaded+' dòng đã tải bảng kê Excel, chưa xuất hóa đơn.</strong></p><p>Chị có thể tải lại bảng kê hoặc chọn lại mặt hàng nếu chưa muốn lên hóa đơn.</p><button type="button" class="btn btn-outline" data-invoice-reopen-file>Tải lại bảng kê</button> <button type="button" class="btn btn-outline" data-invoice-rechoose>Chọn lại mặt hàng</button>':'')+
-      (ready?'<p>Còn '+ready+' dòng có thể lập bảng kê.</p>':'')+
-      (waiting?'<p>Còn '+waiting+' dòng đang để lại hoặc cần xử lý trước khi lập bảng kê.</p><button type="button" class="btn btn-outline" data-invoice-show-waiting>Xem '+waiting+' dòng còn lại</button>':'')+
-      (!rows.length?'<p>Không còn dòng chưa xuất hóa đơn trong nhóm này.</p>':'')+'</div>';
+      (rows.length?'<p><strong>Tổng '+rows.length+' dòng chưa xuất hóa đơn, gồm cả hàng đã tải Excel.</strong></p><button type="button" class="btn btn-outline" data-invoice-show-waiting>Xem đủ '+rows.length+' dòng chưa xuất hóa đơn</button>':'<p>Không còn dòng chưa xuất hóa đơn trong nhóm này.</p>')+
+      (downloaded?'<p>Trong '+rows.length+' dòng trên, có '+downloaded+' dòng đã tải bảng kê Excel nhưng chưa xuất hóa đơn. Các dòng này vẫn nằm trong danh sách chưa xuất.</p><button type="button" class="btn btn-outline" data-invoice-reopen-file>Tải lại bảng kê</button> <button type="button" class="btn btn-outline" data-invoice-rechoose>Chọn lại mặt hàng</button>':'')+'</div>';
   }
   function selectInvoiceGroup(key) {
     state.invoiceGroup=key;state.invoiceGroupScope=JSON.stringify(pendingScope());
@@ -3599,9 +3596,9 @@
     var fileParties=Array.from(new Set(all.map(function(r){return r.contractor;}))).sort();
     var view='skipped',groupFilter=state.unissuedGroup||'';
     if(groupFilter&&!invoiceLineGroups().some(function(g){return g.key===groupFilter;})){groupFilter='';state.unissuedGroup='';}
-    var rows=all.filter(function(r){return (!groupFilter||invoiceGroupKey(r)===groupFilter)&&(r.export_skipped||r.waiting_qty>1e-8||r.downloaded_qty>1e-8)&&(!search||[r.contractor,r.product_code,r.invoice_name].join(' ').toLocaleLowerCase().includes(search));});
+    var rows=all.filter(function(r){return (!groupFilter||invoiceGroupKey(r)===groupFilter)&&r.unissued_qty>1e-8&&(!search||[r.contractor,r.product_code,r.invoice_name].join(' ').toLocaleLowerCase().includes(search));});
     var page=Math.min(state.unissuedPage||0,Math.max(0,Math.ceil(rows.length/50)-1));state.unissuedPage=page;
-    return '<section class="card" id="unissuedReconciliation" data-loaded="'+(d?'true':'false')+'"><div class="card-head"><div><h3>Chưa xuất — hàng để lại và bảng kê chưa lên hóa đơn</h3><p>Gồm hàng chưa đủ điều kiện, hàng chị để lại và hàng đã tải Excel nhưng chưa ký hóa đơn. Các lựa chọn đã lưu được giữ nguyên.</p></div></div><div class="card-body"><p class="code-note"><strong>Phạm vi file: '+esc(invoiceScopeLabel())+'</strong>'+' · '+esc(dateVN(f.from)+' → '+dateVN(f.to))+'</p>'+
+    return '<section class="card" id="unissuedReconciliation" data-loaded="'+(d?'true':'false')+'"><div class="card-head"><div><h3>Chưa xuất — hàng để lại và bảng kê chưa lên hóa đơn</h3><p>Gồm toàn bộ hàng chưa xuất hóa đơn: hàng chờ lập bảng kê, đã chuẩn bị, đã tải Excel và hàng chị để lại. Các lựa chọn đã lưu được giữ nguyên.</p></div></div><div class="card-body"><p class="code-note"><strong>Phạm vi file: '+esc(invoiceScopeLabel())+'</strong>'+' · '+esc(dateVN(f.from)+' → '+dateVN(f.to))+'</p>'+
       ((d&&d.export_receipts||[]).length?'<details class="code-note" id="downloadedInvoiceFiles"><summary>File Excel đã kết xuất · xem / tải lại</summary><p>Đã tải Excel chưa phải đã ký hóa đơn. Tải lại đúng file cũ, không tạo thêm bản nháp.</p>'+(d.export_receipts||[]).map(function(r){return '<p><a href="/api/outgoing-invoices/export-receipts/'+esc(r.token)+'/file">'+esc(r.filename)+'</a> · '+esc(r.received_at)+'</p>';}).join('')+'</details>':'')+
       '<p class="code-note">Hàng đã bỏ chọn vẫn ở đây và không tự chọn lại. Doanh thu, công nợ giữ nguyên; không cần xuất bù đủ tiền để tiếp tục lập hóa đơn.</p><button class="btn btn-outline" type="button" data-money-settlement>Đối chiếu hóa đơn theo tiền</button><p class="code-note">Dùng khi đã ký hóa đơn với mặt hàng khác đơn gốc. Chọn đúng nhà thầu, khoảng ngày và hóa đơn để kiểm tra. Chỉ sau khi xác nhận đã xuất đủ theo tiền, kỳ đơn mới không còn trong file chưa xuất; đơn gốc, công nợ và tồn kho giữ nguyên.</p>'+
       (d&&(d.amount_settlements||[]).length?'<p><strong>Đối trừ theo tiền:</strong> '+d.amount_settlements.map(function(r){return esc(r.contractor+' · '+r.date_from+' → '+r.date_to)+' · '+money(r.amount)+(r.reviewed_kkknt?' · Chỉ KKKNT · Phần vượt giữ riêng: '+money(r.excess_amount)+' (không trừ sang đơn khác)':'')+' · '+(r.needs_review?'Cần đối chiếu lại':'Đã xuất đủ theo tiền');}).join('<br>')+'</p>':'')+
