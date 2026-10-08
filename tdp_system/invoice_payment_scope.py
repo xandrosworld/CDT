@@ -234,6 +234,12 @@ def _local_issued_payment_scope(
             ORDER BY issued_invoice_date,issued_invoice_series,issued_invoice_number,id""",
         (party, safe_from, safe_to),
     )]
+    try:
+        from .invoice_payment_replacements import verified_replacements
+    except ImportError:
+        from invoice_payment_replacements import verified_replacements
+    replacements=verified_replacements(conn)
+    drafts=[d for d in drafts if not ((source := _source_match(conn,d)) and source['id'] in replacements)]
     if not drafts:
         raise InvoicePaymentScopeError(
             "Không có hóa đơn đã phát hành đủ số/ngày trong kỳ",
@@ -382,6 +388,13 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
         "AND UPPER(TRIM(buyer_tax_code))=? AND invoice_date BETWEEN ? AND ? ORDER BY invoice_date,id",
         (tax_code.upper(), safe_from, safe_to),
     )] if tax_code and _table_exists(conn, 'outgoing_source_invoices') else []
+    try:
+        from .invoice_payment_replacements import verified_replacements
+    except ImportError:
+        from invoice_payment_replacements import verified_replacements
+    replacements=verified_replacements(conn)
+    replaced_sources=[r for r in sources if r['id'] in replacements]
+    sources=[r for r in sources if r['id'] not in replacements]
     matched_ids = {i['source_invoice_id'] for i in local['invoices'] if i.get('source_invoice_id')} if local else set()
     sources = [r for r in sources if r['id'] not in matched_ids]
     # Unissued source drafts do not create a payment obligation. A local invoice
@@ -424,9 +437,9 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
                   for i in invoices}
     for source in sources:
         # Do not silently drop an in-period cancellation/replacement/uncertain invoice.
-        if source['source_status_class'] != 'issued' or source['sync_status'] != 'synced' or source['stock_status'] in {
+        if source['id'] not in replacements.values() and (source['source_status_class'] != 'issued' or source['sync_status'] != 'synced' or source['stock_status'] in {
             'blocked', 'reversal_required', 'reversed'
-        } or source['relation_reference']:
+        } or source['relation_reference']):
             raise InvoicePaymentScopeError('Có hóa đơn nguồn bị hủy/thay thế/điều chỉnh hoặc cần đối chiếu trong kỳ; '
                                            'hãy kiểm tra trạng thái trước khi lập hồ sơ.', code='invoice_source_not_payable')
         if not _plain(source['invoice_number']) or not _plain(source['invoice_series']):
@@ -474,6 +487,7 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
             'invoice_number': source['invoice_number'],
             **{k: _vnd(source[k]) for k in ('subtotal', 'tax_amount', 'total_amount')},
             'verification_source': 'synced_issued_source', 'source_invoice_id': source['id'],
+            'replacement_for_remote_id': raw.get('relatedInvoiceId') if source['id'] in replacements.values() else None,
             'source_status_class': source['source_status_class'], 'source_stock_status': source['stock_status'],
         })
         source_lines.extend({**item, 'invoice_date': source['invoice_date'], 'invoice_series': source['invoice_series'],
@@ -486,9 +500,11 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
         'source_lines': source_lines, 'statement_kind': 'invoices',
         'invoice_lines': local['invoice_lines'] if local else [],
         'excluded_draft_count': excluded_drafts,
+        'replaced_invoices': [{'invoice_number':r['invoice_number'],'replacement_id':replacements[r['id']]} for r in replaced_sources],
         'template_status': 'official_customer_xlsx', 'official_template_ready': True,
         'warning': 'Số tiền lấy từ hóa đơn VAT đã phát hành. Thông tin nhận tiền là cấu hình tại lúc lập đề nghị. '
                    'Có hóa đơn chưa liên kết bếp/ngày giao: bảng kê theo ngày hóa đơn, không xác nhận lịch sử giao nhận.' +
+                   (' Đã loại hóa đơn bị thay thế: '+', '.join(r['invoice_number'] for r in replaced_sources)+'. Chỉ tính hóa đơn thay thế trong kỳ; trạng thái kho được theo dõi riêng.' if replaced_sources else '') +
                    (f' Đã loại {excluded_drafts} dự thảo chưa phát hành khỏi số tiền đề nghị.' if excluded_drafts else ''),
     }
     result['scope_id'] = hashlib.sha256(json.dumps(result, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest().upper()

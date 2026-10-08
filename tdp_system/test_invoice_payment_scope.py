@@ -489,6 +489,35 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.json)
         self.assertEqual(response.json['totals']['total_amount'],432)
 
+    def test_verified_replacement_counts_new_once_and_keeps_stock_unchanged(self):
+        from .test_minvoice_portal import document
+        with server.db() as conn:
+            old=self.add_direct_source(conn,invoice_number='857',status_class='replaced',sync_status='reconcile_required',stock_status='reversal_required')
+            new=self.add_direct_source(conn,invoice_number='888',invoice_date='2026-09-04',status_class='replaced',sync_status='reconcile_required',stock_status='blocked')
+            raw=document()
+            raw.update(id='new',invoiceSerial='1C26TDP',invoiceNumber=888,invoiceDate='2026-09-04',
+                       buyerTaxCode='0200000001',buyerAddress='Address',invoiceStatus=3,sendTaxStatus=4,
+                       relatedInvoiceId='old',relatedInvoiceNumber='857',relatedInvoiceDate='2026-09-03',
+                       relatedTemplateCode='1',relatedInvoiceSerial='C26TDP',
+                       totalAmountWithoutVAT=200,vatAmount=16,totalAmount=216,
+                       _tdp_source_contract='minvoice_portal_v1')
+            raw['invoiceDetail']=[dict(productCode='',unitCode='kg',quantity=2,unitPrice=100,amountWithoutVAT=200,vatAmount=16,property=1)]
+            conn.execute('UPDATE outgoing_source_invoices SET remote_id=?,source_status_raw=?,raw_json=? WHERE id=?',
+                         ('old',json.dumps({'invoiceStatus':6,'sendTaxStatus':4}),json.dumps({'sellerTaxCode':raw['sellerTaxCode']}),old))
+            conn.execute('UPDATE outgoing_source_invoices SET remote_id=?,source_status_raw=?,raw_json=? WHERE id=?',
+                         ('new',json.dumps({'invoiceStatus':3,'sendTaxStatus':4}),json.dumps(raw),new))
+            before=conn.serialize()
+        response=self.scope()
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual([r['invoice_number'] for r in response.json['invoices']],['888'])
+        self.assertEqual(response.json['totals']['total_amount'],216)
+        with server.db() as conn:self.assertEqual(before,conn.serialize())
+        # Missing parent, changed buyer, unsigned replacement and ambiguous lineage fail closed.
+        for change in [{'relatedInvoiceId':'missing'},{'buyerTaxCode':'OTHER'},{'sendTaxStatus':0},{'relatedInvoiceSerial':'OTHER'}, {'totalAmount':999}]:
+            with server.db() as conn:
+                conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',(json.dumps({**raw,**change}),new))
+            self.assertEqual(self.scope().status_code,409,change)
+
     def test_unissued_source_draft_does_not_inflate_or_block_issued_payment(self):
         with server.db() as conn:
             self.add_direct_source(conn)

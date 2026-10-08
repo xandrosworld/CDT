@@ -10847,6 +10847,7 @@ def register_contract_routes(app, ctx):
                         remote_id=source['remote_id'], series=item['invoice_series'],
                         number=item['invoice_number'], invoice_date=item['invoice_date'],
                         buyer_tax_code=scope['snapshot']['buyer_tax_code_snapshot'],
+                        **({'replacement_for_remote_id':item['replacement_for_remote_id']} if item.get('replacement_for_remote_id') else {}),
                         **{k: item[k] for k in ('subtotal', 'tax_amount', 'total_amount')})
                 except MinvoiceError as exc:
                     raise MinvoiceError(f"Hóa đơn {item['invoice_series']}/{item['invoice_number']}: {exc}") from None

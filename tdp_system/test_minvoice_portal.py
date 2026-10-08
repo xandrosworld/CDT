@@ -43,6 +43,12 @@ class PortalTests(unittest.TestCase):
                       invoice_date='2026-08-31', buyer_tax_code=d['buyerTaxCode'],
                       subtotal=100000, tax_amount=8000, total_amount=108000)
         self.assertEqual(c.get_issued_invoice_pdf(**kwargs), content)
+        replacement=dict(d,invoiceStatus=3,relatedInvoiceId='original-id')
+        c._portal_json.return_value=replacement
+        with self.assertRaises(MinvoiceError): c.get_issued_invoice_pdf(**kwargs)
+        self.assertEqual(c.get_issued_invoice_pdf(**kwargs,replacement_for_remote_id='original-id'),content)
+        with self.assertRaises(MinvoiceError): c.get_issued_invoice_pdf(**kwargs,replacement_for_remote_id='wrong-id')
+        c._portal_json.return_value=d
         request = c._opener.open.call_args.args[0]
         self.assertEqual(request.get_method(), 'GET')
         self.assertTrue(request.full_url.endswith('/' + d['id'] + '/downloaf-pdf'))

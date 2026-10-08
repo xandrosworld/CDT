@@ -200,7 +200,7 @@ class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
         return normalize_portal_document(detail)
 
     def get_issued_invoice_pdf(self, *, remote_id, series, number, invoice_date,
-                               buyer_tax_code, subtotal, tax_amount, total_amount):
+                               buyer_tax_code, subtotal, tax_amount, total_amount, replacement_for_remote_id=None):
         """Download the provider's original PDF after checking the issued identity."""
         import io
         from pypdf import PdfReader
@@ -208,7 +208,11 @@ class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
             raise MinvoiceError('Hóa đơn chưa có định danh M-Invoice hợp lệ để tải PDF.')
         detail = self.get_outgoing_invoice(remote_id=remote_id, series=series,
                                           number=number, invoice_date=invoice_date)
-        if (portal_status(detail)[1] != 'issued'
+        replacement = (replacement_for_remote_id and detail.get('relatedInvoiceId') == replacement_for_remote_id
+                       and type(detail.get('invoiceStatus')) is int and detail['invoiceStatus'] == 3
+                       and type(detail.get('sendTaxStatus')) is int and detail['sendTaxStatus'] == 4
+                       and not portal_validation_error(detail))
+        if ((portal_status(detail)[1] != 'issued' and not replacement)
                 or str(detail.get('buyerTaxCode') or '').strip() != str(buyer_tax_code).strip()):
             raise MinvoiceError('Trạng thái hoặc người mua của hóa đơn đã thay đổi; hãy tải lại hóa đơn đầu ra.')
         try:
