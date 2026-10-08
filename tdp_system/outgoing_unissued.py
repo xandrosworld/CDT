@@ -377,11 +377,11 @@ def unissued_workbook(payload):
         for r in payload['signed_stock_issues']:review.append([r[k] for k in ('invoice_number','invoice_date','signed_at','contractor','product_code','product_name','unit','signed_qty','opening_qty','input_qty','closing_qty','message')])
     if payload.get('amount_settlements'):
         settled = w.create_sheet('Da doi tru theo tien')
-        settled.append(['Bản đối trừ', 'Nhà thầu', 'Từ ngày đơn', 'Đến ngày đơn', 'Tổng tiền gồm thuế', 'Hóa đơn đã ký', 'Người xác nhận', 'Trạng thái'])
+        settled.append(['Bản đối trừ', 'Nhà thầu', 'Từ ngày đơn', 'Đến ngày đơn', 'Tổng tiền gồm thuế', 'Hóa đơn đã ký', 'Người xác nhận', 'Trạng thái', 'Phạm vi', 'Tiền hóa đơn vượt tiền đơn (không trừ sang đơn khác)'])
         for r in payload['amount_settlements']:
             settled.append([r['id'], r['contractor'], r['date_from'], r['date_to'], r['amount'],
                             ', '.join(i['invoice_series']+'/'+i['invoice_number'] for i in r['invoices']),
-                            r['actor'], 'Cần đối chiếu lại' if r['needs_review'] else 'Đã đối trừ theo tiền; không xác nhận khớp mặt hàng'])
+                            r['actor'], 'Cần đối chiếu lại' if r['needs_review'] else 'Đã đối trừ theo tiền; không xác nhận khớp mặt hàng', 'Chỉ KKKNT' if r.get('reviewed_kkknt') else 'Toàn bộ kỳ đơn', r.get('excess_amount', 0)])
     if payload.get('skipped_details'):
         skipped=w.create_sheet('Da bo chon chua xuat');skipped.append(['Ngày đơn','Nhà thầu','Mã hàng','Tên hàng','ĐVT','Lượng chưa xuất','Tiền hàng','Lý do'])
         for r in payload['skipped_details']:skipped.append([r[k] for k in ('work_date','contractor','product_code','invoice_name','unit','unissued_qty','unissued_amount','pending_reason')])

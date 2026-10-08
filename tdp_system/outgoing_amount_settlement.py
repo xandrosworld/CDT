@@ -85,8 +85,18 @@ def source_snapshot(conn, ids, party):
     return result
 
 
-def current_snapshot(conn, party, start, end, ids):
-    return {'orders': order_snapshot(conn, party, start, end), 'invoices': source_snapshot(conn, ids, party)}
+def current_snapshot(conn, party, start, end, ids, *, reviewed_kkknt=False):
+    snapshot = {'orders': order_snapshot(conn, party, start, end), 'invoices': source_snapshot(conn, ids, party)}
+    if reviewed_kkknt:
+        snapshot['orders'] = [o for o in snapshot['orders'] if str(o['tax']).strip().upper() == 'KKKNT']
+        if any(Decimal(str(i['tax_amount'])) != 0 for i in snapshot['invoices']):
+            raise ValueError('Đối chiếu riêng KKKNT chỉ dùng hóa đơn không có tiền thuế.')
+        for iid in ids:
+            items = list(conn.execute('SELECT tax_rate FROM outgoing_source_invoice_items WHERE invoice_id=?', (iid,)))
+            if not items or any(str(i['tax_rate']).strip().upper() not in ('-2', 'KKKNT') for i in items):
+                raise ValueError('Hóa đơn đã chọn phải chỉ gồm hàng KKKNT. Kiểm tra lại hóa đơn trước khi đối chiếu riêng KKKNT.')
+        snapshot['reviewed_kkknt'] = True
+    return snapshot
 
 
 def progress(conn, party, start, end):
@@ -102,7 +112,7 @@ def progress(conn, party, start, end):
     ids = [r['id'] for r in saved['invoices']]
     error = ''
     try:
-        if digest(current_snapshot(conn, party, start, end, ids)) != row['fingerprint']:
+        if digest(current_snapshot(conn, party, start, end, ids, reviewed_kkknt=saved.get('reviewed_kkknt', False))) != row['fingerprint']:
             error = 'Đơn hoặc hóa đơn đã thay đổi. Bấm Kiểm tra tổng tiền đã chọn để cập nhật tiến độ.'
     except ValueError as exc:
         error = str(exc)
@@ -111,7 +121,7 @@ def progress(conn, party, start, end):
     return {'id': row['id'], 'from': start, 'to': end, 'invoice_ids': ids,
             'orders_total': demand, 'signed_total': signed, 'remaining': demand-signed,
             'actor': row['actor'], 'reason': row['reason'], 'created_at': row['created_at'],
-            'needs_review': bool(error), 'message': error}
+            'needs_review': bool(error), 'message': error, 'reviewed_kkknt': saved.get('reviewed_kkknt', False)}
 
 
 def save_progress(conn, body, timestamp):
@@ -144,7 +154,7 @@ def coverage(conn):
         before = json.loads(record['snapshot_json'])
         try:
             current = current_snapshot(conn, record['contractor'], record['date_from'], record['date_to'],
-                                       [r['id'] for r in before['invoices']])
+                                       [r['id'] for r in before['invoices']], reviewed_kkknt=before.get('reviewed_kkknt', False))
             if digest(current) != record['fingerprint']:
                 raise ValueError('Đơn hoặc hóa đơn đã thay đổi sau khi xác nhận đối trừ tiền.')
         except ValueError as exc:
@@ -168,6 +178,8 @@ def history(conn, party=''):
         result.append({k: r[k] for k in ('id', 'contractor', 'date_from', 'date_to', 'actor', 'reason', 'created_at')})
         result[-1].update(amount=sum(o['amount'] for o in saved['orders']),
                           order_rows=len(saved['orders']), invoices=saved['invoices'],
+                          reviewed_kkknt=saved.get('reviewed_kkknt', False),
+                          excess_amount=max(sum(i['total_amount'] for i in saved['invoices'])-sum(o['amount'] for o in saved['orders']), 0),
                           needs_review=r['id'] in invalid)
     return result
 
@@ -190,7 +202,8 @@ def preview(conn, body):
     ids = body.get('invoice_ids', [])
     if not isinstance(ids, list) or any(type(i) is not int for i in ids) or len(set(ids)) != len(ids):
         raise ValueError('Danh sách hóa đơn không hợp lệ hoặc bị trùng.')
-    snapshot = current_snapshot(conn, party, start, end, ids)
+    reviewed_kkknt = body.get('reviewed_kkknt') is True
+    snapshot = current_snapshot(conn, party, start, end, ids, reviewed_kkknt=reviewed_kkknt)
     if not snapshot['orders']:
         raise ValueError('Không có doanh thu từ đơn đã duyệt trong kỳ đã chọn.')
     conflicts = []
@@ -209,10 +222,16 @@ def preview(conn, body):
         if order_ids.intersection(allocated) and iid not in ids:
             conflicts.append(f'Hóa đơn nguồn {iid} đang đối trừ mặt hàng trong kỳ nhưng chưa được chọn; phải đối chiếu cùng để tránh dùng lại tiền.')
     for iid in ids:
-        if set(lineage.get(iid, {})) - order_ids:
+        if set(lineage.get(iid, {})) - order_ids and not reviewed_kkknt:
             conflicts.append(f'Hóa đơn nguồn {iid} đang đối trừ cho đơn ngoài kỳ đã chọn; không được dùng toàn bộ tiền lần nữa.')
     # Every locally linked issue for this period must appear in the reviewed list.
     sources = {(s['invoice_series'].strip().upper(), s['invoice_number'].strip(), s['invoice_date']) for s in snapshot['invoices']}
+    if reviewed_kkknt:
+        for d in conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE status='issued'"):
+            key = ((d['issued_invoice_series'] or '').strip().upper(), (d['issued_invoice_number'] or '').strip(), d['issued_invoice_date'] or d['invoice_date'])
+            linked_orders = {r[0] for r in conn.execute('SELECT order_id FROM outgoing_order_allocations WHERE draft_id=?', (d['id'],))}
+            if key in sources and linked_orders - order_ids:
+                conflicts.append(f'Hóa đơn đã liên kết với bản #{d["id"]} ngoài phạm vi KKKNT đã chọn; cần sửa liên kết đó trước.')
     drafts = []
     for d in conn.execute("""SELECT DISTINCT d.* FROM outgoing_invoice_drafts d JOIN outgoing_order_allocations a ON a.draft_id=d.id
         WHERE a.order_id IN (SELECT value FROM json_each(?)) AND d.status IN ('draft','issued')""", (json.dumps(sorted(order_ids)),)):
@@ -238,13 +257,18 @@ def preview(conn, body):
             (Decimal(str(r['invoice_price'])) - Decimal(str(r['order_price']))))})
     basis = {'snapshot': snapshot, 'conflicts': conflicts,
              'scope': [party, start, end]}
+    if reviewed_kkknt:
+        basis['previous_allocations'] = {i: lineage.get(i, {}) for i in ids}
     return {'contractor': party, 'from': start, 'to': end, 'invoice_ids': ids,
             'orders_total': demand, 'signed_total': signed, 'remaining': demand - signed,
             'orders_tax': sum(r['tax_amount'] for r in snapshot['orders']),
             'signed_tax': float(sum((Decimal(str(r['tax_amount'])) for r in snapshot['invoices']), Decimal(0))),
             'order_rows': len(order_ids), 'invoices': snapshot['invoices'], 'conflicts': conflicts,
             'price_differences': price_differences,
-            'can_confirm': bool(ids) and demand == signed and not conflicts,
+            'reviewed_kkknt': reviewed_kkknt,
+            'excess_amount': max(signed-demand, 0),
+            'replaced_inferred_order_ids': sorted(set().union(*(set(lineage.get(i, {})) for i in ids))-order_ids) if reviewed_kkknt else [],
+            'can_confirm': bool(ids) and (demand == signed or (reviewed_kkknt and signed > demand)) and not conflicts,
             'can_save_progress': bool(ids) and 0 < signed < demand and not conflicts,
             'token': digest(basis), '_snapshot': snapshot, '_drafts': drafts}
 
@@ -261,7 +285,7 @@ def confirm(conn, body, timestamp):
     for rec in records(conn):
         saved = json.loads(rec['snapshot_json'])
         if [rec['contractor'], rec['date_from'], rec['date_to']] == [body.get('contractor'), body.get('from'), body.get('to')] and sorted(i['id'] for i in saved['invoices']) == sorted(body.get('invoice_ids') or []):
-            current = current_snapshot(conn, rec['contractor'], rec['date_from'], rec['date_to'], body['invoice_ids'])
+            current = current_snapshot(conn, rec['contractor'], rec['date_from'], rec['date_to'], body['invoice_ids'], reviewed_kkknt=body.get('reviewed_kkknt') is True)
             if digest(current) == rec['fingerprint']:
                 return {'id': rec['id'], 'unchanged': True}
     report = preview(conn, body)
@@ -277,10 +301,10 @@ def confirm(conn, body, timestamp):
         from .outgoing_contractors import release_disabled_drafts
     except ImportError:
         from outgoing_contractors import release_disabled_drafts
-    retired = release_disabled_drafts(conn, timestamp)
+    retired = release_disabled_drafts(conn, timestamp, order_ids={o['id'] for o in snapshot['orders']})
     conn.execute("""INSERT INTO audit_log(event_type,entity_type,entity_id,status,message,metadata_json,created_at)
         VALUES('outgoing.amount_settlement','outgoing_amount_settlement',?,'ok',?,?,?)""",
-        (str(iid), reason, json.dumps({'actor': actor, 'invoice_ids': body['invoice_ids'], 'total': report['orders_total'], 'retired_drafts': retired}), timestamp))
+        (str(iid), reason, json.dumps({'actor': actor, 'invoice_ids': body['invoice_ids'], 'total': report['orders_total'], 'retired_drafts': retired, 'reviewed_kkknt': report['reviewed_kkknt'], 'excess_amount': report['excess_amount'], 'replaced_inferred_order_ids': report['replaced_inferred_order_ids']}), timestamp))
     return {'id': iid, 'unchanged': False}
 
 
