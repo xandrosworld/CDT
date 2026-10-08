@@ -39,6 +39,9 @@ LINE_LABELS = {
 
 
 def invoice_state(invoice, direction):
+    replacement=invoice.get('replacement_review') or {}
+    if direction=='output' and replacement.get('confirmed'):
+        return 'posted' if invoice['id']==replacement['old_id'] else 'not_inventory'
     stock = invoice.get("receipt_status" if direction == "input" else "stock_status", "")
     if direction == 'output' and invoice.get('adjustment_review',{}).get('confirmed'):
         return 'not_inventory'
@@ -75,6 +78,7 @@ def invoice_state(invoice, direction):
 
 
 def line_issue(item, invoice, status):
+    if (invoice.get("replacement_review") or {}).get("confirmed"):return ""
     if status == "draft":
         return ""
     if invoice.get('adjustment_review',{}).get('confirmed'):

@@ -51,6 +51,9 @@ function tdpMInvoiceTime(value) {
       return field;
     };
     function mapping(item, invoice, editMode) {
+      var replacement=invoice.replacement_review;
+      if (!input && replacement) return '<strong>Hóa đơn '+esc(replacement.new_number)+' thay thế '+esc(replacement.old_number)+'</strong><small>'+ (replacement.confirmed?'Đã đối chiếu. Giữ nguyên kho đã ghi theo hóa đơn '+esc(replacement.old_number)+', không xuất thêm.':'Các dòng hàng giống nhau. Cần xác nhận giữ nguyên kho đã ghi.')+'</small>'+button('review-output-replacement',invoice.id,replacement.confirmed?'Xem đối chiếu thay thế':'Đối chiếu hóa đơn thay thế');
+
       if (!input && invoice.workbench_status === 'draft') return '<span class="tag">Bản nháp trên M-Invoice · chưa ký</span>'+(invoice.source_created_at?'<small>Tạo trên M-Invoice: '+esc(tdpMInvoiceTime(invoice.source_created_at))+'</small>':'')+'<small>Chưa ghi xuất kho. Kiểm tra bản nháp trên M-Invoice trước khi ký; không cần gửi thêm bản khác.</small>';
       if (!item.id) return esc(item.issue || invoice.error_message || 'Hóa đơn chưa có dòng hàng.');
       if (!input && invoice.adjustment_review) {
@@ -85,6 +88,8 @@ function tdpMInvoiceTime(value) {
     }
     window.TdpInvoiceMappingCell = mapping;
     function actions(invoice) {
+      if (!input && invoice.replacement_review) return button('review-output-replacement',invoice.id,'Đối chiếu hóa đơn thay thế');
+
       var result = input && ['ready','needs_mapping'].includes(invoice.workbench_status) ? '' : '<span class="tag">' + esc(statusLabels[invoice.workbench_status] || 'Cần kiểm tra') + '</span>';
       if (input) result += button('view-invoice-receipt-summary', invoice.id, 'Kiểm tra');
       if (input && invoice.discount_available) result += button('allocate-input-discount',invoice.id,invoice.discount_allocated ? 'Xem / sửa chiết khấu' : 'Phân bổ chiết khấu','btn-primary');
@@ -107,7 +112,7 @@ function tdpMInvoiceTime(value) {
     }
     function renderRow(item) {
       var invoice = invoices[item.invoice_id];
-      var codeLabel = input ? (item.source_item_code || '—') : (item.product_code || (!invoice.can_edit_mapping && (invoice.sync_status !== 'synced' || invoice.stock_status === 'blocked') ? 'Chờ kiểm tra HĐ' : 'Chưa ghép'));
+      var codeLabel = !input && invoice.replacement_review ? (invoice.replacement_review.confirmed?'Đã đối chiếu':'Chờ đối chiếu thay thế') : input ? (item.source_item_code || '—') : (item.product_code || (!invoice.can_edit_mapping && (invoice.sync_status !== 'synced' || invoice.stock_status === 'blocked') ? 'Chờ kiểm tra HĐ' : 'Chưa ghép'));
       return '<tr id="invoice-line-' + direction + '-' + (item.id || 'empty-' + invoice.id) + '" data-issue="' + (item.issue ? '1' : '0') + '" class="' + (item.issue ? 'invoice-row-issue' : '') + '">' + selection(item, invoice) + '<td><strong>' + esc(invoice.invoice_series + ' / ' + invoice.invoice_number) + '</strong><div>' + dateVN(invoice.invoice_date) + '</div>' + (!input && invoice.source_signed_at ? '<small>Ký trên M-Invoice: '+esc(tdpMInvoiceTime(invoice.source_signed_at))+'</small>' : '') + '<small>' + esc(invoice.seller_name || invoice.buyer_name || '') + '</small></td><td>' + esc(item.line_index || '—') + '</td><td title="' + esc('Mã trên hóa đơn gốc: ' + (item.source_item_code || 'Không có')) + '">' + '<span style="white-space:normal;overflow-wrap:anywhere">' + esc(codeLabel) + '</span></td><td>' + esc(item.source_item_name) + (item.issue && (input || !item.identity_warning && invoice.can_edit_mapping) ? '<div class="invoice-issue-text">' + esc(item.issue) + '</div>' : '') + expenseControl(item,invoice) + '</td><td class="num-cell invoice-source-qty">' + num(item.qty) + '</td><td class="invoice-source-unit">' + esc(item.source_unit || '') + '</td><td class="num-cell invoice-unit-price">' + (item.unit_price == null ? '—' : money(item.unit_price)) + '</td><td class="num-cell">' + money(item.amount) + '</td>' + '<td>' + esc(item.tax_rate || '—') + '</td><td class="num-cell" title="' + esc(item.tax_note || 'Chưa có tiền thuế nguồn') + '">' + (item.line_tax_amount == null ? 'Chưa có thuế nguồn' : money(item.line_tax_amount)) + '</td><td class="invoice-mapping-cell">' + mapping(item, invoice) + '</td>' + (input ? '<td><div class="invoice-row-actions">' + actions(invoice) + '</div></td>' : '') + '</tr>';
     }
     window.TdpInvoiceRenderRow = renderRow;

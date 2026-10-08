@@ -180,6 +180,21 @@ def annotate_adjustment(invoice, review):
 
 
 def register_adjustment_routes(app, ctx):
+    @app.post('/api/invoice-workbench/output-replacements/<int:invoice_id>/confirm-stock')
+    def confirm_replacement(invoice_id):
+        try:
+            from .invoice_payment_replacements import confirm_stock_replacement
+        except ImportError:
+            from invoice_payment_replacements import confirm_stock_replacement
+        body=request.get_json(silent=True) or {}
+        try:
+            if not isinstance(body,dict):raise ValueError('Dữ liệu xác nhận không hợp lệ.')
+            with ctx['db']() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                result=confirm_stock_replacement(conn,invoice_id,body.get('expected'),body.get('confirmed'),ctx['now_iso']())
+            return jsonify(ok=True,**result)
+        except ValueError as exc:return jsonify(ok=False,error=str(exc)),409
+
     @app.post('/api/invoice-workbench/output-adjustments/<int:invoice_id>/confirm-tax')
     def confirm(invoice_id):
         body = request.get_json(silent=True) or {}
