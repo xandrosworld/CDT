@@ -26,6 +26,13 @@
     storedReceivableFilters = {};
   }
 
+  function restorePendingImport(){
+    try{var saved=JSON.parse(sessionStorage.getItem('tdp.pendingOrderImport')||'null');return saved&&saved.savedAt>Date.now()-3600000?saved.payload:null;}catch(ignore){return null;}
+  }
+  function persistPendingImport(){
+    try{if(state.pendingImport)sessionStorage.setItem('tdp.pendingOrderImport',JSON.stringify({savedAt:state.pendingImport.savedAt||Date.now(),payload:state.pendingImport}));else sessionStorage.removeItem('tdp.pendingOrderImport');}catch(ignore){}
+  }
+
   var state = {
     view: "home",
     data: null,
@@ -56,7 +63,7 @@
     quoteDetailsOpen: true,
     quoteHistoryOpen: false,
     modalMode: "order",
-    pendingImport: null,
+    pendingImport: restorePendingImport(),
     mappingImportType: "",
     mappingPreview: null,
     catalogImportPreview: null,
@@ -1630,7 +1637,7 @@
           : warningCount
             ? warningCount + " dòng cần xem lại trước khi duyệt"
             : "Đã đủ dữ liệu để duyệt";
-    content.innerHTML = html([
+    content.innerHTML = html([pendingImportBanner(),
       '<div class="daily-range card fade-in"><div class="compact-controls">',
       '<label>Từ ngày <input id="homeFrom" class="input-date" type="date" value="', esc(state.homeFrom), '"></label>',
       '<label>Đến ngày <input id="homeTo" class="input-date" type="date" value="', esc(state.homeTo), '"></label>',
@@ -1744,6 +1751,7 @@
       esc(state.priceOverrideReason), '" placeholder="Lý do sửa giá"><button class="btn btn-outline" data-action="save-price-overrides" ',
       approved ? "disabled" : "", '>Lưu giá đã đổi</button><input class="input-date search-input" id="orderSearch" value="',
       esc(state.orderFilter), '" placeholder="Tìm mã, tên hàng, bếp, nhà cung cấp…"></div></div>',
+      pendingImportBanner(),
       state.orderImportMessage ? '<div class="code-note">' + esc(state.orderImportMessage) + '</div>' : '',
       missingProducts.length ? '<div class="error-summary" role="alert"><strong>Có ' + missingProducts.length + ' mã hàng mới cần bổ sung danh mục</strong><p>Dòng đơn đã được giữ lại. Bấm từng mã để kiểm tra thông tin có sẵn rồi lưu; không cần tải lại file.</p>' + missingProducts.map(function(item) {
         return '<button class="btn btn-outline" data-action="add-order-product" data-id="' + item.id + '">Bổ sung ' + esc(item.product_code) + ' · ' + esc(item.product_name) + '</button>';
@@ -1874,10 +1882,16 @@
     ]);
   }
 
+  function pendingImportBanner() {
+    var pending=state.pendingImport;
+    if(!pending||!pending.token)return '';
+    return '<div class="warning-summary" role="status"><strong>File mới chưa được lưu: '+esc(pending.filename||'Excel')+'</strong><p>Đặt hàng vẫn dùng bản đã lưu trước đó. Bấm Tiếp tục lưu file mới để kiểm tra và lưu; không cần chọn lại file.</p><button class="btn btn-primary" data-action="resume-order-import">Tiếp tục lưu file mới</button> <button class="btn btn-outline" data-action="discard-order-import">Bỏ file chưa lưu</button></div>';
+  }
+
   function renderPurchases() {
     if (!state.supplierNeeds && !state.supplierLoading && !state.supplierError) setTimeout(fetchSupplierNeeds, 0);
     var days = state.supplierNeeds ? state.supplierNeeds.days : [];
-    content.innerHTML = '<div class="toolbar"><label>Từ ngày <input id="supplierFrom" type="date" value="' + esc(state.supplierFrom) + '"></label>' +
+    content.innerHTML = pendingImportBanner() + '<div class="toolbar"><label>Từ ngày <input id="supplierFrom" type="date" value="' + esc(state.supplierFrom) + '"></label>' +
       '<label>Đến ngày <input id="supplierTo" type="date" value="' + esc(state.supplierTo) + '"></label><button class="btn btn-outline" data-action="refresh-supplier-range">Tải lại</button></div>' +
       '<div class="code-note">Đơn đặt NCC theo khoảng ngày. Mỗi ngày giữ riêng đơn và trạng thái đã đặt.</div>' +
       (days.length ? '<div class="supplier-day-links toolbar">' + days.map(function (day) { return '<button class="btn btn-outline" data-action="jump-supplier-day" data-batch-id="' + day.batch_id + '">' + dateVN(day.work_date) + ' · ' + day.checklist.length + ' NCC</button>'; }).join('') + '</div>' : '') +
@@ -1892,7 +1906,7 @@
     var batchAttr = ' data-batch-id="' + needs.batch_id + '"';
     var sourceBanner = '<section class="supplier-day" data-batch-id="' + needs.batch_id + '" data-work-date="' + esc(needs.work_date) + '">' +
       '<div class="card supplier-plan-source"><div class="card-body"><h3>Ngày ' + dateVN(needs.work_date) + '</h3><strong>' +
-      esc(needs.source_message || '') + '</strong><div class="form-actions"><button class="btn btn-outline" data-action="choose-supplier-plan-file"' + batchAttr + '>Nạp sheet đặt hàng ngày này</button><button class="btn btn-outline" data-action="preview-supplier-documents"' + batchAttr + '>Xem / In đơn đặt NCC</button></div>' +
+      esc(needs.source_message || '') + '</strong>'+ (needs.source_saved_at?'<p>Bản đã lưu số '+needs.source_revision+' · Lưu lúc '+esc(dateTimeVN(needs.source_saved_at))+'. Ảnh tải xuống dùng bản này.</p>':'')+'<div class="form-actions"><button class="btn btn-outline" data-action="choose-supplier-plan-file"' + batchAttr + '>Nạp sheet đặt hàng ngày này</button><button class="btn btn-outline" data-action="preview-supplier-documents"' + batchAttr + '>Xem / In đơn đặt NCC</button></div>' +
       ((needs.price_issues || []).length ? '<div class="code-note">Đơn đặt NCC đã hiển thị theo số lượng. Có ' + needs.price_issues.length + ' dòng Giá mua chưa hợp lệ; tiền đang hiển thị chưa phải tổng đầy đủ. Trước khi tính công nợ, sửa Giá mua thành số trong file đặt hàng. <details><summary>Xem các dòng cần sửa Giá mua</summary>' + needs.price_issues.map(esc).join('<br>') + '</details></div>' : '') +
       (preview && preview.plan_only ? purchaseOrderPreviewHtml() : '') + '</div></div>';
     var checklistCounts = needs.checklist_counts || { pending: 0, reopened: 0, ordered: 0 };
@@ -4953,9 +4967,10 @@
     state.modalMode = "import";
     setOrderModalWide(Boolean(payload.strictDaily));
     state.pendingImport = payload;
+    if(!payload.savedAt)payload.savedAt=Date.now();persistPendingImport();
     document.getElementById("modalTitle").textContent = payload.purchasePlanOnly
       ? "Bổ sung Đặt hàng / công nợ phải trả" : payload.phase === "finalization"
-      ? "File cuối ngày còn phần cần kiểm tra" : "Chọn trang Excel của đơn hàng";
+      ? "File mới chưa lưu — kiểm tra và lưu" : "Chọn trang Excel của đơn hàng";
     function dateToken(value) {
       var match = String(value || "").match(/(?:^|\D)(\d{1,2})[.\-_/](\d{1,2})(?:\D|$)/);
       return match ? Number(match[1]) + "." + Number(match[2]) : "";
@@ -4975,6 +4990,7 @@
         : (useDateMatched
         ? dateToken(sheet.name) === fileDate
         : (usePreferred ? sheet.name.toLowerCase().indexOf("đơn hàng") >= 0 : true));
+      if(payload.selectionDraft)checked=payload.selectionDraft.includes(sheet.name);
       var disabled = payload.strictDaily && !sheet.confirmAvailable;
       var role = sheet.scope === "customer_orders"
         ? "Bán/giao · đơn khách, doanh thu, phải thu"
@@ -5043,15 +5059,15 @@
       payload.purchasePlanOnly
         ? "Bổ sung sheet Đặt hàng để đối chiếu nhà cung cấp và tính công nợ phải trả. Đơn bán, phải thu và chứng từ kho đã ghi được giữ nguyên. Dòng chưa có giá mua vẫn cần bổ sung trước khi tính đủ công nợ."
         : payload.phase === "finalization"
-        ? "File chưa thể tự lưu vì còn phần lỗi. Chỉ những phần đã kiểm tra đạt mới được chọn; phần mua không sửa đơn khách, doanh thu hay phải thu."
+        ? "File mới chưa được lưu. Đặt hàng vẫn dùng bản trước cho đến khi lưu thành công. Chỉ những phần đã kiểm tra đạt mới được chọn; phần mua không sửa đơn khách, doanh thu hay phải thu."
         : "Chỉ các trang Excel được chọn mới đi vào đơn hàng. File hợp lệ mới cùng ngày và đúng phạm vi sheet cũ sẽ thay toàn bộ dòng phiên đó, kể cả dòng sửa/thêm tay. Ngày và sheet khác, mã hàng đã có và lịch sử bản cũ được giữ; phần đã liên kết chứng từ sẽ bị chặn để đối chiếu.",
       "</div></div>",
       referenceNote,
       catalogNote,
       '<div class="form-field span-4"><label>Trang Excel cần nhập</label><div class="sheet-list">', sheetCards, "</div></div>",
       importDetails,
-      field("Ngày làm việc dự phòng", "work_date", fallback, "date", "required", "span-2"),
-      '<div class="form-actions"><button type="button" class="btn btn-outline" data-action="close-modal">Hủy</button>',
+      field("Ngày làm việc dự phòng", "work_date", payload.selectionWorkDate||fallback, "date", "required", "span-2"),
+      '<div class="form-actions"><button type="button" class="btn btn-outline" data-action="close-modal">Để sau — chưa lưu</button>',
       '<button type="submit" class="btn btn-primary" '+(payload.strictDaily && !payload.sheets.some(function(sheet) {return sheet.confirmAvailable;})?'disabled':'')+'>',
       payload.purchasePlanOnly ? "Lưu sheet Đặt hàng" : payload.phase === "finalization" ? "Dùng các phần đạt làm bản mới nhất" : "Nhập các trang đã chọn",
       "</button></div></div>"
@@ -5060,20 +5076,18 @@
   }
 
   function closeModal() {
-    if (state.modalMode === "import" && state.pendingImport && state.pendingImport.token) {
-      var token = state.pendingImport.token;
-      state.pendingImport = null;
-      fetch("/api/import/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: token }),
-        keepalive: true
-      }).catch(function () {});
+    var retained=state.modalMode === "import" && state.pendingImport && state.pendingImport.token;
+    if(retained){
+      state.pendingImport.selectionDraft=Array.from(orderForm.querySelectorAll('[name=sheets]:checked')).map(function(e){return e.value;});
+      state.pendingImport.selectionWorkDate=orderForm.elements.work_date?orderForm.elements.work_date.value:'';
+      persistPendingImport();
+      showToast('File mới chưa được lưu. Bấm Tiếp tục lưu file mới để hoàn tất; đặt hàng vẫn dùng bản trước.',true);
     }
     backdrop.hidden = true;
     state.editingId = null;
     state.quickAddContext = null;
     setOrderModalWide(false);
+    if(retained)render();
   }
 
   async function applyPendingOrderImport(sheets, workDate, useAsLatest) {
@@ -5099,7 +5113,7 @@
         'Đã cập nhật phạm vi vừa chọn. Các ngày khác, mã hàng đã có và phần mua/bán không chọn được giữ nguyên.';
       var addedProducts = n(imported.catalogImport && imported.catalogImport.inserted);
       if (addedProducts) state.orderImportMessage += ' Đã thêm '+addedProducts+' mã hàng mới từ danh mục trong file.';
-      state.pendingImport = null;
+      state.pendingImport = null;persistPendingImport();
       closeModal();
       var automaticallyApproved = false;
       var approvalWarning = "";
@@ -7803,6 +7817,13 @@
     var button = event.target.closest("[data-action]");
     if (!button) return;
     var action = button.dataset.action;
+    if(action==='resume-order-import'){if(state.pendingImport){openImportModal(state.pendingImport);var target=orderForm.querySelector('[name=sheets]:not(:disabled),button[type=submit]');if(target)target.focus();}return;}
+    if(action==='discard-order-import'){
+      var discarded=state.pendingImport;state.pendingImport=null;persistPendingImport();
+      if(discarded&&discarded.token)fetch('/api/import/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:discarded.token})}).catch(function(){});
+      render();showToast('Đã bỏ file chưa lưu. Bản đặt hàng đã lưu được giữ nguyên.');return;
+    }
+
     if(action==='focus-order-approval'){
       var approveButton=content.querySelector('[data-action="approve-batch"]');
       if(approveButton){approveButton.scrollIntoView({block:'center'});approveButton.focus();}return;

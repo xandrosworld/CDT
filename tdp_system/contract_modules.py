@@ -3920,6 +3920,8 @@ def purchase_order_payload(conn, batch_id: int, *, for_sending=False) -> dict:
         "format": "supplier_sheet_plan" if plan_source else "customer_canonical" if canonical_sources else "legacy_or_customer_orders",
         "send_available": send_available, "source_message": source_message,
         "source_sheet": plan_source['source_sheet'] if plan_source else '',
+        "source_revision": plan_source['revision'] if plan_source else None,
+        "source_saved_at": plan_source['updated_at'] if plan_source else '',
         "source_name": plan_source['source_name'] if plan_source else '',
         "source_issues": source_issues,
         "price_issues": price_issues,
