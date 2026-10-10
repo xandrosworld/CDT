@@ -281,6 +281,11 @@ def init_invoice_workbench_schema(conn) -> None:
         from outgoing_export_receipts import SCHEMA as RECEIPT_SCHEMA
     conn.executescript(RECEIPT_SCHEMA)
     try:
+        from .outgoing_source_acceptance import SCHEMA as ACCEPTANCE_SCHEMA
+    except ImportError:
+        from outgoing_source_acceptance import SCHEMA as ACCEPTANCE_SCHEMA
+    conn.executescript(ACCEPTANCE_SCHEMA)
+    try:
         from .output_stock_remap import init_schema as init_remap_schema
     except ImportError:
         from output_stock_remap import init_schema as init_remap_schema

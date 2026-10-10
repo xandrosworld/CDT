@@ -3562,9 +3562,11 @@
       var choice=draft?draft.choice:r.scope==='outside'?'outside':r.scope==='orders'?r.contractor:'';
       var status=r.scope==='outside'?'Đơn riêng · không trừ đơn đã duyệt':r.scope==='orders'?'Trừ đơn của '+r.contractor:'Chưa xác định đơn liên quan';
       if(r.date_from)status+=' · Ngày đơn '+dateVN(r.date_from)+' – '+dateVN(r.date_to);
+      if(r.acceptance)status=r.acceptance.message;
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>Ngày hóa đơn: '+esc(dateVN(r.date))+'</p><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         ((r.item_reviews||[]).length?'<p>'+ (r.item_review_stale?'Xác nhận đổi mặt hàng cần kiểm tra lại.':'Đã xác nhận đổi mặt hàng trên hóa đơn; đối trừ theo các dòng đơn gốc đã xác nhận.')+' Mã trên hóa đơn: '+r.item_reviews.map(function(x){return esc(x.source_code);}).join(', ')+'.</p>':'')+
         (r.error?'<p class="error-summary">'+esc(r.error)+'</p><button type="button" class="btn btn-primary" data-source-comparison="'+r.id+'">So hóa đơn với bảng kê đã tải</button>':'')+
+        (r.acceptance?'<p>'+r.acceptance.allocated_order_rows+' dòng đơn đã đối trừ được giữ nguyên; '+r.acceptance.unmatched.length+' thông tin chênh lệch giữ riêng. Không tự trừ thêm đơn.</p><button type="button" class="btn btn-outline" data-source-acceptance="'+r.id+'">Xem xác nhận đã lưu</button>':r.error&&r.scope==='orders'&&r.stock_status==='posted'?'<button type="button" class="btn btn-outline" data-source-acceptance="'+r.id+'">Giữ hóa đơn cho nhà thầu — chênh lệch riêng</button>':'')+
         (hasLater?'<p>Các đơn trong phạm vi hóa đơn này vẫn cần đối chiếu. Chị có thể mở riêng đơn từ '+esc(dateVN(laterFrom))+' để kiểm tra và lập bảng kê tiếp.</p><button type="button" class="btn btn-outline" data-invoice-later-from="'+esc(laterFrom)+'" data-contractor="'+esc(r.contractor)+'"'+(exportChoicesDirty()?' disabled':'')+'>Mở đơn từ '+esc(dateVN(laterFrom))+'</button>':'')+
         ((r.review_details||[]).length?'<details class="source-review-details"><summary>Chi tiết cần đối chiếu · '+r.review_details.length+' thông tin</summary><div style="max-height:280px;overflow:auto"><ul>'+r.review_details.map(function(message){return '<li>'+esc(message)+'</li>';}).join('')+'</ul></div></details>':'')+
         '<details'+(r.scope==='unresolved'||r.scope_error?' open':'')+'><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Kiểm tra / sửa nguồn đơn')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
@@ -7540,6 +7542,11 @@
     var preparedSummary=event.target.closest('.prepared-invoice > summary');
     if(preparedSummary&&!preparedSummary.parentElement.open){
       event.preventDefault();var row=(state.preparedInvoices.items||[]).find(function(r){return r.id===Number(preparedSummary.parentElement.dataset.draftId);});if(row){selectInvoiceGroup(invoiceGroupKey(row));state.preparedActiveId=row.id;}renderDocuments();return;
+    }
+    var acceptanceButton=event.target.closest('[data-source-acceptance]');
+    if(acceptanceButton){
+      if(exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy){showToast('Lưu lựa chọn mặt hàng đang sửa trước khi xác nhận hóa đơn.',true);return;}
+      window.TdpSourceAcceptance({api:api,esc:esc,invoiceId:Number(acceptanceButton.dataset.sourceAcceptance),onSaved:function(){state.preparedInvoices=null;return loadUnissuedScope(true);}});return;
     }
     var comparisonButton=event.target.closest('[data-source-comparison]');
     if(comparisonButton){

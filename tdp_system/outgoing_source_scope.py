@@ -87,6 +87,12 @@ def order_period(conn, invoice, *, export_matches=None):
 
 
 def set_scope(conn, invoice_id, body, timestamp):
+    try:
+        from .outgoing_source_acceptance import records as accepted_sources
+    except ImportError:
+        from outgoing_source_acceptance import records as accepted_sources
+    if any(r['invoice_id']==invoice_id for r in accepted_sources(conn)):
+        raise ValueError('Hóa đơn đã xác nhận giữ chênh lệch riêng. Bấm Xem xác nhận đã lưu rồi Mở lại để đối chiếu trước khi đổi nguồn đơn.')
     source=conn.execute("SELECT * FROM outgoing_source_invoices WHERE id=? AND source='minvoice'",(invoice_id,)).fetchone()
     if not source or source['source_status_class']!='issued':
         raise ValueError('Chỉ xác nhận phạm vi cho hóa đơn đã phát hành.')
@@ -155,6 +161,11 @@ def set_scope(conn, invoice_id, body, timestamp):
 
 
 def scope_report(conn, start, end, contractor='', *, order_scope=False):
+    try:
+        from .outgoing_source_acceptance import coverage as acceptance_coverage, summary as acceptance_summary
+    except ImportError:
+        from outgoing_source_acceptance import coverage as acceptance_coverage, summary as acceptance_summary
+    acceptances=acceptance_coverage(conn)
     relevant_ids = None
     source_warnings = defaultdict(list)
     if order_scope:
@@ -176,6 +187,9 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
         relevant_ids = {sid for sid, linked in allocations.items() if ids.intersection(linked)}
         relevant_ids.update(w['invoice_id'] for w in warnings if w.get('invoice_id')
                             and any(warning_applies_to_order(w,o) for o in orders))
+        relevant_ids.update(sid for sid,rec in acceptances.items() if
+            (not contractor or rec['contractor']==contractor) and
+            (start<=rec['snapshot']['basis']['source']['invoice_date']<=end or ids.intersection(rec['allocations'])))
         start,end='0001-01-01','9999-12-31'
     profiles=defaultdict(list)
     for r in conn.execute("SELECT contractor,tax_code FROM outgoing_buyer_profiles WHERE TRIM(COALESCE(tax_code,''))!=''"):
@@ -205,6 +219,7 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
                      'scope':'outside' if party is None else 'orders' if party else 'unresolved',
                      'stock_status':source['stock_status'],'error':error,'token':review_token(source),
                      'scope_error':scope_error,'review_details':details,
+                     'acceptance':acceptance_summary(acceptances[source['id']]) if source['id'] in acceptances else None,
                      'item_reviews':item_reviews,'item_review_stale':review_stale,
                      'date_from':period_from,'date_to':period_to})
     return rows

@@ -207,6 +207,12 @@ def preview(conn, body):
     if not snapshot['orders']:
         raise ValueError('Không có doanh thu từ đơn đã duyệt trong kỳ đã chọn.')
     conflicts = []
+    try:
+        from .outgoing_source_acceptance import records as accepted_sources
+    except ImportError:
+        from outgoing_source_acceptance import records as accepted_sources
+    if any(r['invoice_id'] in ids for r in accepted_sources(conn)):
+        conflicts.append('Hóa đơn đã xác nhận giữ chênh lệch riêng. Mở lại xác nhận đó trước khi đối trừ theo tiền, tránh trừ hai lần.')
     order_ids = {o['id'] for o in snapshot['orders']}
     for rec in records(conn):
         prior = json.loads(rec['snapshot_json'])

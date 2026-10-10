@@ -93,6 +93,26 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
     money_orders, money_invoices, money_warnings = coverage(conn)
     orders = [o for o in orders if o['id'] not in money_orders]
     quantities=defaultdict(float);warnings=list(money_warnings);linked=set(money_invoices)
+    try:
+        from .outgoing_source_acceptance import coverage as acceptance_coverage
+    except ImportError:
+        from outgoing_source_acceptance import coverage as acceptance_coverage
+    acceptances=acceptance_coverage(conn)
+    accepted_ids=set()
+    for sid,rec in acceptances.items():
+        saved_source=rec['snapshot']['basis']['source']
+        if saved_source['invoice_date']>asof:continue
+        accepted_ids.add(sid);linked.add(sid)
+        if not rec['valid'] or any(oid in money_orders for oid in rec['allocations']) or sid in money_invoices:
+            warnings.append({'invoice_id':sid,'invoice_number':saved_source['invoice_number'],
+                'contractor':rec['contractor'],'order_date_through':saved_source['invoice_date'],
+                'order_ids':list(rec['allocations']),'code':'accepted_source_changed',
+                'message':'Hóa đơn '+saved_source['invoice_number']+' hoặc đơn đã thay đổi sau xác nhận giữ chênh lệch riêng. Mở xác nhận đã lưu để kiểm tra lại.'})
+            continue
+        for oid,qty in rec['allocations'].items():
+            quantities[oid]+=qty
+            if external_quantities is not None:external_quantities[oid]=external_quantities.get(oid,0)+qty
+        if source_order_allocations is not None:source_order_allocations[sid]=dict(rec['allocations'])
     remapped_sources=_stock_only_remap_sources(conn)
     sources=[dict(r) for r in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND invoice_date<=? ORDER BY invoice_date,id",(asof,))]
     by_identity=defaultdict(list)
@@ -101,7 +121,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
         local_scope = {'order_date_through':d['issued_invoice_date'] or d['invoice_date'],
                        'order_ids':[r[0] for r in conn.execute('SELECT order_id FROM outgoing_order_allocations WHERE draft_id=?',(d['id'],))]}
         matching=by_identity.get(_identity(d,True),[])
-        if matching and all(s['id'] in money_invoices for s in matching):
+        if matching and all(s['id'] in money_invoices or s['id'] in accepted_ids for s in matching):
             continue
         if matching and any(s['source_status_class'] in ('cancelled','replaced','adjusted') for s in matching):
             warnings.append({**local_scope,'contractor':d['contractor'],'message':'Hóa đơn '+str(d['issued_invoice_number'])+' đã thay đổi trạng thái trên M-Invoice; cần đối chiếu.'})
@@ -261,6 +281,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
             if remaining>1e-8:
                 warnings.append({'contractor':party,'code':'unmatched_posted_quantity',
                     'product_code':line['product_code'],
+                    'unmatched_qty':remaining,'unit':line['unit'],
                     'invoice_id':s['id'],'invoice_number':s['invoice_number'],
                     **source_scope,
                     'message':'Hóa đơn '+s['invoice_number']+': còn '+format(remaining,'.10g')+' '+line['unit']+' mã '+line['product_code']+' đã xuất chưa khớp đơn đã duyệt. Kiểm tra đúng mã hàng hoặc phạm vi đơn trước khi xuất tiếp.'})

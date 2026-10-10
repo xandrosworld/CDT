@@ -5883,6 +5883,11 @@ except ImportError:
     from outgoing_amount_settlement import register_routes as register_amount_settlement
 register_amount_settlement(app, globals())
 try:
+    from .outgoing_source_acceptance import register_routes as register_source_acceptance
+except ImportError:
+    from outgoing_source_acceptance import register_routes as register_source_acceptance
+register_source_acceptance(app, globals())
+try:
     from .outgoing_download_archive import register_routes as register_download_archive
 except ImportError:
     from outgoing_download_archive import register_routes as register_download_archive
