@@ -4741,6 +4741,26 @@ def api_sync_issued_orders():
         return jsonify(ok=False,error='Chưa cập nhật đủ hóa đơn đã ký; chưa được xuất file mới. '+str(exc),code=getattr(exc,'code','issued_sync_required')),409
 
 
+@app.get('/api/outgoing-invoices/source-scopes/<int:invoice_id>/comparison')
+def api_outgoing_source_comparison(invoice_id):
+    try:
+        from .outgoing_export_lineage import comparison
+        from .outgoing_source_scope import resolve_scope, review_token
+    except ImportError:
+        from outgoing_export_lineage import comparison
+        from outgoing_source_scope import resolve_scope, review_token
+    with db() as conn:
+        source=conn.execute("SELECT * FROM outgoing_source_invoices WHERE id=? AND source='minvoice'",(invoice_id,)).fetchone()
+        if not source:return jsonify(ok=False,error='Không tìm thấy hóa đơn để đối chiếu.'),404
+        profiles={}
+        for r in conn.execute('SELECT contractor,tax_code FROM outgoing_buyer_profiles'):
+            profiles.setdefault((r['tax_code'] or '').strip().upper(),[]).append(r['contractor'])
+        party,error=resolve_scope(conn,source,profiles)
+        return jsonify(ok=True,invoice_id=invoice_id,number=source['invoice_series']+' / '+source['invoice_number'],
+            buyer=source['buyer_name'],contractor=party or '',token=review_token(source),scope_error=error,
+            **comparison(conn,source,party))
+
+
 @app.get('/api/outgoing-invoices/source-scopes')
 @app.put('/api/outgoing-invoices/source-scopes/<int:invoice_id>')
 def api_outgoing_source_scopes(invoice_id=None):

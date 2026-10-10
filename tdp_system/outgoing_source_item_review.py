@@ -4,12 +4,13 @@ import json
 import math
 
 
-def fingerprint(conn, invoice_id, items):
+def fingerprint(conn, invoice_id, items, *, legacy=False):
     source=dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(invoice_id,)).fetchone())
     # Sync timestamps may change without changing the invoice.
     source={k:source[k] for k in ('tenant','identity_key','invoice_series','invoice_number','invoice_date',
         'buyer_tax_code','buyer_name','source_status_class','subtotal','total_amount')}
-    lines=[tuple(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY id',(invoice_id,))]
+    fields='*' if legacy else 'line_index,source_item_code,source_item_name,source_unit,qty,unit_price,amount,tax_rate,source_nature,inventory_eligible,product_code,mapping_status'
+    lines=[tuple(r) for r in conn.execute('SELECT '+fields+' FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY '+('id' if legacy else 'line_index'),(invoice_id,))]
     orders=[]
     for item in items:
         for oid in item['order_ids']:
@@ -17,14 +18,26 @@ def fingerprint(conn, invoice_id, items):
             orders.append(tuple(row) if row else None)
     period=conn.execute('SELECT date_from,date_to,identity_snapshot FROM outgoing_source_order_periods WHERE invoice_id=?',(invoice_id,)).fetchone()
     ledger=[tuple(r) for r in conn.execute("SELECT product_code,qty_delta,status FROM invoice_inventory_effective_ledger WHERE source_invoice_table='outgoing_source_invoices' AND source_invoice_id=? ORDER BY product_code,qty_delta",(invoice_id,))]
-    return hashlib.sha256(json.dumps([source,lines,orders,list(period) if period else None,ledger,items],sort_keys=True,default=str).encode()).hexdigest()
+    digest=hashlib.sha256(json.dumps([source,lines,orders,list(period) if period else None,ledger,items],sort_keys=True,default=str).encode()).hexdigest()
+    return digest if legacy else 'v2:'+digest
+
+
+def upgrade_fingerprints(conn):
+    # Upgrade only reviews still valid under their original rules. Never turn a
+    # stale customer confirmation back into a valid one during deployment.
+    for row in conn.execute("SELECT * FROM outgoing_source_item_reviews WHERE fingerprint NOT LIKE 'v2:%'").fetchall():
+        if not conn.execute('SELECT 1 FROM outgoing_source_invoices WHERE id=?',(row['invoice_id'],)).fetchone():continue
+        items=json.loads(row['items_json'])
+        if row['fingerprint']==fingerprint(conn,row['invoice_id'],items,legacy=True):
+            conn.execute('UPDATE outgoing_source_item_reviews SET fingerprint=? WHERE invoice_id=?',
+                         (fingerprint(conn,row['invoice_id'],items),row['invoice_id']))
 
 
 def reviewed_items(conn, invoice_id):
     row=conn.execute('SELECT * FROM outgoing_source_item_reviews WHERE invoice_id=?',(invoice_id,)).fetchone()
     if not row:return [],False
     items=json.loads(row['items_json'])
-    return items,row['fingerprint']!=fingerprint(conn,invoice_id,items)
+    return items,row['fingerprint']!=fingerprint(conn,invoice_id,items,legacy=not row['fingerprint'].startswith('v2:'))
 
 
 def save_review(conn, source, party, start, end, items, note, timestamp):

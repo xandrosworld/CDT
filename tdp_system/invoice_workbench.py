@@ -286,6 +286,11 @@ def init_invoice_workbench_schema(conn) -> None:
         from output_stock_remap import init_schema as init_remap_schema
     init_remap_schema(conn)
     try:
+        from .outgoing_source_item_review import upgrade_fingerprints
+    except ImportError:
+        from outgoing_source_item_review import upgrade_fingerprints
+    upgrade_fingerprints(conn)
+    try:
         from invoice_line_groups import SCHEMA
     except ImportError:
         from .invoice_line_groups import SCHEMA

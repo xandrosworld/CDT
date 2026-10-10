@@ -19,6 +19,8 @@ def warning_applies_to_order(warning, order):
         return False
     # Explicit order lineage takes precedence, including exceptional later orders.
     order = dict(order)
+    if warning.get('exact_order_scope'):
+        return order.get('order_id',order.get('id')) in warning.get('order_ids',[])
     if order.get('order_id', order.get('id')) in warning.get('order_ids', []):
         return True
     # FIFO never applies a source invoice to an order after its issue date.
@@ -146,6 +148,21 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
     profiles=defaultdict(list)
     for r in conn.execute("SELECT contractor,tax_code FROM outgoing_buyer_profiles WHERE TRIM(COALESCE(tax_code,''))!=''"):
         profiles[r['tax_code'].strip().upper()].append(r['contractor'])
+    try:
+        from .outgoing_export_lineage import catalog, matches, orders_unchanged
+    except ImportError:
+        from outgoing_export_lineage import catalog, matches, orders_unchanged
+    exports=catalog(conn);export_matches={};reserved=defaultdict(float)
+    for s in sources:
+        if s['id'] in linked or s['source_status_class']!='issued':continue
+        party,error=resolve_scope(conn,s,profiles)
+        if error or not party:continue
+        # Explicit changed-item reviews outrank inference from an export.
+        if conn.execute('SELECT 1 FROM outgoing_source_item_reviews WHERE invoice_id=?',(s['id'],)).fetchone():continue
+        found=matches(conn,s,party,exports)
+        export_matches[s['id']]=found
+        if len(found)==1:
+            for oid,qty in found[0]['allocations'].items():reserved[oid]+=qty
     indexed=defaultdict(list)
     for o in orders:indexed[(o['contractor'],o['product_code'],o['unit'].strip().casefold())].append(o)
     earliest=min((o['work_date'] for o in orders),default=asof)
@@ -154,9 +171,12 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
         if s['id'] in linked or s['invoice_date']<earliest or s['source_status_class'] in ('draft','cancelled','replaced'):continue
         source_scope = {'invoice_id':s['id'],'invoice_date':s['invoice_date'],
                         'invoice_number':s['invoice_number'],'order_date_through':s['invoice_date']}
-        period_from,period_to=order_period(conn,s)
+        found=export_matches.get(s['id'],[])
+        period_from,period_to=order_period(conn,s,export_matches=found)
         if period_from:
             source_scope.update(order_date_from=period_from,order_date_through=min(period_to,s['invoice_date']))
+        if found:
+            source_scope.update(exact_order_scope=True,order_ids=sorted({r['order_id'] for e in found for r in e['rows']}))
         party,scope_error=resolve_scope(conn,s,profiles)
         if scope_error:
             if s['source_status_class']=='issued':warnings.append({**source_scope,'contractor':'','message':scope_error})
@@ -178,6 +198,46 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
         reviewed,stale=reviewed_items(conn,s['id'])
         if stale:
             warnings.append({**source_scope,'contractor':party,'message':'Hóa đơn '+s['invoice_number']+' hoặc đơn gốc đã thay đổi sau xác nhận đổi mặt hàng; cần đối chiếu lại.'});continue
+        # After an immutable export exists, a changed/new invoice must not fall
+        # back to FIFO across old months. A saved customer period/item review
+        # remains authoritative; existing historical reconciliations are kept.
+        saved_period=conn.execute('SELECT * FROM outgoing_source_order_periods WHERE invoice_id=?',(s['id'],)).fetchone()
+        if saved_period:
+            try:
+                from .outgoing_source_scope import identity_snapshot
+            except ImportError:
+                from outgoing_source_scope import identity_snapshot
+            saved_period=saved_period if saved_period['identity_snapshot']==identity_snapshot(s) else None
+        if not found and not reviewed and not saved_period and any(not e.get('legacy_basis') and
+                e['created_at']<=s['created_at'] and
+                e['created_at'][:10]<=s['invoice_date'] for e in exports):
+            warnings.append({'invoice_id':s['id'],'invoice_date':s['invoice_date'],'invoice_number':s['invoice_number'],
+                'order_date_through':s['invoice_date'],'contractor':party,'code':'export_source_required',
+                'message':'Hóa đơn '+s['invoice_number']+' chưa khớp trọn vẹn bảng kê đã tải. Bấm So hóa đơn với bảng kê đã tải để kiểm tra, chọn đúng Từ ngày đơn và Đến ngày đơn; nếu đã đổi mặt hàng, mở đối chiếu theo tiền. Chưa tự trừ sang đơn kỳ khác.'})
+            continue
+        if found:
+            error=''
+            if len(found)!=1:
+                error='Có nhiều bảng kê cùng mặt hàng và số tiền nhưng khác dòng đơn. Chọn đúng khoảng ngày đơn trong Kiểm tra / sửa nguồn đơn.'
+            else:
+                export=found[0];expected=defaultdict(float)
+                for r in export['rows']:expected[r['product_code']]+=r['qty']
+                posted={r['product_code']:r['qty'] for r in conn.execute("SELECT product_code,-SUM(qty_delta) qty FROM invoice_inventory_effective_ledger WHERE direction='output' AND status='posted' AND source_invoice_table='outgoing_source_invoices' AND source_invoice_id=? GROUP BY product_code",(s['id'],))}
+                current={o['id']:o for o in orders}
+                if not orders_unchanged(conn,export):
+                    error='Đơn gốc đã thay đổi sau khi tải bảng kê. Mở Kiểm tra / sửa nguồn đơn để đối chiếu phần đã thay đổi.'
+                elif set(expected)!=set(posted) or any(abs(q-posted.get(code,0))>1e-8 for code,q in expected.items()):
+                    error='Lượng đã ghi kho chưa khớp bảng kê đã tải. Kiểm tra mã hàng và quy đổi của hóa đơn tại Hóa đơn đầu vào + đầu ra.'
+                elif any(oid not in current or reserved[oid]+quantities.get(oid,0)>max(current[oid]['actual_delivered']-current[oid]['customer_return_qty'],0)+1e-8 for oid in export['allocations']):
+                    error='Dòng đơn trong bảng kê đang được liên kết với hóa đơn khác hoặc đã đối trừ. Kiểm tra các hóa đơn trước khi xác nhận lại nguồn.'
+            if error:
+                warnings.append({**source_scope,'contractor':party,'code':'export_lineage_review','message':'Hóa đơn '+s['invoice_number']+': '+error})
+                continue
+            for oid,qty in export['allocations'].items():
+                quantities[oid]+=qty;reserved[oid]-=qty
+                if external_quantities is not None:external_quantities[oid]=external_quantities.get(oid,0)+qty
+                if source_order_allocations is not None:source_order_allocations.setdefault(s['id'],{})[oid]=qty
+            continue
         reviewed_by_code={r['source_code']:set(r['order_ids']) for r in reviewed}
         # The posted stock ledger already includes reviewed conversions and reversals.
         lines=conn.execute("""SELECT il.product_code,p.unit,-SUM(il.qty_delta) qty FROM invoice_inventory_effective_ledger il
@@ -191,7 +251,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
             for o in candidates:
                 if o['work_date']>s['invoice_date']:continue
                 if period_from and not period_from<=o['work_date']<=period_to:continue
-                need=max(o['actual_delivered']-o['customer_return_qty']-quantities[o['id']],0)
+                need=max(o['actual_delivered']-o['customer_return_qty']-quantities[o['id']]-reserved[o['id']],0)
                 take=min(need,remaining);quantities[o['id']]+=take;remaining-=take
                 if take and source_order_allocations is not None:
                     target=source_order_allocations.setdefault(s['id'],{})

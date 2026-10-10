@@ -3564,7 +3564,7 @@
       if(r.date_from)status+=' · Ngày đơn '+dateVN(r.date_from)+' – '+dateVN(r.date_to);
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>Ngày hóa đơn: '+esc(dateVN(r.date))+'</p><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         ((r.item_reviews||[]).length?'<p>'+ (r.item_review_stale?'Xác nhận đổi mặt hàng cần kiểm tra lại.':'Đã xác nhận đổi mặt hàng trên hóa đơn; đối trừ theo các dòng đơn gốc đã xác nhận.')+' Mã trên hóa đơn: '+r.item_reviews.map(function(x){return esc(x.source_code);}).join(', ')+'.</p>':'')+
-        (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
+        (r.error?'<p class="error-summary">'+esc(r.error)+'</p><button type="button" class="btn btn-primary" data-source-comparison="'+r.id+'">So hóa đơn với bảng kê đã tải</button>':'')+
         (hasLater?'<p>Các đơn trong phạm vi hóa đơn này vẫn cần đối chiếu. Chị có thể mở riêng đơn từ '+esc(dateVN(laterFrom))+' để kiểm tra và lập bảng kê tiếp.</p><button type="button" class="btn btn-outline" data-invoice-later-from="'+esc(laterFrom)+'" data-contractor="'+esc(r.contractor)+'"'+(exportChoicesDirty()?' disabled':'')+'>Mở đơn từ '+esc(dateVN(laterFrom))+'</button>':'')+
         ((r.review_details||[]).length?'<details class="source-review-details"><summary>Chi tiết cần đối chiếu · '+r.review_details.length+' thông tin</summary><div style="max-height:280px;overflow:auto"><ul>'+r.review_details.map(function(message){return '<li>'+esc(message)+'</li>';}).join('')+'</ul></div></details>':'')+
         '<details'+(r.scope==='unresolved'||r.scope_error?' open':'')+'><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Kiểm tra / sửa nguồn đơn')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
@@ -3572,7 +3572,7 @@
         '<label>Từ ngày đơn<input type="date" name="date_from" value="'+esc(draft?draft.date_from||'':r.date_from||'')+'"></label>'+
         '<label>Đến ngày đơn<input type="date" name="date_to" value="'+esc(draft?draft.date_to||'':r.date_to||'')+'"></label>'+
         '<p>Nhập cả hai ngày để chỉ đối trừ đơn trong khoảng đã xác nhận. Đổi bộ lọc xem bảng không tự đổi nguồn của hóa đơn.</p>'+
-        '<label>Lý do xác nhận<input name="note" required value="'+esc(draft&&draft.note||'')+'" placeholder="Đối chiếu theo đơn / hóa đơn nào"></label><button type="submit" class="btn btn-outline">Lưu đối chiếu</button></form></details></div>';
+        '<label>Lý do xác nhận<input name="note" required value="'+esc(draft&&draft.note||'')+'" placeholder="Đối chiếu theo đơn / hóa đơn nào"></label><button type="submit" class="btn btn-outline">Lưu đối chiếu</button><p>Nếu đã đổi mặt hàng trên hóa đơn: nhập đúng khoảng ngày đơn, rồi mở đối chiếu theo tiền để kiểm tra trước khi xác nhận.</p><button type="button" class="btn btn-outline" data-source-money="'+r.id+'">Đã đổi mặt hàng — đối chiếu theo tiền</button></form></details></div>';
     }
     return '<section id="invoiceSourceReview" class="code-note"><strong>Đối chiếu hóa đơn đã ký</strong><p>Phạm vi đơn đang xem: '+esc(invoiceScopeLabel())+' · '+esc(dateVN(pendingScope().from))+' – '+esc(dateVN(pendingScope().to))+'. Ngày hóa đơn được ghi riêng bên dưới.</p>'+
       (needsReview.length ? '<p>Có <strong>'+needsReview.length+' hóa đơn cần đối chiếu</strong>. Mở Chi tiết cần đối chiếu để xem chỗ chưa khớp. Chỉ mở Kiểm tra / sửa nguồn đơn khi cần chỉnh nguồn; không phải nhập lại các hóa đơn đã làm.</p><div class="source-review-pending">'+needsReview.map(renderSourceRow).join('')+'</div>' :
@@ -7090,6 +7090,7 @@
         var scopeError=sourceForm.querySelector('.source-save-error');
         if(!scopeError){scopeError=document.createElement('p');scopeError.className='source-save-error error-summary';scopeError.setAttribute('role','alert');sourceForm.appendChild(scopeError);}
         scopeError.textContent=error.message+' Phần đang chọn và Lý do xác nhận được giữ nguyên; kiểm tra rồi bấm Lưu đối chiếu để thử lại.';
+        if(error.message.indexOf('Từ ngày đơn')!==-1){var dateField=sourceForm.elements[!sourceForm.elements.date_from.value?'date_from':'date_to'];dateField.scrollIntoView({block:'center'});dateField.focus({preventScroll:true});}
         showToast(error.message,true);
       } finally {scopeButton.disabled=false;}
       return;
@@ -7539,6 +7540,26 @@
     var preparedSummary=event.target.closest('.prepared-invoice > summary');
     if(preparedSummary&&!preparedSummary.parentElement.open){
       event.preventDefault();var row=(state.preparedInvoices.items||[]).find(function(r){return r.id===Number(preparedSummary.parentElement.dataset.draftId);});if(row){selectInvoiceGroup(invoiceGroupKey(row));state.preparedActiveId=row.id;}renderDocuments();return;
+    }
+    var comparisonButton=event.target.closest('[data-source-comparison]');
+    if(comparisonButton){
+      var comparisonId=Number(comparisonButton.dataset.sourceComparison);
+      window.TdpSourceComparison({api:api,esc:esc,invoiceId:comparisonId,openForm:function(candidate,token){
+        var form=content.querySelector('.source-order-scope[data-id="'+comparisonId+'"]');if(!form)return;
+        if(form.dataset.token!==token){showToast('Thông tin hóa đơn vừa thay đổi. Cập nhật hóa đơn rồi mở đối chiếu lại; phần đã nhập vẫn được giữ.',true);return;}
+        form.closest('details').open=true;
+        if(candidate){form.elements.date_from.value=candidate.from;form.elements.date_to.value=candidate.to;}
+        state.sourceScopeEdits=state.sourceScopeEdits||{};state.sourceScopeEdits[comparisonId]=Object.fromEntries(new FormData(form).entries());
+        var field=form.elements[candidate?'note':'date_from'];field.scrollIntoView({block:'center'});field.focus({preventScroll:true});
+      }});return;
+    }
+    var sourceMoney=event.target.closest('[data-source-money]');
+    if(sourceMoney){
+      if(exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy){showToast('Lưu lựa chọn mặt hàng đang sửa trước khi đối chiếu theo tiền.',true);return;}
+      var moneyForm=sourceMoney.closest('form'),moneyValues=Object.fromEntries(new FormData(moneyForm).entries());
+      var missing=!moneyValues.choice||moneyValues.choice==='outside'?'choice':!moneyValues.date_from?'date_from':!moneyValues.date_to||moneyValues.date_to<moneyValues.date_from?'date_to':'';
+      if(missing){var message=missing==='choice'?'Chọn Hóa đơn này thuộc một nhà thầu có đơn đã duyệt.':missing==='date_from'?'Điền Từ ngày đơn để đối chiếu đúng phần đã xuất.':'Điền Đến ngày đơn không trước Từ ngày đơn.';showToast(message,true);moneyForm.elements[missing].focus();return;}
+      window.TdpAmountSettlement({api:api,esc:esc,scope:{contractor:moneyValues.choice,from:moneyValues.date_from,to:moneyValues.date_to},invoiceIds:[Number(sourceMoney.dataset.sourceMoney)],onSaved:function(){state.preparedInvoices=null;return loadUnissuedScope(false);}});return;
     }
     if(event.target.closest('[data-money-settlement]')){
       if(exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy){showToast('Lưu lựa chọn đang sửa trước khi đối trừ tiền.',true);return;}

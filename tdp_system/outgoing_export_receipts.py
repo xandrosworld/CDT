@@ -11,9 +11,9 @@ SCHEMA='''CREATE TABLE IF NOT EXISTS outgoing_export_receipts (
 );'''
 
 
-def draft_snapshot(conn,did):
+def draft_snapshot(conn,did, *, active_only=True):
     draft=conn.execute('SELECT status FROM outgoing_invoice_drafts WHERE id=?',(did,)).fetchone()
-    if not draft or draft['status']!='draft':return None
+    if not draft or (active_only and draft['status']!='draft'):return None
     rows=[dict(r) for r in conn.execute('''SELECT a.order_id,a.qty,o.contractor,o.work_date,
         o.product_code,o.unit,o.sell_price,o.tax,o.actual_delivered,o.customer_return_qty
         FROM outgoing_order_allocations a JOIN orders o ON o.id=a.order_id
@@ -22,10 +22,26 @@ def draft_snapshot(conn,did):
     return {'id':did,'rows':rows,'hash':hashlib.sha256(json.dumps([rows,lines],sort_keys=True).encode()).hexdigest()}
 
 
+def source_basis(conn, did):
+    try:
+        from .outgoing_weights import invoice_rows
+    except ImportError:
+        from outgoing_weights import invoice_rows
+    draft=conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?',(did,)).fetchone()
+    buyer=conn.execute('SELECT tax_code FROM outgoing_buyer_profiles WHERE contractor=?',(draft['contractor'],)).fetchone()
+    lines=[dict(r) for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(did,))]
+    return {'contractor':draft['contractor'],'buyer_tax_code':buyer['tax_code'] if buyer else '',
+            'subtotal':draft['subtotal'],'total_amount':draft['total_amount'],
+            'lines':invoice_rows(conn,lines)}
+
+
 def create(conn,ids,data,filename,timestamp):
     manifest=[draft_snapshot(conn,int(d)) for d in ids]
     manifest=[d for d in manifest if d and d['rows']]
     if not manifest:return ''
+    # Freeze the actual exported units/prices and buyer, independently of later
+    # draft edits/cancellation. The existing hash still tracks download choices.
+    for entry in manifest:entry['source_basis']=source_basis(conn,entry['id'])
     serialized=json.dumps(manifest)
     previous=conn.execute('SELECT token FROM outgoing_export_receipts WHERE manifest=?',(serialized,)).fetchone()
     if previous:return previous['token']

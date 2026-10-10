@@ -30,7 +30,7 @@ def review_token(invoice):
     return hashlib.sha256(identity_snapshot(invoice).encode()).hexdigest()
 
 
-def order_period(conn, invoice):
+def order_period(conn, invoice, *, export_matches=None):
     row=conn.execute('SELECT * FROM outgoing_source_order_periods WHERE invoice_id=?',(invoice['id'],)).fetchone()
     if row and row['identity_snapshot']==identity_snapshot(invoice):
         return row['date_from'],row['date_to']
@@ -47,6 +47,15 @@ def order_period(conn, invoice):
         profiles[(r['tax_code'] or '').strip().upper()].append(r['contractor'])
     party,error=resolve_scope(conn,invoice,profiles)
     if error or not party:return '', ''
+    try:
+        from .outgoing_export_lineage import matches
+    except ImportError:
+        from outgoing_export_lineage import matches
+    exports=matches(conn,invoice,party) if export_matches is None else export_matches
+    if exports:
+        if len(exports)!=1:return '', ''
+        dates=[r['work_date'] for r in exports[0]['rows']]
+        return min(dates),max(dates)
     actual=list(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(invoice['id'],)))
     if not actual:return '', ''
     def signature(rows,source=False):
@@ -105,6 +114,14 @@ def set_scope(conn, invoice_id, body, timestamp):
         if linked:
             raise ValueError('Hóa đơn đã liên kết với các dòng đơn gốc; không đổi khoảng ngày tại đây.')
     elif scope=='orders':
+        try:
+            from .outgoing_export_lineage import catalog, matches
+        except ImportError:
+            from outgoing_export_lineage import catalog, matches
+        exports=catalog(conn)
+        if len(matches(conn,source,contractor,exports))!=1 and any(not e.get('legacy_basis') and
+                e['created_at']<=source['created_at'] and e['created_at'][:10]<=source['invoice_date'] for e in exports):
+            raise ValueError('Điền Từ ngày đơn và Đến ngày đơn đúng bảng kê đã dùng cho hóa đơn này; chưa đủ thông tin để tự chọn khoảng ngày.')
         start,end=order_period(conn,source)
     conn.execute('''INSERT INTO outgoing_source_order_scopes(invoice_id,scope,contractor,identity_snapshot,note,updated_at)
         VALUES(?,?,?,?,?,?) ON CONFLICT(invoice_id) DO UPDATE SET scope=excluded.scope,contractor=excluded.contractor,
@@ -164,6 +181,11 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
     for r in conn.execute("SELECT contractor,tax_code FROM outgoing_buyer_profiles WHERE TRIM(COALESCE(tax_code,''))!=''"):
         profiles[r['tax_code'].strip().upper()].append(r['contractor'])
     rows=[]
+    try:
+        from .outgoing_export_lineage import catalog, matches
+    except ImportError:
+        from outgoing_export_lineage import catalog, matches
+    exports=catalog(conn)
     for source in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND invoice_date BETWEEN ? AND ? ORDER BY invoice_date,id",(start,end)):
         if relevant_ids is not None and source['id'] not in relevant_ids:continue
         if source['source_status_class']!='issued':continue
@@ -172,7 +194,7 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
         details=list(dict.fromkeys(source_warnings[source['id']]))
         if not error and source_warnings[source['id']]:
             error=f'Có {len(details)} thông tin chưa khớp với đơn đã duyệt. Mở Chi tiết cần đối chiếu để kiểm tra mã hàng, số lượng và nguồn đơn. Không xuất lại hóa đơn này.'
-        period_from,period_to=order_period(conn,source)
+        period_from,period_to=order_period(conn,source,export_matches=matches(conn,source,party,exports) if party else [])
         try:
             from .outgoing_source_item_review import reviewed_items
         except ImportError:
