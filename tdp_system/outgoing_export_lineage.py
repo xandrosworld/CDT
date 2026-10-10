@@ -69,12 +69,12 @@ def matches(conn, invoice, party, exports=None):
         except ImportError:
             from outgoing_source_scope import identity_snapshot
         if period['identity_snapshot']!=identity_snapshot(invoice):return []
-    found={}
+    found={};legacy={}
     for export in catalog(conn) if exports is None else exports:
         # Historical receipts did not freeze the buyer or converted lines.
         # They are useful comparison evidence, not permission to rewrite old
-        # reconciliations at deployment time.
-        if export.get('legacy_basis'):continue
+        # reconciliations at deployment time. They must still prevent an
+        # ambiguous new match when two different order sets look identical.
         basis=export['source_basis']
         if basis['contractor']!=party or export['created_at']>invoice['created_at']:continue
         if not (basis['buyer_tax_code'] or '').strip() or basis['buyer_tax_code'].strip().upper()!=invoice['buyer_tax_code'].strip().upper():continue
@@ -86,8 +86,8 @@ def matches(conn, invoice, party, exports=None):
         links=defaultdict(float)
         for r in rows:links[r['order_id']]+=r['qty']
         key=tuple(sorted(links.items()))
-        found[key]={**export,'allocations':dict(links)}
-    return list(found.values())
+        (legacy if export.get('legacy_basis') else found)[key]={**export,'allocations':dict(links)}
+    return list({**legacy,**found}.values()) if found else []
 
 
 def orders_unchanged(conn, export):

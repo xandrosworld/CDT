@@ -103,6 +103,16 @@ class ExportLineageTests(unittest.TestCase):
             c.execute('UPDATE outgoing_invoice_lines SET qty=99 WHERE draft_id=?',(did,))
             self.assertEqual(catalog(c),[])
 
+    def test_new_file_does_not_hide_identical_legacy_file_for_different_orders(self):
+        _,_,token=self.export();self.export(date='2026-10-02');sid=self.source()
+        with server.db() as c:
+            entries=json.loads(c.execute('SELECT manifest FROM outgoing_export_receipts WHERE token=?',(token,)).fetchone()[0])
+            del entries[0]['source_basis']
+            c.execute('UPDATE outgoing_export_receipts SET manifest=? WHERE token=?',(json.dumps(entries),token))
+            q,w=issued_allocations(c)
+            self.assertFalse(q)
+            self.assertIn('nhiều bảng kê',w[0]['message'])
+
     def test_changed_code_qty_or_buyer_is_not_exact_and_comparison_is_read_only(self):
         self.export();sid=self.source()
         with server.db() as c:
