@@ -1893,7 +1893,7 @@
     var days = state.supplierNeeds ? state.supplierNeeds.days : [];
     content.innerHTML = pendingImportBanner() + '<div class="toolbar"><label>Từ ngày <input id="supplierFrom" type="date" value="' + esc(state.supplierFrom) + '"></label>' +
       '<label>Đến ngày <input id="supplierTo" type="date" value="' + esc(state.supplierTo) + '"></label><button class="btn btn-outline" data-action="refresh-supplier-range">Tải lại</button></div>' +
-      '<div class="code-note">Đơn đặt NCC theo khoảng ngày. Mỗi ngày giữ riêng đơn và trạng thái đã đặt.</div>' +
+      '<div class="code-note">Đơn đặt NCC theo khoảng ngày. Số lượng gửi NCC được làm tròn đến 1 số sau dấu phẩy sau khi gộp hàng. Mỗi ngày giữ riêng đơn và trạng thái đã đặt.</div>' +
       (days.length ? '<div class="supplier-day-links toolbar">' + days.map(function (day) { return '<button class="btn btn-outline" data-action="jump-supplier-day" data-batch-id="' + day.batch_id + '">' + dateVN(day.work_date) + ' · ' + day.checklist.length + ' NCC</button>'; }).join('') + '</div>' : '') +
       (state.supplierError ? '<div class="error-summary" role="alert">' + esc(state.supplierError) + '</div>' : '') +
       (state.supplierLoading ? '<div class="loading-panel">Đang nạp kế hoạch đặt nhà cung cấp…</div>' : '') +
@@ -1930,9 +1930,9 @@
         ' dòng gửi</span></div><div class="supplier-order-actions"><span class="tag ' + statusClass + '">' + statusText +
         '</span><button class="btn btn-small btn-outline" data-action="edit-supplier-notes" data-supplier-key="' + esc(group.supplier_key) + '"' + batchAttr + '>Ghi chú NCC</button><button class="btn btn-small btn-primary" data-action="copy-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' +
         groupIndex + '"' + batchAttr + '>Sao chép ảnh</button><button class="btn btn-small btn-outline" data-action="download-supplier-image" data-supplier-key="' + esc(group.supplier_key) + '" data-group-index="' + groupIndex + '"' + batchAttr + '>Tải ảnh</button>' + reopenControl + '</div></div><div class="group-total"><span>Tổng đặt nhà cung cấp</span><strong>' +
-        esc(stockQuantitySummary(items, 'order_qty')) + (group.total_amount != null ? " · " + stockMoney(group.total_amount) : "") + '</strong></div>' +
+        esc(stockQuantitySummary(items.map(function(r){return Object.assign({},r,{order_qty:window.TdpSupplierImage.roundedQuantity(r.order_qty)});}), 'order_qty')) + (group.total_amount != null ? " · " + stockMoney(group.total_amount) : "") + '</strong></div>' +
         '<details class="supplier-lines"><summary>Xem ' + items.length + ' dòng đặt hàng</summary><div class="table-wrap round2-table"><table><thead><tr><th>Bếp</th><th>Hàng</th><th>SL đặt</th><th>ĐVT</th><th>Giá mua</th><th>Thành tiền</th><th>Ghi chú</th></tr></thead><tbody>' +
-        items.map(function (item) { return '<tr><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td>' + stockQty(item.order_qty) + '</td><td>' + esc(item.unit) + '</td><td>' + (item.mixed_buy_prices ? 'Nhiều giá' : stockMoney(item.buy_price)) + '</td><td>' + stockMoney(item.amount) + '</td><td>' + esc(item.note) + '</td></tr>'; }).join('') +
+        items.map(function (item) { return '<tr><td>' + esc(item.kitchen) + '</td><td>' + esc(item.product_name) + '</td><td>' + window.TdpSupplierImage.quantityText(item.order_qty) + '</td><td>' + esc(item.unit) + '</td><td>' + (item.mixed_buy_prices ? 'Nhiều giá' : stockMoney(item.buy_price)) + '</td><td>' + stockMoney(item.amount) + '</td><td>' + esc(item.note) + '</td></tr>'; }).join('') +
         '</tbody></table></div></details></div>';
     }).join("");
     var markup = sourceBanner + '<div class="supplier-order-overview fade-in"><div><strong>' + checklistOpen +

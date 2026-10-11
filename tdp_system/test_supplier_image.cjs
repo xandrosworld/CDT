@@ -20,3 +20,10 @@ plan.columns.forEach((c,i)=>{
 });
 assert.equal(renderer.wrap('Tên hàng rất dài không được mất chữ',80,measure).join('').replace(/\s/g,''),'Tênhàngrấtdàikhôngđượcmấtchữ');
 console.log('Supplier image: compact columns, all rows, varied dates/suppliers/notes, no truncated text passed.');
+
+for(const [source,expected] of [[35.25,35.3],[35.65,35.7],[35.5,35.5],[35.7,35.7],[1.15,1.2],[0,0]])assert.equal(renderer.roundedQuantity(source),expected);
+assert.equal(renderer.quantityText(35.65),'35,7');
+const original={supplier:'Thu',items:[{order_qty:35.65,unit:'Kg',product_name:'Cải ngọt'}]};
+assert.equal(renderer.layout(original,options,measure).rows[0].order_qty,'35,7');
+assert.equal(original.items[0].order_qty,35.65,'Rendering must preserve source quantities');
+console.log('Customer rounding examples and immutable source passed');

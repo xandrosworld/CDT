@@ -1,5 +1,14 @@
 (function (root) {
   'use strict';
+  function roundedQuantity(value) {
+    var number=Number(value);
+    if(!Number.isFinite(number))return 0;
+    var scaled=Math.abs(number)*10;
+    return Math.sign(number)*Math.floor(scaled+0.5+Number.EPSILON*Math.max(1,scaled)*4)/10;
+  }
+  function quantityText(value) {
+    return roundedQuantity(value).toLocaleString('vi-VN',{maximumFractionDigits:1});
+  }
   function wrap(text, width, measure) {
     var lines = [], line = '';
     String(text == null ? '' : text).split(/\n/).forEach(function (paragraph) {
@@ -23,7 +32,7 @@
     if (items.some(function(r) { return r.supplier && r.supplier !== group.supplier; })) columns.push({key:'supplier',label:'NCC',max:135});
     columns.push({key:'note',label:'Ghi chú',max:190});
     var rows = items.map(function(r) { return Object.assign({},r,{
-      order_qty:options.quantity(r.order_qty == null ? r.required_qty : r.order_qty),
+      order_qty:quantityText(r.order_qty == null ? r.required_qty : r.order_qty),
       work_date:options.dateText(r.work_date || options.date)
     }); });
     columns.forEach(function(c) {
@@ -79,7 +88,7 @@
     edges.forEach(function(edge){ctx.moveTo(left,edge);ctx.lineTo(x,edge);});ctx.stroke();
     return new Promise(function(resolve,reject){canvas.toBlob(function(image){image?resolve(image):reject(new Error('Không tạo được ảnh NCC.'));},'image/png');});
   }
-  var api={layout:layout,wrap:wrap,blob:blob};
+  var api={roundedQuantity:roundedQuantity,quantityText:quantityText,layout:layout,wrap:wrap,blob:blob};
   if (typeof module!=='undefined' && module.exports) module.exports=api;
   root.TdpSupplierImage=api;
 })(typeof window==='undefined'?globalThis:window);
