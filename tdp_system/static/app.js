@@ -3134,7 +3134,7 @@
       var notes=extra[0],preparedList=extra[1];
       if(preparedList.items.length && !(state.minvoiceSeries||[]).length){state.minvoiceSeries=(await api('/api/minvoice/series')).items||[];}
       if(serial===state.unissuedSerial && key===JSON.stringify(pendingScope())){
-        state.unissued=d;state.invoiceReviewNotes=notes;state.outgoingSourceReview=extra[2].items;
+        state.unissued=d;state.invoiceReviewNotes=notes;state.outgoingSourceReview=extra[2].items;state.outsideBuyers=extra[2].outside_buyers||[];
         state.outputSyncApplied=(state.outputSyncStatus||{}).last_checked;
         acceptPreparedInvoices(preparedList);
       }
@@ -3563,7 +3563,8 @@
     if(!state.outgoingSourceReview) return '';
     var party=pendingScope().contractor,enabled=(state.invoiceContractorChoices&&state.invoiceContractorChoices.items||[]).filter(function(r){return r.enabled;}).map(function(r){return r.code;});
     var rows=state.outgoingSourceReview.filter(function(r){return r.scope==='unresolved'||r.scope==='outside'||(party?r.contractor===party:enabled.includes(r.contractor));});
-    if(!rows.length)return '';
+    var outsideHtml='<details class="code-note" id="outsideBuyerRules"><summary>Khách bán ngoài đã ghi nhớ · '+(state.outsideBuyers||[]).length+'</summary><p>Hóa đơn mới của đúng người mua đã ghi nhớ được nhận là bán ngoài, không trừ đơn nhà thầu. Kho vẫn xử lý theo hóa đơn như bình thường. Nếu thông tin người mua thay đổi hoặc hàng khớp bảng kê đã tải, cần kiểm tra lại.</p>'+((state.outsideBuyers||[]).map(function(r){return '<p>'+esc(r.buyer)+' · '+esc(r.tax_code||'Không có mã số thuế')+' <button type="button" class="btn btn-outline" data-forget-outside="'+r.invoice_id+'">Bỏ ghi nhớ</button></p>';}).join('')||'<p>Chưa ghi nhớ người mua nào. Khi xác nhận một hóa đơn là bán ngoài, tích Ghi nhớ người mua này là khách bán ngoài trước khi lưu.</p>')+'<p>Bỏ ghi nhớ chỉ áp dụng cho hóa đơn nhận về sau; các hóa đơn đã xác nhận được giữ nguyên.</p></details>';
+    if(!rows.length)return outsideHtml;
     var needsReview = rows.filter(function(r){return r.scope==='unresolved'||r.error;});
     var matched = rows.filter(function(r){return r.scope!=='unresolved'&&!r.error;});
     var stockPending = matched.filter(function(r){return r.stock_status!=='posted';}).length;
@@ -3584,17 +3585,18 @@
         (hasLater?'<p>Các đơn trong phạm vi hóa đơn này vẫn cần đối chiếu. Chị có thể mở riêng đơn từ '+esc(dateVN(laterFrom))+' để kiểm tra và lập bảng kê tiếp.</p><button type="button" class="btn btn-outline" data-invoice-later-from="'+esc(laterFrom)+'" data-contractor="'+esc(r.contractor)+'"'+(exportChoicesDirty()?' disabled':'')+'>Mở đơn từ '+esc(dateVN(laterFrom))+'</button>':'')+
         ((r.review_details||[]).length?'<details class="source-review-details"><summary>Chi tiết cần đối chiếu · '+r.review_details.length+' thông tin</summary><div style="max-height:280px;overflow:auto"><ul>'+r.review_details.map(function(message){return '<li>'+esc(message)+'</li>';}).join('')+'</ul></div></details>':'')+
         '<details'+(r.scope==='unresolved'||r.scope_error?' open':'')+'><summary>'+(r.scope==='unresolved'?'Chọn đơn liên quan':'Kiểm tra / sửa nguồn đơn')+'</summary><form class="source-order-scope document-contractor-form" data-id="'+r.id+'" data-token="'+esc(r.token)+'">'+
-        '<label>Hóa đơn này thuộc<select name="choice" required><option value="">Chọn đúng nguồn đơn</option><option value="outside"'+(choice==='outside'?' selected':'')+'>Đơn riêng, chưa đưa vào phần mềm</option>'+state.data.master.contractors.map(function(c){return '<option value="'+esc(c.code)+'"'+(choice===c.code?' selected':'')+'>Đơn đã duyệt · '+esc(c.code)+'</option>';}).join('')+'</select></label>'+
+        '<label>Hóa đơn này thuộc<select name="choice" required><option value="">Chọn đúng nguồn đơn</option><option value="outside"'+(choice==='outside'?' selected':'')+'>Bán ngoài · không trừ đơn nhà thầu</option>'+state.data.master.contractors.map(function(c){return '<option value="'+esc(c.code)+'"'+(choice===c.code?' selected':'')+'>Đơn đã duyệt · '+esc(c.code)+'</option>';}).join('')+'</select></label>'+
         '<label>Từ ngày đơn<input type="date" name="date_from" value="'+esc(draft?draft.date_from||'':r.date_from||'')+'"></label>'+
         '<label>Đến ngày đơn<input type="date" name="date_to" value="'+esc(draft?draft.date_to||'':r.date_to||'')+'"></label>'+
         '<p>Nhập cả hai ngày để chỉ đối trừ đơn trong khoảng đã xác nhận. Đổi bộ lọc xem bảng không tự đổi nguồn của hóa đơn.</p>'+
+        '<label><input type="checkbox" name="remember_outside"'+(draft&&draft.remember_outside?' checked':'')+'> Ghi nhớ người mua này là khách bán ngoài</label><p>Chỉ tích khi các hóa đơn mới của người mua này là bán ngoài. Không đổi các hóa đơn cũ và không ghi xuất kho lần hai.</p>'+
         '<label>Lý do xác nhận<input name="note" required value="'+esc(draft&&draft.note||'')+'" placeholder="Đối chiếu theo đơn / hóa đơn nào"></label><button type="submit" class="btn btn-outline">Lưu đối chiếu</button><p>Nếu đã đổi mặt hàng trên hóa đơn: nhập đúng khoảng ngày đơn, rồi mở đối chiếu theo tiền để kiểm tra trước khi xác nhận.</p><button type="button" class="btn btn-outline" data-source-money="'+r.id+'">Đã đổi mặt hàng — đối chiếu theo tiền</button></form></details></div>';
     }
     return '<section id="invoiceSourceReview" class="code-note"><strong>Đối chiếu hóa đơn đã ký</strong><p>Phạm vi đơn đang xem: '+esc(invoiceScopeLabel())+' · '+esc(dateVN(pendingScope().from))+' – '+esc(dateVN(pendingScope().to))+'. Ngày hóa đơn được ghi riêng bên dưới.</p>'+
       (needsReview.length ? '<p>Có <strong>'+needsReview.length+' hóa đơn cần đối chiếu</strong>. Mở Chi tiết cần đối chiếu để xem chỗ chưa khớp. Chỉ mở Kiểm tra / sửa nguồn đơn khi cần chỉnh nguồn; không phải nhập lại các hóa đơn đã làm.</p><div class="source-review-pending">'+needsReview.map(renderSourceRow).join('')+'</div>' :
         '<p>Đã xác định nguồn đơn cho '+matched.length+' hóa đơn. Không cần lưu đối chiếu lại; tiếp tục chọn mặt hàng và kiểm tra tồn ở các bước phía trên.</p>')+
       (stockPending ? '<p>Còn '+stockPending+' hóa đơn đã xác định nguồn đơn nhưng chưa ở trạng thái Đã ghi xuất kho. Mở danh sách bên dưới để xem hóa đơn; kiểm tra tại Hóa đơn đầu vào + đầu ra → Đầu ra.</p>' : '')+
-      (matched.length ? '<details class="source-review-matched"><summary>Xem '+matched.length+' hóa đơn đã đối chiếu · chỉ sửa khi gắn sai nguồn đơn</summary><p>Danh sách này để tra cứu hóa đơn đã ký, không phải hóa đơn mới cần xuất. Trạng thái ghi xuất kho được hiển thị riêng ở từng hóa đơn.</p>'+matched.map(renderSourceRow).join('')+'</details>' : '')+'</section>';
+      (matched.length ? '<details class="source-review-matched"><summary>Xem '+matched.length+' hóa đơn đã đối chiếu · chỉ sửa khi gắn sai nguồn đơn</summary><p>Danh sách này để tra cứu hóa đơn đã ký, không phải hóa đơn mới cần xuất. Trạng thái ghi xuất kho được hiển thị riêng ở từng hóa đơn.</p>'+matched.map(renderSourceRow).join('')+'</details>' : '')+'</section>'+outsideHtml;
   }
 
   function conversionIssue(orderId) {
@@ -7095,11 +7097,11 @@
       var sourceForm=event.target,choice=new FormData(sourceForm).get('choice');
       var scopeButton=event.submitter || sourceForm.querySelector('button[type=submit]');scopeButton.disabled=true;
       try {
-        await api('/api/outgoing-invoices/source-scopes/'+sourceForm.dataset.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:sourceForm.dataset.token,scope:choice==='outside'?'outside':'orders',contractor:choice==='outside'?'':choice,note:new FormData(sourceForm).get('note'),date_from:new FormData(sourceForm).get('date_from'),date_to:new FormData(sourceForm).get('date_to')})});
+        await api('/api/outgoing-invoices/source-scopes/'+sourceForm.dataset.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:sourceForm.dataset.token,scope:choice==='outside'?'outside':'orders',contractor:choice==='outside'?'':choice,note:new FormData(sourceForm).get('note'),date_from:new FormData(sourceForm).get('date_from'),date_to:new FormData(sourceForm).get('date_to'),remember_outside:new FormData(sourceForm).has('remember_outside')})});
         sourceForm.dataset.saved='true';
         if(state.sourceScopeEdits)delete state.sourceScopeEdits[sourceForm.dataset.id];
         var sourceDates=state.orderInvoiceFilters || {};
-        state.outgoingSourceReview=(await api(sourceReviewUrl())).items;
+        var sourceReport=await api(sourceReviewUrl());state.outgoingSourceReview=sourceReport.items;state.outsideBuyers=sourceReport.outside_buyers||[];
         await loadUnissuedScope(true);
         showToast('Đã lưu phạm vi đối chiếu hóa đơn');
       } catch(error) {
@@ -7276,6 +7278,14 @@
   });
 
   content.addEventListener("change", function (event) {
+    if(event.target.matches('.source-order-scope select[name=choice]')){
+      var sourceChoiceForm=event.target.form;
+      if(event.target.value==='outside'&&!sourceChoiceForm.elements.note.value){
+        sourceChoiceForm.elements.note.value='Bán ngoài, không lấy từ đơn nhà thầu trên phần mềm.';
+      }
+      if(event.target.value!=='outside')sourceChoiceForm.elements.remember_outside.checked=false;
+    }
+
     if(event.target.id==='bkPrintMonth'){state.bkPrintMonth=event.target.value;return;}
     if(event.target.id==='invoiceTaxGroupPick'){selectInvoiceGroup(event.target.value);openInvoiceGroupChoices();return;}
     if(event.target.form&&event.target.form.classList.contains('preparedSendForm')){
@@ -7812,6 +7822,17 @@
     // Saving keeps the current working position. Only explicit navigation scrolls.
   }
   content.addEventListener("click", async function (event) {
+    var forgetOutside=event.target.closest('[data-forget-outside]');
+    if(forgetOutside){
+      forgetOutside.disabled=true;
+      try {
+        await api('/api/outgoing-invoices/outside-buyers/'+forgetOutside.dataset.forgetOutside,{method:'DELETE'});
+        await loadUnissuedScope(true);
+        showToast('Đã bỏ ghi nhớ người mua. Các hóa đơn đã xác nhận được giữ nguyên.');
+      } catch(error){showToast(error.message,true);forgetOutside.disabled=false;}
+      return;
+    }
+
     var viewButton = event.target.closest("[data-view]");
     if (viewButton) { navigate(viewButton.dataset.view); return; }
     var button = event.target.closest("[data-action]");

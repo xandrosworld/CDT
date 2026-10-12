@@ -589,6 +589,8 @@ def upsert_output_invoice(
             conn, existing["id"], data["identity_key"], previous_class,
             data["source_status_class"], data["relation_reference"], now,
         )
+        if not requires_reconcile:
+            _remembered_outside(conn, existing['id'], now)
         return existing["id"], False, data, requires_reconcile
 
     if existing:
@@ -663,7 +665,17 @@ def upsert_output_invoice(
         conn, invoice_id, data["identity_key"], previous_class,
         status_class, data["relation_reference"], now,
     )
+    if sync_status == 'synced':
+        _remembered_outside(conn, invoice_id, now)
     return invoice_id, created, data, sync_status != "synced"
+
+
+def _remembered_outside(conn, invoice_id, timestamp):
+    try:
+        from .outgoing_outside_buyers import apply_remembered
+    except ImportError:
+        from outgoing_outside_buyers import apply_remembered
+    apply_remembered(conn, invoice_id, timestamp)
 
 
 def _counts(conn, batch_id: int) -> dict[str, int]:

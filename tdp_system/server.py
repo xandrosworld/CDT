@@ -4778,12 +4778,31 @@ def api_outgoing_source_scopes(invoice_id=None):
                 conn.execute('BEGIN IMMEDIATE')
                 return jsonify(ok=True,**set_scope(conn,invoice_id,body,now_iso()))
             start,end,party,_=resolve_scope(conn,request.args,valid_iso_date)
-            return jsonify(ok=True,items=scope_report(conn,start,end,party,order_scope=request.args.get('order_scope')=='1'))
+            try:
+                from .outgoing_outside_buyers import rules
+            except ImportError:
+                from outgoing_outside_buyers import rules
+            return jsonify(ok=True,items=scope_report(conn,start,end,party,order_scope=request.args.get('order_scope')=='1'),outside_buyers=rules(conn))
     except ValueError as exc:
         return jsonify(ok=False,error=str(exc)),409
     except sqlite3.OperationalError as exc:
         if 'locked' not in str(exc).lower():raise
         return jsonify(ok=False,error='Hệ thống đang cập nhật hóa đơn. Chờ cập nhật xong rồi lưu đối chiếu lại; xác nhận này chưa được lưu.'),409
+
+
+@app.delete('/api/outgoing-invoices/outside-buyers/<int:invoice_id>')
+def api_forget_outside_buyer(invoice_id):
+    try:
+        from .outgoing_outside_buyers import forget
+    except ImportError:
+        from outgoing_outside_buyers import forget
+    try:
+        with db() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            forget(conn,invoice_id,now_iso())
+        return jsonify(ok=True)
+    except ValueError as exc:
+        return jsonify(ok=False,error=str(exc)),409
 
 
 @app.post("/api/export/order-invoices")

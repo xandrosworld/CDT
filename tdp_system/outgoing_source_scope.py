@@ -111,6 +111,14 @@ def set_scope(conn, invoice_id, body, timestamp):
     if linked and (scope=='outside' or any(r['contractor']!=contractor for r in linked)):
         raise ValueError('Hóa đơn đã được xác nhận gắn với đơn trên phần mềm; cần đối chiếu liên kết đó trước khi đổi phạm vi.')
     if scope=='outside':contractor=''
+    if body.get('remember_outside'):
+        if scope!='outside':
+            raise ValueError('Chọn Hóa đơn này thuộc là Bán ngoài trước khi ghi nhớ người mua.')
+        try:
+            from .outgoing_outside_buyers import remember
+        except ImportError:
+            from outgoing_outside_buyers import remember
+        remember(conn,source,note,timestamp)
     start=str(body.get('date_from') or '').strip();end=str(body.get('date_to') or '').strip()
     if scope=='orders' and (start or end):
         try:
@@ -161,6 +169,7 @@ def set_scope(conn, invoice_id, body, timestamp):
 
 
 def scope_report(conn, start, end, contractor='', *, order_scope=False):
+    displayed_period = (start,end)
     try:
         from .outgoing_source_acceptance import coverage as acceptance_coverage, summary as acceptance_summary
     except ImportError:
@@ -200,8 +209,16 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
     except ImportError:
         from outgoing_export_lineage import catalog, matches
     exports=catalog(conn)
+    outside_scopes = {r['invoice_id']:r['identity_snapshot'] for r in conn.execute(
+        "SELECT invoice_id,identity_snapshot FROM outgoing_source_order_scopes WHERE scope='outside'")} if order_scope else {}
     for source in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND invoice_date BETWEEN ? AND ? ORDER BY invoice_date,id",(start,end)):
-        if relevant_ids is not None and source['id'] not in relevant_ids:continue
+        if relevant_ids is not None and source['id'] not in relevant_ids:
+            # Keep outside sales discoverable in the selected period so the
+            # customer can correct a remembered default without support.
+            outside = outside_scopes.get(source['id'])
+            if not (outside==identity_snapshot(source)
+                    and displayed_period[0]<=source['invoice_date']<=displayed_period[1]):
+                continue
         if source['source_status_class']!='issued':continue
         party,error=resolve_scope(conn,source,profiles)
         scope_error=error
