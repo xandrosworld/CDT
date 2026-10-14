@@ -1041,3 +1041,14 @@ body { min-width: 320px; }
 .invoice-reconciliation{margin-top:10px;padding:10px;border-left:3px solid #087f73}
 
 .invoice-coverage{margin:10px 0;padding:12px;border:1px solid currentColor;border-radius:6px}.invoice-coverage .table-wrap{max-height:300px;overflow:auto}.invoice-coverage label{display:block;margin-top:12px;font-weight:600}
+
+/* Keep the partial-invoice decision readable and next to its actions. */
+.invoice-coverage { margin: 14px 0; padding: 16px; font-size: 15px; line-height: 1.55; }
+.invoice-coverage h3 { margin: 0 0 8px; font-size: 18px; }
+.invoice-coverage .coverage-row { padding: 14px 0; border-bottom: 1px solid #cbd5d8; }
+.invoice-coverage .coverage-row p { margin: 5px 0; }
+.invoice-send-controls .btn { min-height: 42px; white-space: normal; margin: 5px 6px 5px 0; }
+.invoice-send-controls .coverage-confirm { display: flex; align-items: flex-start; gap: 10px; padding: 14px 0; font-size: 16px; line-height: 1.5; }
+.invoice-workflow #orderInvoiceExportForm .invoice-send-controls .coverage-confirm input[type=checkbox] { width: 22px; height: 22px; flex: 0 0 22px; margin-top: 2px; }
+
+.invoice-send-controls .invoice-remaining-reason {font-size:15px;max-width:750px;line-height:1.55;}

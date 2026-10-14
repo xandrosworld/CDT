@@ -62,7 +62,21 @@ def explain_pending(conn, orders, details, units, warnings, stock):
             available = stock.get(code, {}).get('available_qty', 0)
             shortage = not is_kkknt(r['tax']) and code not in exempt[r['contractor']] and available + 1e-8 < pending_by_code[code]
             if shortage:
-                reasons.append('Chưa đủ tồn khả dụng cho phần còn chờ; cần bổ sung đầu vào hoặc kiểm tra lượng đang giữ ở bảng kê khác.')
+                item = stock.get(code, {})
+                balance = item.get('canonical_qty', 0)
+                reserved = item.get('reserved_qty', 0)
+                pending_issue = item.get('pending_sync_issued_qty', 0)
+                def quantity(value):
+                    return f'{value:g}'.replace('.', ',')+' '+r['unit']
+                r['stock_summary'] = {'balance_qty':balance,'reserved_qty':reserved,
+                    'pending_sync_issued_qty':pending_issue,'available_qty':available}
+                explanation = 'Tồn trên sổ: '+quantity(balance)+'. '
+                if reserved > 1e-8:
+                    explanation += 'Đang giữ ở bản nháp: '+quantity(reserved)+'. '
+                if pending_issue > 1e-8:
+                    explanation += 'Đã phát hành, chờ ghi kho: '+quantity(pending_issue)+'. '
+                explanation += 'Chưa đủ cho phần còn lại. Bấm Kiểm tra nguồn tồn để xem và xử lý.'
+                reasons.append(explanation)
                 codes.append('stock_shortage')
             total = groups[key(r)]
             remainder = total - export_quantity(total, r['unit'],r['tax'])

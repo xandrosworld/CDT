@@ -8374,7 +8374,7 @@ def register_contract_routes(app, ctx):
         with db_factory() as conn:
             conn.execute('BEGIN')
             try:
-                return jsonify(ok=True, **batch_product_stock_trace(conn, batch_id, product_code))
+                return jsonify(ok=True, **batch_product_stock_trace(conn, batch_id, product_code,remaining=request.args.get('remaining')=='1'))
             except OutgoingReadinessError as exc:
                 return jsonify(ok=False, error=str(exc), code=exc.code), exc.status
 

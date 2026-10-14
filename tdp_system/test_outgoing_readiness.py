@@ -414,6 +414,9 @@ class OutgoingReadinessTests(unittest.TestCase):
         self.assertEqual(self.client.post(f'/api/outgoing-invoices/draft/{other}').status_code, 200)
         trace = self.client.get(f'/api/outgoing-invoices/readiness/{own}/stock/HH-01').json
         self.assertEqual((trace['closing_qty'], trace['reserved_qty'], trace['available_qty']), (10, 2, 8))
+        remaining = self.client.get(f'/api/outgoing-invoices/readiness/{own}/stock/HH-01?remaining=1').json
+        self.assertEqual((remaining['closing_qty'], remaining['reserved_qty'], remaining['available_qty']), (10, 6, 4))
+        self.assertEqual(sum(r['qty'] for r in remaining['reservations']), 6)
 
     def test_opening_edit_preserves_cost_source_and_rejects_stale_window(self):
         with server.db() as conn:

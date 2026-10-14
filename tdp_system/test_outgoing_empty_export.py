@@ -81,12 +81,12 @@ class EmptyExportTests(unittest.TestCase):
 const fs=require('fs'),assert=require('assert');
 const source=fs.readFileSync('tdp_system/static/app.js','utf8');
 const part=source.slice(source.indexOf('  function sourceScopeReviewHtml()'),source.indexOf('  function conversionIssue('));
-const render=new Function('state','pendingScope','esc',part+'return sourceScopeReviewHtml();');
+const render=new Function('state','pendingScope','esc','invoiceScopeLabel','dateVN',part+'return sourceScopeReviewHtml();');
 const rows=['ATV','TOYOTA','EXCLUDED',''].map((c,i)=>({contractor:c,number:'INVOICE-'+i,buyer:c||'OUTSIDE',scope:c?'orders':'outside',stock_status:'posted',id:i}));
 const state={outgoingSourceReview:rows,invoiceContractorChoices:{items:[{code:'ATV',enabled:true},{code:'TOYOTA',enabled:true},{code:'EXCLUDED',enabled:false}]},data:{master:{contractors:[]}}};
-let html=render(state,()=>({contractor:'ATV'}),String);
-assert(html.includes('INVOICE-0'));assert(!html.includes('INVOICE-1'));assert(!html.includes('INVOICE-2'));assert(!html.includes('INVOICE-3'));assert(!html.includes('<details open'));
-html=render(state,()=>({contractor:''}),String);assert(html.includes('INVOICE-1'));assert(!html.includes('INVOICE-2'));assert(!html.includes('INVOICE-3'));
+let html=render(state,()=>({contractor:'ATV'}),String,()=> 'ATV',String);
+assert(html.includes('INVOICE-0'));assert(!html.includes('INVOICE-1'));assert(!html.includes('INVOICE-2'));assert(html.includes('INVOICE-3'));assert(!html.includes('<details open'));
+html=render(state,()=>({contractor:''}),String,()=> 'Tất cả',String);assert(html.includes('INVOICE-1'));assert(!html.includes('INVOICE-2'));assert(html.includes('INVOICE-3'));
 console.log(JSON.stringify({ok:true}));'''
         result=subprocess.check_output(['node','-e',script],cwd=Path(__file__).resolve().parent.parent,text=True,encoding='utf-8')
         self.assertTrue(json.loads(result)['ok'])

@@ -388,6 +388,7 @@ def unissued_payload(conn,asof,contractor='',*,respect_export_choices=False,star
     for r in line_choices:
         d=detail_by_id.get(r['order_id'],{})
         r.update(pending_reason=d.get('pending_reason',''),pending_codes=d.get('pending_codes',[]),
+                 stock_summary=d.get('stock_summary'),
                  issued_invoices=invoice_refs.get(r['order_id'],[]),
                  ready_qty=d.get('ready_qty',0) if r['enabled'] else 0,
                  waiting_qty=d.get('waiting_qty',r['qty']) if r['enabled'] else r['qty'])

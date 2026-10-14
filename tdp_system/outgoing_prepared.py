@@ -92,6 +92,7 @@ def send_coverage(app, conn, draft_id, period, report=None):
                     {'selected_qty': r['qty'], 'included_qty': included, 'remaining_qty': remaining,
                      'pending_reason': r.get('pending_reason') or 'Phần này chưa nằm trong bản nháp đang gửi. Mở các dòng còn lại để kiểm tra.',
                      'pending_codes': r.get('pending_codes', [])})
+        rows[-1]['stock_summary'] = r.get('stock_summary')
     data = {'selected_rows': len(rows), 'included_rows': sum(r['included_qty'] > 1e-8 for r in rows),
             'remaining_rows': sum(r['remaining_qty'] > 1e-8 for r in rows), 'skipped_rows': skipped,
             'rows': rows, 'scope': period}
@@ -105,7 +106,7 @@ def validate_partial_send(app, conn, draft_id, body):
     if not scope: return
     coverage = send_coverage(app, conn, draft_id, {'from': scope['date_from'], 'to': scope['date_to'], 'contractor': scope['contractor']})
     if not coverage['partial']: return
-    message = 'Bản nháp chỉ có một phần hàng đã chọn. Xem phần còn lại và tích “Tôi đồng ý chỉ gửi phần có trong bản nháp này”.'
+    message = 'Bản nháp chỉ có một phần hàng đã chọn. Kiểm tra số dòng và số tiền, rồi tích xác nhận chỉ gửi phần này; phần còn lại để lần sau.'
     if body.get('confirm_partial') is not True: raise ValueError(message)
     try:
         plan = signer(app).loads(body.get('coverage_token', ''), max_age=30*60)

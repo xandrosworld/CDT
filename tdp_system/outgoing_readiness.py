@@ -708,7 +708,7 @@ def _replaceable_batch_holds(conn, batch_id: int) -> dict[str, float]:
         "AND COALESCE(d.minvoice_status,'not_sent') NOT IN ('saved','saving','unknown') GROUP BY t.product_code", (batch_id,))}
 
 
-def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[str, Any]:
+def batch_product_stock_trace(conn, batch_id: int, product_code: str, *, remaining=False) -> dict[str, Any]:
     """Explain the exact stock basis used by the selected batch, without writes."""
     if not conn.execute('SELECT 1 FROM batches WHERE id=?', (batch_id,)).fetchone():
         raise OutgoingReadinessError('Không tìm thấy đơn hàng.', status=404)
@@ -768,9 +768,14 @@ def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[st
     for event in events:
         balance += event['qty_delta']
         event['balance_qty'] = balance
-    released = _replaceable_batch_holds(conn, batch_id).get(product_code, 0)
+    released = 0 if remaining else _replaceable_batch_holds(conn, batch_id).get(product_code, 0)
     reserved = stock['reserved_qty'] - released
     available = stock['raw_available_qty'] + released
+    reservations = [dict(r) for r in conn.execute('''SELECT d.id draft_id,d.contractor,d.invoice_date,
+        d.minvoice_status,SUM(t.qty_out) qty FROM inventory_transactions t
+        JOIN outgoing_invoice_drafts d ON CAST(d.id AS TEXT)=t.source_id
+        WHERE t.source_type='OUTGOING_DRAFT' AND t.status='reserved' AND t.product_code=?
+        GROUP BY d.id,d.contractor,d.invoice_date,d.minvoice_status ORDER BY d.id''',(product_code,))] if remaining else []
     return {'batch_id': batch_id, 'product_code': product_code, 'product_name': stock['product_name'],
             'unit': stock['unit'], 'opening_date': opening[1] if opening else '',
             'opening_qty': stock.get('opening_qty', 0), 'input_qty': stock.get('input_qty', 0),
@@ -778,7 +783,7 @@ def batch_product_stock_trace(conn, batch_id: int, product_code: str) -> dict[st
             'closing_qty': stock['canonical_qty'], 'reserved_qty': reserved,
             'pending_sync_issued_qty': stock['pending_sync_issued_qty'], 'available_qty': available,
             'negative_opening_only': stock.get('opening_qty', 0) < -EPSILON and not movements,
-            'events': events, 'opening_editor': opening_editor, 'read_only': True}
+            'events': events, 'opening_editor': opening_editor, 'read_only': True,'reservations':reservations}
 
 
 def batch_readiness_payload(conn, batch_id: int) -> dict[str, Any]:
