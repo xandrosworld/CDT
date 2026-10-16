@@ -307,6 +307,88 @@ class OutgoingUploadTests(unittest.TestCase):
             self.assertEqual(issued_allocations(c)[0][self.oids[0]],2)
         self.assertEqual(before,self.business())
 
+    def seed_mixed_waiting_draft(self):
+        from .outgoing_consolidation import _write_draft, decimal
+        from .contract_modules import invoice_tax_percent
+        with server.db() as c:
+            rows=[{**dict(r),'order_id':r['id'],'_source_price':decimal(r['sell_price'])}
+                  for r in c.execute('SELECT * FROM orders ORDER BY id')]
+            return _write_draft(c,'NT-A',rows,{r['batch_id'] for r in rows},
+                                invoice_tax_percent,server.now_iso(),kind='waiting')
+
+    def test_fully_signed_row_in_mixed_hold_does_not_block_remaining_export(self):
+        self.seed_mixed_waiting_draft()
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,tax_code,address,updated_at) VALUES('NT-A','0101234567','','today')")
+            sid=fixtures.OutgoingReadinessTests.add_posted_source(c,source='minvoice',qty=3,invoice_date='2026-09-01',number='SIGNED-OLD')
+            c.execute("UPDATE outgoing_source_invoices SET buyer_tax_code='0101234567' WHERE id=?",(sid,))
+        before=self.business()
+        p=self.preview().get_json()
+        self.assertEqual([r['order_id'] for r in p['items']],[self.oids[1]])
+        self.assertGreater(p['ready_count'],0)
+        rows=self.file_rows(self.export(p['token']))
+        self.assertEqual(sum(r[3] for r in rows),5)
+        self.assertEqual(rows,self.file_rows(self.export(p['token'])))
+        self.assertEqual(before,self.business())
+        with server.db() as c:
+            self.assertEqual(c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],5)
+            self.assertEqual(c.execute('SELECT external_issued_qty FROM outgoing_waiting_settlements WHERE order_id=?',(self.oids[0],)).fetchone()[0],3)
+
+    def test_partial_signed_outside_hold_is_settled_once_and_preserves_remainder(self):
+        self.seed_mixed_waiting_draft()
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,tax_code,address,updated_at) VALUES('NT-A','0101234567','','today')")
+            sid=fixtures.OutgoingReadinessTests.add_posted_source(c,source='minvoice',qty=2,invoice_date='2026-09-01',number='PARTIAL-OLD')
+            c.execute("UPDATE outgoing_source_invoices SET buyer_tax_code='0101234567' WHERE id=?",(sid,))
+        data=self.workbook(lambda s:s.delete_rows(2))
+        before=self.business()
+        for _ in range(2):
+            p=self.preview(data).get_json()
+            self.assertEqual(sum(r[3] for r in self.file_rows(self.export(p['token']))),5)
+            with server.db() as c:
+                held={r['order_id']:r['qty'] for r in c.execute("SELECT a.order_id,SUM(a.qty) qty FROM outgoing_order_allocations a JOIN outgoing_invoice_drafts d ON d.id=a.draft_id WHERE d.status='draft' GROUP BY a.order_id")}
+                self.assertEqual(held,{self.oids[0]:1,self.oids[1]:5})
+                self.assertEqual(c.execute('SELECT external_issued_qty FROM outgoing_waiting_settlements WHERE order_id=?',(self.oids[0],)).fetchone()[0],2)
+        self.assertEqual(before,self.business())
+
+    def test_unresolved_old_row_in_mixed_hold_does_not_block_later_export(self):
+        with server.db() as c:
+            c.execute("UPDATE orders SET work_date='2026-09-02' WHERE id=?",(self.oids[1],))
+        self.seed_mixed_waiting_draft()
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,tax_code,address,updated_at) VALUES('NT-A','0101234567','','today')")
+            sid=fixtures.OutgoingReadinessTests.add_posted_source(c,source='minvoice',qty=1,invoice_date='2026-09-01',number='907')
+            c.execute("UPDATE outgoing_source_invoices SET buyer_tax_code='0101234567',stock_status='ready' WHERE id=?",(sid,))
+        before=self.business()
+        p=self.client.post('/api/outgoing-invoice-upload/stock-preview?from=2026-09-01&to=2026-09-13&contractor=NT-A').get_json()
+        self.assertTrue(p['items'][0]['needs_source_review'])
+        self.assertEqual(p['items'][0]['ready_qty'],0)
+        self.assertEqual(p['items'][1]['ready_qty'],5)
+        rows=self.file_rows(self.export(p['token']))
+        self.assertEqual(sum(r[3] for r in rows),5)
+        self.assertEqual(before,self.business())
+        with server.db() as c:
+            from .outgoing_readiness import validate_draft_export_stock, OutgoingReadinessError
+            waiting=c.execute("SELECT d.id FROM outgoing_invoice_drafts d JOIN outgoing_order_allocations a ON a.draft_id=d.id WHERE d.status='draft' AND a.order_id=?",(self.oids[0],)).fetchone()[0]
+            self.assertEqual(c.execute('SELECT SUM(qty) FROM outgoing_order_allocations WHERE draft_id=?',(waiting,)).fetchone()[0],3)
+            with self.assertRaises(OutgoingReadinessError):validate_draft_export_stock(c,waiting)
+
+    def test_failed_export_rolls_back_settlement_of_outside_signed_hold(self):
+        old=self.seed_mixed_waiting_draft()
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,tax_code,address,updated_at) VALUES('NT-A','0101234567','','today')")
+            sid=fixtures.OutgoingReadinessTests.add_posted_source(c,source='minvoice',qty=3,invoice_date='2026-09-01',number='ROLLBACK-OLD')
+            c.execute("UPDATE outgoing_source_invoices SET buyer_tax_code='0101234567' WHERE id=?",(sid,))
+        p=self.preview().get_json()
+        with patch('tdp_system.outgoing_upload.build_invoice_workbook',side_effect=ValueError('template broken')):
+            response=self.export(p['token'])
+        self.assertEqual(response.status_code,409)
+        self.assertIn('template broken',response.json['error'])
+        with server.db() as c:
+            self.assertEqual(c.execute('SELECT status FROM outgoing_invoice_drafts WHERE id=?',(old,)).fetchone()[0],'draft')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM outgoing_waiting_settlements').fetchone()[0],0)
+            self.assertEqual(c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE status='reserved'").fetchone()[0],8)
+
     def test_malformed_workbook_is_reported_without_server_error(self):
         original=self.workbook();broken=io.BytesIO()
         with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(broken,'w') as target:

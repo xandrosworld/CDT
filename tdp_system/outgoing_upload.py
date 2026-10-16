@@ -209,6 +209,34 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
             all_old_rows.append(r)
             if r['order_id'] in eligible: released[r['product_code']]+=decimal(r['qty'])
             else: outside.append({**r,'_source_price':decimal(r['source_price'])})
+    # A mixed draft can also contain fully issued rows (omitted from the
+    # request) or older rows still awaiting reconciliation. Settle only proven
+    # outside quantities whose complete active hold is being replaced here.
+    # Ambiguous/protected holds stay reserved and are never added to the file.
+    settlements = {oid:external.get(oid,0) for oid in eligible}
+    settled = {r['order_id']:r['external_issued_qty'] for r in conn.execute(
+        'SELECT order_id,external_issued_qty FROM outgoing_waiting_settlements')}
+    old_ids = {d['id'] for d in old}
+    other_holds = {r['order_id'] for r in conn.execute('''SELECT a.order_id,a.draft_id
+        FROM outgoing_order_allocations a JOIN outgoing_invoice_drafts d ON d.id=a.draft_id
+        WHERE d.status='draft' ''') if r['draft_id'] not in old_ids}
+    outside_by_order = defaultdict(list)
+    for r in outside: outside_by_order[r['order_id']].append(r)
+    outside = []
+    for oid, rows in outside_by_order.items():
+        order = sources.get(oid) or dict(conn.execute('SELECT * FROM orders WHERE id=?',(oid,)).fetchone())
+        if oid in other_holds or any(warning_applies_to_order(w,order) for w in warnings):
+            outside.extend(rows)
+            continue
+        total = sum((decimal(r['qty']) for r in rows),Decimal(0))
+        newly_issued = max(decimal(external.get(oid,0))-decimal(settled.get(oid,0)),Decimal(0))
+        remaining = max(decimal(order['actual_delivered'])-decimal(order['customer_return_qty'])-decimal(issued.get(oid,0)),Decimal(0))
+        keep = min(max(total-newly_issued,Decimal(0)),remaining)
+        for r in rows:
+            qty = min(decimal(r['qty']),keep);keep -= qty
+            released[r['product_code']] += decimal(r['qty'])-qty
+            if qty>0: outside.append({**r,'qty':float(qty)})
+        settlements[oid] = external.get(oid,0)
     stock = canonical_available_stock(conn)
     capacity = {code:decimal(r['raw_available_qty'])+released[code] for code,r in stock.items()}
     exempt = {party:exempt_order_codes(conn,[o for o in eligible.values() if o['contractor']==party]) for party in {o['contractor'] for o in eligible.values()}}
@@ -258,10 +286,10 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
     # No eligible quantity means no draft or reservation is touched.
     fingerprint=digest({'items':items,'reconciliation_issues':list(reconciliation_issues.values()),'orders':[order_snapshot(sources[i['order_id']]) for i in items],
         'weights':{oid:weights[oid]['revision'] for oid in eligible if oid in weights},
-        'old':old,'old_rows':all_old_rows,
+        'old':old,'old_rows':all_old_rows,'outside':outside,'external':settlements,
         'stock':{code:stock.get(code) for code in {o['product_code'] for o in eligible.values()}}})
     return {'items':items,'reconciliation_issues':list(reconciliation_issues.values()),'ready_rows':ready,'outside':outside,'old':old,'fingerprint':fingerprint,
-        'external':{oid:external.get(oid,0) for oid in eligible},
+        'external':settlements,
         'ready_count':sum(i['ready_qty']>1e-8 for i in items),'waiting_count':sum(i['waiting_qty']>1e-8 for i in items),
         'amount':sum(i['amount'] for i in items)}
 
@@ -278,16 +306,18 @@ def create_plan_drafts(conn, plan, timestamp, tax_percent):
     for oid,qty in plan['external'].items():
         conn.execute('''INSERT INTO outgoing_waiting_settlements(order_id,external_issued_qty,updated_at) VALUES(?,?,?)
             ON CONFLICT(order_id) DO UPDATE SET external_issued_qty=excluded.external_issued_qty,updated_at=excluded.updated_at''',(oid,qty,timestamp))
-    created=[]; exported=[]
+    exported=[]
     for rows, kind in ((plan['outside'],'waiting'),(plan['ready_rows'],'invoice_upload')):
         groups=defaultdict(list)
         for r in rows: groups[(r['contractor'],tax_percent(r['tax']))].append(r)
         for (party,_),group in sorted(groups.items()):
             did=_write_draft(conn,party,group,{r['batch_id'] for r in group},tax_percent,timestamp,floor_kg=False,kind=kind)
             if did:
-                created.append(did)
                 if kind=='invoice_upload':exported.append(did)
-    for did in created:validate_draft_export_stock(conn,did)
+    # Retained outside rows are still waiting, not approved for download.
+    # Applying the export gate to them blocks unrelated, valid new orders.
+    # Every actual download/send continues to use the full stock/source gate.
+    for did in exported:validate_draft_export_stock(conn,did)
     return exported
 
 
