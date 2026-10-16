@@ -84,3 +84,4 @@ tdp_system/print_tools/SumatraPDF-settings.txt
 
 !tdp_system/templates/inventory_nxt_template.xlsx
 !tdp_system/templates/inventory_closing_template.xlsx
+!tdp_system/templates/minvoice_import.xlsx

@@ -70,21 +70,13 @@ class InvoiceTaxGoldenTests(unittest.TestCase):
                 try:
                     self.assertEqual(output.sheetnames, [spec["sheet"]])
                     self.assertEqual(tuple(output.active.cell(1, col).value for col in range(1, 14)), INVOICE_HEADERS)
-                    for column in range(1, 14):
-                        expected_cell = style_sheet.cell(1, column)
-                        actual_cell = output.active.cell(1, column)
-                        # Customer's updated print style: keep template geometry,
-                        # use regular black text, white fill and fine borders.
-                        self.assertEqual(actual_cell.font.name, expected_cell.font.name)
-                        self.assertEqual(actual_cell.font.sz, expected_cell.font.sz)
-                        self.assertFalse(actual_cell.font.bold)
-                        self.assertEqual(actual_cell.font.color.rgb, '00000000')
-                        self.assertIsNone(actual_cell.fill.patternType)
-                        for side in ('left','right','top','bottom'):
-                            self.assertEqual(getattr(actual_cell.border,side).style,
-                                             'hair' if getattr(expected_cell.border,side).style else None)
-                        self.assertEqual(str(actual_cell.alignment), str(expected_cell.alignment))
-                        self.assertEqual(actual_cell.number_format, expected_cell.number_format)
+                    # Import files use the customer's accepted M-Invoice layout,
+                    # independently of the styling used for printable documents.
+                    from .minvoice_import_workbook import TEMPLATE
+                    with zipfile.ZipFile(TEMPLATE) as accepted, zipfile.ZipFile(io.BytesIO(payload)) as generated:
+                        self.assertEqual(accepted.read('xl/styles.xml'),generated.read('xl/styles.xml'))
+                        self.assertEqual(accepted.read('xl/_rels/workbook.xml.rels'),generated.read('xl/_rels/workbook.xml.rels'))
+                        self.assertIn('xl/sharedStrings.xml',generated.namelist())
                     self.assertEqual(output.active.max_row - 1, len(source_rows))
                     for row_number, expected in enumerate(source_rows, start=2):
                         actual = [values_output.active.cell(row_number, col).value for col in range(1, 14)]

@@ -81,6 +81,7 @@ python -m PyInstaller `
   --hidden-import print_bundle `
   --hidden-import xcom_payment_documents `
   --hidden-import invoice_tax_export `
+  --hidden-import minvoice_import_workbook `
   --hidden-import outgoing_substitution `
   --hidden-import outgoing_upload `
   --hidden-import invoice_payment_scope `
@@ -103,6 +104,7 @@ python -m PyInstaller `
   --hidden-import reportlab.pdfbase._fontdata_widths_helveticabold `
   --hidden-import win32print `
   --add-data "tdp_system/static;static" `
+  --add-data "tdp_system/templates/minvoice_import.xlsx;templates" `
   --add-binary "tdp_system/print_tools/SumatraPDF-3.6.1-64.exe;print_tools" `
   --add-data "tdp_system/print_tools/SUMATRA_NOTICE.txt;print_tools" `
   --add-data "demo_tdp/styles.css;shared" `

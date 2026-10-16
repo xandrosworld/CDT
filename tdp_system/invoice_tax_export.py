@@ -17,12 +17,6 @@ from typing import Any
 
 from openpyxl import Workbook, load_workbook
 
-try:
-    from template_workbook import safe_workbook_bytes
-except ImportError:  # pragma: no cover - package invocation
-    from .template_workbook import safe_workbook_bytes
-
-
 INVOICE_HEADERS = (
     "Mã hàng", "Tên hàng", "Đơn vị tính", "Số lượng", "Đơn giá",
     "Cộng tiền hàng", "%CK", "Tiền CK", "Tiền trước thuế", "% VAT",
@@ -257,7 +251,14 @@ def build_invoice_workbook(
                 sheet.cell(output_row, 5).number_format = "#,##0.##########"
             sheet.auto_filter.ref = f"A1:M{sheet.max_row}"
             sheet.freeze_panes = None
-            return safe_workbook_bytes(workbook), template_kind
+            # Use the accepted customer's OPC layout for M-Invoice imports.
+            # A fresh openpyxl save opens in Excel but reproduces the reported
+            # error with an editable fixed-length .NET stream.
+            try:
+                from .minvoice_import_workbook import build_import_package
+            except ImportError:
+                from minvoice_import_workbook import build_import_package
+            return build_import_package(list(sheet.values), sheet_name=sheet.title), template_kind
         finally:
             if style_source_book is not None:
                 style_source_book.close()

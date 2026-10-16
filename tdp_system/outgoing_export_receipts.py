@@ -83,7 +83,11 @@ def register_routes(app,ctx):
 
     @app.get('/api/outgoing-invoices/export-receipts/<token>/file')
     def saved_file(token):
+        try:
+            from .minvoice_import_workbook import compatible_archive
+        except ImportError:
+            from minvoice_import_workbook import compatible_archive
         with ctx['db']() as c:
             row=c.execute("SELECT filename,file_data FROM outgoing_export_receipts WHERE token=? AND received_at<>''",(token,)).fetchone()
             if not row:return jsonify(ok=False,error='Không tìm thấy file đã tải.'),404
-            return send_file(BytesIO(row['file_data']),as_attachment=True,download_name=row['filename'],mimetype='application/zip')
+            return send_file(BytesIO(compatible_archive(row['file_data'])),as_attachment=True,download_name=row['filename'],mimetype='application/zip')
