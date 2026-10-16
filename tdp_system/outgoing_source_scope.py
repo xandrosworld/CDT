@@ -224,7 +224,9 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
         scope_error=error
         details=list(dict.fromkeys(source_warnings[source['id']]))
         if not error and source_warnings[source['id']]:
-            error=f'Có {len(details)} thông tin chưa khớp với đơn đã duyệt. Mở Chi tiết cần đối chiếu để kiểm tra mã hàng, số lượng và nguồn đơn. Không xuất lại hóa đơn này.'
+            error=('Hóa đơn đã ký nhưng chưa ghi xuất kho nên chưa thể trừ khỏi đơn chờ. Bấm Kiểm tra và xử lý ngay để xem nguyên nhân và số lượng cần ghi kho. Không xuất lại hóa đơn này.'
+                   if source['stock_status'] != 'posted' else
+                   f'Có {len(details)} thông tin chưa khớp với đơn đã duyệt. Bấm So hóa đơn với bảng kê đã tải để kiểm tra mã hàng, số lượng và nguồn đơn. Không xuất lại hóa đơn này.')
         period_from,period_to=order_period(conn,source,export_matches=matches(conn,source,party,exports) if party else [])
         try:
             from .outgoing_source_item_review import reviewed_items

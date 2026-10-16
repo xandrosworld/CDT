@@ -112,6 +112,13 @@ class OutputGroupTests(unittest.TestCase):
         self.assertEqual(200,result.status_code,result.json)
         self.assertEqual(before,list(self.conn.iterdump()))
         rows=result.json['items']
+        one=client.get('/api/invoice-workbench/output-postings?invoice_id='+str(rows[0]['id']))
+        self.assertEqual(200,one.status_code,one.json)
+        self.assertEqual([rows[0]['id']],[r['id'] for r in one.json['items']])
+        self.assertTrue(one.json['items'][0]['stock_lines'])
+        self.assertEqual(before,list(self.conn.iterdump()))
+        self.assertEqual(400,client.get('/api/invoice-workbench/output-postings?invoice_id=invalid').status_code)
+        self.assertEqual(404,client.get('/api/invoice-workbench/output-postings?invoice_id=999999').status_code)
         self.assertEqual(400,client.post('/api/invoice-workbench/output-postings',json={'items':rows}).status_code)
         self.assertEqual(200,client.post('/api/invoice-workbench/output-postings',json={'items':rows,'confirmed':True}).status_code)
 

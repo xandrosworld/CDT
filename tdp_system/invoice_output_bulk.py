@@ -21,7 +21,12 @@ def output_review(conn, invoice_id, tenant):
     items = [dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY id', (invoice_id,))]
     products = [dict(r) for r in conn.execute('SELECT code,name,unit FROM products WHERE code IN (SELECT product_code FROM outgoing_source_invoice_items WHERE invoice_id=?) ORDER BY code', (invoice_id,))]
     rules = [dict(r) for r in conn.execute("SELECT * FROM invoice_line_mappings WHERE tenant=? AND source='minvoice' AND partner_key=? ORDER BY id", (tenant, row['buyer_tax_code']))]
-    token = hashlib.sha256(json.dumps(['invoice-source-quantity-v1', header, items, products, rules], sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+    weights = []
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='outgoing_weight_exports'").fetchone():
+        weights = [tuple(r) for r in conn.execute('''SELECT e.* FROM outgoing_weight_exports e
+            JOIN outgoing_invoice_lines l ON l.id=e.line_id WHERE l.product_code IN
+            (SELECT product_code FROM outgoing_source_invoice_items WHERE invoice_id=?) ORDER BY e.line_id''', (invoice_id,))]
+    token = hashlib.sha256(json.dumps(['invoice-source-quantity-v1', header, items, products, rules, weights], sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
     quantities, amount = {}, Decimal(0)
     eligible = [r for r in items if r['inventory_eligible']]
     for item in eligible:
@@ -49,11 +54,15 @@ def preview_outputs(conn, ids, tenant, now_iso):
                 if result['idempotent']:
                     blocked.append({'id': row['id'], 'number': row['number'], 'reason': 'Hóa đơn đã xuất kho.'})
                 else:
+                    row['stock_lines'] = [dict(r) for r in copy.execute('''SELECT i.product_code code,
+                        p.name,p.unit,i.qty invoice_qty,i.source_unit invoice_unit,i.stock_qty
+                        FROM outgoing_source_invoice_items i JOIN products p ON p.code=i.product_code
+                        WHERE i.invoice_id=? AND i.inventory_eligible=1 ORDER BY i.line_index''', (row['id'],))]
                     ready.append(row)
                 # Keep successful simulated issues: two invoices cannot each
                 # consume the same stock. The source connection is never written.
             except InvoiceInventoryError as error:
-                blocked.append({'id': row['id'], 'number': row['number'], 'reason': str(error)})
+                blocked.append({'id': row['id'], 'number': row['number'], 'reason': str(error), 'code': error.code})
     finally:
         copy.close()
     return {'items': ready, 'blocked': blocked}

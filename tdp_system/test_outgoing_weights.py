@@ -244,6 +244,65 @@ class ActualWeightTests(unittest.TestCase):
             evidence=_confirmed_names(conn,'default',{('nấm kim châm','kg')})
             self.assertEqual([None],evidence[('nấm kim châm','kg')])
 
+    def excel_signed(self):
+        from .outgoing_export_receipts import create
+        sid,item,did=self.signed()
+        with server.db() as conn:
+            conn.execute('DELETE FROM outgoing_export_receipts')
+            conn.execute("UPDATE outgoing_invoice_drafts SET status='draft',minvoice_status='not_sent',buyer_tax_code_snapshot=NULL,issued_invoice_number=NULL,issued_invoice_series=NULL,issued_invoice_date=NULL WHERE id=?",(did,))
+            conn.execute("UPDATE inventory_transactions SET status='reserved' WHERE source_type='OUTGOING_DRAFT'")
+            conn.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,display_name,legal_name,tax_code,address,email,updated_at) VALUES('NT-A','A','A','MST-A','A','','now')")
+            conn.execute('UPDATE outgoing_source_invoices SET subtotal=112000,total_amount=112000 WHERE id=?',(sid,))
+            conn.execute("UPDATE outgoing_source_invoice_items SET source_nature='1' WHERE invoice_id=?",(sid,))
+            token=create(conn,[did],b'file','test.zip','2026-09-13')
+            conn.execute("UPDATE outgoing_export_receipts SET received_at='2026-09-13' WHERE token=?",(token,))
+        return sid,item,did,token
+
+    def test_excel_signed_uses_received_frozen_weight_and_posts_once(self):
+        sid,item,did,token=self.excel_signed()
+        with server.db() as conn:
+            self.assertEqual(14,validated_output_stock_snapshot(conn,item)['stock_qty'])
+            self.assertEqual(1,post_output_invoice(conn,sid,confirmed=True,now_iso=server.now_iso)['new_inventory_lines'])
+            self.assertTrue(post_output_invoice(conn,sid,confirmed=True,now_iso=server.now_iso)['idempotent'])
+
+    def test_excel_requires_received_unchanged_buyer_order_and_frozen_conversion(self):
+        sid,item,did,token=self.excel_signed()
+        changes=["UPDATE outgoing_export_receipts SET received_at=''",
+                 "UPDATE outgoing_source_invoices SET buyer_tax_code='OTHER'",
+                 "UPDATE orders SET actual_delivered=15",
+                 "UPDATE outgoing_invoice_lines SET qty=15",
+                 "UPDATE outgoing_weight_exports SET output_json=json_set(output_json,'$.stock_qty',15)",
+                 "UPDATE outgoing_invoice_drafts SET minvoice_status='saved'",
+                 "UPDATE outgoing_source_invoice_items SET qty=3"]
+        with server.db() as conn:
+            for sql in changes:
+                conn.execute('SAVEPOINT changed')
+                conn.execute(sql)
+                with self.assertRaises(InvoiceMappingError,msg=sql):validated_output_stock_snapshot(conn,item)
+                conn.execute('ROLLBACK TO changed');conn.execute('RELEASE changed')
+            self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM invoice_inventory_ledger').fetchone()[0])
+
+    def test_excel_legacy_receipt_cannot_authorize_package_conversion(self):
+        sid,item,did,token=self.excel_signed()
+        with server.db() as conn:
+            manifest=json.loads(conn.execute('SELECT manifest FROM outgoing_export_receipts WHERE token=?',(token,)).fetchone()[0])
+            del manifest[0]['source_basis']
+            conn.execute('UPDATE outgoing_export_receipts SET manifest=? WHERE token=?',(json.dumps(manifest),token))
+            with self.assertRaises(InvoiceMappingError):validated_output_stock_snapshot(conn,item)
+
+    def test_excel_preview_is_read_only_and_weight_change_invalidates_confirmation(self):
+        from .invoice_output_bulk import preview_outputs,post_outputs,InvoiceInventoryError
+        sid,item,did,token=self.excel_signed()
+        with server.db() as conn:
+            before=conn.serialize()
+            preview=preview_outputs(conn,[sid],'default',server.now_iso)
+            self.assertEqual(before,conn.serialize())
+            self.assertEqual(14,preview['items'][0]['stock_lines'][0]['stock_qty'])
+            conn.execute("UPDATE outgoing_weight_exports SET output_json=json_set(output_json,'$.stock_qty',15)")
+            with self.assertRaises(InvoiceInventoryError) as caught:
+                post_outputs(conn,preview['items'],'default',server.now_iso,confirmed=True)
+            self.assertEqual('stale_review',caught.exception.code)
+
     def test_signed_invoice_posts_original_packages_once(self):
         sid,item,did=self.signed()
         with server.db() as conn:

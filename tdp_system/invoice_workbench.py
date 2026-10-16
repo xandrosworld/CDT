@@ -656,6 +656,12 @@ def register_invoice_workbench_routes(app, ctx) -> None:
                     result = post_outputs(conn, body.get('items'), tenant_code(conn), now_iso, confirmed=body.get('confirmed'))
                 else:
                     conn.execute('BEGIN')
+                    wanted = request.args.get('invoice_id')
+                    if wanted is not None:
+                        if not wanted.isdigit() or int(wanted) <= 0:
+                            raise InvoiceInventoryError('Chọn đúng hóa đơn cần kiểm tra.', status=400)
+                        result = preview_outputs(conn, [int(wanted)], tenant_code(conn), now_iso)
+                        return jsonify({'ok': True, **result})
                     payload = invoice_range_payload(conn, tenant=tenant_code(conn), invoice_type='output',
                         date_from=request.args.get('from'), date_to=request.args.get('to'),
                         status=request.args.get('status', 'all'), line_filter=request.args.get('line_filter', 'all'),

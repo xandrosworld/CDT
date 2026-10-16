@@ -218,7 +218,7 @@ def invoice_rows(conn, rows, *, freeze=False, timestamp=''):
 
 
 def signed_stock_snapshot(conn, item_id):
-    """Resolve only an explicitly linked issued draft and an identical signed file.
+    """Resolve an identical signed file from a linked draft or received Excel.
 
     Other Kg sources for products with measured package conversions must wait;
     the historical code-only rule cannot treat kg as a count of packages.
@@ -281,7 +281,32 @@ def signed_stock_snapshot(conn, item_id):
                         and all(abs(dec(source[k])-dec(d[k])) <= Decimal('.000001')
                                 for k in ('subtotal','tax_amount','total_amount'))):
                     drafts = candidates
-    if len(drafts) != 1 or not source['buyer_tax_code'] or key(drafts[0]['buyer_tax_code_snapshot']) != key(source['buyer_tax_code']):
+    receipt = None
+    if not drafts:
+        # Excel uploads have no portal draft key. A unique, received file with
+        # immutable buyer/line evidence can link the original measured weights.
+        from collections import defaultdict
+        try:
+            from .outgoing_export_lineage import matches, orders_unchanged
+            from .outgoing_export_receipts import draft_snapshot
+            from .outgoing_source_scope import resolve_scope
+        except ImportError:
+            from outgoing_export_lineage import matches, orders_unchanged
+            from outgoing_export_receipts import draft_snapshot
+            from outgoing_source_scope import resolve_scope
+        profiles = defaultdict(list)
+        for profile in conn.execute('SELECT contractor,tax_code FROM outgoing_buyer_profiles'):
+            profiles[(profile['tax_code'] or '').strip().upper()].append(profile['contractor'])
+        party, error = resolve_scope(conn, source, profiles)
+        candidates = matches(conn, source, party) if party and not error else []
+        if len(candidates) == 1 and not candidates[0]['legacy_basis']:
+            candidate = candidates[0]
+            snapshot = draft_snapshot(conn, candidate['id'], active_only=False)
+            draft = conn.execute("SELECT * FROM outgoing_invoice_drafts WHERE id=? AND status IN ('draft','cancelled') AND minvoice_status='not_sent'", (candidate['id'],)).fetchone()
+            if draft and snapshot and snapshot['hash'] == candidate['hash'] and orders_unchanged(conn, candidate):
+                receipt, drafts = candidate, [draft]
+    buyer = receipt['source_basis']['buyer_tax_code'] if receipt else (drafts[0]['buyer_tax_code_snapshot'] if len(drafts) == 1 else '')
+    if len(drafts) != 1 or not source['buyer_tax_code'] or key(buyer) != key(source['buyer_tax_code']):
         raise blocked()
     local = [dict(r) for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id', (drafts[0]['id'],))]
     # Issued names/weights are frozen; never derive a signed quantity from later catalog edits.
@@ -290,7 +315,21 @@ def signed_stock_snapshot(conn, item_id):
         saved = conn.execute('SELECT * FROM outgoing_weight_exports WHERE line_id=?', (row['id'],)).fetchone()
         expected.append((row, {**row, **json.loads(saved['output_json'])} if saved else row, saved))
     actual = conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index', (source['id'],)).fetchall()
-    if raw.get('_tdp_source_contract') == 'minvoice_portal_v1':
+    if receipt:
+        # Check the frozen conversion itself, not just current draft lines.
+        frozen = {r['id']: r for r in receipt['source_basis']['lines']}
+        if len(frozen) != len(expected) or any(frozen.get(stock['id']) != exported for stock, exported, saved in expected):
+            raise blocked()
+        def line_key(row, remote=False):
+            return (row['source_item_code'] if remote else row['product_code'],
+                    key(row['source_unit'] if remote else row['unit']), dec(row['unit_price']), dec(row['qty']), dec(row['amount']))
+        # An ambiguous duplicate cannot choose a package conversion safely.
+        keys = [line_key(exported) for stock, exported, saved in expected]
+        if len(set(keys)) != len(keys):
+            raise blocked()
+        expected.sort(key=lambda entry: line_key(entry[1]))
+        actual = sorted(actual, key=lambda row: line_key(row, True))
+    elif raw.get('_tdp_source_contract') == 'minvoice_portal_v1':
         try:
             from .minvoice_portal_drafts import ordered_draft_lines
             from .minvoice_client import MinvoiceError

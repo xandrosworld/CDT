@@ -3589,7 +3589,9 @@
       if(r.acceptance)status=r.acceptance.message;
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>Ngày hóa đơn: '+esc(dateVN(r.date))+'</p><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         ((r.item_reviews||[]).length?'<p>'+ (r.item_review_stale?'Xác nhận đổi mặt hàng cần kiểm tra lại.':'Đã xác nhận đổi mặt hàng trên hóa đơn; đối trừ theo các dòng đơn gốc đã xác nhận.')+' Mã trên hóa đơn: '+r.item_reviews.map(function(x){return esc(x.source_code);}).join(', ')+'.</p>':'')+
-        (r.error?'<p class="error-summary">'+esc(r.error)+'</p><button type="button" class="btn btn-primary" data-source-comparison="'+r.id+'">So hóa đơn với bảng kê đã tải</button>':'')+
+        (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
+        (r.error||r.stock_status!=='posted'?'<button type="button" class="btn btn-outline" data-source-comparison="'+r.id+'">So hóa đơn với bảng kê đã tải</button>':'')+
+        (r.stock_status!=='posted'?'<p><button type="button" class="btn btn-primary" data-source-repair="'+r.id+'">Kiểm tra và xử lý ngay</button></p>':'')+
         (r.acceptance?'<p>'+r.acceptance.allocated_order_rows+' dòng đơn đã đối trừ được giữ nguyên; '+r.acceptance.unmatched.length+' thông tin chênh lệch giữ riêng. Không tự trừ thêm đơn.</p><button type="button" class="btn btn-outline" data-source-acceptance="'+r.id+'">Xem xác nhận đã lưu</button>':r.error&&r.scope==='orders'&&r.stock_status==='posted'?'<button type="button" class="btn btn-outline" data-source-acceptance="'+r.id+'">Giữ hóa đơn cho nhà thầu — chênh lệch riêng</button>':'')+
         (hasLater?'<p>Các đơn trong phạm vi hóa đơn này vẫn cần đối chiếu. Chị có thể mở riêng đơn từ '+esc(dateVN(laterFrom))+' để kiểm tra và lập bảng kê tiếp.</p><button type="button" class="btn btn-outline" data-invoice-later-from="'+esc(laterFrom)+'" data-contractor="'+esc(r.contractor)+'"'+(exportChoicesDirty()?' disabled':'')+'>Mở đơn từ '+esc(dateVN(laterFrom))+'</button>':'')+
         ((r.review_details||[]).length?'<details class="source-review-details"><summary>Chi tiết cần đối chiếu · '+r.review_details.length+' thông tin</summary><div style="max-height:280px;overflow:auto"><ul>'+r.review_details.map(function(message){return '<li>'+esc(message)+'</li>';}).join('')+'</ul></div></details>':'')+
@@ -7582,6 +7584,28 @@
       window.TdpSourceAcceptance({api:api,esc:esc,invoiceId:Number(acceptanceButton.dataset.sourceAcceptance),onSaved:function(){state.preparedInvoices=null;return loadUnissuedScope(true);}});return;
     }
     var comparisonButton=event.target.closest('[data-source-comparison]');
+    var repairButton=event.target.closest('[data-source-repair]');
+    if(repairButton){
+      var repairId=Number(repairButton.dataset.sourceRepair),sourceRow=(state.outgoingSourceReview||[]).find(function(r){return r.id===repairId;});
+      if(!sourceRow)return;
+      if(exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy){showToast('Lưu lựa chọn mặt hàng đang sửa trước khi ghi xuất kho.',true);return;}
+      window.TdpSourceRepair({api:api,esc:esc,invoiceId:repairId,number:sourceRow.number,
+        compare:function(){content.querySelector('[data-source-comparison="'+repairId+'"]')?.click();},
+        onSaved:async function(){state.preparedInvoices=null;await loadUnissuedScope(false);},
+        openInvoice:async function(){
+          state.invoiceDirection='output';state.invoiceFrom=sourceRow.date;state.invoiceTo=sourceRow.date;
+          state.invoiceStatus='all';state.invoiceLineFilter='all';state.invoicePending=false;
+          state.invoiceWorkbench=null;state.invoiceListing=null;
+          await loadInvoiceWorkbench(true);
+          if(!state.operations)await loadOperations(true);
+          navigate('msmi');
+          var lines=(state.invoiceListing?.lines||[]).filter(function(r){return r.invoice_id===repairId;});
+          var line=lines.find(function(r){return r.issue;})||lines[0];
+          var target=line&&(invoiceVirtual?.reveal(line.id)||document.getElementById('invoice-line-output-'+line.id));
+          if(target){target.scrollIntoView({block:'center'});target.classList.add('invoice-just-saved');var field=target.querySelector('button,input,select');if(field)field.focus({preventScroll:true});}
+          showToast('Đang mở hóa đơn '+sourceRow.number+'. Sửa dòng có cảnh báo rồi trở lại bảng kê; các lựa chọn đã lưu vẫn được giữ.');
+        }});return;
+    }
     if(comparisonButton){
       var comparisonId=Number(comparisonButton.dataset.sourceComparison);
       window.TdpSourceComparison({api:api,esc:esc,invoiceId:comparisonId,openForm:function(candidate,token){
