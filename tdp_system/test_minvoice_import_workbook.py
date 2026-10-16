@@ -8,6 +8,39 @@ from .minvoice_import_workbook import build_import_package,compatible_archive,TE
 
 
 class MinvoiceImportPackageTests(unittest.TestCase):
+    def test_tax_codes_are_integer_xml_tokens_even_when_input_is_float(self):
+        for tax in (-2, -1, 0, 5, 8, 10):
+            rows = self.rows()
+            rows[1][9] = float(tax)
+            payload = build_import_package(rows)
+            with zipfile.ZipFile(io.BytesIO(payload)) as z:
+                root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            self.assertEqual(str(tax), root.find('.//s:c[@r="J2"]/s:v', ns).text)
+            self.assertEqual([tuple(row) for row in rows], self.values(payload))
+
+    def test_previous_package_with_float_tax_is_repaired_on_redownload(self):
+        original = build_import_package(self.rows())
+        broken = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(broken, 'w') as target:
+            for entry in source.infolist():
+                data = source.read(entry.filename)
+                if entry.filename == 'xl/worksheets/sheet1.xml':
+                    data = data.replace(b'<c r="J2" s="1"><v>8</v>', b'<c r="J2" s="1"><v>8.0</v>')
+                    self.assertIn(b'<v>8.0</v>', data)
+                target.writestr(entry, data)
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as z:
+            z.writestr('Bang_ke_ATV_VAT8_949.xlsx', broken.getvalue())
+        repaired = compatible_archive(archive.getvalue())
+        self.assertNotEqual(archive.getvalue(), repaired)
+        with zipfile.ZipFile(io.BytesIO(repaired)) as z:
+            payload = z.read('Bang_ke_ATV_VAT8_949.xlsx')
+            with zipfile.ZipFile(io.BytesIO(payload)) as xlsx:
+                self.assertIn(b'<c r="J2" s="1"><v>8</v>', xlsx.read('xl/worksheets/sheet1.xml'))
+            self.assertEqual(self.values(original), self.values(payload))
+        self.assertEqual(repaired, compatible_archive(repaired))
+
     def rows(self):
         return [INVOICE_HEADERS,['HH-01','Rau & quả <tươi>','Kg',1.25,8000,10000,None,None,10000,8,800,10800,'1']]
 

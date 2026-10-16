@@ -8,6 +8,8 @@ only cell data, shared strings and the used range are replaced.
 """
 from pathlib import Path
 from io import BytesIO
+from decimal import Decimal
+import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 from xml.sax.saxutils import quoteattr
 import re
@@ -17,6 +19,26 @@ TEMPLATE = Path(__file__).resolve().parent / 'templates' / 'minvoice_import.xlsx
 NAMESPACE = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 # Styles of the accepted customer's row 2, A:M. No style is synthesized.
 STYLES = (2,2,3,4,5,1,1,1,1,1,1,1,0)
+
+
+def _numeric_text(value):
+    """Write integral numbers like Excel: 8, not 8.0 (VAT is a code)."""
+    number = Decimal(str(value))
+    return str(int(number)) if number.is_finite() and number == number.to_integral_value() else str(value)
+
+
+def _canonical_tax_codes(xml):
+    root = ET.fromstring(xml)
+    ns = {'s': NAMESPACE}
+    for cell in root.findall('.//s:sheetData/s:row/s:c', ns):
+        if not re.fullmatch(r'J[2-9]|J[1-9][0-9]+', cell.get('r', '')):
+            continue
+        value = cell.find('s:v', ns)
+        if cell.get('t') not in (None, 'n') or value is None:
+            continue
+        if value.text != _numeric_text(value.text):
+            return False
+    return True
 
 
 def build_import_package(values, *, sheet_name='8'):
@@ -35,7 +57,7 @@ def build_import_package(values, *, sheet_name='8'):
                 count+=1
                 cells.append(f'<c{attrs} t="s"><v>{indices[value]}</v></c>')
             else:
-                cells.append(f'<c{attrs}><v>{value}</v></c>')
+                cells.append(f'<c{attrs}><v>{_numeric_text(value)}</v></c>')
         rows.append(f'<row r="{rownum}"'+(' ht="18"' if rownum>1 else '')+' spans="1:13">'+''.join(cells)+'</row>')
     shared=('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         f'<sst xmlns="{NAMESPACE}" count="{count}" uniqueCount="{len(strings)}">'+
@@ -74,7 +96,9 @@ def compatible_archive(data):
             payload=source.read(entry.filename)
             if entry.filename.startswith('Bang_ke_') and entry.filename.endswith('.xlsx'):
                 with zipfile.ZipFile(BytesIO(payload)) as existing:
-                    if 'xl/sharedStrings.xml' in existing.namelist() and existing.read('xl/styles.xml')==accepted_styles:
+                    if ('xl/sharedStrings.xml' in existing.namelist()
+                            and existing.read('xl/styles.xml')==accepted_styles
+                            and _canonical_tax_codes(existing.read('xl/worksheets/sheet1.xml'))):
                         target.writestr(entry,payload)
                         continue
                 workbook=load_workbook(BytesIO(payload),read_only=True,data_only=True,keep_links=False)
