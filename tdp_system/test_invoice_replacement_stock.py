@@ -31,3 +31,39 @@ class ReplacementStockTests(unittest.TestCase):
     def test_reversed_or_changed_stock_cannot_be_retained(self):
         self.c.execute("UPDATE invoice_inventory_effective_ledger SET qty_delta=-1")
         self.assertEqual(stock_replacement_reviews(self.c),{})
+
+    def test_confirmation_survives_reinserted_details_and_download_metadata(self):
+        self.c.execute('ALTER TABLE outgoing_source_invoice_items ADD COLUMN id INTEGER')
+        self.c.execute('ALTER TABLE outgoing_source_invoices ADD COLUMN raw_json TEXT')
+        self.c.execute('ALTER TABLE outgoing_source_invoices ADD COLUMN synced_at TEXT')
+        self.c.execute('UPDATE outgoing_source_invoice_items SET id=invoice_id')
+        review=stock_replacement_reviews(self.c)[2]
+        confirm_stock_replacement(self.c,2,review['token'],True,'now')
+        before=list(self.c.execute('SELECT * FROM invoice_inventory_effective_ledger'))
+        for attempt in range(3):
+            row=dict(self.c.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=2').fetchone())
+            self.c.execute('DELETE FROM outgoing_source_invoice_items WHERE invoice_id=2')
+            row['id']=100+attempt
+            self.c.execute('INSERT INTO outgoing_source_invoice_items('+','.join(row)+') VALUES('+','.join('?' for _ in row)+')',tuple(row.values()))
+            self.c.execute('UPDATE outgoing_source_invoices SET raw_json=?,synced_at=?',
+                           ('{"downloadMetadata":'+str(attempt)+'}',str(attempt)))
+            after=stock_replacement_reviews(self.c)[2]
+            self.assertEqual(after['token'],review['token'])
+            self.assertTrue(after['confirmed'])
+        self.assertEqual(before,list(self.c.execute('SELECT * FROM invoice_inventory_effective_ledger')))
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0],1)
+
+    def test_changed_totals_or_buyer_require_fresh_confirmation(self):
+        review=stock_replacement_reviews(self.c)[2]
+        confirm_stock_replacement(self.c,2,review['token'],True,'now')
+        self.c.execute('UPDATE outgoing_source_invoices SET total_amount=102 WHERE id=2')
+        self.assertFalse(stock_replacement_reviews(self.c)[2]['confirmed'])
+        with self.assertRaises(ValueError):confirm_stock_replacement(self.c,2,review['token'],True,'later')
+        self.c.execute("UPDATE outgoing_source_invoices SET total_amount=101,buyer_name='Changed' WHERE id=2")
+        self.assertFalse(stock_replacement_reviews(self.c)[2]['confirmed'])
+
+    def test_changed_posted_mapping_cannot_keep_old_confirmation(self):
+        review=stock_replacement_reviews(self.c)[2]
+        confirm_stock_replacement(self.c,2,review['token'],True,'now')
+        self.c.execute("UPDATE outgoing_source_invoice_items SET product_code='B' WHERE invoice_id=1")
+        self.assertEqual(stock_replacement_reviews(self.c),{})

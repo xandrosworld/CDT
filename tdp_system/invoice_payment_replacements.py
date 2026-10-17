@@ -2,6 +2,32 @@
 import json
 
 
+def replacement_basis(old, new, old_items, new_items, ledger):
+    """Fingerprint business evidence, not sync timestamps or regenerated row IDs.
+
+    Replacement detail rows are deleted/reinserted on every provider refresh.
+    The old posted rows and their ledger remain frozen. Provider envelopes also
+    contain changing download metadata that is not a change of goods or value.
+    """
+    header_fields = ('id','tenant','source','identity_key','remote_id','business_key',
+                     'invoice_number','invoice_series','invoice_date','buyer_tax_code',
+                     'buyer_name','subtotal','tax_amount','total_amount','source_status_class')
+    item_fields = ('source_item_code','source_item_name','source_unit','qty','unit_price',
+                   'amount','tax_rate','source_nature','inventory_eligible')
+    posted_fields = item_fields + ('product_code','mapping_status','stock_qty','conversion_factor')
+    ledger_fields = ('event_key','source_invoice_table','source_invoice_id','source_line_id',
+                     'source_line_index','direction','event_type','status','product_code',
+                     'txn_date','qty_delta','unit_cost','mapping_revision_id','confirmation_id',
+                     'reverses_event_key')
+    def select(row, fields):
+        return {k:row[k] for k in fields if k in row}
+    def rows(items, fields):
+        return sorted((select(r,fields) for r in items),key=lambda r:json.dumps(r,sort_keys=True,default=str))
+    return {'version':2,'old':select(old,header_fields),'new':select(new,header_fields),
+            'old_items':rows(old_items,posted_fields),'new_items':rows(new_items,item_fields),
+            'ledger':rows(ledger,ledger_fields)}
+
+
 def verified_replacements(conn):
     try:
         from .minvoice_portal import portal_date, portal_validation_error
@@ -68,8 +94,8 @@ def stock_replacement_reviews(conn):
             actual=Counter()
             for r in ledger:actual[r['product_code']]-=float(r['qty_delta'])
             if set(expected)!=set(actual) or any(abs(expected[k]-actual[k])>1e-8 for k in expected):continue
-            stable=lambda r:{k:v for k,v in r.items() if k not in ('updated_at','synced_at')}
-            token=hashlib.sha256(json.dumps([stable(old),stable(new),old_items,new_items,ledger],sort_keys=True,default=str).encode()).hexdigest()
+            basis=replacement_basis(old,new,old_items,new_items,ledger)
+            token=hashlib.sha256(json.dumps(basis,sort_keys=True,default=str).encode()).hexdigest()
             confirmed=conn.execute("SELECT 1 FROM audit_log WHERE event_type='invoice_output.replacement_keep_stock' AND entity_id=? AND status='ok'",(token,)).fetchone() is not None
             review={'token':token,'confirmed':confirmed,'old_id':old_id,'new_id':new_id,'old_number':old['invoice_number'],'new_number':new['invoice_number'],'buyer':new['buyer_name'],'line_count':len(new_items),'old_total':old['total_amount'],'new_total':new['total_amount']}
             result[old_id]=review;result[new_id]=review
