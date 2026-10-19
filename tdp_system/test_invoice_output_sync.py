@@ -189,6 +189,22 @@ class InvoiceOutputSyncTests(unittest.TestCase):
             **kwargs,
         )
 
+    def test_unchanged_refresh_keeps_line_ids_but_changed_source_invalidates_editor(self):
+        remote = output_invoice(1)
+        client = OutputFixtureMsmi([remote])
+        self.sync(client)
+        def ids():
+            return [r[0] for r in self.conn.execute(
+                'SELECT id FROM outgoing_source_invoice_items ORDER BY id')]
+        before = ids()
+        self.assertTrue(before)
+        for _ in range(3):
+            self.sync(client)
+            self.assertEqual(before, ids())
+        client.items[0]['tenNmua'] = 'Different buyer name'
+        self.sync(client)
+        self.assertTrue(set(before).isdisjoint(ids()))
+
     def test_provider_test_environment_cannot_enter_business_database(self):
         client = OutputFixtureMsmi([output_invoice(1)])
         client.is_test_environment = True

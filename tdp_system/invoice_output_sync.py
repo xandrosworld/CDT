@@ -593,9 +593,28 @@ def upsert_output_invoice(
             _remembered_outside(conn, existing['id'], now)
         return existing["id"], False, data, requires_reconcile
 
+    # A customer may be editing a line while the background sync runs. Keep
+    # its identity only when the full source detail and buyer/date scope agree.
+    # Changed sources still get fresh IDs, so an old screen cannot edit them.
+    keep_items = False
     if existing:
         invoice_id = existing["id"]
-        conn.execute("DELETE FROM outgoing_source_invoice_items WHERE invoice_id=?", (invoice_id,))
+        old_items = conn.execute(
+            "SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index,id",
+            (invoice_id,),
+        ).fetchall()
+        source_fields = ('line_index', 'source_item_code', 'source_item_name', 'source_unit',
+                         'qty', 'unit_price', 'amount', 'tax_rate', 'source_nature',
+                         'inventory_eligible', 'validation_note')
+        scope_fields = ('buyer_tax_code', 'buyer_name', 'invoice_date', 'invoice_number',
+                        'invoice_series', 'source_status_class', 'subtotal', 'tax_amount',
+                        'total_amount', 'relation_reference')
+        keep_items = (all(existing[k] == data[k] for k in scope_fields)
+                      and len(old_items) == len(normalized_items)
+                      and all(all(old[k] == new[k] for k in source_fields)
+                              for old, new in zip(old_items, normalized_items)))
+        if not keep_items:
+            conn.execute("DELETE FROM outgoing_source_invoice_items WHERE invoice_id=?", (invoice_id,))
         created = False
     else:
         invoice_id = conn.execute(
@@ -609,6 +628,8 @@ def upsert_output_invoice(
     inventory_items = 0
     for item in normalized_items:
         inventory_items += int(bool(item["inventory_eligible"]))
+        if keep_items:
+            continue
         conn.execute(
             """INSERT INTO outgoing_source_invoice_items(
                    invoice_id,line_index,source_item_code,source_item_name,source_unit,qty,
