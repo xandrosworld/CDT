@@ -45,6 +45,23 @@ class InvoiceExpenseTests(unittest.TestCase):
         upsert_msmi_invoice(self.conn,self.remote,'INPUT_ELECTRONIC_INVOICE','TDP',now_iso())
         apply_saved_mappings(self.conn,'input',self.invoice_id)
 
+    def test_open_editor_and_expense_confirmation_survive_unchanged_sync(self):
+        token = expense_token(self.conn, self.invoice_id)
+        for _ in range(3):
+            self.sync()
+            self.assertEqual(self.ids, [r[0] for r in self.conn.execute(
+                'SELECT id FROM msmi_invoice_items ORDER BY line_index')])
+            self.assertEqual(token, expense_token(self.conn, self.invoice_id))
+        save_mapping(self.conn, direction='input', item_id=self.ids[0], product_code='P', now_iso=now_iso)
+        self.change(ids=[self.ids[1]])
+        token = expense_token(self.conn, self.invoice_id)
+        self.sync()
+        self.assertEqual(token, expense_token(self.conn, self.invoice_id))
+        self.remote['hdhhdvu'][0]['sluong'] = 3
+        self.sync()
+        self.assertTrue(set(self.ids).isdisjoint(r[0] for r in self.conn.execute('SELECT id FROM msmi_invoice_items')))
+        self.assertNotEqual(token, expense_token(self.conn, self.invoice_id))
+
     def test_whole_invoice_keeps_money_and_removes_code_requirement_and_is_reversible(self):
         before=self.source()
         self.assertEqual(2,self.change()['changed_lines'])

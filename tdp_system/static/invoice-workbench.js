@@ -107,7 +107,7 @@ function tdpMInvoiceTime(value) {
     }
     function expenseControl(item, invoice) {
       if (!input || !item.id || invoice.sync_status !== 'synced' || ['posted','blocked'].includes(invoice.receipt_status) || (!item.inventory_eligible && !item.is_expense)) return '';
-      return '<div class="invoice-line-classification">' + button(item.is_expense ? 'invoice-expense-undo' : 'invoice-expense-all',invoice.id,'Phân loại…','btn-link') +
+      return '<div class="invoice-line-classification">' + button(item.is_expense ? 'invoice-expense-undo' : 'invoice-expense-all',invoice.id,item.is_expense ? 'Chuyển hóa đơn về hàng nhập kho' : 'Hóa đơn chi phí · không nhập kho','btn-outline') +
         (item.expense_needs_review ? button('invoice-expense-all',invoice.id,'Xác nhận lại chi phí','btn-link') : '') + '</div>';
     }
     function renderRow(item) {

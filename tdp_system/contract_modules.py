@@ -5429,6 +5429,16 @@ def upsert_msmi_invoice(conn, remote: dict, invoice_type: str, tenant: str, now:
             )
         return existing["id"], False
 
+    # Background refresh must not invalidate an editor or expense/group choice
+    # when the supplier's business data has not changed.
+    if existing and existing['sync_status'] == 'synced' and existing['receipt_status'] != 'blocked':
+        stored_items = [dict(row) for row in conn.execute(
+            'SELECT * FROM msmi_invoice_items WHERE invoice_id=? ORDER BY line_index', (existing['id'],))]
+        if business_signature(dict(existing), stored_items) == business_signature(data, normalized_items):
+            conn.execute('UPDATE msmi_invoices SET raw_json=?,synced_at=?,updated_at=? WHERE id=?',
+                         (data['raw_json'], now, now, existing['id']))
+            return existing['id'], False
+
     conn.execute(
         """INSERT INTO msmi_invoices(
             remote_id,tenant,invoice_type,seller_tax_code,seller_name,invoice_number,invoice_series,
