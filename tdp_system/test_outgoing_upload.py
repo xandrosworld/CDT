@@ -40,6 +40,29 @@ class OutgoingUploadTests(unittest.TestCase):
                 ['orders','batches','products','receivable_ledger_lines','payable_ledger_lines',
                  'invoice_inventory_ledger','outgoing_source_invoices','outgoing_source_invoice_items']}
 
+    def test_stock_preview_change_requires_new_confirmation_and_creates_no_draft(self):
+        url='/api/outgoing-invoice-upload/stock-preview?from=2026-09-01&to=2026-09-13&contractor=NT-A'
+        preview=self.client.post(url).get_json()
+        with server.db() as c:
+            c.execute("UPDATE inventory_transactions SET qty_in=4 WHERE source_type='OPENING'")
+        response=self.export(preview['token'])
+        self.assertEqual(response.status_code,409,response.get_json())
+        self.assertEqual(response.json['code'],'stock_preview_changed')
+        with server.db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM outgoing_invoice_drafts').fetchone()[0],0)
+        fresh=self.client.post(url).get_json()
+        self.assertNotEqual(preview['token'],fresh['token'])
+        self.assertEqual(sum(r['ready_qty'] for r in fresh['items']),4)
+        self.assertEqual(sum(row[3] for row in self.file_rows(self.export(fresh['token']))),4)
+
+    def test_expired_stock_preview_has_stock_specific_recovery(self):
+        preview=self.client.post('/api/outgoing-invoice-upload/stock-preview?from=2026-09-01&to=2026-09-13&contractor=NT-A').get_json()
+        with server.db() as c:
+            c.execute('UPDATE outgoing_upload_jobs SET expires_at=0 WHERE token=?',(preview['token'],))
+        response=self.export(preview['token'])
+        self.assertEqual(response.status_code,409)
+        self.assertEqual(response.json['code'],'stock_preview_changed')
+
     def test_old_posted_remainder_holds_old_orders_but_not_later_orders(self):
         with server.db() as c:
             c.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,legal_name,tax_code,address,updated_at) VALUES('NT-A','Test','0101234567','Test','2026-09-01')")

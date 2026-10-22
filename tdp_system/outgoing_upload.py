@@ -47,6 +47,10 @@ SHEET = 'Lap hoa don'
 MAX_ROWS = 10000
 
 
+class StockPreviewChanged(ValueError):
+    pass
+
+
 def packed(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
 
@@ -401,7 +405,9 @@ def register(app, ctx):
                 job=conn.execute('SELECT * FROM outgoing_upload_jobs WHERE token=?',(token,)).fetchone()
                 if not job:raise ValueError('Không tìm thấy bản xem trước. Nhập lại file.')
                 job=dict(job)
-                if not job['result_json'] and time.time()>job['expires_at']:raise ValueError('Bản xem trước đã hết hạn 15 phút. Nhập lại file để kiểm tra số mới.')
+                if not job['result_json'] and time.time()>job['expires_at']:
+                    if job['source_name']=='STOCK_ONLY':raise StockPreviewChanged('Bản xem trước đã hết hạn. Cần tính lại lượng có thể xuất.')
+                    raise ValueError('Bản xem trước đã hết hạn 15 phút. Nhập lại file để kiểm tra số mới.')
                 requested=json.loads(job['rows_json'])
                 for r in requested:
                     o=conn.execute('SELECT contractor FROM orders WHERE id=?',(r['order_id'],)).fetchone()
@@ -427,10 +433,15 @@ def register(app, ctx):
                 if job['result_json']:
                     result=json.loads(job['result_json']);ids=result['draft_ids']
                 else:
-                    if time.time()>job['expires_at']:raise ValueError('Bản xem trước đã hết hạn. Nhập lại file.')
-                    plan=build_plan(conn,requested,job['cutoff'],job['contractor'],ctx['invoice_tax_percent'],stock_only=job['source_name']=='STOCK_ONLY')
-                    if plan['fingerprint']!=job['preview_hash']:
-                        raise ValueError('Đơn, lựa chọn, quy đổi, tồn hoặc hóa đơn đã ký vừa thay đổi. Nhập lại file để xem số mới; chưa tạo dự thảo.')
+                    try:
+                        if time.time()>job['expires_at']:raise ValueError('Bản xem trước đã hết hạn. Nhập lại file.')
+                        plan=build_plan(conn,requested,job['cutoff'],job['contractor'],ctx['invoice_tax_percent'],stock_only=job['source_name']=='STOCK_ONLY')
+                        if plan['fingerprint']!=job['preview_hash']:
+                            raise ValueError('Đơn, lựa chọn, quy đổi, tồn hoặc hóa đơn đã ký vừa thay đổi. Nhập lại file để xem số mới; chưa tạo dự thảo.')
+                    except ValueError as exc:
+                        if job['source_name']=='STOCK_ONLY':
+                            raise StockPreviewChanged('Dữ liệu vừa thay đổi. Cần tính lại lượng có thể xuất; chưa tạo bảng kê.') from exc
+                        raise
                     ids=create_plan_drafts(conn,plan,timestamp,ctx['invoice_tax_percent'])
                     result={'draft_ids':ids,**public_plan(plan)}
                     conn.execute('UPDATE outgoing_upload_jobs SET result_json=?,generated_at=? WHERE token=?',(packed(result),timestamp,token))
@@ -448,4 +459,5 @@ def register(app, ctx):
             response.headers['X-Export-Receipt']=receipt
             response.headers['X-Waiting-Rows']=str(result['waiting_count'])
             return response
+        except StockPreviewChanged as exc:return jsonify(ok=False,code='stock_preview_changed',error=str(exc)),409
         except (ValueError,InvalidOperation) as exc:return jsonify(ok=False,error=str(exc)),409

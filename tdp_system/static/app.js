@@ -3562,8 +3562,8 @@
         var button=target.querySelector('[data-stock-export]');
         target.querySelector('[data-stock-confirm]').onchange=function(){button.disabled=!this.checked||!result.ready_count;};
         target.querySelector('[data-stock-refresh]').onclick=refresh;
-        button.onclick=async function(){button.disabled=true;try{await downloadFile('/api/outgoing-invoice-upload/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:result.token,confirmed:true})});target.querySelector('[data-stock-status]').textContent='Đã tải file theo tồn. Chưa ký/phát hành hóa đơn; phần còn lại vẫn chờ.';}catch(error){target.querySelector('[data-stock-status]').textContent=error.message+' Bấm Tính lại để xem số mới.';}finally{button.disabled=false;}};
-      }catch(error){target.textContent=error.message;}
+        button.onclick=async function(){button.disabled=true;try{await downloadFile('/api/outgoing-invoice-upload/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:result.token,confirmed:true})});target.querySelector('[data-stock-status]').textContent='Đã tải file theo tồn. Chưa ký/phát hành hóa đơn; phần còn lại vẫn chờ.';}catch(error){if(error.payload?.code==='stock_preview_changed'){await refresh();var updated=target.querySelector('[data-stock-status]');if(updated){updated.textContent='Dữ liệu vừa thay đổi. Đã tính lại bảng bên trên; chưa tạo bảng kê. Chị kiểm tra lượng mới, tích xác nhận rồi bấm tải.';target.querySelector('[data-stock-confirm]')?.focus();}}else{target.querySelector('[data-stock-status]').textContent=error.message+' Bấm Tính lại để xem số mới.';}}finally{if(button.isConnected)button.disabled=!target.querySelector('[data-stock-confirm]').checked||!result.ready_count;}};
+      }catch(error){target.textContent=error.message;var retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.textContent='Tính lại';retry.onclick=refresh;target.appendChild(retry);}
     }
     await refresh();
   }
