@@ -66,6 +66,7 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
     @app.route('/login', methods=['GET', 'POST'])
     def cloud_login():
         error, status = '', 200
+        resume_mode = request.args.get('resume') == '1'
         csrf = session.setdefault('login_csrf', secrets.token_urlsafe(24))
         if request.method == 'POST':
             if not hmac.compare_digest(request.form.get('csrf', ''), csrf):
@@ -82,10 +83,12 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
                 if len(attempts) > 10000 or len(attempts[peer]) >= 10:
                     return render_template_string(LOGIN, csrf=csrf,
                         error='Đã thử quá nhiều lần. Vui lòng thử lại sau 10 phút.',
+                        resume_mode=resume_mode,
                         entered_username=request.form.get('username', '')), 429
                 attempts[peer].append(now)
             valid_password = check_password_hash(password_hash, request.form.get('password', ''))
-            if hmac.compare_digest(request.form.get('username', '').encode(), username.encode()) and valid_password:
+            submitted_username = username if resume_mode else request.form.get('username', '')
+            if hmac.compare_digest(submitted_username.encode(), username.encode()) and valid_password:
                 with lock:
                     attempts.pop(peer, None)
                 session.clear()
@@ -95,8 +98,9 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
                 if request.args.get('resume') == '1':
                     return '<!doctype html><html lang="vi"><meta charset="utf-8"><p>Đã đăng nhập. Đang trở lại công việc…</p><script>window.parent.postMessage({type:"tdp-session-restored"},location.origin)</script></html>'
                 return redirect('/')
-            error, status = 'Tên đăng nhập hoặc mật khẩu chưa đúng.', 401
+            error, status = ('Mật khẩu chưa đúng.' if resume_mode else 'Tên đăng nhập hoặc mật khẩu chưa đúng.'), 401
         return render_template_string(LOGIN, csrf=csrf, error=error,
+                                      resume_mode=resume_mode,
                                       entered_username=request.form.get('username', '')), status
 
     @app.post('/logout')

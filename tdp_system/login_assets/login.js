@@ -18,7 +18,7 @@
   const reset = () => {
     submit.disabled = false;
     submit.classList.remove('is-loading');
-    submit.querySelector('.submit-label').textContent = 'Đăng nhập';
+    submit.querySelector('.submit-label').textContent = new URLSearchParams(location.search).get('resume') === '1' ? 'Mở khóa' : 'Đăng nhập';
     form.removeAttribute('aria-busy');
     status.textContent = '';
   };
@@ -31,13 +31,14 @@
     timer = setTimeout(() => { reset(); status.textContent = 'Kết nối hơi chậm. Bạn có thể bấm Đăng nhập để thử lại.'; }, 15000);
   });
   window.addEventListener('pageshow', () => { clearTimeout(timer); reset(); });
-  document.querySelector('.error a')?.addEventListener('click', () => { document.querySelector('#username').focus(); });
+  document.querySelector('.error a')?.addEventListener('click', () => { (document.querySelector('#username') || password).focus(); });
 })();
 
 (() => {
   if (new URLSearchParams(location.search).get('resume') === '1') {
     document.querySelector('#welcome').textContent = 'Tiếp tục công việc.';
-    document.querySelector('.intro').textContent = 'Phiên làm việc đã khóa. Đăng nhập lại để tiếp tục.';
+    document.querySelector('.intro').textContent = 'Nhập mật khẩu để mở khóa và tiếp tục công việc.';
+    document.querySelector('.submit-label').textContent = 'Mở khóa';
     document.querySelector('.form-note p').textContent = 'Màn hình đang làm vẫn được giữ trong tab này. Đừng đóng hoặc tải lại tab nếu chưa lưu.';
   }
   const panel = document.querySelector('.brand-panel');

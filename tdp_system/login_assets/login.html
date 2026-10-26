@@ -23,10 +23,10 @@
         <p class="section-label">HỆ THỐNG QUẢN LÝ</p>
         <h2 id="welcome">Chào mừng trở lại.</h2>
         <p class="intro">Đăng nhập để bắt đầu công việc hôm nay.</p>
-        {% if error %}<div role="alert" id="login-error" class="error">{{ error }}<br><a href="#username">Kiểm tra lại thông tin đăng nhập</a></div>{% endif %}
+        {% if error %}<div role="alert" id="login-error" class="error">{{ error }}<br><a href="{{ '#password' if resume_mode else '#username' }}">{{ 'Nhập lại mật khẩu' if resume_mode else 'Kiểm tra lại thông tin đăng nhập' }}</a></div>{% endif %}
         <form method="post" id="login-form">
           <input type="hidden" name="csrf" value="{{ csrf }}">
-          <div class="field"><label for="username">Tên đăng nhập</label><input id="username" name="username" value="{{ entered_username|default('') }}" autocomplete="username" autocapitalize="none" spellcheck="false" required {% if error %}aria-describedby="login-error"{% endif %}></div>
+          {% if not resume_mode %}<div class="field"><label for="username">Tên đăng nhập</label><input id="username" name="username" value="{{ entered_username|default('') }}" autocomplete="username" autocapitalize="none" spellcheck="false" required {% if error %}aria-describedby="login-error"{% endif %}></div>{% endif %}
           <div class="field"><label for="password">Mật khẩu</label><div class="password-wrap"><input id="password" name="password" type="password" autocomplete="current-password" required><button class="reveal" type="button" aria-controls="password" aria-pressed="false" hidden>Hiện</button></div><p id="caps-warning" class="caps-warning" hidden>Đang bật Caps Lock. Kiểm tra chữ hoa khi nhập mật khẩu.</p></div>
           <button class="submit" type="submit"><span class="submit-label">Đăng nhập</span><span class="arrow" aria-hidden="true">→</span><span class="spinner" aria-hidden="true"></span></button>
           <p class="login-status" role="status" aria-live="polite"></p>

@@ -85,8 +85,9 @@ class CloudAuthTests(unittest.TestCase):
 
     def test_resume_login_stays_in_frame_and_keeps_csrf_protection(self):
         page = self.client.get('/login?resume=1')
+        self.assertNotIn('name="username"', page.text)
         token = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
-        response = self.client.post('/login?resume=1', data={'csrf':token,'username':'admin','password':'fixture-password'})
+        response = self.client.post('/login?resume=1', data={'csrf':token,'password':'fixture-password'})
         self.assertEqual(response.status_code, 200)
         self.assertIn('tdp-session-restored', response.text)
         self.assertEqual(self.client.post('/api/session/activity').status_code, 403)
