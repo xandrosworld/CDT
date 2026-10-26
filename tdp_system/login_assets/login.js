@@ -33,3 +33,27 @@
   window.addEventListener('pageshow', () => { clearTimeout(timer); reset(); });
   document.querySelector('.error a')?.addEventListener('click', () => { document.querySelector('#username').focus(); });
 })();
+
+(() => {
+  if (new URLSearchParams(location.search).get('resume') === '1') {
+    document.querySelector('#welcome').textContent = 'Tiếp tục công việc.';
+    document.querySelector('.intro').textContent = 'Phiên làm việc đã khóa. Đăng nhập lại để tiếp tục.';
+    document.querySelector('.form-note p').textContent = 'Màn hình đang làm vẫn được giữ trong tab này. Đừng đóng hoặc tải lại tab nếu chưa lưu.';
+  }
+  const panel = document.querySelector('.brand-panel');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+  let raf;
+  panel.addEventListener('pointermove', event => {
+    if (reduce.matches || event.pointerType !== 'mouse') return;
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      const rect = panel.getBoundingClientRect();
+      panel.style.setProperty('--photo-x', `${(event.clientX - rect.left - rect.width / 2) / rect.width * 14}px`);
+      panel.style.setProperty('--photo-y', `${(event.clientY - rect.top - rect.height / 2) / rect.height * 10}px`);
+    });
+  });
+  panel.addEventListener('pointerleave', () => {
+    cancelAnimationFrame(raf);
+    panel.style.setProperty('--photo-x', '0px');panel.style.setProperty('--photo-y', '0px');
+  });
+})();

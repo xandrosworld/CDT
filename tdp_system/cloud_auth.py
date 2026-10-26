@@ -15,7 +15,8 @@ from werkzeug.security import check_password_hash
 
 LOGIN_ASSETS = Path(__file__).with_name('login_assets')
 LOGIN = (LOGIN_ASSETS / 'login.html').read_text(encoding='utf-8')
-PUBLIC_LOGIN_ASSETS = frozenset({'login.css', 'login.js', 'harvest.webp'})
+PUBLIC_LOGIN_ASSETS = frozenset({'login.css', 'login.js', 'harvest.webp', 'session.js'})
+IDLE_SECONDS = 5 * 60 * 60
 
 
 def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True):
@@ -23,13 +24,21 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
         raise RuntimeError('Hosted mode requires a username, password hash and strong session secret')
     app.config.update(SECRET_KEY=secret_key, TDP_CLOUD_ADMIN_USER=username, SESSION_COOKIE_NAME='tdp_session',
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SECURE=secure,
-                      SESSION_COOKIE_SAMESITE='Lax', PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
+                      SESSION_COOKIE_SAMESITE='Lax', PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+                      SESSION_REFRESH_EACH_REQUEST=False)
     attempts = defaultdict(deque)
     lock = threading.Lock()
 
     def guard():
         if request.path in ('/health', '/login') or (request.method in ('GET', 'HEAD') and request.path in {f'/login-assets/{name}' for name in PUBLIC_LOGIN_ASSETS}):
             return None
+        if session.get('user') == username:
+            # Background invoice polling must never count as customer activity.
+            last_activity = session.get('last_activity')
+            if last_activity is None:
+                session['last_activity'] = time.time()  # Existing sessions at rollout.
+            elif time.time() - last_activity >= IDLE_SECONDS:
+                session.pop('user', None)
         if session.get('user') != username:
             if request.path.startswith('/api/'):
                 return jsonify(ok=False, error='Vui lòng đăng nhập để tiếp tục.'), 401
@@ -41,6 +50,12 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
         return None
 
     app.before_request_funcs.setdefault(None, []).insert(0, guard)
+
+    @app.route('/api/session/activity', methods=['GET', 'POST'])
+    def cloud_session_activity():
+        if request.method == 'POST':
+            session['last_activity'] = time.time()
+        return jsonify(ok=True, remaining_seconds=max(0, IDLE_SECONDS - (time.time() - session['last_activity'])))
 
     @app.get('/login-assets/<name>')
     def cloud_login_asset(name):
@@ -75,7 +90,10 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
                     attempts.pop(peer, None)
                 session.clear()
                 session['user'] = username
+                session['last_activity'] = time.time()
                 session.permanent = True
+                if request.args.get('resume') == '1':
+                    return '<!doctype html><html lang="vi"><meta charset="utf-8"><p>Đã đăng nhập. Đang trở lại công việc…</p><script>window.parent.postMessage({type:"tdp-session-restored"},location.origin)</script></html>'
                 return redirect('/')
             error, status = 'Tên đăng nhập hoặc mật khẩu chưa đúng.', 401
         return render_template_string(LOGIN, csrf=csrf, error=error,
@@ -92,8 +110,12 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
             response.direct_passthrough = False
             html = response.get_data(as_text=True)
             old = '<button class="user-chip" title="Hai người có thể cùng sử dụng">VT</button>'
-            response.set_data(html.replace(old,
-                '<form action="/logout" method="post"><button class="user-chip" type="submit">Đăng xuất</button></form>'))
+            html = html.replace(old,
+                '<form action="/logout" method="post"><button class="user-chip" type="submit">Đăng xuất</button></form>')
+            # Run ahead of application scripts without reloading the working page on expiry.
+            script = '<script src="/login-assets/session.js?v=20261027"></script>'
+            html = html.replace('</head>', script + '</head>') if '</head>' in html else script + html
+            response.set_data(html)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'SAMEORIGIN'
         response.headers['Referrer-Policy'] = 'same-origin'

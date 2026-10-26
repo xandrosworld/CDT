@@ -2,6 +2,7 @@ import re
 import gzip
 import io
 import unittest
+from unittest.mock import patch
 
 from flask import Flask
 from werkzeug.security import generate_password_hash
@@ -64,6 +65,31 @@ class CloudAuthTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn('&lt;script&gt;', response.text)
         self.assertNotIn('<script>alert(1)</script>', response.text)
+
+    def test_idle_expiry_and_activity_heartbeat(self):
+        self.login()
+        with self.client.session_transaction() as state:
+            start = state['last_activity']
+        with patch('tdp_system.cloud_auth.time.time', return_value=start + 17900):
+            self.assertEqual(self.client.get('/api/private').status_code, 200)
+        with self.client.session_transaction() as state:
+            self.assertEqual(state['last_activity'], start)
+        with patch('tdp_system.cloud_auth.time.time', return_value=start + 18001):
+            self.assertEqual(self.client.post('/api/private', headers={'Origin':'http://localhost'}).status_code, 401)
+        self.login()
+        with self.client.session_transaction() as state:
+            state['last_activity'] -= 17000
+        response = self.client.post('/api/session/activity', headers={'Origin':'http://localhost'})
+        self.assertEqual(response.status_code, 200)
+        self.assertGreater(response.json['remaining_seconds'], 17990)
+
+    def test_resume_login_stays_in_frame_and_keeps_csrf_protection(self):
+        page = self.client.get('/login?resume=1')
+        token = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        response = self.client.post('/login?resume=1', data={'csrf':token,'username':'admin','password':'fixture-password'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('tdp-session-restored', response.text)
+        self.assertEqual(self.client.post('/api/session/activity').status_code, 403)
 
     def test_text_compression_preserves_payload(self):
         self.app.add_url_rule('/large', endpoint='large', view_func=lambda: {'items': ['fixture-value']*500})
