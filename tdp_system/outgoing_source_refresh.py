@@ -66,14 +66,14 @@ try:
     from .invoice_output_sync import sync_output_batch
     from .invoice_inventory import post_output_invoice, InvoiceInventoryError
     from .outgoing_source_scope import scope_report
-    from .outgoing_waiting import refresh_waiting
+    from .outgoing_waiting import refresh_waiting, reconcile_shared_issued_holds
     from .outgoing_sent_reconcile import reconcile_sent
 except ImportError:
     from invoice_workbench import prepare_sync_batch
     from invoice_output_sync import sync_output_batch
     from invoice_inventory import post_output_invoice, InvoiceInventoryError
     from outgoing_source_scope import scope_report
-    from outgoing_waiting import refresh_waiting
+    from outgoing_waiting import refresh_waiting, reconcile_shared_issued_holds
     from outgoing_sent_reconcile import reconcile_sent
 
 
@@ -148,6 +148,10 @@ def _refresh_sources(db_factory, client_factory, now_iso, start, end):
                 blocked.append({'id':r['id'],'number':r['number'],'error':str(exc)})
         sent=reconcile_sent(conn,now_iso())
         blocked.extend(sent['blocked'])
+        # Old/unrelated review warnings must not prevent releasing editable
+        # holds whose exact order quantities have already been issued.
+        orders=[dict(r) for r in conn.execute("SELECT o.* FROM orders o JOIN batches b ON b.id=o.batch_id WHERE b.status='approved'")]
+        reconcile_shared_issued_holds(conn,orders,now_iso())
         waiting=refresh_waiting(conn,now_iso(),fill=False)
         sources=scope_report(conn,start,end)
     log.warning('TDP source refresh timing: provider=%.3fs local_sync=%.3fs reconcile=%.3fs total=%.3fs invoices=%d',

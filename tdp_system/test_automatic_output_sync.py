@@ -74,7 +74,7 @@ class AutomaticOutputTests(unittest.TestCase):
             with self.subTest(result=result):
                 with patch('tdp_system.automatic_output_sync.refresh_sources',return_value=result):
                     self.assertFalse(self.execute()['ok'])
-                s=self.state();self.assertEqual('needs_review',s['state']);self.assertTrue(s['attention'])
+                s=self.state();self.assertEqual('needs_review',s['state']);self.assertTrue(s['attention']);self.assertFalse(s['source_attention'])
                 self.assertIsNone(s['last_success']);self.assertTrue(s['last_checked'])
                 self.now+=timedelta(minutes=5)
 

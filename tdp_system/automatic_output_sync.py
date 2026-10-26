@@ -39,7 +39,7 @@ def status(conn, tenant, now=None):
     now = now or vn_now()
     stale = not r['last_checked'] or now - datetime.fromisoformat(r['last_checked']) > timedelta(minutes=10)
     overdue = bool(r['lease_until'] and datetime.fromisoformat(r['lease_until']) <= now)
-    r.update(interval_minutes=5, attention=bool(r['enabled'] and (stale or overdue or r['state'] in ('error','needs_review'))))
+    r.update(source_attention=bool(r['enabled'] and (stale or overdue or r['state']=='error')), interval_minutes=5, attention=bool(r['enabled'] and (stale or overdue or r['state'] in ('error','needs_review'))))
     return r
 
 

@@ -105,6 +105,30 @@ class WaitingTests(unittest.TestCase):
         r=self.refresh()['rows'][0];self.assertEqual((r['issued_qty'],r['unissued_qty']),(3,12))
         with server.db() as c:self.assertEqual(canonical_available_stock(c)['HH-01']['raw_available_qty'],0)
 
+    def test_unrelated_review_does_not_keep_proven_issued_stock_reserved(self):
+        from unittest.mock import patch
+        from .outgoing_waiting import reconcile_shared_issued_holds, issued_allocations
+        self.seed();self.refresh()
+        with server.db() as c:
+            c.execute("INSERT OR REPLACE INTO outgoing_buyer_profiles(contractor,legal_name,tax_code,address,updated_at) VALUES('NT-A','A','0101234567','A','2026-09-01')")
+            sid=Fixture.add_posted_source(c,source='minvoice',qty=3,invoice_date='2026-09-02',number='201')
+            c.execute("UPDATE outgoing_source_invoices SET buyer_tax_code='0101234567' WHERE id=?",(sid,))
+            def with_unrelated(*args,**kwargs):
+                quantities,warnings=issued_allocations(*args,**kwargs)
+                return quantities,warnings+[{'contractor':'NT-B','message':'Old unresolved invoice'}]
+            orders=[dict(r) for r in c.execute('SELECT * FROM orders')]
+            original_orders=[tuple(r) for r in c.execute('SELECT * FROM orders')]
+            original_ledger=[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')]
+            with patch('tdp_system.outgoing_waiting.issued_allocations',side_effect=with_unrelated):
+                self.assertTrue(refresh_waiting(c,'now',fill=False)['warnings'])
+                reconcile_shared_issued_holds(c,orders,'now')
+                held=c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND status='reserved'").fetchone()[0]
+                self.assertEqual(4,held)
+                reconcile_shared_issued_holds(c,orders,'now')
+                self.assertEqual(held,c.execute("SELECT SUM(qty_out) FROM inventory_transactions WHERE source_type='OUTGOING_DRAFT' AND status='reserved'").fetchone()[0])
+            self.assertEqual(original_orders,[tuple(r) for r in c.execute('SELECT * FROM orders')])
+            self.assertEqual(original_ledger,[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')])
+
     def test_partial_date_export_preserves_other_days_waiting(self):
         self.seed(stock=20)
         with server.db() as c:self.add_batch(c,'2026-09-02',[{'qty':5}])

@@ -3148,10 +3148,18 @@
     }
   }
 
+  function scopedOutputReview(s) {
+    var d=state.unissued,f=pendingScope();
+    return !!(s&&s.state==='needs_review'&&s.source_attention===false&&d&&d.from===f.from&&d.asof===f.to&&d.contractor===f.contractor);
+  }
+  function outputSyncAttention(s) {
+    return scopedOutputReview(s)?!!(state.unissued.warnings||[]).length:!!(s||{}).attention;
+  }
   function outputSyncText(s) {
     if(!s)return 'Đang kiểm tra lịch cập nhật hóa đơn đã ký…';
     if(!s.enabled)return 'Tự cập nhật nền chưa bật. Khi tải bảng, web vẫn cập nhật hóa đơn đã ký trước.';
     var checked=s.last_checked?new Date(s.last_checked).toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'}):'chưa có lượt hoàn tất';
+    if(scopedOutputReview(s))return 'Đã cập nhật M-Invoice: '+checked+'. '+((state.unissued.warnings||[]).length?'Phạm vi đang xem còn '+state.unissued.warnings.length+' thông tin cần kiểm tra ở bên dưới.':'Phạm vi đang xem không có cảnh báo đối chiếu. Các cảnh báo của nhà thầu/kỳ khác không tính vào phần này.');
     return 'Tự cập nhật M-Invoice mỗi 5 phút · Lần kiểm tra gần nhất: '+checked+'. '+
       (s.state==='running'?'Đang cập nhật; số đang xem có thể thay đổi.':s.message||'Đang chờ cập nhật.')+
       (s.attention?' Cần kiểm tra trạng thái đồng bộ; chưa coi số đang xem là đã đối chiếu xong.':'');
@@ -3165,7 +3173,7 @@
       var changed=next.last_checked && next.last_checked!==state.outputSyncApplied;
       state.outputSyncStatus=next;
       var note=document.getElementById('outputSyncStatus');
-      if(note){note.textContent=outputSyncText(next);note.className=next.attention?'warning-summary':'muted';}
+      if(note){note.textContent=outputSyncText(next);note.className=outputSyncAttention(next)?'warning-summary':'muted';}
       if(changed&&!state.unissuedLoading&&!state.invoiceExportBusy&&!state.unissuedBusy&&!state.preparedBusy&&
           !((state.preparedInvoices||{}).items||[]).length&&
           !state.invoiceReviewBusy&&!state.invoiceReviewOpen&&!state.invoiceReviewPreview&&!exportChoicesDirty()&&
@@ -3630,7 +3638,7 @@
     var rows=all.filter(function(r){return (!groupFilter||invoiceGroupKey(r)===groupFilter)&&r.unissued_qty>1e-8&&(!search||[r.contractor,r.product_code,r.invoice_name].join(' ').toLocaleLowerCase().includes(search));});
     var page=Math.min(state.unissuedPage||0,Math.max(0,Math.ceil(rows.length/50)-1));state.unissuedPage=page;
     return '<section class="card" id="unissuedReconciliation" data-loaded="'+(d?'true':'false')+'"><div class="card-head"><div><h3>Chưa xuất — hàng để lại và bảng kê chưa lên hóa đơn</h3><p>Gồm toàn bộ hàng chưa xuất hóa đơn: hàng chờ lập bảng kê, đã chuẩn bị, đã tải Excel và hàng chị để lại. Các lựa chọn đã lưu được giữ nguyên.</p></div></div><div class="card-body"><p class="code-note"><strong>Phạm vi file: '+esc(invoiceScopeLabel())+'</strong>'+' · '+esc(dateVN(f.from)+' → '+dateVN(f.to))+'</p>'+
-      ((d&&d.export_receipts||[]).length?'<details class="code-note" id="downloadedInvoiceFiles"><summary>File Excel đã kết xuất · xem / tải lại</summary><p>Đã tải Excel chưa phải đã ký hóa đơn. Tải lại đúng file cũ, không tạo thêm bản nháp.</p>'+(d.export_receipts||[]).map(function(r){return '<p><a href="/api/outgoing-invoices/export-receipts/'+esc(r.token)+'/file">'+esc(r.filename)+'</a> · '+esc(r.received_at)+'</p>';}).join('')+'</details>':'')+
+      invoicePeriodProgressHtml(d)+((d&&d.export_receipts||[]).length?'<details class="code-note" id="downloadedInvoiceFiles"><summary>File Excel đã kết xuất · xem / tải lại</summary><p>Đã tải Excel chưa phải đã ký hóa đơn. Tải lại đúng file cũ, không tạo thêm bản nháp.</p>'+(d.export_receipts||[]).map(function(r){return '<p><a href="/api/outgoing-invoices/export-receipts/'+esc(r.token)+'/file">'+esc(r.filename)+'</a> · '+esc(r.received_at)+'</p>';}).join('')+'</details>':'')+
       '<p class="code-note">Hàng đã bỏ chọn vẫn ở đây và không tự chọn lại. Doanh thu, công nợ giữ nguyên; không cần xuất bù đủ tiền để tiếp tục lập hóa đơn.</p><button class="btn btn-outline" type="button" data-money-settlement>Đối chiếu hóa đơn theo tiền</button><p class="code-note">Dùng khi đã ký hóa đơn với mặt hàng khác đơn gốc. Chọn đúng nhà thầu, khoảng ngày và hóa đơn để kiểm tra. Chỉ sau khi xác nhận đã xuất đủ theo tiền, kỳ đơn mới không còn trong file chưa xuất; đơn gốc, công nợ và tồn kho giữ nguyên.</p>'+
       (d&&(d.amount_settlements||[]).length?'<p><strong>Đối trừ theo tiền:</strong> '+d.amount_settlements.map(function(r){return esc(r.contractor+' · '+r.date_from+' → '+r.date_to)+' · '+money(r.amount)+(r.reviewed_kkknt?' · Chỉ KKKNT · Phần vượt giữ riêng: '+money(r.excess_amount)+' (không trừ sang đơn khác)':'')+' · '+(r.needs_review?'Cần đối chiếu lại':'Đã xuất đủ theo tiền');}).join('<br>')+'</p>':'')+
       (d&&d.amount_progress&&!(d.amount_settlements||[]).some(function(r){return !r.needs_review&&r.date_from===f.from&&r.date_to===f.to;})?'<p><strong>Tiến độ đối chiếu tiền đã lưu:</strong> '+(d.amount_progress.needs_review?'Số liệu đã thay đổi, cần kiểm tra lại.':'Hóa đơn đã chọn '+money(d.amount_progress.signed_total)+' · Còn chưa xuất theo tiền '+money(d.amount_progress.remaining)+'. Chưa khép kỳ đơn.')+' <button type="button" class="btn btn-outline" data-money-settlement>Mở tiến độ đối chiếu</button></p>':'')+
@@ -3638,10 +3646,17 @@
       '<button type="button" class="btn btn-outline" data-queue-archive>Bỏ phần cũ / Khôi phục</button><p class="code-note">Bỏ phần chưa xuất khỏi bảng chờ và file tải để không lặp lại kỳ sau; giữ nguyên đơn gốc, công nợ, kho và hóa đơn đã ký.</p><details><summary>Phần trước đây chỉ ẩn khỏi file tải</summary><button type="button" class="btn btn-outline" data-download-archive>Ẩn phần cũ khỏi bảng tải / Khôi phục</button></details>'+
       (d&&d.queue_archived_order_rows?'<p role="status">Đã bỏ '+d.queue_archived_order_rows+' dòng đơn khỏi chờ xuất và bảng tải trong phạm vi này. Đây không phải lượng đã xuất hóa đơn; bấm “Bỏ phần cũ / Khôi phục” để xem lịch sử.</p>':'')+
       (d?'<p><strong>Nhà thầu có dữ liệu chưa xuất ('+fileParties.length+'):</strong> '+esc(fileParties.join(', ')||'Chưa có dòng trong phạm vi này')+'.</p>':'')+
-      '<p id="outputSyncStatus" role="status" class="'+((state.outputSyncStatus||{}).attention?'warning-summary':'muted')+'">'+esc(outputSyncText(state.outputSyncStatus))+'</p>'+
+      '<p id="outputSyncStatus" role="status" class="'+(outputSyncAttention(state.outputSyncStatus)?'warning-summary':'muted')+'">'+esc(outputSyncText(state.outputSyncStatus))+'</p>'+
       (state.unissuedExportResult?'<p role="status">'+esc(state.unissuedExportResult)+'</p>':'')+
-      (d&&d.warnings.length?'<details><summary>'+d.warnings.length+' thông tin cần đối chiếu hóa đơn đã ký</summary>'+d.warnings.map(function(w){return '<p>'+esc(w.message)+'</p>';}).join('')+'</details>':'')+
+      (d&&d.warnings.length?'<details id="invoicePeriodIssues"><summary>'+d.warnings.length+' thông tin cần đối chiếu hóa đơn đã ký</summary>'+d.warnings.map(function(w){return '<p>'+esc(w.message)+'</p>';}).join('')+'</details>':'')+
       '<p>Muốn đổi chọn / bỏ chọn, bấm Mở dòng để xử lý để trở về bước 1, rồi lưu ở bước 2.</p><details'+(state.invoiceUnissuedOpen?' open':'')+' id="invoiceUnissuedDetails"><summary>Hàng chưa lên hóa đơn · '+rows.length+' dòng</summary><div class="compact-controls"><label>Nhóm hàng<select id="unissuedGroup"><option value="">Tất cả nhóm hàng</option>'+invoiceLineGroups().map(function(g){return '<option value="'+esc(g.key)+'"'+(groupFilter===g.key?' selected':'')+'>'+esc(g.label)+'</option>';}).join('')+'</select></label><input id="unissuedSearch" value="'+esc(state.unissuedSearch||'')+'" placeholder="Tìm nhà thầu / mã / tên hàng"><button type="button" class="btn btn-outline" data-unissued="search">Tìm</button></div><div class="table-wrap invoice-unissued-table"><table><thead><tr><th>Ngày / Nhà thầu</th><th>Mã / Tên hóa đơn</th><th>ĐVT đơn</th><th>SL trong phần đang xem</th><th>Đơn giá</th><th>Thuế</th><th>Tiền hàng</th><th>Trạng thái / Xử lý</th></tr></thead><tbody>'+rows.slice(page*50,page*50+50).map(function(r){return '<tr><td>'+esc(dateVN(r.work_date)+' · '+r.contractor)+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'</td><td>'+esc(r.unit)+'</td><td>'+stockQty(view==='pending'?r.waiting_qty:view==='ready'?r.ready_qty:r.unissued_qty)+'</td><td>'+stockQty(r.unit_price)+'</td><td>'+esc(taxText(r.tax))+'</td><td>'+money((view==='pending'?r.waiting_qty:view==='ready'?r.ready_qty:r.unissued_qty)*r.unit_price)+'</td><td>'+esc(r.export_skipped?'Đã chuyển sang Chưa xuất':r.downloaded_qty>1e-8?'Đã tải Excel, chưa ký hóa đơn':(view==='ready'||r.ready_qty>1e-8&&r.waiting_qty<=1e-8)?'Đã chuẩn bị — chờ gửi/ký':r.pending_reason||'Chưa chuẩn bị bản nháp')+'<div><button type="button" class="btn btn-outline" data-invoice-remaining-row="'+r.order_id+'">'+(r.export_skipped?'Đưa lại bảng chờ xuất':'Mở dòng để xử lý')+'</button></div>'+(r.export_skipped?'':invoiceUnitButton(r.product_code,r.order_id))+'</td></tr>';}).join('')+'</tbody></table></div><div class="compact-controls"><span>'+rows.length+' dòng · Trang '+(page+1)+'/'+Math.max(1,Math.ceil(rows.length/50))+'</span><button type="button" class="btn btn-outline" data-unissued="prev"'+(!page?' disabled':'')+'>Trang trước</button><button type="button" class="btn btn-outline" data-unissued="next"'+((page+1)*50>=rows.length?' disabled':'')+'>Trang sau</button></div></details></div></section>';
+  }
+
+  function invoicePeriodProgressHtml(d) {
+    if(!d)return '';
+    var groups=d.reconciliation_groups||[],done=0,left=0,refs=new Map();
+    groups.forEach(function(g){done+=Number(g.fully_issued_rows||0);left+=Number(g.remaining_rows||0);(g.invoices||[]).forEach(function(r){refs.set(r.series+'/'+r.number,r);});});
+    return '<div class="code-note" id="invoicePeriodProgress"><strong>Tiến độ trong phạm vi đang xem: '+done+' dòng đã xuất hết · '+left+' dòng còn chưa xuất hết</strong><p>Cuối tháng chọn lại cả tháng để làm phần còn lại. Dòng xuất một phần chỉ còn số lượng chưa xuất. Tải Excel chưa tính là đã xuất hóa đơn.</p><button type="button" class="btn btn-outline" data-period-remaining>Xem phần còn lại</button>'+(refs.size?'<details><summary>Xem hóa đơn đã trừ khỏi đơn · '+refs.size+' hóa đơn</summary>'+Array.from(refs.values()).map(function(r){return '<div>HĐ '+esc(r.series+' / '+r.number)+' · '+esc(dateVN(r.date))+'</div>';}).join('')+'</details>':'')+((d.warnings||[]).length?'<p>Còn thông tin cần kiểm tra; chưa coi phần còn lại là đã đối chiếu xong. <button type="button" class="btn btn-outline" data-period-issues>Xem thông tin cần kiểm tra</button></p>':'')+'</div>';
   }
 
   function invoiceReviewNotesHtml() {
@@ -7655,6 +7670,10 @@
       try{localStorage.setItem('tdp.invoice.review.scope',JSON.stringify(state.orderInvoiceFilters));}catch(_){}
       loadUnissuedScope(false).then(function(){renderDocuments();var next=content.querySelector('#orderInvoiceExportForm [value=open-review]');if(next){next.scrollIntoView({block:'center'});next.focus();}}).catch(function(error){showToast(error.message,true);});
       return;
+    }
+    if(event.target.closest('[data-period-remaining],[data-period-issues]')){
+      var section=document.getElementById(event.target.closest('[data-period-issues]')?'invoicePeriodIssues':'invoiceUnissuedDetails');
+      if(section){section.open=true;section.scrollIntoView({block:'start'});section.querySelector('summary').focus();}return;
     }
     if(event.target.closest('[data-invoice-all-parties]')){
       if(exportChoicesDirty()||state.unissuedBusy||state.invoiceExportBusy)return;
