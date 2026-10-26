@@ -148,6 +148,36 @@ class AutoInputTests(unittest.TestCase):
         self.assertTrue(self.execute()['ok'])
         self.refresh.refresh.assert_called_with('2026-08-01','2026-08-31')
 
+    def test_available_invoices_are_committed_before_slow_source_refresh(self):
+        item=remote_invoice(20649)
+        item.update(_id='available',tdlap='2026-09-15',nmmst='0202265016')
+        def refresh(*args):
+            with self.db() as c:
+                self.assertEqual(1,c.execute('SELECT COUNT(*) FROM msmi_invoices').fetchone()[0])
+                progress=status(c,'TDP',self.now)
+                self.assertTrue(progress['result']['available_loaded'])
+                self.assertFalse(progress['result']['source_ready'])
+                self.assertEqual('running',progress['state'])
+                self.assertEqual(0,c.execute('SELECT COUNT(*) FROM inventory_transactions').fetchone()[0])
+            raise RefreshError('mSMI chưa phản hồi hợp lệ; sẽ tự thử lại.')
+        self.refresh.refresh.side_effect=refresh
+        self.assertFalse(self.execute([item])['ok'])
+        self.assertTrue(self.state()['result']['available_loaded'])
+        self.assertEqual(1,self.state()['result']['new_invoices'])
+        self.assertIsNone(self.state()['last_success'])
+
+    def test_second_snapshot_counts_new_invoices_once_and_can_add_repaired_invoice(self):
+        first=remote_invoice(20649)
+        first.update(_id='one',tdlap='2026-09-15',nmmst='0202265016')
+        second=deepcopy(first);second.update(_id='two',shdon=20650)
+        clients=iter([DateBoundedMsmi([first]),DateBoundedMsmi([first,second])])
+        result=run_due(self.db,'TDP',lambda:next(clients),self.factory,'0202265016',now_fn=lambda:self.now)
+        self.assertTrue(result['ok'])
+        self.assertEqual(2,result['result']['new_invoices'])
+        with self.db() as c:
+            self.assertEqual(2,c.execute('SELECT COUNT(*) FROM msmi_invoices').fetchone()[0])
+            self.assertEqual(0,c.execute('SELECT COUNT(*) FROM inventory_transactions').fetchone()[0])
+
     def test_manual_cannot_replace_running_job_or_spawn_duplicate_fetch(self):
         request_refresh(self.db,'TDP','2026-09-01','2026-09-30',now=self.now)
         self.assertIsNotNone(claim(self.db,'TDP',self.now))

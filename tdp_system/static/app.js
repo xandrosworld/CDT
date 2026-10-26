@@ -1118,11 +1118,12 @@
     var box=content.querySelector('.automatic-input-status');
     if(!box){content.insertAdjacentHTML('afterbegin','<div class="code-note automatic-input-status" role="status"></div>');box=content.querySelector('.automatic-input-status');}
     var active=sync.state==='running'||(sync.manual_requested&&sync.state==='waiting');
-    box.innerHTML='<strong>'+esc(active?'Đang cập nhật nguồn mSMI và tải đầu vào…':sync.state==='error'?'Chưa tải được đầu vào mới':sync.last_success?'Đã cập nhật đầu vào':'Cập nhật đầu vào')+'</strong>'+
+    var available=!!(sync.result||{}).available_loaded;
+    box.innerHTML='<strong>'+esc(active?(available?'Đã tải hóa đơn có sẵn; đang kiểm tra bổ sung…':'Đang tải hóa đơn có sẵn trên mSMI…'):sync.state==='error'?(available?'Đã tải hóa đơn có sẵn; chưa cập nhật được nguồn mSMI':'Chưa tải được đầu vào mới'):sync.last_success?'Đã cập nhật đầu vào':'Cập nhật đầu vào')+'</strong>'+
       (sync.message?'<p>'+esc(sync.message)+'</p>':'')+
       (sync.last_success?'<p>Lần thành công: '+esc(new Date(sync.last_success).toLocaleString('vi-VN'))+'</p>':'')+
-      (sync.state==='error'?/Từ ngày|Đến ngày/.test(sync.message||'')?'<button class="btn btn-outline" data-action="fix-input-sync-dates">Sửa Từ ngày – Đến ngày</button>':'<a class="btn btn-outline" href="https://qlhd.minvoice.com.vn/" target="_blank" rel="noopener noreferrer">Mở mSMI để kiểm tra kết nối thuế</a>':'')+
-      (!active&&sync.state==='success'?'<p>Thêm '+Number((sync.result||{}).new_invoices||0)+' hóa đơn mới. <button class="btn btn-outline" data-action="view-refreshed-input">Xem hóa đơn vừa tải</button></p>':'')+
+      (sync.state==='error'?/Từ ngày|Đến ngày/.test(sync.message||'')?'<button class="btn btn-outline" data-action="fix-input-sync-dates">Sửa Từ ngày – Đến ngày</button>':/kết nối thuế|đăng nhập|tài khoản/i.test(sync.message||'')?'<a class="btn btn-outline" href="https://qlhd.minvoice.com.vn/" target="_blank" rel="noopener noreferrer">Mở mSMI để kiểm tra kết nối thuế</a>':'<button class="btn btn-outline" data-action="prepare-invoice-sync">Thử tải lại đầu vào</button>':'')+
+      (available||(!active&&sync.state==='success')?'<p>Thêm '+Number((sync.result||{}).new_invoices||0)+' hóa đơn mới. <button class="btn btn-outline" data-action="view-refreshed-input">Xem hóa đơn vừa tải</button></p>':'')+
       '<small>Hóa đơn và các lựa chọn đang sửa được giữ nguyên. Tải về chưa nhập kho.</small>';
     clearTimeout(inputSyncTimer);
     if(active)inputSyncTimer=setTimeout(async function(){

@@ -60,7 +60,7 @@ def request_refresh(db, tenant, start, end, *, now=None):
         c.execute('INSERT OR IGNORE INTO automatic_input_sync(tenant) VALUES(?)',(tenant,))
         r=dict(c.execute('SELECT * FROM automatic_input_sync WHERE tenant=?',(tenant,)).fetchone())
         if (r['lease_until'] and datetime.fromisoformat(r['lease_until']) > now) or (r['state']=='waiting' and r.get('requested_from')):
-            return {'accepted':False,'message':'Đang tải đầu vào. Chờ lượt hiện tại hoàn tất rồi tải khoảng ngày khác.'}
+            return {'accepted':False,'message':'Lượt tải vẫn đang chạy. Hóa đơn đã tải có thể xem ngay ở phần tiến độ; không cần bấm tải lại.'}
         c.execute("""UPDATE automatic_input_sync SET requested_from=?,requested_to=?,
             next_attempt=?,state='waiting',message='',failures=0 WHERE tenant=?""",
             (first.isoformat(),last.isoformat(),now.isoformat(),tenant))
@@ -101,7 +101,7 @@ def claim(db, tenant, now):
         if r['lease_until'] and datetime.fromisoformat(r['lease_until']) > now: return None
         if r['next_attempt'] and datetime.fromisoformat(r['next_attempt']) > now: return None
         c.execute('''UPDATE automatic_input_sync SET state='running',owner=?,lease_until=?,
-                     last_attempt=?,last_slot=?,message='' WHERE tenant=?''',
+                     last_attempt=?,last_slot=?,message='',result_json='{}' WHERE tenant=?''',
                   (owner,(now+LEASE).isoformat(),now.isoformat(),slot.isoformat(),tenant))
     return owner
 
@@ -168,17 +168,9 @@ def run_due(db, tenant, client_factory, refresher_factory, tax_code, *, now_fn=v
         start,end=request['requested_from'],request['requested_to']
     result={}
     error=''
-    try:
-        source={'source_ready':True,'repaired_details':0}
-        refresher=refresher_factory()
-        first,last=(datetime.strptime(d,'%Y-%m-%d').date() for d in (start,end))
-        while first <= last:
-            stop=min(first+timedelta(days=30),last)
-            part=refresher.refresh(first.isoformat(),stop.isoformat())
-            if not part.get('source_ready'): raise RefreshError('mSMI chưa xác nhận đồng bộ đủ chi tiết.')
-            source['repaired_details']+=part.get('repaired_details',0)
-            first=stop+timedelta(days=1)
-        rows=fetch_snapshot(client_factory(),start,end,tax_code)
+    def save_snapshot(rows, source):
+        nonlocal result, error
+        error=''
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
             lease=c.execute('SELECT owner,lease_until FROM automatic_input_sync WHERE tenant=?',(tenant,)).fetchone()
@@ -190,19 +182,43 @@ def run_due(db, tenant, client_factory, refresher_factory, tax_code, *, now_fn=v
             rows=preserve_newer_revisions(c,tenant,rows)
             # The complete in-memory snapshot has a different paging space.
             c.execute("UPDATE invoice_sync_batches SET source_cursor='{}' WHERE id=?",(batch['id'],))
+            previous_new=result.get('new_invoices',0)
             result=sync_input_batch(c,Snapshot(rows),batch['id'],stamp,max_pages=50,page_size=199)
             try:
                 from .automatic_invoice_mapping import apply_automatic_input_mappings
             except ImportError:
                 from automatic_invoice_mapping import apply_automatic_input_mappings
             result['automatic_mapping']=apply_automatic_input_mappings(c,tenant=tenant,date_from=start,date_to=end,now_iso=stamp)
-            result.update(source, stock_changed=False)
+            result.update(source, stock_changed=False, available_loaded=True, date_from=start, date_to=end)
+            result['new_invoices']+=previous_new
             if not result['complete'] or result['review_required'] or result['error_count']:
                 error='Còn hóa đơn thiếu hoặc sai dữ liệu nguồn; hệ thống sẽ tự thử lại. Xem phần Cần kiểm tra.'
             missing=c.execute('''SELECT COUNT(*) FROM msmi_invoices i WHERE tenant=? AND invoice_type=?
                 AND invoice_date BETWEEN ? AND ? AND NOT EXISTS
                 (SELECT 1 FROM msmi_invoice_items li WHERE li.invoice_id=i.id)''',(tenant,INPUT_INVOICE,start,end)).fetchone()[0]
             if missing: error='Còn hóa đơn chưa có dòng hàng; hệ thống sẽ tự đồng bộ bù chi tiết.'
+            c.execute('UPDATE automatic_input_sync SET result_json=? WHERE tenant=? AND owner=?',
+                      (json.dumps(result,ensure_ascii=False),tenant,owner))
+    try:
+        # Publish invoices already available on mSMI before asking the tax
+        # crawler for more. A slow/expired tax session must not hide them.
+        try:
+            rows=fetch_snapshot(client_factory(),start,end,tax_code)
+        except (RefreshError,MsmiError):
+            rows=None  # Refresh may repair the source; retry the listing below.
+        if rows is not None:
+            save_snapshot(rows, {'source_ready':False,'repaired_details':0})
+        source={'source_ready':True,'repaired_details':0}
+        refresher=refresher_factory()
+        first,last=(datetime.strptime(d,'%Y-%m-%d').date() for d in (start,end))
+        while first <= last:
+            stop=min(first+timedelta(days=30),last)
+            part=refresher.refresh(first.isoformat(),stop.isoformat())
+            if not part.get('source_ready'): raise RefreshError('mSMI chưa xác nhận đồng bộ đủ chi tiết.')
+            source['repaired_details']+=part.get('repaired_details',0)
+            first=stop+timedelta(days=1)
+        rows=fetch_snapshot(client_factory(),start,end,tax_code)
+        save_snapshot(rows,source)
     except (RefreshError,MsmiError) as exc:
         error=str(exc)
     except Exception:
