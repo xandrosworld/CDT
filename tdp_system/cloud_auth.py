@@ -8,25 +8,14 @@ import threading
 import time
 from collections import defaultdict, deque
 from datetime import timedelta
+from pathlib import Path
 
-from flask import jsonify, redirect, render_template_string, request, session
+from flask import jsonify, redirect, render_template_string, request, session, send_from_directory
 from werkzeug.security import check_password_hash
 
-LOGIN = """<!doctype html><html lang="vi"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Đăng nhập · Thành Đạt Phát</title><style>
-*{box-sizing:border-box}body{margin:0;background:#edf3f5;color:#17324d;font:16px system-ui;
-min-height:100vh;display:grid;place-items:center}main{background:white;padding:40px;
-width:min(440px,92vw);border-radius:16px;box-shadow:0 12px 45px #17324d14}
-h1{font-size:24px;margin:0 0 8px}p{line-height:1.6;color:#5e7083}label{display:block;margin:20px 0 7px}
-input,button{font:inherit;width:100%;padding:12px;border:1px solid #b8c8ce;border-radius:7px}
-button{background:#087f73;color:white;border:0;margin-top:24px;cursor:pointer}
-.error{color:#a52b24}</style><main><h1>THÀNH ĐẠT PHÁT</h1><p>Đăng nhập hệ thống quản lý</p>
-{% if error %}<p role="alert" class="error">{{ error }}</p>{% endif %}
-<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
-<label for="username">Tên đăng nhập</label><input id="username" name="username" autocomplete="username" required>
-<label for="password">Mật khẩu</label><input id="password" name="password" type="password" autocomplete="current-password" required>
-<button type="submit">Đăng nhập</button></form></main></html>"""
+LOGIN_ASSETS = Path(__file__).with_name('login_assets')
+LOGIN = (LOGIN_ASSETS / 'login.html').read_text(encoding='utf-8')
+PUBLIC_LOGIN_ASSETS = frozenset({'login.css', 'login.js', 'harvest.webp'})
 
 
 def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True):
@@ -39,7 +28,7 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
     lock = threading.Lock()
 
     def guard():
-        if request.path in ('/health', '/login'):
+        if request.path in ('/health', '/login') or (request.method in ('GET', 'HEAD') and request.path in {f'/login-assets/{name}' for name in PUBLIC_LOGIN_ASSETS}):
             return None
         if session.get('user') != username:
             if request.path.startswith('/api/'):
@@ -52,6 +41,12 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
         return None
 
     app.before_request_funcs.setdefault(None, []).insert(0, guard)
+
+    @app.get('/login-assets/<name>')
+    def cloud_login_asset(name):
+        if name not in PUBLIC_LOGIN_ASSETS:
+            return '', 404
+        return send_from_directory(LOGIN_ASSETS, name)
 
     @app.route('/login', methods=['GET', 'POST'])
     def cloud_login():
@@ -71,7 +66,8 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
                         del attempts[key]
                 if len(attempts) > 10000 or len(attempts[peer]) >= 10:
                     return render_template_string(LOGIN, csrf=csrf,
-                        error='Đã thử quá nhiều lần. Vui lòng thử lại sau 10 phút.'), 429
+                        error='Đã thử quá nhiều lần. Vui lòng thử lại sau 10 phút.',
+                        entered_username=request.form.get('username', '')), 429
                 attempts[peer].append(now)
             valid_password = check_password_hash(password_hash, request.form.get('password', ''))
             if hmac.compare_digest(request.form.get('username', '').encode(), username.encode()) and valid_password:
@@ -82,7 +78,8 @@ def install_cloud_auth(app, *, username, password_hash, secret_key, secure=True)
                 session.permanent = True
                 return redirect('/')
             error, status = 'Tên đăng nhập hoặc mật khẩu chưa đúng.', 401
-        return render_template_string(LOGIN, csrf=csrf, error=error), status
+        return render_template_string(LOGIN, csrf=csrf, error=error,
+                                      entered_username=request.form.get('username', '')), status
 
     @app.post('/logout')
     def cloud_logout():

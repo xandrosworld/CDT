@@ -49,6 +49,22 @@ class CloudAuthTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             install_cloud_auth(Flask('unsafe'), username='', password_hash='', secret_key='')
 
+    def test_login_assets_are_public_without_exposing_other_files(self):
+        for name in ('login.css', 'login.js', 'harvest.webp'):
+            with self.client.get('/login-assets/' + name) as response:
+                self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.get('/login-assets/login.html').status_code, 302)
+        self.assertEqual(self.client.get('/api/private').status_code, 401)
+
+    def test_failed_login_preserves_and_escapes_username(self):
+        page = self.client.get('/login')
+        token = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        response = self.client.post('/login', data={'csrf': token,
+            'username': '<script>alert(1)</script>', 'password': 'wrong'})
+        self.assertEqual(response.status_code, 401)
+        self.assertIn('&lt;script&gt;', response.text)
+        self.assertNotIn('<script>alert(1)</script>', response.text)
+
     def test_text_compression_preserves_payload(self):
         self.app.add_url_rule('/large', endpoint='large', view_func=lambda: {'items': ['fixture-value']*500})
         self.login()

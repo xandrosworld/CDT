@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#183e34">
+  <title>Đăng nhập · Thành Đạt Phát</title>
+  <link rel="stylesheet" href="/login-assets/login.css?v=20261026">
+  <script src="/login-assets/login.js?v=20261026" defer></script>
+</head>
+<body>
+  <main class="login-shell">
+    <section class="brand-panel" aria-label="Thành Đạt Phát">
+      <img class="brand-photo" src="/login-assets/harvest.webp" alt="Rau củ tươi trong giỏ tre dưới ánh nắng" fetchpriority="high">
+      <div class="photo-shade"></div>
+      <div class="brand"><span class="monogram" aria-hidden="true">TĐP</span><span>THÀNH ĐẠT PHÁT<small>THỰC PHẨM &amp; DỊCH VỤ</small></span></div>
+      <div class="brand-copy"><p class="eyebrow">CHĂM CHÚT TỪNG NGÀY</p><h1>Tươi ngon mỗi bữa.<br>Trọn vẹn niềm tin.</h1></div>
+      <p class="photo-caption">Từ nguồn hàng tươi ngon<br>đến những bữa ăn đủ đầy.</p>
+    </section>
+    <section class="form-panel" aria-labelledby="welcome">
+      <div class="mobile-brand">THÀNH ĐẠT PHÁT</div>
+      <div class="form-content">
+        <p class="section-label">HỆ THỐNG QUẢN LÝ</p>
+        <h2 id="welcome">Chào mừng trở lại.</h2>
+        <p class="intro">Đăng nhập để bắt đầu công việc hôm nay.</p>
+        {% if error %}<div role="alert" id="login-error" class="error">{{ error }}<br><a href="#username">Kiểm tra lại thông tin đăng nhập</a></div>{% endif %}
+        <form method="post" id="login-form">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <div class="field"><label for="username">Tên đăng nhập</label><input id="username" name="username" value="{{ entered_username|default('') }}" autocomplete="username" autocapitalize="none" spellcheck="false" required {% if error %}aria-describedby="login-error"{% endif %}></div>
+          <div class="field"><label for="password">Mật khẩu</label><div class="password-wrap"><input id="password" name="password" type="password" autocomplete="current-password" required><button class="reveal" type="button" aria-controls="password" aria-pressed="false" hidden>Hiện</button></div><p id="caps-warning" class="caps-warning" hidden>Đang bật Caps Lock. Kiểm tra chữ hoa khi nhập mật khẩu.</p></div>
+          <button class="submit" type="submit"><span class="submit-label">Đăng nhập</span><span class="arrow" aria-hidden="true">→</span><span class="spinner" aria-hidden="true"></span></button>
+          <p class="login-status" role="status" aria-live="polite"></p>
+        </form>
+        <div class="form-note"><span class="note-line"></span><p>Đơn hàng, kho và hóa đơn.<br>Cùng bạn quản lý mỗi ngày.</p></div>
+      </div>
+      <footer>Thành Đạt Phát<span>Hệ thống quản lý nội bộ</span></footer>
+    </section>
+  </main>
+</body>
+</html>
