@@ -3690,7 +3690,7 @@
         '<strong>'+esc(r.product_code+' · '+r.invoice_name)+'</strong>'+(conversionIssue(r.order_id)?' <strong>— Cần nhập kg thực tế</strong>':'')+'<p>'+esc(dateVN(r.date)+' · '+r.contractor+' · Bếp '+r.kitchen+' · Dòng đơn #'+r.order_id)+'</p>'+
         '<p>Chưa xuất: <strong>'+stockQty(r.remaining_qty)+' '+esc(r.unit)+'</strong> · ĐVT kho: '+esc(r.stock_unit)+' · ĐVT hóa đơn: '+esc(r.invoice_unit)+' · Thành tiền giữ nguyên: <strong>'+money(r.amount)+'</strong></p>'+
         (r.reason?'<p class="warning-summary">'+esc(r.reason)+'</p>':'')+
-        (r.editable?'<div class="document-contractor-form"><label>Tổng kg thực tế<input name="actual_kg" type="number" min="0.000001" max="999999.999999" step="0.000001" inputmode="decimal" required value="'+(r.actual_kg===null?'':esc(Number(r.actual_kg.toFixed(6))))+'" placeholder="Chị nhập số kg đã xác nhận"></label><label>Căn cứ số kg<input name="note" maxlength="500" required value="'+esc(r.note)+'" placeholder="Ví dụ: đã cân / đã đối chiếu với khách"></label></div><p>Đơn giá mới: <strong class="actual-weight-price">'+(r.price_per_kg===null?'Chưa có kg thực tế':stockQty(r.price_per_kg)+' đ/kg')+'</strong></p><label style="display:block;margin:12px 0"><input name="confirmed_actual_weight" type="checkbox" required> Tôi xác nhận đây là tổng kg thực tế của phần chưa xuất trên dòng này.</label><button class="btn btn-primary" type="submit">'+(r.confirmed?'Cập nhật kg thực tế':'Lưu kg thực tế')+'</button>':
+        (r.editable?'<div class="document-contractor-form"><label>Tổng kg thực tế<input name="actual_kg" type="text" inputmode="decimal" autocomplete="off" required value="'+(r.actual_kg===null?'':esc(Number(r.actual_kg.toFixed(6))))+'" placeholder="Chị nhập số kg đã xác nhận"></label><label>Căn cứ số kg<input name="note" maxlength="500" required value="'+esc(r.note)+'" placeholder="Ví dụ: đã cân / đã đối chiếu với khách"></label></div><p>Đơn giá mới: <strong class="actual-weight-price">'+(r.price_per_kg===null?'Chưa có kg thực tế':stockQty(r.price_per_kg)+' đ/kg')+'</strong></p><label style="display:block;margin:12px 0"><input name="confirmed_actual_weight" type="checkbox" required> Tôi xác nhận đây là tổng kg thực tế của phần chưa xuất trên dòng này.</label><button class="btn btn-primary" type="submit">'+(r.confirmed?'Cập nhật kg thực tế':'Lưu kg thực tế')+'</button>':
           (r.confirmed?'<p>Đã xác nhận: '+stockQty(r.actual_kg)+' Kg · '+stockQty(r.price_per_kg)+' đ/kg</p>':''))+
         '<p class="actual-weight-status" role="status">'+(r.confirmed?'Đã lưu kg · '+esc(r.updated_at):'')+'</p></form>';}).join(''):'<p>Không có dòng cần quy đổi trong phạm vi đang chọn.</p>')+'</div></section>';
   }
@@ -6674,7 +6674,10 @@
       var form=event.target,button=form.querySelector('button[type=submit]'),status=form.querySelector('.actual-weight-status');
       button.disabled=true;
       try {
+        var actualKg=window.TDPInvoiceUnitEditor.validateWeight(form.elements.actual_kg,true);
+        if(actualKg===null){button.disabled=false;return;}
         var values=Object.fromEntries(new FormData(form).entries());
+        values.actual_kg=actualKg;
         values.token=form.dataset.token;values.confirmed_actual_weight=values.confirmed_actual_weight==='on';
         await api('/api/outgoing-invoices/actual-weights/'+form.dataset.orderId,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)});
         state.actualWeightMessage='Đã lưu kg thực tế. Thành tiền đơn giữ nguyên. Dùng nút tải bảng kê ở trên để kiểm tra phần đủ điều kiện xuất.';
@@ -7222,7 +7225,7 @@
       if (status) status.textContent = 'Phần sửa chưa ghi dữ liệu. Bấm Kiểm tra lại trước khi xác nhận.';
     }
     if(event.target.name==='actual_kg' && event.target.closest('.actual-weight-form')) {
-      var wf=event.target.closest('.actual-weight-form'),kg=Number(event.target.value);
+      var wf=event.target.closest('.actual-weight-form'),kg=Number(window.TDPInvoiceUnitEditor.validateWeight(event.target,false));
       wf.querySelector('.actual-weight-price').textContent=Number.isFinite(kg)&&kg>0?stockQty(Number(wf.dataset.amount)/kg)+' đ/kg':'Chưa có kg thực tế';
     }
     if (event.target.form && event.target.form.id === 'orderInvoiceExportForm' && !exportChoicesDirty() && !state.invoiceChoicesBusy) state.orderInvoiceFilters=Object.fromEntries(new FormData(event.target.form).entries());

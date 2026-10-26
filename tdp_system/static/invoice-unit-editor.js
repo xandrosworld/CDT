@@ -4,6 +4,20 @@
   var number = function (v) { return Number(v).toLocaleString('vi-VN', {maximumFractionDigits: 6}); };
   var date = function (v) { return String(v || '').replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$3/$2/$1'); };
 
+  // Keep the customer's text untouched while typing, including a decimal comma.
+  function parseWeight(value) {
+    var text = String(value == null ? '' : value).trim();
+    if (!/^\d+(?:[.,]\d{1,6})?$/.test(text)) return null;
+    var normalized = text.replace(',', '.'), kg = Number(normalized);
+    return Number.isFinite(kg) && kg > 0 && kg < 1000000 ? normalized : null;
+  }
+  function validateWeight(input, report) {
+    var value = parseWeight(input.value);
+    input.setCustomValidity(value === null ? 'Tổng kg thực tế: nhập số lớn hơn 0, nhỏ hơn 1.000.000, tối đa 6 chữ số sau dấu phẩy. Ví dụ: 0,4 hoặc 0.4.' : '');
+    if (value === null && report) { input.focus(); input.reportValidity(); }
+    return value;
+  }
+
   function open(options) {
     if (document.querySelector('.invoice-unit-dialog')) return;
     var dialog = document.createElement('dialog'), busy = false, rows = [], weights = [];
@@ -31,8 +45,8 @@
         '<p class="muted">ĐVT trong danh mục dùng cho những lần lập hóa đơn sau. Đổi chữ Túi/Gói thành Kg chưa tự đổi số lượng.</p>';
       if (weight && weight.review_kind === 'actual_kg' && weight.editable) {
         body.innerHTML += '<form data-weight-form><p>Nhập <strong>tổng kg thực tế của phần chưa xuất trên dòng này</strong>. Phần mềm tính giá/kg, giữ thành tiền <strong>' + number(weight.amount) + ' đ</strong>.</p>' +
-          '<label>Tổng kg thực tế<input name="actual_kg" type="number" min="0.000001" max="999999.999999" step="0.000001" inputmode="decimal" required value="' + (weight.actual_kg == null ? '' : esc(weight.actual_kg)) + '" placeholder="Nhập số kg đã xác nhận"></label>' +
-          '<p>Đơn giá: <strong data-price>' + (weight.price_per_kg == null ? 'Chưa nhập kg' : number(weight.price_per_kg) + ' đ/kg') + '</strong></p>' +
+          '<label>Tổng kg thực tế<input name="actual_kg" type="text" inputmode="decimal" autocomplete="off" required value="' + (weight.actual_kg == null ? '' : esc(weight.actual_kg)) + '" placeholder="Nhập số kg đã xác nhận"></label>' +
+          '<p class="muted">Có thể nhập 0,4 hoặc 0.4 kg. Không dùng dấu phân cách hàng nghìn.</p><p>Đơn giá: <strong data-price>' + (weight.price_per_kg == null ? 'Chưa nhập kg' : number(weight.price_per_kg) + ' đ/kg') + '</strong></p>' +
           '<label>Căn cứ số kg<input name="note" maxlength="500" required value="' + esc(weight.note) + '" placeholder="Ví dụ: đã cân / khách xác nhận"></label>' +
           '<label class="invoice-unit-confirm"><input type="checkbox" name="confirmed" required> Tôi xác nhận số kg của phần chưa xuất trên dòng này.</label>' +
           '<button type="submit" class="btn btn-primary">' + (weight.confirmed ? 'Cập nhật kg thực tế' : 'Lưu kg thực tế') + '</button>' +
@@ -65,7 +79,7 @@
     dialog.addEventListener('change', function (event) { if (event.target.matches('[data-unit-row]')) { selected = Number(event.target.value); status.textContent = ''; render(); } });
     dialog.addEventListener('input', function (event) {
       if (event.target.name !== 'actual_kg') return;
-      var kg = Number(event.target.value), weight = currentWeight();
+      var kg = Number(validateWeight(event.target, false)), weight = currentWeight();
       dialog.querySelector('[data-price]').textContent = Number.isFinite(kg) && kg > 0 ? number(weight.amount / kg) + ' đ/kg' : 'Chưa nhập kg';
     });
     dialog.addEventListener('click', async function (event) {
@@ -79,19 +93,21 @@
     dialog.addEventListener('submit', async function (event) {
       if (!event.target.matches('[data-weight-form]')) return;
       event.preventDefault(); if (busy) return;
+      var actualKg = validateWeight(event.target.elements.actual_kg, true);
+      if (actualKg === null) return;
       var weight = currentWeight(), values = new FormData(event.target);
       lock(true); status.textContent = 'Đang lưu kg thực tế…';
       var saved = false;
       try {
-        await options.api('/api/outgoing-invoices/actual-weights/' + selected, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:weight.token, actual_kg:values.get('actual_kg'), note:values.get('note'), confirmed_actual_weight:values.get('confirmed') === 'on'})});
+        await options.api('/api/outgoing-invoices/actual-weights/' + selected, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:weight.token, actual_kg:actualKg, note:values.get('note'), confirmed_actual_weight:values.get('confirmed') === 'on'})});
         saved = true;
         await options.onSaved();
         await reload();
         status.textContent = 'Đã lưu kg thực tế, giữ nguyên thành tiền. Đóng cửa sổ để kiểm tra và chuẩn bị lại bảng kê.';
-      } catch (error) { status.textContent = (saved ? 'Kg đã được lưu. ' : 'Chưa lưu kg. ') + error.message + ' Bấm “Tải lại dữ liệu dòng” trước khi sửa tiếp.'; }
+      } catch (error) { status.textContent = (saved ? 'Kg đã được lưu. ' : 'Chưa lưu kg. ') + error.message + ' Nội dung đang nhập được giữ nguyên.'; }
       finally { if (dialog.isConnected) lock(false); }
     });
     document.body.appendChild(dialog); dialog.showModal(); reload();
   }
-  window.TDPInvoiceUnitEditor = {open:open};
+  window.TDPInvoiceUnitEditor = {open:open, parseWeight:parseWeight, validateWeight:validateWeight};
 })();
