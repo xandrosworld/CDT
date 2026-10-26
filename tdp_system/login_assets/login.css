@@ -8,7 +8,6 @@
 @media(min-width:1600px){body{padding:44px}.login-shell{min-height:820px}}
 @media(max-width:1050px){body{padding:20px}.brand{padding:32px 28px;font-size:16px}.brand-copy{padding:28px 28px 0}.photo-caption{left:28px}.form-panel{padding:40px 30px 24px}.brand-panel{min-height:680px}h1{font-size:35px}}
 @media(max-width:720px){body{padding:0;background:var(--paper);display:block}.login-shell{display:block;border:0;border-radius:0;box-shadow:none;min-height:100dvh}.brand-panel{min-height:200px;height:27vh;max-height:250px}.brand-photo{object-position:center 55%}.photo-shade{background:linear-gradient(90deg,#102f34b0,transparent)}.brand{padding:23px 26px;font-size:16px}.brand small{font-size:9px}.monogram{width:44px;height:44px;font-size:15px}.brand-copy{padding:0 26px 24px}h1{font-size:26px;letter-spacing:-.6px;line-height:1.2}.eyebrow,.photo-caption{display:none}.form-panel{padding:34px 26px 22px}.form-content{max-width:430px}.section-label{margin-bottom:14px;font-size:10px}h2{font-size:30px}.intro{font-size:15px;margin-bottom:27px}.field{margin-bottom:20px}.submit{margin-top:26px}.form-note{margin-top:10px}footer{margin-top:34px;font-size:10px;max-width:430px;width:100%;align-self:center}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 /* The photo carries the motion; the working form remains stationary. */
 .brand-panel{--photo-x:0px;--photo-y:0px}
 .brand-photo{inset:-2%;width:104%;height:104%;transform:translate3d(var(--photo-x),var(--photo-y),0);animation:living-photo 18s ease-in-out infinite alternate;transition:translate .7s cubic-bezier(.2,.7,.2,1);translate:var(--photo-x) var(--photo-y)}
@@ -20,4 +19,7 @@
 @keyframes living-photo{from{transform:scale(1)}to{transform:scale(1.06)}}
 @keyframes sunlight{from{transform:translateX(-28%);opacity:.35}to{transform:translateX(15%);opacity:.85}}
 @media(max-width:720px){.brand-photo{animation-duration:24s}.brand-panel::after{display:none}}
-@media(prefers-reduced-motion:reduce){.brand-photo{transform:none!important;translate:none!important}.brand-panel::after{display:none}*,*::before,*::after{animation:none!important;transition:none!important}}
+.form-panel{position:relative}.motion-toggle{position:absolute;top:16px;right:24px;border:1px solid #c3cec5;border-radius:7px;background:#fbfcf8;color:#365a4b;font-size:12px;padding:8px 12px;z-index:2}.motion-toggle:hover{background:#edf3ec}
+html[data-motion="off"] *,html[data-motion="off"] *::before,html[data-motion="off"] *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+html[data-motion="off"] .brand-photo{transform:none!important;translate:none!important}html[data-motion="off"] .brand-panel::after{display:none}
+@media(max-width:720px){.motion-toggle{top:14px;right:26px;font-size:11px;padding:6px 9px}}

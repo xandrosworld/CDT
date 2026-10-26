@@ -42,10 +42,26 @@
     document.querySelector('.form-note p').textContent = 'Màn hình đang làm vẫn được giữ trong tab này. Đừng đóng hoặc tải lại tab nếu chưa lưu.';
   }
   const panel = document.querySelector('.brand-panel');
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+  const preferenceKey = 'tdp.login.motion';
+  const toggle = document.createElement('button');
+  toggle.type = 'button'; toggle.className = 'motion-toggle';
+  let enabled = true;
+  try { enabled = localStorage.getItem(preferenceKey) !== 'off'; } catch (_) {}
+  const applyMotion = () => {
+    document.documentElement.dataset.motion = enabled ? 'on' : 'off';
+    toggle.textContent = enabled ? 'Tắt hiệu ứng' : 'Bật hiệu ứng';
+    toggle.setAttribute('aria-pressed', String(enabled));
+    panel.style.setProperty('--photo-x', '0px'); panel.style.setProperty('--photo-y', '0px');
+  };
+  applyMotion();
+  toggle.addEventListener('click', () => {
+    enabled = !enabled; applyMotion();
+    try { localStorage.setItem(preferenceKey, enabled ? 'on' : 'off'); } catch (_) {}
+  });
+  document.querySelector('.form-panel').append(toggle);
   let raf;
   panel.addEventListener('pointermove', event => {
-    if (reduce.matches || event.pointerType !== 'mouse') return;
+    if (!enabled || event.pointerType !== 'mouse') return;
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => {
       const rect = panel.getBoundingClientRect();
