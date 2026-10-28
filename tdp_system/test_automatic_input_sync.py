@@ -201,6 +201,17 @@ class AutoInputTests(unittest.TestCase):
 
 
 class RefreshTests(unittest.TestCase):
+    def test_transient_response_retries_but_auth_errors_do_not(self):
+        from unittest.mock import patch
+        client=MsmiRefresh('u','p','0202265016')
+        client._request_once=Mock(side_effect=[RefreshError('mSMI chưa phản hồi hợp lệ; sẽ tự thử lại.'),[]])
+        with patch('tdp_system.msmi_refresh.time.sleep'):
+            self.assertEqual([],client.request('read'))
+        self.assertEqual(2,client._request_once.call_count)
+        client._request_once=Mock(side_effect=RefreshError('Không đăng nhập được mSMI'))
+        with self.assertRaises(RefreshError):client.request('read')
+        self.assertEqual(1,client._request_once.call_count)
+
     def test_month_header_failure_retries_exact_week_windows(self):
         client=MsmiRefresh('u','p','0202265016')
         account={'_id':'account','username':'0202265016','token':'private',

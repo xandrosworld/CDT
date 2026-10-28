@@ -29,6 +29,17 @@ class MsmiRefresh:
         self.deadline = clock() + 900
 
     def request(self, path, body=None, params=None):
+        for attempt in range(3):
+            try:
+                return self._request_once(path, body, params)
+            except RefreshError as error:
+                # Retry transient empty/network responses, never tax login or
+                # permission errors. All these requests only fetch invoices.
+                if 'chưa phản hồi hợp lệ' not in str(error) or attempt == 2:
+                    raise
+                time.sleep(attempt + 1)
+
+    def _request_once(self, path, body=None, params=None):
         remaining = self.deadline - self.clock()
         if remaining <= 0:
             raise RefreshError('mSMI chưa hoàn tất trong thời gian chờ; sẽ tự thử lại.')
