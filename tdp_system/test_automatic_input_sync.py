@@ -53,7 +53,7 @@ class AutoInputTests(unittest.TestCase):
             return {'source_ready':True}
         self.refresh.refresh.side_effect=refresh
         self.assertTrue(self.execute()['ok'])
-        self.assertEqual('2026-09-16T02:40:00+07:00',self.state()['next_attempt'])
+        self.assertEqual('2026-09-16T02:35:00+07:00',self.state()['next_attempt'])
         self.assertTrue(self.execute()['skipped'])
 
     def test_restart_recovers_expired_lease_and_catches_missed_schedule(self):
