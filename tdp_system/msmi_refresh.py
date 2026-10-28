@@ -85,9 +85,27 @@ class MsmiRefresh:
                       toDate=last.strftime('%d/%m/%YT23:59:59'))
         session = uuid.uuid4().hex[:24]
         for kind in ('purchase','purchase_sco'):
-            response = self.request('crawl-api/build-request', dict(common,
+            payload = dict(common,
                 crawlType='excel', invoiceType=kind, trigger_id=session, manualSessionId=session,
-                nbmst=None, khhdon=None, shdon=None, khmshdon=None))
+                nbmst=None, khhdon=None, shdon=None, khmshdon=None)
+            try:
+                response = self.request('crawl-api/build-request', payload)
+            except RefreshError:
+                if (last-first).days < 7:
+                    raise
+                # The source sometimes fails for a whole month but accepts
+                # shorter windows. Preserve the exact requested date coverage.
+                cursor=first
+                response=[]
+                while cursor <= last:
+                    stop=min(last,cursor+timedelta(days=6))
+                    part=self.request('crawl-api/build-request', dict(payload,
+                        fromDate=cursor.strftime('%d/%m/%YT00:00:00'),
+                        toDate=stop.strftime('%d/%m/%YT23:59:59')))
+                    if not isinstance(part,list):
+                        raise RefreshError('mSMI chưa xác nhận tải xong danh sách hóa đơn; sẽ tự thử lại.')
+                    response.extend(part)
+                    cursor=stop+timedelta(days=1)
             # The portal returns an array of received headers. Never mistake
             # an HTTP-200 error object or legacy request recipe for completion.
             if not isinstance(response,list):
@@ -107,10 +125,15 @@ class MsmiRefresh:
                 raise RefreshError('mSMI thiếu định danh để tải chi tiết; sẽ tự thử lại.')
             source = item.get('from','query')
             kind = 'purchase' if source == 'query' else 'purchase_sco'
-            self.request('crawl-api/build-request', dict(common, crawlType='detail',
-                invoiceType=kind, nbmst=keys['nbmst'], khhdon=keys['khhdon'],
-                shdon=str(keys['shdon']), khmshdon=str(keys['khmshdon']), invoiceKey=item.get('key')))
-            repaired += 1
+            try:
+                self.request('crawl-api/build-request', dict(common, crawlType='detail',
+                    invoiceType=kind, nbmst=keys['nbmst'], khhdon=keys['khhdon'],
+                    shdon=str(keys['shdon']), khmshdon=str(keys['khmshdon']), invoiceKey=item.get('key')))
+                repaired += 1
+            except RefreshError:
+                # One bad/empty response must not strand other invoices. The
+                # authoritative missing-detail query below still gates success.
+                continue
         remaining = self.request(path, params=params)
         if not isinstance(remaining,list) or remaining:
             raise RefreshError('mSMI vẫn còn hóa đơn thiếu chi tiết; sẽ tự thử lại.')

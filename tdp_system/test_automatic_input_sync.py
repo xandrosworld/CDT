@@ -53,7 +53,7 @@ class AutoInputTests(unittest.TestCase):
             return {'source_ready':True}
         self.refresh.refresh.side_effect=refresh
         self.assertTrue(self.execute()['ok'])
-        self.assertEqual('2026-09-16T06:00:00+07:00',self.state()['next_attempt'])
+        self.assertEqual('2026-09-16T02:40:00+07:00',self.state()['next_attempt'])
         self.assertTrue(self.execute()['skipped'])
 
     def test_restart_recovers_expired_lease_and_catches_missed_schedule(self):
@@ -72,7 +72,7 @@ class AutoInputTests(unittest.TestCase):
         self.refresh.refresh.side_effect=RefreshError('mSMI chưa kết nối')
         self.assertFalse(self.execute()['ok'])
         s=self.state();self.assertTrue(s['attention']);self.assertIsNone(s['last_success'])
-        self.assertEqual('2026-09-16T03:00:00+07:00',s['next_attempt'])
+        self.assertEqual('2026-09-16T02:35:00+07:00',s['next_attempt'])
         self.assertTrue(self.execute()['skipped'])
         self.now+=timedelta(minutes=30);self.refresh.refresh.side_effect=None
         self.assertTrue(self.execute()['ok']);self.assertFalse(self.state()['attention'])
@@ -178,6 +178,20 @@ class AutoInputTests(unittest.TestCase):
             self.assertEqual(2,c.execute('SELECT COUNT(*) FROM msmi_invoices').fetchone()[0])
             self.assertEqual(0,c.execute('SELECT COUNT(*) FROM inventory_transactions').fetchone()[0])
 
+    def test_failed_refresh_publishes_new_partial_data_without_posting_stock(self):
+        item=remote_invoice(20649)
+        item.update(_id='partial',tdlap='2026-09-15',nmmst='0202265016')
+        clients=iter([DateBoundedMsmi([]),DateBoundedMsmi([item])])
+        self.refresh.refresh.side_effect=RefreshError('mSMI thiếu chi tiết')
+        result=run_due(self.db,'TDP',lambda:next(clients),self.factory,'0202265016',now_fn=lambda:self.now)
+        self.assertFalse(result['ok'])
+        self.assertFalse(self.state()['result']['source_ready'])
+        self.assertEqual(1,self.state()['result']['new_invoices'])
+        self.assertIsNone(self.state()['last_success'])
+        with self.db() as c:
+            self.assertEqual(1,c.execute('SELECT COUNT(*) FROM msmi_invoices').fetchone()[0])
+            self.assertEqual(0,c.execute('SELECT COUNT(*) FROM inventory_transactions').fetchone()[0])
+
     def test_manual_cannot_replace_running_job_or_spawn_duplicate_fetch(self):
         request_refresh(self.db,'TDP','2026-09-01','2026-09-30',now=self.now)
         self.assertIsNotNone(claim(self.db,'TDP',self.now))
@@ -187,6 +201,32 @@ class AutoInputTests(unittest.TestCase):
 
 
 class RefreshTests(unittest.TestCase):
+    def test_month_header_failure_retries_exact_week_windows(self):
+        client=MsmiRefresh('u','p','0202265016')
+        account={'_id':'account','username':'0202265016','token':'private',
+                 'sync_invoices_purchase':{'sync':True}}
+        client.request=Mock(side_effect=[{}, {'items':[account]}, [],
+            RefreshError('HTTP 500'), [], [], [], [], [], []])
+        self.assertTrue(client.refresh('2026-10-01','2026-10-28')['source_ready'])
+        calls=client.request.call_args_list[4:8]
+        self.assertEqual(['01/10/2026T00:00:00','08/10/2026T00:00:00','15/10/2026T00:00:00','22/10/2026T00:00:00'],[c.args[1]['fromDate'] for c in calls])
+        self.assertEqual('28/10/2026T23:59:59',calls[-1].args[1]['toDate'])
+
+    def test_failed_detail_does_not_block_other_details_or_hide_incomplete_source(self):
+        account={'_id':'account','username':'0202265016','token':'private',
+                 'sync_invoices_purchase':{'sync':True}}
+        detail={'type':'purchase','from':'query','keys':{'nbmst':'seller','khhdon':'C26TMA','shdon':1,'khmshdon':1}}
+        for remaining in ([detail],[]):
+            client=MsmiRefresh('u','p','0202265016')
+            client.request=Mock(side_effect=[{}, {'items':[account]}, [], [],
+                [detail,detail], RefreshError('HTTP 500'), {}, remaining])
+            if remaining:
+                with self.assertRaisesRegex(RefreshError,'thiếu chi tiết'):
+                    client.refresh('2026-09-14','2026-09-16')
+            else:
+                self.assertTrue(client.refresh('2026-09-14','2026-09-16')['source_ready'])
+            self.assertEqual(8,client.request.call_count)
+
     def test_source_reports_locked_tax_account_without_retrying_tax_login(self):
         client=MsmiRefresh('login','private-password','0202265016')
         client.request=Mock(side_effect=[{}, {'items':[

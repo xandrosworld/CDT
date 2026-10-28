@@ -77,7 +77,7 @@ def status(conn, tenant, now=None):
     r['manual_requested']=bool(r.get('requested_from'))
     result = json.loads(r.pop('result_json'))
     r.pop('owner')
-    r.update(schedule='02:30 và 06:00 hằng ngày (giờ Việt Nam)', lookback_days=LOOKBACK,
+    r.update(schedule='Mỗi 10 phút; kiểm tra bổ sung lúc 02:30 và 06:00 (giờ Việt Nam)', lookback_days=LOOKBACK,
              result=result, stock_changed=False)
     lease = datetime.fromisoformat(r['lease_until']) if r['lease_until'] else None
     due,_ = schedule(now)
@@ -224,6 +224,16 @@ def run_due(db, tenant, client_factory, refresher_factory, tax_code, *, now_fn=v
     except Exception:
         # Never expose payloads, account passwords, cookies or tax tokens.
         error='Đồng bộ tự động chưa hoàn tất; hệ thống sẽ thử lại. Cần kiểm tra nếu lỗi kéo dài.'
+    if error:
+        # A crawler can publish several invoices before failing on one detail.
+        # Expose that newly available data without claiming a complete source.
+        refresh_error = error
+        try:
+            save_snapshot(fetch_snapshot(client_factory(),start,end,tax_code),
+                          {'source_ready':False,'repaired_details':0})
+        except Exception:
+            pass
+        error = refresh_error
     finished=now_fn().astimezone(VN)
     with db() as c:
         c.execute('BEGIN IMMEDIATE')
@@ -231,7 +241,7 @@ def run_due(db, tenant, client_factory, refresher_factory, tax_code, *, now_fn=v
         if row['owner'] != owner: return {'superseded':True}
         failures=row['failures']+1 if error else 0
         _,next_slot=schedule(finished)
-        retry=finished+timedelta(minutes=min(120,30*2**min(failures-1,2))) if error else next_slot
+        retry=finished+timedelta(minutes=min(30,5*2**min(failures-1,3))) if error else finished+timedelta(minutes=10)
         next_attempt=min(retry,next_slot)
         result.update(date_from=start,date_to=end)
         c.execute('''UPDATE automatic_input_sync SET state=?,owner='',lease_until=NULL,
