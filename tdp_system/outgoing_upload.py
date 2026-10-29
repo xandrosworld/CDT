@@ -69,8 +69,8 @@ def source_rows(conn, cutoff, contractor):
         (cutoff, contractor, contractor))]
 
 
-def template_values(conn, cutoff, contractor):
-    issued, _ = issued_allocations(conn)
+def template_values(conn, cutoff, contractor, *, issued=None):
+    if issued is None:issued, _ = issued_allocations(conn)
     rows = []
     for o in selected_orders(conn, source_rows(conn, cutoff, contractor)):
         remaining = max(o['actual_delivered']-o['customer_return_qty']-issued.get(o['id'], 0), 0)
@@ -82,11 +82,11 @@ def template_values(conn, cutoff, contractor):
     return rows
 
 
-def stock_requests(conn, cutoff, contractor, start):
+def stock_requests(conn, cutoff, contractor, start, *, issued=None):
     # The web preview already owns these values; do not render/read an Excel
     # workbook while holding the database write lock merely to recover them.
     return [{'order_id':v[0], 'qty':v[7], 'values':v, 'excel_row':index}
-            for index,v in enumerate(template_values(conn,cutoff,contractor),2)
+            for index,v in enumerate(template_values(conn,cutoff,contractor,issued=issued),2)
             if str(v[2])>=start and v[7]>0]
 
 
@@ -171,10 +171,10 @@ def _parse_workbook(data):
         wb.close()
 
 
-def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=False):
+def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=False, issued_state=None):
     sources = {o['id']:o for o in source_rows(conn, cutoff, contractor)}
-    external = {}
-    issued, warnings = issued_allocations(conn, external_quantities=external)
+    if issued_state is None:issued_state=export_issued_state(conn)
+    issued,warnings,external=issued_state
     weights = confirmed_weights(conn)
     requested_sources = [sources[r['order_id']] for r in requests if r['order_id'] in sources]
     assert_orders_enabled(conn, requested_sources)
@@ -317,6 +317,13 @@ def public_plan(plan):
     return {k:plan[k] for k in ('items','ready_count','waiting_count','amount','reconciliation_issues')}
 
 
+def export_issued_state(conn):
+    """Fresh reconciliation for one read-only phase within the caller's transaction."""
+    external={}
+    issued,warnings=issued_allocations(conn,external_quantities=external)
+    return issued,warnings,external
+
+
 def create_plan_drafts(conn, plan, timestamp, tax_percent):
     if not plan['ready_rows']:raise ValueError('Chưa có lượng đủ điều kiện. Xem lý do từng dòng; không tạo dự thảo.')
     for old in plan['old']:
@@ -336,18 +343,26 @@ def create_plan_drafts(conn, plan, timestamp, tax_percent):
     # Retained outside rows are still waiting, not approved for download.
     # Applying the export gate to them blocks unrelated, valid new orders.
     # Every actual download/send continues to use the full stock/source gate.
-    for did in exported:validate_draft_export_stock(conn,did)
+    issued_state=export_issued_state(conn)
+    for did in exported:validate_draft_export_stock(conn,did,issued_state=issued_state)
     return exported
 
 
 def export_archive(conn, draft_ids, template_dir, tax_percent, timestamp):
     output=BytesIO()
+    drafts=[]
+    for did in draft_ids:
+        d=conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?',(did,)).fetchone()
+        if not d or d['status']!='draft' or d['minvoice_status'] in ('saved','saving','unknown'):
+            raise ValueError('Bộ file này đã được xử lý hoặc có bản trên M-Invoice. Đối chiếu phần đã ký rồi tải mẫu mới.')
+        drafts.append(d)
+    # Validate the complete set against a fresh snapshot before freezing any
+    # conversion. Never retain this snapshot across writes or remote refreshes.
+    issued_state=export_issued_state(conn)
+    for did in draft_ids:validate_draft_export_stock(conn,did,issued_state=issued_state)
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
-        for did in draft_ids:
-            d=conn.execute('SELECT * FROM outgoing_invoice_drafts WHERE id=?',(did,)).fetchone()
-            if not d or d['status']!='draft' or d['minvoice_status'] in ('saved','saving','unknown'):
-                raise ValueError('Bộ file này đã được xử lý hoặc có bản trên M-Invoice. Đối chiếu phần đã ký rồi tải mẫu mới.')
-            validate_draft_export_stock(conn,did)
+        for d in drafts:
+            did=d['id']
             lines=invoice_rows(conn,[{**dict(r),'contractor':d['contractor']} for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(did,))],freeze=True,timestamp=timestamp)
             vat=tax_percent(lines[0]['tax']); data,_=build_invoice_workbook(lines,vat_percent=vat,template_dir=template_dir)
             label='KKKNT' if vat==-2 else 'KCT' if vat==-1 else f'VAT{vat:g}'
@@ -386,9 +401,10 @@ def register(app, ctx):
             if start>cutoff:raise ValueError('Từ ngày đơn phải trước hoặc bằng Đến ngày đơn.')
             with ctx['db']() as conn:
                 conn.execute('BEGIN IMMEDIATE')
-                requested=stock_requests(conn,cutoff,party,start)
+                issued_state=export_issued_state(conn)
+                requested=stock_requests(conn,cutoff,party,start,issued=issued_state[0])
                 if not requested:raise ValueError('Không có đơn đã duyệt đang chọn còn lượng chưa xuất. Chọn lại mặt hàng cần xuất trước.')
-                plan=build_plan(conn,requested,cutoff,party,ctx['invoice_tax_percent'],stock_only=True)
+                plan=build_plan(conn,requested,cutoff,party,ctx['invoice_tax_percent'],stock_only=True,issued_state=issued_state)
                 token=uuid.uuid4().hex
                 conn.execute('INSERT INTO outgoing_upload_jobs(token,source_name,cutoff,contractor,rows_json,preview_hash,preview_json,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)',
                     (token,'STOCK_ONLY',cutoff,party,packed(requested),plan['fingerprint'],packed(public_plan(plan)),ctx['now_iso'](),time.time()+900))

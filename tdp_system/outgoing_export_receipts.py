@@ -22,7 +22,7 @@ def draft_snapshot(conn,did, *, active_only=True):
     return {'id':did,'rows':rows,'hash':hashlib.sha256(json.dumps([rows,lines],sort_keys=True).encode()).hexdigest()}
 
 
-def source_basis(conn, did):
+def source_basis(conn, did, *, weights=None):
     try:
         from .outgoing_weights import invoice_rows
     except ImportError:
@@ -32,7 +32,7 @@ def source_basis(conn, did):
     lines=[dict(r) for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(did,))]
     return {'contractor':draft['contractor'],'buyer_tax_code':buyer['tax_code'] if buyer else '',
             'subtotal':draft['subtotal'],'total_amount':draft['total_amount'],
-            'lines':invoice_rows(conn,lines)}
+            'lines':invoice_rows(conn,lines,weights=weights)}
 
 
 def create(conn,ids,data,filename,timestamp):

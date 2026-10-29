@@ -172,7 +172,10 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
         from .outgoing_export_lineage import catalog, matches, orders_unchanged
     except ImportError:
         from outgoing_export_lineage import catalog, matches, orders_unchanged
-    exports=catalog(conn);export_matches={};reserved=defaultdict(float)
+    try:from .outgoing_weights import confirmed_weights
+    except ImportError:from outgoing_weights import confirmed_weights
+    weights=confirmed_weights(conn)
+    exports=catalog(conn,weights=weights);export_matches={};reserved=defaultdict(float)
     for s in sources:
         if s['id'] in linked or s['source_status_class']!='issued':continue
         party,error=resolve_scope(conn,s,profiles)
@@ -192,7 +195,7 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
         source_scope = {'invoice_id':s['id'],'invoice_date':s['invoice_date'],
                         'invoice_number':s['invoice_number'],'order_date_through':s['invoice_date']}
         found=export_matches.get(s['id'],[])
-        period_from,period_to=order_period(conn,s,export_matches=found)
+        period_from,period_to=order_period(conn,s,export_matches=found,weights=weights)
         if period_from:
             source_scope.update(order_date_from=period_from,order_date_through=min(period_to,s['invoice_date']))
         if found:

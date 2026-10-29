@@ -53,6 +53,22 @@ class OutgoingUploadTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'bỏ chọn'):
                 outgoing_upload.build_plan(c,direct,'2026-09-13','NT-A',server.invoice_vat_percent,stock_only=True)
 
+
+    def test_preview_reuses_reconciliation_only_within_the_current_request(self):
+        url='/api/outgoing-invoice-upload/stock-preview?from=2026-09-01&to=2026-09-13&contractor=NT-A'
+        with patch.object(outgoing_upload,'issued_allocations',wraps=outgoing_upload.issued_allocations) as reads:
+            first=self.client.post(url)
+            self.assertEqual(first.status_code,200,first.json)
+            self.assertGreater(first.json['ready_count'],0)
+            self.assertEqual(reads.call_count,1)
+        with server.db() as c:
+            fixtures.OutgoingReadinessTests.add_posted_source(c,source='minvoice',qty=3,
+                product_code='HH-01',invoice_date='2026-09-03',number='new-after-preview')
+        second=self.client.post(url)
+        self.assertEqual(second.status_code,200,second.json)
+        self.assertEqual(second.json['ready_count'],0)
+        self.assertTrue(second.json['reconciliation_issues'])
+
     def test_stock_preview_change_requires_new_confirmation_and_creates_no_draft(self):
         url='/api/outgoing-invoice-upload/stock-preview?from=2026-09-01&to=2026-09-13&contractor=NT-A'
         preview=self.client.post(url).get_json()

@@ -381,7 +381,7 @@ def invoice_order_issues(orders):
     return issues
 
 
-def validate_draft_export_stock(conn, draft_id, invoice_date=""):
+def validate_draft_export_stock(conn, draft_id, invoice_date="", *, issued_state=None):
     """Read-only recheck before handing off a file or saving a remote draft."""
     try:
         from .outgoing_price_guard import assert_current_prices
@@ -421,8 +421,11 @@ def validate_draft_export_stock(conn, draft_id, invoice_date=""):
         from .outgoing_unissued import issued_allocations, warning_applies_to_order
     except ImportError:
         from outgoing_unissued import issued_allocations, warning_applies_to_order
-    external={}
-    issued,warnings=issued_allocations(conn,external_quantities=external)
+    if issued_state is None:
+        external={}
+        issued,warnings=issued_allocations(conn,external_quantities=external)
+    else:
+        issued,warnings,external=issued_state
     parties={r['contractor'] for r in policy_rows}
     relevant=[w for w in warnings if any(warning_applies_to_order(w,r) for r in policy_rows)]
     if relevant:

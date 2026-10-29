@@ -155,9 +155,9 @@ def save_weight(conn, order_id, body, timestamp):
             'price_per_kg': float(dec(current['amount'])/kg)}
 
 
-def invoice_rows(conn, rows, *, freeze=False, timestamp=''):
+def invoice_rows(conn, rows, *, freeze=False, timestamp='', weights=None):
     """One stock line stays one invoice line; distinct measured orders never merge."""
-    weights = confirmed_weights(conn)
+    if weights is None:weights = confirmed_weights(conn)
     rows = [dict(r) for r in rows]
     snapshots = {r['line_id']: r for r in conn.execute('''SELECT * FROM outgoing_weight_exports
         WHERE line_id IN (SELECT value FROM json_each(?))''',

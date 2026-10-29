@@ -30,7 +30,7 @@ def review_token(invoice):
     return hashlib.sha256(identity_snapshot(invoice).encode()).hexdigest()
 
 
-def order_period(conn, invoice, *, export_matches=None):
+def order_period(conn, invoice, *, export_matches=None, weights=None):
     row=conn.execute('SELECT * FROM outgoing_source_order_periods WHERE invoice_id=?',(invoice['id'],)).fetchone()
     if row and row['identity_snapshot']==identity_snapshot(invoice):
         return row['date_from'],row['date_to']
@@ -75,7 +75,7 @@ def order_period(conn, invoice, *, export_matches=None):
         AND created_at<=?''',(party,invoice['subtotal'],invoice['total_amount'],invoice['created_at'])):
         base=[dict(r) for r in conn.execute('SELECT * FROM outgoing_invoice_lines WHERE draft_id=? ORDER BY id',(d['id'],))]
         try:
-            if signature(invoice_rows(conn,base))!=expected:continue
+            if signature(invoice_rows(conn,base,weights=weights))!=expected:continue
         except (ValueError,TypeError):continue
         links=list(conn.execute('''SELECT a.order_id,a.qty,o.work_date FROM outgoing_order_allocations a
             JOIN orders o ON o.id=a.order_id WHERE a.draft_id=? ORDER BY a.order_id''',(d['id'],)))
@@ -208,7 +208,10 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
         from .outgoing_export_lineage import catalog, matches
     except ImportError:
         from outgoing_export_lineage import catalog, matches
-    exports=catalog(conn)
+    try:from .outgoing_weights import confirmed_weights
+    except ImportError:from outgoing_weights import confirmed_weights
+    weights=confirmed_weights(conn)
+    exports=catalog(conn,weights=weights)
     outside_scopes = {r['invoice_id']:r['identity_snapshot'] for r in conn.execute(
         "SELECT invoice_id,identity_snapshot FROM outgoing_source_order_scopes WHERE scope='outside'")} if order_scope else {}
     for source in conn.execute("SELECT * FROM outgoing_source_invoices WHERE source='minvoice' AND invoice_date BETWEEN ? AND ? ORDER BY invoice_date,id",(start,end)):
@@ -227,7 +230,7 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
             error=('Hóa đơn đã ký nhưng chưa ghi xuất kho nên chưa thể trừ khỏi đơn chờ. Bấm Kiểm tra và xử lý ngay để xem nguyên nhân và số lượng cần ghi kho. Không xuất lại hóa đơn này.'
                    if source['stock_status'] != 'posted' else
                    f'Có {len(details)} thông tin chưa khớp với đơn đã duyệt. Bấm So hóa đơn với bảng kê đã tải để kiểm tra mã hàng, số lượng và nguồn đơn. Không xuất lại hóa đơn này.')
-        period_from,period_to=order_period(conn,source,export_matches=matches(conn,source,party,exports) if party else [])
+        period_from,period_to=order_period(conn,source,export_matches=matches(conn,source,party,exports) if party else [],weights=weights)
         try:
             from .outgoing_source_item_review import reviewed_items
         except ImportError:

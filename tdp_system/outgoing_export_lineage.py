@@ -31,7 +31,7 @@ def signature(rows, source=False):
     return {k:tuple(n.quantize(Decimal('.000001')) for n in v) for k,v in sums.items()}
 
 
-def catalog(conn):
+def catalog(conn, *, weights=None):
     result=[];seen=set();bases={}
     for receipt in conn.execute("SELECT token,filename,manifest,created_at,received_at FROM outgoing_export_receipts WHERE received_at<>'' ORDER BY created_at DESC"):
         for entry in json.loads(receipt['manifest']):
@@ -44,7 +44,7 @@ def catalog(conn):
                 current=draft_snapshot(conn,entry['id'],active_only=False)
                 if not current or current['hash']!=entry['hash']:continue
                 try:
-                    if marker not in bases:bases[marker]=source_basis(conn,entry['id'])
+                    if marker not in bases:bases[marker]=source_basis(conn,entry['id'],weights=weights)
                     basis=bases[marker]
                 except ValueError:continue
             try:sig=signature(basis['lines'])
