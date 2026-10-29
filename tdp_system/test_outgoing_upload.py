@@ -40,6 +40,19 @@ class OutgoingUploadTests(unittest.TestCase):
                 ['orders','batches','products','receivable_ledger_lines','payable_ledger_lines',
                  'invoice_inventory_ledger','outgoing_source_invoices','outgoing_source_invoice_items']}
 
+    def test_direct_stock_requests_match_excel_and_batch_choice_checks(self):
+        from . import outgoing_contractors
+        with server.db() as c:
+            expected=outgoing_upload.parse_workbook(outgoing_upload.template(c,'2026-09-13','NT-A'))
+            direct=outgoing_upload.stock_requests(c,'2026-09-13','NT-A','2026-09-01')
+            self.assertEqual(direct,expected)
+            with patch.object(outgoing_contractors,'excluded_order_ids',wraps=outgoing_contractors.excluded_order_ids) as checks:
+                outgoing_upload.build_plan(c,direct,'2026-09-13','NT-A',server.invoice_vat_percent,stock_only=True)
+                self.assertEqual(checks.call_count,1)
+            c.execute("INSERT INTO outgoing_order_choices VALUES(?,0,'test','today')",(self.oids[0],))
+            with self.assertRaisesRegex(ValueError,'bỏ chọn'):
+                outgoing_upload.build_plan(c,direct,'2026-09-13','NT-A',server.invoice_vat_percent,stock_only=True)
+
     def test_stock_preview_change_requires_new_confirmation_and_creates_no_draft(self):
         url='/api/outgoing-invoice-upload/stock-preview?from=2026-09-01&to=2026-09-13&contractor=NT-A'
         preview=self.client.post(url).get_json()

@@ -798,7 +798,7 @@
     var response,controller,timer;
     options=Object.assign({},options||{});
     var syncWaitStarted=options._syncWaitStarted||Date.now();delete options._syncWaitStarted;
-    if((url.indexOf('/api/outgoing-invoices/')===0||url==='/api/minvoice/series')&&!options.signal){
+    if((url.indexOf('/api/outgoing-invoices/')===0||url.indexOf('/api/outgoing-invoice-upload/')===0||url==='/api/minvoice/series')&&!options.signal){
       controller=new AbortController();options.signal=controller.signal;
       timer=setTimeout(function(){controller.abort();},options.method&&options.method!=='GET'?180000:60000);
     }
@@ -825,13 +825,19 @@
     return payload;
   }
 
-  async function downloadFile(url, options) {
-    var response;
+  async function downloadFile(url, options, onDelivered) {
+    var response,downloadController,downloadTimer;
+    if(url==='/api/outgoing-invoice-upload/export'){
+      downloadController=new AbortController();
+      options=Object.assign({},options,{signal:downloadController.signal});
+      downloadTimer=setTimeout(function(){downloadController.abort();},180000);
+    }
     try {
       response = await fetch(url, options || {});
     } catch (error) {
+      if(downloadController&&downloadController.signal.aborted)throw new Error('Chưa nhận được file sau 3 phút. Lượt tạo file có thể vẫn đang xử lý. Bấm tải lại cùng bản xem trước để nhận kết quả, không cần đổi nhà thầu.');
       throw new Error(friendlyErrorMessage(error && error.message));
-    }
+    } finally {if(downloadTimer)clearTimeout(downloadTimer);}
     if (!response.ok) {
       var type = response.headers.get("content-type") || "";
       var payload = type.indexOf("application/json") >= 0 ? await response.json() : null;
@@ -846,17 +852,28 @@
     var anchor = document.createElement("a");
     anchor.href = blobUrl;
     anchor.download = filename;
-    document.body.appendChild(anchor);
+    // A modal makes the rest of the document inert. Keep the download link
+    // inside the active dialog so its activation is allowed while it is open.
+    var openDialogs=document.querySelectorAll('dialog[open]');
+    (openDialogs.length?openDialogs[openDialogs.length-1]:document.body).appendChild(anchor);
     anchor.click();
     anchor.remove();
-    setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
+    // Keep an explicit download available when the caller shows a result link.
+    if(!onDelivered)setTimeout(function () { URL.revokeObjectURL(blobUrl); },1000);
+    var result={filename:filename, invoiceFiles:Number(response.headers.get('X-Invoice-Files') || 0), pendingLines:Number(response.headers.get('X-Pending-Order-Lines') || 0), blockedContractors:Number(response.headers.get('X-Blocked-Contractors') || 0)};
+    if(onDelivered)result.downloadUrl=blobUrl;
+    if(onDelivered)onDelivered(result);
     var receipt=response.headers.get('X-Export-Receipt');
     if(receipt){
-      await api('/api/outgoing-invoices/export-receipts/'+encodeURIComponent(receipt)+'/received',{method:'POST'});
+      try {
+        await api('/api/outgoing-invoices/export-receipts/'+encodeURIComponent(receipt)+'/received',{method:'POST'});
+        result.savedDownloadUrl='/api/outgoing-invoices/export-receipts/'+encodeURIComponent(receipt)+'/file';
+      }
+      catch(error){result.receiptWarning='File đã chuyển tới trình duyệt nhưng chưa ghi nhận được lượt tải. Giữ file đã nhận; bấm tải lại cùng bản xem trước để ghi nhận, không cần tạo bảng mới.';showToast(result.receiptWarning,true);}
       await loadUnissuedScope(false);
       renderDocuments();
     }
-    return {filename:filename, invoiceFiles:Number(response.headers.get('X-Invoice-Files') || 0), pendingLines:Number(response.headers.get('X-Pending-Order-Lines') || 0), blockedContractors:Number(response.headers.get('X-Blocked-Contractors') || 0)};
+    return result;
   }
 
   function setBusy(value, message) {
@@ -3546,24 +3563,71 @@
     await loadUnissuedScope(false);
   }
 
+  async function confirmOutsideInvoice(invoiceId, scope, onSaved) {
+    var dialog=document.createElement('dialog'),row=null,saving=false;
+    dialog.className='inventory-totals-dialog';dialog.style.width='min(650px,95vw)';
+    dialog.innerHTML='<h3>Xác nhận xuất ngoài</h3><div data-outside-info>Đang lấy thông tin hóa đơn…</div><p>Chỉ xác nhận khi hóa đơn này không xuất cho đơn giao hàng trên phần mềm. Xác nhận áp dụng riêng hóa đơn này; không đổi kho, công nợ hoặc ghi nhớ toàn bộ người mua là khách bán ngoài.</p><form><label>Lý do xác nhận<input name="note" required value="Xuất ngoài, không đối trừ đơn giao hàng"></label><p><label><input type="checkbox" name="confirmed" required> Tôi xác nhận hóa đơn trên là xuất ngoài, không trừ đơn giao hàng.</label></p><p data-outside-status role="status"></p><button type="submit" class="btn btn-primary" disabled>Xác nhận xuất ngoài</button> <button type="button" class="btn btn-outline" data-outside-reload>Kiểm tra lại hóa đơn</button> <button type="button" class="btn btn-outline" data-outside-close>Quay lại</button></form>';
+    document.body.appendChild(dialog);dialog.showModal();
+    var form=dialog.querySelector('form'),submit=form.querySelector('[type=submit]'),status=dialog.querySelector('[data-outside-status]');
+    dialog.oncancel=function(e){if(saving)e.preventDefault();};
+    dialog.onclose=function(){dialog.remove();};
+    dialog.querySelector('[data-outside-close]').onclick=function(){if(!saving)dialog.close();};
+    async function reload(){
+      submit.disabled=true;row=null;form.elements.confirmed.checked=false;
+      try{
+        var report=await api(sourceReviewUrl(scope));
+        if(!dialog.isConnected)return;
+        row=(report.items||[]).find(function(r){return r.id===Number(invoiceId);});
+        if(!row)throw new Error('Không tìm thấy hóa đơn trong phạm vi đang xem. Quay lại và tính lại bảng kê.');
+        dialog.querySelector('[data-outside-info]').innerHTML='<strong>Hóa đơn '+esc(row.number)+'</strong><p>Ngày hóa đơn: '+esc(dateVN(row.date))+'<br>Người mua: '+esc(row.buyer)+'<br>Tổng tiền: '+money(row.total_amount)+'</p>';
+        if(row.scope==='outside'){status.textContent='Hóa đơn đã được xác nhận xuất ngoài. Quay lại và tính lại bảng kê.';return;}
+        if(row.acceptance){status.textContent='Hóa đơn đã có xác nhận đối trừ. Quay lại và mở Xem xác nhận đã lưu để kiểm tra trước khi đổi nguồn.';return;}
+        submit.disabled=false;status.textContent='Kiểm tra số hóa đơn, ngày và tổng tiền trước khi tích xác nhận.';form.elements.confirmed.focus();
+      }catch(error){status.textContent=error.message+' Lý do xác nhận vẫn được giữ nguyên. Bấm Kiểm tra lại hóa đơn để thử lại.';}
+    }
+    dialog.querySelector('[data-outside-reload]').onclick=reload;
+    form.onsubmit=async function(e){
+      e.preventDefault();e.stopPropagation();if(saving||!row||submit.disabled)return;
+      if(!form.elements.note.value.trim()){form.elements.note.setCustomValidity('Nhập Lý do xác nhận.');form.elements.note.reportValidity();return;}
+      saving=true;form.querySelectorAll('button').forEach(function(b){b.disabled=true;});status.textContent='Đang lưu xác nhận xuất ngoài…';
+      try{
+        await api('/api/outgoing-invoices/source-scopes/'+row.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:row.token,scope:'outside',remember_outside:false,note:form.elements.note.value.trim()})});
+      }catch(error){
+        saving=false;form.querySelectorAll('button').forEach(function(b){b.disabled=false;});status.textContent=error.message+' Lý do xác nhận được giữ nguyên. Nếu hóa đơn đã thay đổi, bấm Kiểm tra lại hóa đơn rồi xác nhận lại.';return;
+      }
+      if(state.sourceScopeEdits)delete state.sourceScopeEdits[row.id];
+      dialog.close();showToast('Đã xác nhận xuất ngoài. Đang tính lại bảng kê…');
+      if(onSaved)await onSaved();
+      await loadUnissuedScope(false);
+    };
+    form.elements.note.oninput=function(){this.setCustomValidity('');};
+    form.elements.note.oninvalid=function(){this.setCustomValidity('Nhập Lý do xác nhận.');};
+    form.elements.confirmed.oninvalid=function(){this.setCustomValidity('Tích xác nhận hóa đơn trên là xuất ngoài trước khi lưu.');};
+    form.elements.confirmed.onchange=function(){this.setCustomValidity('');};
+    await reload();
+  }
+
   async function openStockOnlyPreview() {
     if(exportChoicesDirty()){showToast('Lưu lựa chọn mặt hàng trước khi xem xuất theo tồn.',true);return;}
     var scope=pendingScope(),dialog=document.createElement('dialog');
     dialog.className='inventory-totals-dialog';dialog.style.width='min(1100px,95vw)';
-    dialog.innerHTML='<h3>Xuất theo tồn</h3><p>Đang tính lượng còn lại của các đơn đã duyệt đến '+esc(dateVN(scope.to))+'. Giữ nguyên những dòng đã bỏ chọn.</p><div data-stock-body>Đang kiểm tra…</div><button type="button" class="btn btn-outline" data-stock-close>Đóng</button>';
+    dialog.innerHTML='<h3>Xuất theo tồn</h3><p>'+esc(scope.contractor||'Các nhà thầu đã chọn')+' · Đơn từ '+esc(dateVN(scope.from))+' đến '+esc(dateVN(scope.to))+'. Giữ nguyên những dòng đã bỏ chọn.</p><div data-stock-body>Đang kiểm tra…</div><button type="button" class="btn btn-outline" data-stock-close>Đóng</button>';
     document.body.appendChild(dialog);dialog.showModal();dialog.querySelector('[data-stock-close]').onclick=function(){dialog.close();};dialog.onclose=function(){dialog.remove();};
     async function refresh(){
       var target=dialog.querySelector('[data-stock-body]');target.textContent='Đang đối chiếu tồn và các bản nháp…';
+      var previewStarted=Date.now(),previewTimer=setInterval(function(){if(dialog.isConnected)target.textContent='Đang đối chiếu tồn và các bản nháp · đã chờ '+Math.floor((Date.now()-previewStarted)/1000)+' giây. Lựa chọn được giữ nguyên; chị không cần bấm lại.';},10000);
       try{
         var result=await api('/api/outgoing-invoice-upload/stock-preview?'+new URLSearchParams({from:scope.from,to:scope.to,contractor:scope.contractor||''}),{method:'POST'});
+        clearInterval(previewTimer);
         if(!dialog.isConnected)return;
         target.innerHTML='<p><strong>'+result.ready_count+' dòng có thể xuất · '+result.waiting_count+' dòng còn chờ · '+money(result.amount)+'</strong></p><p>KKKNT được xuất âm theo lượng đơn còn lại; các nhóm khác chỉ phân bổ trong tồn khả dụng. Phần đã giữ cho bản nháp khác và phần đã ký được đối trừ. Không đổi lựa chọn hoặc số lượng đơn hàng.</p><div class="table-wrap" style="max-height:50vh;overflow:auto"><table><thead><tr><th>Nhà thầu / Ngày</th><th>Mặt hàng</th><th>ĐVT</th><th>Chưa xuất</th><th>Xuất lần này</th><th>Còn chờ / Lý do</th></tr></thead><tbody>'+result.items.map(function(r){return '<tr><td>'+esc(r.contractor)+'<br>'+esc(dateVN(r.date))+'</td><td>'+esc(r.product_code+' · '+r.invoice_name)+'</td><td>'+esc(r.unit)+'</td><td>'+stockQty(r.requested_qty)+'</td><td><strong>'+stockQty(r.ready_qty)+'</strong></td><td>'+stockQty(r.waiting_qty)+'<br>'+esc(r.reason)+'</td></tr>';}).join('')+'</tbody></table></div><p><label><input type="checkbox" data-stock-confirm> Tôi đã kiểm tra lượng xuất lần này. Tạo file sẽ thay các bản nháp chưa gửi có liên quan.</label></p><button type="button" class="btn btn-primary" data-stock-export disabled>Xác nhận và tải file theo tồn</button> <button type="button" class="btn btn-outline" data-stock-refresh>Tính lại</button><p data-stock-status role="status">Tải file chưa phát hành hóa đơn. Dùng file này để nhập lên M-Invoice, kiểm tra rồi ký.</p>';
         var issues=result.reconciliation_issues||[];
         if(issues.length){
           var groups={};issues.forEach(function(w){var key=w.contractor||'Chưa xác định nhà thầu';(groups[key]||(groups[key]=[])).push(w);});
           var panel=document.createElement('section');panel.className='code-note';panel.setAttribute('data-stock-issues','');panel.tabIndex=-1;
-          panel.innerHTML='<strong>Cần đối chiếu hóa đơn đã xuất</strong><p>Các lý do chung được liệt kê một lần bên dưới. Đây chưa phải kết luận thiếu tồn kho.</p>'+Object.keys(groups).map(function(party){return '<details data-stock-party="'+esc(party)+'"><summary>'+esc(party)+' · '+groups[party].length+' mục cần kiểm tra</summary><div style="max-height:180px;overflow:auto">'+groups[party].map(function(w){return '<p>'+esc(w.message)+(w.invoice_date?' Ngày hóa đơn: '+esc(dateVN(w.invoice_date))+'.':'')+'</p>';}).join('')+'</div></details>';}).join('');
+          panel.innerHTML='<strong>Cần đối chiếu hóa đơn đã xuất</strong><p>Các lý do chung được liệt kê một lần bên dưới. Đây chưa phải kết luận thiếu tồn kho.</p>'+Object.keys(groups).map(function(party){return '<details open data-stock-party="'+esc(party)+'"><summary>'+esc(party)+' · '+groups[party].length+' mục cần kiểm tra</summary><div style="max-height:180px;overflow:auto">'+groups[party].map(function(w){return '<p>'+esc(w.message)+(w.invoice_date?' Ngày hóa đơn: '+esc(dateVN(w.invoice_date))+'.':'')+'</p>'+(w.invoice_id?'<button type="button" class="btn btn-primary" data-stock-outside="'+w.invoice_id+'">Xác nhận xuất ngoài · HĐ '+esc(w.invoice_number||w.invoice_id)+'</button>':'');}).join('')+'</div></details>';}).join('');
           target.insertBefore(panel,target.querySelector('.table-wrap'));
+          panel.querySelectorAll('[data-stock-outside]').forEach(function(b){b.onclick=function(){return confirmOutsideInvoice(Number(b.dataset.stockOutside),scope,refresh);};});
           var reviewButton=document.createElement('button');reviewButton.type='button';reviewButton.className='btn btn-outline';reviewButton.textContent='Mở đối chiếu hóa đơn đã xuất';
           reviewButton.onclick=function(){var section=document.getElementById('invoiceSourceReview');if(!section){showToast('Đóng bảng này, tải lại danh sách hóa đơn rồi mở mục Đối chiếu hóa đơn đã ký.',true);return;}dialog.close();section.querySelectorAll('details').forEach(function(d){d.open=true;});section.scrollIntoView({block:'start'});var first=section.querySelector('select');if(first)first.focus({preventScroll:true});};panel.appendChild(reviewButton);
           target.querySelectorAll('tbody tr').forEach(function(tr,index){var row=result.items[index];if(!row.needs_source_review)return;var link=document.createElement('button');link.type='button';link.className='btn btn-outline';link.textContent='Xem lý do chung';link.onclick=function(){panel.querySelectorAll('details').forEach(function(d){d.open=d.dataset.stockParty===row.contractor||d.dataset.stockParty==='Chưa xác định nhà thầu';});panel.scrollIntoView({block:'nearest'});panel.focus({preventScroll:true});};tr.lastElementChild.appendChild(link);});
@@ -3571,8 +3635,38 @@
         var button=target.querySelector('[data-stock-export]');
         target.querySelector('[data-stock-confirm]').onchange=function(){button.disabled=!this.checked||!result.ready_count;};
         target.querySelector('[data-stock-refresh]').onclick=refresh;
-        button.onclick=async function(){button.disabled=true;try{await downloadFile('/api/outgoing-invoice-upload/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:result.token,confirmed:true})});target.querySelector('[data-stock-status]').textContent='Đã tải file theo tồn. Chưa ký/phát hành hóa đơn; phần còn lại vẫn chờ.';}catch(error){if(error.payload?.code==='stock_preview_changed'){await refresh();var updated=target.querySelector('[data-stock-status]');if(updated){updated.textContent='Dữ liệu vừa thay đổi. Đã tính lại bảng bên trên; chưa tạo bảng kê. Chị kiểm tra lượng mới, tích xác nhận rồi bấm tải.';target.querySelector('[data-stock-confirm]')?.focus();}}else{target.querySelector('[data-stock-status]').textContent=error.message+' Bấm Tính lại để xem số mới.';}}finally{if(button.isConnected)button.disabled=!target.querySelector('[data-stock-confirm]').checked||!result.ready_count;}};
+        button.onclick=async function(){
+          var confirm=target.querySelector('[data-stock-confirm]'),recalc=target.querySelector('[data-stock-refresh]'),status=target.querySelector('[data-stock-status]');
+          button.disabled=true;confirm.disabled=true;recalc.disabled=true;button.textContent='Đang tạo file…';
+          state.invoiceExportBusy=true;
+          status.textContent='Đang cập nhật hóa đơn đã ký và tạo file cho '+(scope.contractor||'các nhà thầu đã chọn')+'. Có thể mất vài phút. Chị không cần bấm lại hoặc đổi nhà thầu.';
+          status.scrollIntoView({block:'nearest'});
+          var started=Date.now(),progress=setInterval(function(){if(status.isConnected)status.textContent='Đang tạo file cho '+(scope.contractor||'các nhà thầu đã chọn')+' · đã chờ '+Math.floor((Date.now()-started)/1000)+' giây. Giữ nguyên lựa chọn; file sẽ tải khi xử lý xong.';},10000);
+          function delivered(file){
+            clearInterval(progress);status.textContent='Đã tạo file '+file.filename+' ('+(scope.contractor||'các nhà thầu đã chọn')+'). Nếu chưa thấy trong Tải xuống (Ctrl+J) hoặc Downloads, bấm liên kết dưới đây. Chưa ký/phát hành hóa đơn. ';
+            var link=document.createElement('a');link.className='btn btn-primary';link.href=file.downloadUrl;link.download=file.filename;link.textContent='Tải file ZIP đã tạo';status.appendChild(link);
+            if(dialog.isConnected)dialog.addEventListener('close',function(){URL.revokeObjectURL(file.downloadUrl);},{once:true});
+            else setTimeout(function(){URL.revokeObjectURL(file.downloadUrl);},1000);
+            showToast('File '+file.filename+' đã sẵn sàng. Bấm Tải file ZIP đã tạo nếu chưa tải tự động.');
+          }
+          try{
+            var file=await downloadFile('/api/outgoing-invoice-upload/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:result.token,confirmed:true})},delivered);
+            if(file.savedDownloadUrl){var savedLink=status.querySelector('a');if(savedLink)savedLink.href=file.savedDownloadUrl;}
+            if(file.receiptWarning)status.appendChild(document.createTextNode(' '+file.receiptWarning));
+          }catch(error){
+            clearInterval(progress);
+            if(error.payload?.code==='stock_preview_changed'){
+              await refresh();var updated=target.querySelector('[data-stock-status]');
+              if(updated){updated.textContent='Dữ liệu vừa thay đổi. Đã tính lại bảng bên trên; chưa tạo bảng kê. Chị kiểm tra lượng mới, tích xác nhận rồi bấm tải.';target.querySelector('[data-stock-confirm]')?.focus();}
+            }else{status.textContent=error.message+' Lựa chọn được giữ nguyên. Bấm tải lại để kiểm tra và nhận file của cùng lượt này.';}
+          }finally{
+            clearInterval(progress);state.invoiceExportBusy=false;
+            if(button.isConnected){button.textContent='Xác nhận và tải file theo tồn';confirm.disabled=false;recalc.disabled=false;button.disabled=!confirm.checked||!result.ready_count;}
+            renderDocuments();
+          }
+        };
       }catch(error){target.textContent=error.message;var retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.textContent='Tính lại';retry.onclick=refresh;target.appendChild(retry);}
+      finally{clearInterval(previewTimer);}
     }
     await refresh();
   }
@@ -3599,6 +3693,7 @@
       return '<div class="code-note"><strong>'+esc(r.number)+' · '+esc(r.buyer)+'</strong><p>Ngày hóa đơn: '+esc(dateVN(r.date))+'</p><p>'+esc(status)+' · '+(r.stock_status==='posted'?'Đã ghi xuất kho':'Cần kiểm tra mã hàng / ghi xuất kho')+'</p>'+
         ((r.item_reviews||[]).length?'<p>'+ (r.item_review_stale?'Xác nhận đổi mặt hàng cần kiểm tra lại.':'Đã xác nhận đổi mặt hàng trên hóa đơn; đối trừ theo các dòng đơn gốc đã xác nhận.')+' Mã trên hóa đơn: '+r.item_reviews.map(function(x){return esc(x.source_code);}).join(', ')+'.</p>':'')+
         (r.error?'<p class="error-summary">'+esc(r.error)+'</p>':'')+
+        (r.error&&r.scope!=='outside'&&!r.acceptance?'<button type="button" class="btn btn-primary" data-source-outside="'+r.id+'">Xác nhận xuất ngoài</button>':'')+
         (r.error||r.stock_status!=='posted'?'<button type="button" class="btn btn-outline" data-source-comparison="'+r.id+'">So hóa đơn với bảng kê đã tải</button>':'')+
         (r.stock_status!=='posted'?'<p><button type="button" class="btn btn-primary" data-source-repair="'+r.id+'">Kiểm tra và xử lý ngay</button></p>':'')+
         (r.acceptance?'<p>'+r.acceptance.allocated_order_rows+' dòng đơn đã đối trừ được giữ nguyên; '+r.acceptance.unmatched.length+' thông tin chênh lệch giữ riêng. Không tự trừ thêm đơn.</p><button type="button" class="btn btn-outline" data-source-acceptance="'+r.id+'">Xem xác nhận đã lưu</button>':r.error&&r.scope==='orders'&&r.stock_status==='posted'?'<button type="button" class="btn btn-outline" data-source-acceptance="'+r.id+'">Giữ hóa đơn cho nhà thầu — chênh lệch riêng</button>':'')+
@@ -7602,6 +7697,8 @@
       if(exportChoicesDirty()||state.invoiceExportBusy||state.unissuedBusy){showToast('Lưu lựa chọn mặt hàng đang sửa trước khi xác nhận hóa đơn.',true);return;}
       window.TdpSourceAcceptance({api:api,esc:esc,invoiceId:Number(acceptanceButton.dataset.sourceAcceptance),onSaved:function(){state.preparedInvoices=null;return loadUnissuedScope(true);}});return;
     }
+    var outsideButton=event.target.closest('[data-source-outside]');
+    if(outsideButton){confirmOutsideInvoice(Number(outsideButton.dataset.sourceOutside),pendingScope());return;}
     var comparisonButton=event.target.closest('[data-source-comparison]');
     var repairButton=event.target.closest('[data-source-repair]');
     if(repairButton){

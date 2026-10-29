@@ -60,6 +60,18 @@ def assert_order_enabled(conn, contractor, order_id):
         raise ValueError('Dòng đơn đã bỏ chọn khỏi file M-Invoice; chưa được tạo dự thảo hoặc giữ tồn cho dòng này.')
 
 
+def assert_orders_enabled(conn, rows):
+    """Check one transaction's rows against one fresh choice/archive snapshot."""
+    excluded = excluded_codes(conn)
+    skipped = excluded_order_ids(conn)
+    for row in rows:
+        contractor = row['contractor']
+        if contractor and contractor in excluded:
+            raise ValueError(f'Nhà thầu {contractor} đang bỏ chọn khỏi file M-Invoice. Bật lại ở “Nhà thầu đưa vào file” nếu cần xuất.')
+        if row['id'] in skipped:
+            raise ValueError('Dòng đơn đã bỏ chọn khỏi file M-Invoice; chưa được tạo dự thảo hoặc giữ tồn cho dòng này.')
+
+
 def _token(code, enabled, revision):
     return hashlib.sha256(json.dumps([code, enabled, revision]).encode()).hexdigest()
 

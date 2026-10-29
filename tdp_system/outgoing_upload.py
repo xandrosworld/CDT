@@ -13,7 +13,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 try:
-    from .outgoing_contractors import assert_order_enabled, selected_orders
+    from .outgoing_contractors import assert_orders_enabled, selected_orders
     from .outgoing_unissued import issued_allocations, warning_applies_to_order
     from .outgoing_line_policy import unit_issues
     from .outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_draft_export_stock
@@ -24,7 +24,7 @@ try:
     from .invoice_tax_export import build_invoice_workbook, _safe_name
     from .template_workbook import safe_workbook_bytes
 except ImportError:
-    from outgoing_contractors import assert_order_enabled, selected_orders
+    from outgoing_contractors import assert_orders_enabled, selected_orders
     from outgoing_unissued import issued_allocations, warning_applies_to_order
     from outgoing_line_policy import unit_issues
     from outgoing_readiness import canonical_available_stock, invoice_order_issues, validate_draft_export_stock
@@ -69,16 +69,30 @@ def source_rows(conn, cutoff, contractor):
         (cutoff, contractor, contractor))]
 
 
-def template(conn, cutoff, contractor):
+def template_values(conn, cutoff, contractor):
     issued, _ = issued_allocations(conn)
-    wb = Workbook(); ws = wb.active; ws.title = SHEET; ws.append(HEADERS)
+    rows = []
     for o in selected_orders(conn, source_rows(conn, cutoff, contractor)):
         remaining = max(o['actual_delivered']-o['customer_return_qty']-issued.get(o['id'], 0), 0)
         if o['batch_status'] != 'approved' or remaining <= 1e-8:
             continue
-        ws.append([o['id'], o['contractor'], o['work_date'], o['kitchen'], o['product_code'],
+        rows.append([o['id'], o['contractor'], o['work_date'], o['kitchen'], o['product_code'],
                    invoice_name(conn, o['product_code'], o['product_name']), o['unit'],
                    round(remaining, 8), o['invoice_unit'], digest(order_snapshot(o))])
+    return rows
+
+
+def stock_requests(conn, cutoff, contractor, start):
+    # The web preview already owns these values; do not render/read an Excel
+    # workbook while holding the database write lock merely to recover them.
+    return [{'order_id':v[0], 'qty':v[7], 'values':v, 'excel_row':index}
+            for index,v in enumerate(template_values(conn,cutoff,contractor),2)
+            if str(v[2])>=start and v[7]>0]
+
+
+def template(conn, cutoff, contractor):
+    wb = Workbook(); ws = wb.active; ws.title = SHEET; ws.append(HEADERS)
+    for values in template_values(conn,cutoff,contractor):ws.append(values)
     ws.freeze_panes = 'A2'; ws.auto_filter.ref = ws.dimensions
     for i, width in enumerate([12,22,15,22,16,38,14,20,20,16], 1):
         ws.column_dimensions[ws.cell(1,i).column_letter].width = width
@@ -162,12 +176,14 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
     external = {}
     issued, warnings = issued_allocations(conn, external_quantities=external)
     weights = confirmed_weights(conn)
+    requested_sources = [sources[r['order_id']] for r in requests if r['order_id'] in sources]
+    assert_orders_enabled(conn, requested_sources)
+    units = unit_issues(conn, requested_sources)
     items = []; eligible = {}; reconciliation_issues = {}
     for req in requests:
         oid = req['order_id']; o = sources.get(oid); v = req['values']
         if not o or o['batch_status'] != 'approved':
             raise ValueError(f'Dòng đơn {oid} không thuộc đơn đã duyệt trong phạm vi chọn.')
-        assert_order_enabled(conn, o['contractor'], oid)
         name = invoice_name(conn, o['product_code'], o['product_name'])
         expected = [o['id'],o['contractor'],o['work_date'],o['kitchen'],o['product_code'],name,o['unit']]
         if (any(str(a or '').strip()!=str(b or '').strip() for a,b in zip(v[:7],expected))
@@ -181,7 +197,6 @@ def build_plan(conn, requests, cutoff, contractor, tax_percent, *, stock_only=Fa
         for warning in relevant:
             reconciliation_issues[packed(warning)] = warning
         reasons = ['Cần đối chiếu hóa đơn đã xuất. Bấm Xem lý do chung.'] if relevant else []
-        units = unit_issues(conn,[o])
         if oid in units: reasons.append(units[oid]['message'])
         for issue in invoice_order_issues([o]): reasons.extend(issue['messages'])
         if float(o['sell_price'] or 0) < 0: reasons.append('Giá bán không hợp lệ; đối chiếu đơn gốc.')
@@ -371,7 +386,7 @@ def register(app, ctx):
             if start>cutoff:raise ValueError('Từ ngày đơn phải trước hoặc bằng Đến ngày đơn.')
             with ctx['db']() as conn:
                 conn.execute('BEGIN IMMEDIATE')
-                requested=[r for r in parse_workbook(template(conn,cutoff,party)) if str(r['values'][2])>=start]
+                requested=stock_requests(conn,cutoff,party,start)
                 if not requested:raise ValueError('Không có đơn đã duyệt đang chọn còn lượng chưa xuất. Chọn lại mặt hàng cần xuất trước.')
                 plan=build_plan(conn,requested,cutoff,party,ctx['invoice_tax_percent'],stock_only=True)
                 token=uuid.uuid4().hex
@@ -409,10 +424,12 @@ def register(app, ctx):
                     if job['source_name']=='STOCK_ONLY':raise StockPreviewChanged('Bản xem trước đã hết hạn. Cần tính lại lượng có thể xuất.')
                     raise ValueError('Bản xem trước đã hết hạn 15 phút. Nhập lại file để kiểm tra số mới.')
                 requested=json.loads(job['rows_json'])
+                requested_orders=[]
                 for r in requested:
-                    o=conn.execute('SELECT contractor FROM orders WHERE id=?',(r['order_id'],)).fetchone()
+                    o=conn.execute('SELECT id,contractor FROM orders WHERE id=?',(r['order_id'],)).fetchone()
                     if not o:raise ValueError('Dòng đơn đã thay đổi. Nhập lại file.')
-                    assert_order_enabled(conn,o['contractor'],r['order_id'])
+                    requested_orders.append(o)
+                assert_orders_enabled(conn,requested_orders)
                 connected=ctx['setting_get'](conn,'minvoice_active_connection','')
             if connected:
                 try:

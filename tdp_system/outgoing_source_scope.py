@@ -234,7 +234,7 @@ def scope_report(conn, start, end, contractor='', *, order_scope=False):
             from outgoing_source_item_review import reviewed_items
         item_reviews,review_stale=reviewed_items(conn,source['id'])
         rows.append({'id':source['id'],'number':source['invoice_series']+' / '+source['invoice_number'],
-                     'date':source['invoice_date'],'buyer':source['buyer_name'],'contractor':party or '',
+                     'date':source['invoice_date'],'buyer':source['buyer_name'],'total_amount':source['total_amount'],'contractor':party or '',
                      'scope':'outside' if party is None else 'orders' if party else 'unresolved',
                      'stock_status':source['stock_status'],'error':error,'token':review_token(source),
                      'scope_error':scope_error,'review_details':details,

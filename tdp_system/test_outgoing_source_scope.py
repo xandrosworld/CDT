@@ -98,6 +98,29 @@ class SourceScopeTests(unittest.TestCase):
         self.assertEqual(self.report()['rows'][0]['unissued_qty'],10)
         with server.db() as c:self.assertEqual(before,[tuple(r) for r in c.execute('SELECT * FROM invoice_inventory_ledger')])
 
+    def test_quick_outside_confirmation_unblocks_preview_without_changing_business_data(self):
+        self.seed(stock=20);sid=self.source()
+        period={'from':'2026-09-01','to':'2026-09-03','contractor':'NT-A'}
+        with server.db() as c:
+            c.execute('UPDATE outgoing_source_invoices SET total_amount=60 WHERE id=?',(sid,))
+            tables=['orders','invoice_inventory_ledger','outgoing_buyer_profiles','outgoing_source_invoices']
+            before={t:[tuple(r) for r in c.execute('SELECT * FROM '+t)] for t in tables}
+        blocked=self.client.post('/api/outgoing-invoice-upload/stock-preview',query_string=period)
+        self.assertEqual(blocked.status_code,200,blocked.json)
+        self.assertEqual(blocked.json['ready_count'],0)
+        report=self.client.get('/api/outgoing-invoices/source-scopes',query_string={**period,'order_scope':'1'})
+        row=next(r for r in report.json['items'] if r['id']==sid)
+        self.assertEqual(row['total_amount'],60)
+        saved=self.client.put('/api/outgoing-invoices/source-scopes/'+str(sid),json={
+            'token':row['token'],'scope':'outside','remember_outside':False,'note':'Xuất ngoài, không đối trừ đơn giao hàng'})
+        self.assertEqual(saved.status_code,200,saved.json)
+        ready=self.client.post('/api/outgoing-invoice-upload/stock-preview',query_string=period)
+        self.assertEqual(ready.status_code,200,ready.json)
+        self.assertGreater(ready.json['ready_count'],0)
+        self.assertEqual(ready.json['reconciliation_issues'],[])
+        with server.db() as c:
+            self.assertEqual(before,{t:[tuple(r) for r in c.execute('SELECT * FROM '+t)] for t in tables})
+
     def test_manual_invoice_link_settles_orders_and_repeat_is_not_double_counted(self):
         self.seed(stock=20);sid=self.source();self.assign(sid)
         self.assertEqual(self.report()['rows'][0]['unissued_qty'],7)
