@@ -125,6 +125,20 @@ class PayableLedgerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         return response.get_json()
 
+    def test_batch_sync_does_not_reverse_other_batches_or_history(self):
+        with server.db() as conn:
+            a=self._batch(conn,'2026-09-01');b=self._batch(conn,'2026-09-02')
+            source=self._purchase(conn,a,'2026-09-01',row_key='A')
+            self._purchase(conn,b,'2026-09-02',row_key='B')
+            self._historical(conn,source_row=3)
+            sync_payable_ledger(conn,timestamp='before')
+            others=[tuple(r) for r in conn.execute('SELECT * FROM payable_ledger_lines WHERE batch_id IS NULL OR batch_id<>? ORDER BY id',(a,))]
+            conn.execute('DELETE FROM purchase_workbook_lines WHERE id=?',(source,))
+            sync_payable_ledger(conn,timestamp='after',batch_id=a)
+            self.assertEqual([tuple(r) for r in conn.execute('SELECT * FROM payable_ledger_lines WHERE batch_id IS NULL OR batch_id<>? ORDER BY id',(a,))],others)
+            result=sync_payable_ledger(conn,timestamp='verify')
+            self.assertEqual(sum(result[k] for k in ('inserted','updated','reversed','reactivated')),0)
+
     def test_current_source_line_is_detailed_idempotent_and_never_deleted(self):
         with server.db() as conn:
             batch_id = self._batch(conn, "2026-09-01")

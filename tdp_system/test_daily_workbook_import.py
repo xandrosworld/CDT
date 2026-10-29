@@ -419,6 +419,25 @@ class DailyWorkbookImportTests(unittest.TestCase):
         ))
         self.assertNotIn(secret, json.dumps(result, ensure_ascii=False))
 
+    def test_locked_finalization_preserves_token_and_workbook_for_retry(self):
+        import sqlite3
+        from unittest.mock import patch
+        analyzed = self.analyze_api(self.workbook_bytes())
+        pending = server.PENDING_IMPORTS[analyzed["token"]]
+        pending["strict_analysis"]["phase"] = "finalization"
+        body = dict(token=analyzed["token"], state_hash=analyzed["stateHash"], sheets=["01.09"], work_date="2026-09-01")
+        with patch.object(server, "confirm_strict_daily_finalization", side_effect=sqlite3.OperationalError("database is locked")):
+            response = self.client.post("/api/import/confirm", json=body)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "import_busy")
+        self.assertTrue(pending["path"].exists())
+        self.assertIs(server.PENDING_IMPORTS[analyzed["token"]], pending)
+        with patch.object(server, "confirm_strict_daily_finalization", return_value={"ok": True}):
+            response = self.client.post("/api/import/confirm", json=body)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(analyzed["token"], server.PENDING_IMPORTS)
+        self.assertFalse(pending["path"].exists())
+
     def test_preview_exposes_only_safe_counts_scopes_and_hash(self):
         secret = "CCCD-NOT-IN-API"
         analyzed = self.analyze_api(self.workbook_bytes(secret=secret))

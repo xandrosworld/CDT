@@ -100,7 +100,7 @@ def save_supplier_plan(conn, *, batch_id, preview, source_hash, source_name, now
     cm.audit(conn, now_iso, 'supplier_plan.import', 'ok', entity_type='batch', entity_id=batch_id,
              metadata={'rows': len(items), 'source_hash': source_hash[:16], 'issues': len(issues)})
     if conn.execute("SELECT 1 FROM batches WHERE id=? AND status='approved'", (batch_id,)).fetchone():
-        cm.refresh_payable_ledger(conn, now_iso())
+        cm.refresh_payable_ledger(conn, now_iso(), batch_id=batch_id)
     return {'processed': len(items), 'count': len(items), 'idempotent': False, 'plan_only': True}
 
 

@@ -2070,7 +2070,7 @@ def apply_strict_customer_scope(conn, batch_id: int, incoming_orders, *, continu
         # Persist removal tombstones before inserting any new rows. SQLite may
         # reuse a deleted orders.id inside this same transaction; the later
         # sync must then mint a new source generation, not overwrite history.
-        sync_receivable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
     update_fields = (
         "work_date", "contractor", "kitchen", "product_code", "product_name", "qty",
         "actual_delivered", "customer_return_qty", "unit", "sell_price", "tax",
@@ -2114,7 +2114,7 @@ def apply_strict_customer_scope(conn, batch_id: int, incoming_orders, *, continu
             conn.execute("UPDATE orders SET sell_price_revision=sell_price_revision+1,"
                          "sell_price_source='import_or_standard',sell_price_override_at=NULL WHERE id=?",
                          (int(existing['order']['id']),))
-    sync_receivable_ledger(conn, timestamp=now_iso())
+    sync_receivable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
     # The explicit second sales/delivery confirmation settles the existing
     # order claim; it does not post another physical issue.
     if not continuous:
@@ -2335,12 +2335,12 @@ def confirm_strict_daily_finalization(pending, body, sheets):
                 json.dumps(sheets, ensure_ascii=False), batch_id, now_iso(),
             ),
         )
-        sync_receivable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
         conn.execute("UPDATE batches SET source_name=? WHERE id=?", (pending['name'], batch_id))
         if analysis.get('continuous'):
             conn.execute("UPDATE batches SET status='draft',approved_at=NULL WHERE id=?", (batch_id,))
-            sync_payable_ledger(conn, timestamp=now_iso())
-            sync_receivable_ledger(conn, timestamp=now_iso())
+            sync_payable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
+            sync_receivable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
         daily_import = strict_daily_version_payload(
             conn, batch_id, source_hash, day_sheet_name,
         )
@@ -2887,6 +2887,7 @@ def api_import_cancel():
 def confirm_strict_daily_import(pending, body):
     """Consume one strict preview token and atomically apply its customer-order scope."""
     analysis = pending["strict_analysis"]
+    retryable_busy = False
     try:
         raw_sheets = body.get("sheets") or []
         if not isinstance(raw_sheets, list):
@@ -3007,7 +3008,7 @@ def confirm_strict_daily_import(pending, body):
                 # lifecycle-owned batch contents. Historical version hashes remain.
                 conn.execute("DELETE FROM order_import_receipts WHERE batch_id=?", (batch_id,))
                 conn.execute("DELETE FROM orders WHERE batch_id=?", (batch_id,))
-                sync_receivable_ledger(conn, timestamp=now_iso())
+                sync_receivable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
                 conn.execute(
                     "UPDATE batches SET work_date=?,source_name=? WHERE id=?",
                     (work_date, pending["name"], batch_id),
@@ -3035,7 +3036,7 @@ def confirm_strict_daily_import(pending, body):
                     json.dumps(sheets, ensure_ascii=False), batch_id, now_iso(),
                 ),
             )
-            sync_receivable_ledger(conn, timestamp=now_iso())
+            sync_receivable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
             daily_import = strict_daily_version_payload(
                 conn, batch_id, source_hash, sheets[0],
             )
@@ -3053,13 +3054,19 @@ def confirm_strict_daily_import(pending, body):
                 dailyImport=daily_import,
             )
             return jsonify(payload)
+    except sqlite3.OperationalError as exc:
+        retryable_busy = getattr(exc, "sqlite_errorcode", None) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or str(exc) in ("database is locked", "database table is locked")
+        if retryable_busy:
+            pending["retryable_busy"] = True
+        raise
     except DailyImportError as exc:
         return jsonify({"ok": False, "error": str(exc), "code": exc.code}), exc.status
     except (OSError, ValueError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     finally:
         try:
-            pending["path"].unlink()
+            if not retryable_busy:
+                pending["path"].unlink()
         except OSError:
             pass
 
@@ -3073,7 +3080,15 @@ def api_import_confirm():
     if not pending or not pending["path"].exists():
         return jsonify({"ok": False, "error": "Phiên chọn sheet đã hết hạn. Vui lòng chọn lại file."}), 400
     if pending.get("strict_analysis"):
-        return confirm_strict_daily_import(pending, body)
+        pending.pop("retryable_busy", None)
+        try:
+            return confirm_strict_daily_import(pending, body)
+        except sqlite3.OperationalError:
+            if not pending.pop("retryable_busy", False):
+                raise
+            with PENDING_IMPORT_LOCK:
+                PENDING_IMPORTS[token] = pending
+            return jsonify(ok=False, code="import_busy", error="Hệ thống đang lưu dữ liệu khác. File Excel và lựa chọn của chị vẫn được giữ nguyên; chờ một chút rồi bấm lại nút xác nhận trong cửa sổ nhập file."), 409
     raw_sheets = body.get("sheets") or []
     if not isinstance(raw_sheets, list):
         with PENDING_IMPORT_LOCK:
@@ -3152,8 +3167,8 @@ def api_import_confirm():
                 VALUES(?,?,?,?,?,?)""", (batch_id, previous["source_name"], pending["name"], json.dumps(old_orders, ensure_ascii=False), json.dumps(previous_keys), now_iso()))
             conn.execute("DELETE FROM order_import_receipts WHERE batch_id=?", (batch_id,))
             conn.execute("DELETE FROM orders WHERE batch_id=?", (batch_id,))
-            sync_receivable_ledger(conn, timestamp=now_iso())
-            sync_payable_ledger(conn, timestamp=now_iso())
+            sync_receivable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
+            sync_payable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
             save_imported_orders(conn, batch_id, orders)
             conn.execute("UPDATE batches SET source_name=?,status='draft',approved_at=NULL WHERE id=?", (pending["name"], batch_id))
             replacement = {"replaced_rows": len(old_orders), "new_rows": len(orders),
@@ -3169,7 +3184,7 @@ def api_import_confirm():
                 json.dumps(sheets, ensure_ascii=False), batch_id, now_iso(),
             ),
         )
-        sync_receivable_ledger(conn, timestamp=now_iso())
+        sync_receivable_ledger(conn, timestamp=now_iso(), batch_id=batch_id)
         payload = batch_payload(conn, batch_id)
         payload.update(
             ok=True,

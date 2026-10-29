@@ -346,10 +346,10 @@ def _base_candidate(
     return item
 
 
-def _purchase_sheet_sources(conn):
+def _purchase_sheet_sources(conn, batch_id=None):
     sources = []
     for source in conn.execute('''SELECT p.*,b.status batch_status,b.work_date
-        FROM supplier_plan_sources p JOIN batches b ON b.id=p.batch_id ORDER BY p.batch_id'''):
+        FROM supplier_plan_sources p JOIN batches b ON b.id=p.batch_id WHERE (? IS NULL OR p.batch_id=?) ORDER BY p.batch_id''', (batch_id,batch_id)):
         sheet = dict(source)
         sheet['items'] = json.loads(sheet['items_json'])
         sheet['issues'] = json.loads(sheet['issues_json'])
@@ -468,7 +468,7 @@ def pending_purchase_sheets(conn, date_from, date_to):
     return result
 
 
-def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]:
+def discover_payable_sources(conn, existing_by_key=None, *, batch_id=None) -> list[dict[str, Any]]:
     """Build the complete source projection without changing database state."""
     existing_by_key = existing_by_key or {}
     cutoff = _historical_cutoff(conn)
@@ -476,18 +476,18 @@ def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]
     candidates: list[dict[str, Any]] = []
     # An approved day's priced purchase sheet is the payable source even when
     # its inventory document is already locked. This projection never posts stock.
-    purchase_sheets = _purchase_sheet_sources(conn)
+    purchase_sheets = _purchase_sheet_sources(conn, batch_id)
     sheet_batches = {row['batch_id'] for row in purchase_sheets}
     canonical_batches = {
         int(row["batch_id"]) for row in conn.execute(
-            "SELECT DISTINCT batch_id FROM purchase_workbook_lines"
+            "SELECT DISTINCT batch_id FROM purchase_workbook_lines WHERE (? IS NULL OR batch_id=?)", (batch_id,batch_id)
         )
     }
 
     for row in conn.execute(
         """SELECT p.*,b.status batch_status
            FROM purchase_workbook_lines p JOIN batches b ON b.id=p.batch_id
-           ORDER BY p.batch_id,p.row_key"""
+           WHERE (? IS NULL OR p.batch_id=?) ORDER BY p.batch_id,p.row_key""", (batch_id,batch_id)
     ):
         if int(row['batch_id']) in sheet_batches:
             continue
@@ -545,7 +545,7 @@ def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]
                   p.status plan_status,p.source_hash plan_source_hash
            FROM orders o JOIN batches b ON b.id=o.batch_id
            LEFT JOIN purchase_order_lines p ON p.order_id=o.id
-           ORDER BY o.batch_id,o.id"""
+           WHERE (? IS NULL OR o.batch_id=?) ORDER BY o.batch_id,o.id""", (batch_id,batch_id)
     ):
         if int(row["batch_id"]) in canonical_batches | sheet_batches:
             continue
@@ -590,7 +590,7 @@ def discover_payable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]
         ))
 
     for row in conn.execute(
-        "SELECT * FROM historical_payable_lines ORDER BY source_sheet,source_row,id"
+        "SELECT * FROM historical_payable_lines WHERE ? IS NULL ORDER BY source_sheet,source_row,id", (batch_id,)
     ):
         source_key = _source_key(
             "historical_payable_lines", _mapping_key(row["source_sheet"]), row["source_row"]
@@ -658,7 +658,7 @@ def _append_revision(conn, line: dict[str, Any], change_kind: str, timestamp: st
     )
 
 
-def sync_payable_ledger(conn, *, timestamp: str) -> dict[str, int]:
+def sync_payable_ledger(conn, *, timestamp: str, batch_id=None) -> dict[str, int]:
     """Synchronize source documents into the append-only payable contract."""
     if conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='payable_ledger_lines'"
@@ -670,7 +670,7 @@ def sync_payable_ledger(conn, *, timestamp: str) -> dict[str, int]:
         row["source_key"]: dict(row)
         for row in conn.execute("SELECT * FROM payable_ledger_lines ORDER BY id")
     }
-    candidates = discover_payable_sources(conn, existing)
+    candidates = discover_payable_sources(conn, existing, batch_id=batch_id)
     seen: set[str] = set()
     counters = Counter(inserted=0, updated=0, reversed=0, reactivated=0, unchanged=0)
 
@@ -758,6 +758,8 @@ def sync_payable_ledger(conn, *, timestamp: str) -> dict[str, int]:
         _append_revision(conn, line, change_kind, timestamp)
 
     for key, previous in existing.items():
+        if batch_id is not None and previous["batch_id"] != batch_id:
+            continue
         if key in seen or previous["status"] == "reversed":
             continue
         if previous["paid_amount"] > 0 and (

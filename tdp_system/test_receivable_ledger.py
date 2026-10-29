@@ -136,6 +136,22 @@ class ReceivableLedgerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         return response.get_json()
 
+    def test_batch_sync_preserves_other_days_and_reused_id_generations(self):
+        with server.db() as conn:
+            a=self._batch(conn,'2026-09-01');b=self._batch(conn,'2026-09-02')
+            self._order(conn,b,'2026-09-02');old=self._order(conn,a,'2026-09-01')
+            sync_receivable_ledger(conn,timestamp='before')
+            other=tuple(conn.execute('SELECT * FROM receivable_ledger_lines WHERE batch_id=?',(b,)).fetchone())
+            conn.execute('DELETE FROM orders WHERE id=?',(old,))
+            sync_receivable_ledger(conn,timestamp='removed',batch_id=a)
+            new=self._order(conn,a,'2026-09-01',sell_price=15000)
+            conn.execute("UPDATE orders SET id=? WHERE id=?", (old, new))
+            sync_receivable_ledger(conn,timestamp='after',batch_id=a)
+            self.assertEqual(tuple(conn.execute('SELECT * FROM receivable_ledger_lines WHERE batch_id=?',(b,)).fetchone()),other)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM receivable_ledger_lines WHERE batch_id=?',(a,)).fetchone()[0],2)
+            result=sync_receivable_ledger(conn,timestamp='verify')
+            self.assertEqual(sum(result[k] for k in ('inserted','updated','reversed','reactivated')),0)
+
     def test_net_delivery_transaction_price_tax_and_red_invoice_independence(self):
         with server.db() as conn:
             batch_id = self._batch(conn, "2026-09-01")

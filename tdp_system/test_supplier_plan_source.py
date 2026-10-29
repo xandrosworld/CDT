@@ -63,6 +63,29 @@ class SupplierPlanSourceTests(unittest.TestCase):
                     for t in ('orders', 'batches', 'purchase_workbook_lines', 'purchase_order_lines',
                               'payable_ledger_lines', 'receivable_ledger_lines', 'invoice_inventory_ledger')}
 
+    def test_streamed_formulas_match_normal_reader_after_blank_row(self):
+        from unittest.mock import patch
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+        from .contract_modules import parse_canonical_purchase_workbook
+        data = self.file(price=9000)
+        bid = self.daily(data)
+        wb = load_workbook(io.BytesIO(data))
+        ws = wb['đặt hàng']
+        ws.insert_rows(3)
+        ws.cell(4, 13, '=D4+I4-J4-K4-L4')
+        ws.cell(4, 14, '=M4*H4')
+        stream = io.BytesIO(); wb.save(stream); wb.close()
+        data = stream.getvalue()
+        results = []
+        for read_only in (False, True):
+            values = load_workbook(io.BytesIO(data), read_only=read_only, data_only=True)
+            formulas = load_workbook(io.BytesIO(data), read_only=read_only, data_only=False)
+            with server.db() as conn, patch.object(ReadOnlyWorksheet, 'cell', side_effect=AssertionError('random XML read')):
+                results.append(parse_canonical_purchase_workbook(conn, values, bid, {}, formulas, plan_only=True))
+            values.close(); formulas.close()
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[1]['error_rows'], 1)
+
     def test_first_upload_uses_purchase_sheet_and_zero_price_does_not_post_debt(self):
         bid = self.daily(self.file(7))
         plan = self.needs(bid)

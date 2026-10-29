@@ -4134,14 +4134,14 @@ class PurchaseOrderApplyError(ValueError):
         self.status = status
 
 
-def refresh_payable_ledger(conn, timestamp: str) -> dict:
+def refresh_payable_ledger(conn, timestamp: str, *, batch_id=None) -> dict:
     """Refresh the small dedicated payable projection inside this transaction."""
     try:
         from payable_ledger import sync_payable_ledger, PayableLedgerError
     except ImportError:  # pragma: no cover - package invocation
         from .payable_ledger import sync_payable_ledger, PayableLedgerError
     try:
-        return sync_payable_ledger(conn, timestamp=timestamp)
+        return sync_payable_ledger(conn, timestamp=timestamp, batch_id=batch_id)
     except PayableLedgerError as exc:
         raise PurchaseOrderApplyError(str(exc), code=exc.code, status=exc.status) from exc
 
@@ -4191,7 +4191,7 @@ def apply_purchase_order_preview(
             entity_type="batch", entity_id=batch_id,
             metadata={"rows": len(items), "source_hash": source_hash[:16]},
         )
-        payable_ledger = refresh_payable_ledger(conn, now_iso())
+        payable_ledger = refresh_payable_ledger(conn, now_iso(), batch_id=batch_id)
         return {
             "processed": 0, "count": len(items), "idempotent": True,
             "purchase_order": result, "payable_ledger": payable_ledger,
@@ -4307,7 +4307,7 @@ def apply_purchase_order_preview(
     )
     conn.execute('DELETE FROM supplier_plan_sources WHERE batch_id=?', (batch_id,))
     reopen_changed_suppliers(conn, batch_id, before_plan, now_iso)
-    payable_ledger = refresh_payable_ledger(conn, timestamp)
+    payable_ledger = refresh_payable_ledger(conn, timestamp, batch_id=batch_id)
     return {
         "processed": changed_count, "count": len(items), "idempotent": False,
         "purchase_order": purchase_order_payload(conn, batch_id),
@@ -4374,6 +4374,11 @@ def parse_canonical_purchase_workbook(
             cat_code, cat_name, cat_unit = (catalog_value(f) for f in ('product_code', 'product_name', 'unit'))
             if cat_code and cat_name and cat_unit:
                 source_units[(mapping_key(cat_code), mapping_key(cat_name))][mapping_key(cat_unit)] = (cat_unit, cat_sheet.title, cat_row)
+    # Read-only worksheets reparse XML for every .cell() call. Advance the
+    # formula stream alongside cached values, including blank/skipped rows.
+    formula_rows = (iter(formula_worksheet.iter_rows(
+        min_row=header_row + 1, max_col=max(fields.values()), values_only=True,
+    )) if formula_worksheet is not None else None)
     parsed = []
     occurrences = Counter()
     seen_row_keys = set()
@@ -4382,6 +4387,11 @@ def parse_canonical_purchase_workbook(
     for source_row, values in enumerate(
         worksheet.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1
     ):
+        formula_values = next(formula_rows, ()) if formula_rows is not None else values
+        def formula_cell(field):
+            column = fields.get(field)
+            return formula_values[column - 1] if column and column <= len(formula_values) else None
+
         def cell(field):
             column = fields.get(field)
             return values[column - 1] if column and column <= len(values) else None
@@ -4493,7 +4503,7 @@ def parse_canonical_purchase_workbook(
             fields, source_row,
         )
         formula_actual = (
-            formula_worksheet.cell(source_row, fields["actual_qty"]).value
+            formula_cell("actual_qty")
             if formula_worksheet is not None else cell("actual_qty")
         )
         actual_formula_key = purchase_formula_key(formula_actual)
@@ -4516,7 +4526,7 @@ def parse_canonical_purchase_workbook(
             errors.append("Số lượng thực tế lệch công thức chuẩn")
         actual_qty = computed_actual
         formula_amount = (
-            formula_worksheet.cell(source_row, fields["amount"]).value
+            formula_cell("amount")
             if formula_worksheet is not None else cell("amount")
         )
         amount_formula_key = purchase_formula_key(formula_amount)

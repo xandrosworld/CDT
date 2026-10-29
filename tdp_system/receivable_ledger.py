@@ -153,12 +153,19 @@ def _source_key(source_id: Any, generation: int = 1) -> str:
     return hashlib.sha256(identity.encode("utf-8")).hexdigest().upper()
 
 
-def _source_identity(source_id: Any, existing_by_key) -> tuple[str, dict[str, Any] | None]:
+def _index_source_identities(existing_by_key):
+    # Build once per projection: scanning the entire ledger for every order
+    # made imports quadratic while holding the database write transaction.
+    by_id = defaultdict(list)
+    for row in existing_by_key.values():
+        if row.get("source_table") == "orders":
+            by_id[int(row.get("source_id") or 0)].append(row)
+    return by_id
+
+
+def _source_identity(source_id: Any, existing_by_id) -> tuple[str, dict[str, Any] | None]:
     matches = sorted(
-        (
-            dict(row) for row in existing_by_key.values()
-            if row.get("source_table") == "orders" and int(row.get("source_id") or 0) == int(source_id)
-        ),
+        existing_by_id.get(int(source_id), ()),
         key=lambda row: int(row.get("id") or 0),
     )
     if not matches:
@@ -265,9 +272,10 @@ def _candidate_hash(item: dict[str, Any]) -> str:
     ).hexdigest().upper()
 
 
-def discover_receivable_sources(conn, existing_by_key=None) -> list[dict[str, Any]]:
+def discover_receivable_sources(conn, existing_by_key=None, *, batch_id=None) -> list[dict[str, Any]]:
     """Return the full order projection without mutating the database."""
     existing_by_key = existing_by_key or {}
+    existing_by_id = _index_source_identities(existing_by_key)
     catalog = _contractor_catalog(conn)
     candidates: list[dict[str, Any]] = []
     for row in conn.execute(
@@ -280,9 +288,10 @@ def discover_receivable_sources(conn, existing_by_key=None) -> list[dict[str, An
                   ),'') batch_source_hash
            FROM orders o JOIN batches b ON b.id=o.batch_id
            LEFT JOIN kitchens k ON k.code=o.kitchen
-           ORDER BY o.batch_id,o.id"""
+           WHERE (? IS NULL OR o.batch_id=?)
+           ORDER BY o.batch_id,o.id""", (batch_id, batch_id)
     ):
-        source_key, existing = _source_identity(row["id"], existing_by_key)
+        source_key, existing = _source_identity(row["id"], existing_by_id)
         contractor_code, contractor_snapshot = _contractor_reference(
             row["contractor"], catalog=catalog, existing=existing,
         )
@@ -377,7 +386,7 @@ def _append_revision(conn, line: dict[str, Any], change_kind: str, timestamp: st
     )
 
 
-def sync_receivable_ledger(conn, *, timestamp: str) -> dict[str, int]:
+def sync_receivable_ledger(conn, *, timestamp: str, batch_id=None) -> dict[str, int]:
     """Materialize current order state and append revisions atomically with its caller."""
     if conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='receivable_ledger_lines'"
@@ -387,9 +396,11 @@ def sync_receivable_ledger(conn, *, timestamp: str) -> dict[str, int]:
         )
     existing = {
         row["source_key"]: dict(row)
-        for row in conn.execute("SELECT * FROM receivable_ledger_lines ORDER BY id")
+        for row in conn.execute("""SELECT * FROM receivable_ledger_lines
+            WHERE ? IS NULL OR batch_id=? OR (source_table='orders' AND source_id IN
+                (SELECT id FROM orders WHERE batch_id=?)) ORDER BY id""", (batch_id, batch_id, batch_id))
     }
-    candidates = discover_receivable_sources(conn, existing)
+    candidates = discover_receivable_sources(conn, existing, batch_id=batch_id)
     seen: set[str] = set()
     counters = Counter(inserted=0, updated=0, reversed=0, reactivated=0, unchanged=0)
     for candidate in candidates:
