@@ -32,6 +32,23 @@ class ReplacementStockTests(unittest.TestCase):
         self.c.execute("UPDATE invoice_inventory_effective_ledger SET qty_delta=-1")
         self.assertEqual(stock_replacement_reviews(self.c),{})
 
+    def test_price_only_replacement_keeps_quantity_and_requires_new_consent(self):
+        original=stock_replacement_reviews(self.c)[2]
+        confirm_stock_replacement(self.c,2,original['token'],True,'before')
+        self.c.execute('UPDATE outgoing_source_invoice_items SET unit_price=60,amount=120 WHERE invoice_id=2')
+        self.c.execute('UPDATE outgoing_source_invoices SET total_amount=130 WHERE id=2')
+        review=stock_replacement_reviews(self.c)[2]
+        self.assertFalse(review['confirmed'])
+        with self.assertRaises(ValueError):confirm_stock_replacement(self.c,2,original['token'],True,'after')
+        before=list(self.c.execute('SELECT * FROM invoice_inventory_effective_ledger'))
+        confirm_stock_replacement(self.c,2,review['token'],True,'after')
+        self.assertTrue(stock_replacement_reviews(self.c)[2]['confirmed'])
+        self.assertEqual(before,list(self.c.execute('SELECT * FROM invoice_inventory_effective_ledger')))
+
+    def test_blank_codes_cannot_prove_identical_goods(self):
+        self.c.execute("UPDATE outgoing_source_invoice_items SET source_item_code=''")
+        self.assertEqual(stock_replacement_reviews(self.c),{})
+
     def test_changed_quantity_is_explained_without_authorizing_stock_changes(self):
         self.c.executescript('''
         ALTER TABLE outgoing_source_invoices ADD COLUMN buyer_tax_code TEXT DEFAULT 'TAX';

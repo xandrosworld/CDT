@@ -1,0 +1,14 @@
+.replacement-dialog { width: min(900px, calc(100vw - 32px)); max-width: 900px; font-size: 16px; }
+.replacement-dialog p { margin: 12px 0; }
+.replacement-dialog h4 { margin: 16px 0 10px; }
+.replacement-changes { max-height: 230px; overflow: auto; }
+.replacement-changes article { padding: 12px; border: 1px solid #ccd9dc; border-radius: 8px; margin-bottom: 8px; }
+.replacement-amounts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 8px; }
+.replacement-dialog select { max-width: 100%; width: 100%; }
+.replacement-reason { display: block; }
+.replacement-reason textarea { display: block; width: 100%; box-sizing: border-box; min-height: 66px; margin: 6px 0 12px; }
+.replacement-confirm { display: flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
+.replacement-confirm input { flex: 0 0 auto; width: 20px; height: 20px; margin-top: 2px; }
+.replacement-dialog [data-correction-error]:empty { display: none; }
+.replacement-dialog [data-correction-error] { color: #a32626; }
+.replacement-dialog [data-save-correction] { margin-top: 14px; }

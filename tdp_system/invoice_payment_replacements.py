@@ -72,16 +72,21 @@ def verified_replacements(conn):
 
 
 def stock_replacement_reviews(conn):
-    """Only identical goods with intact old postings can retain stock once."""
+    """Same goods/quantities retain stock even when sale prices or tax change."""
     import hashlib
     from collections import Counter
     result={}
     for old_id,new_id in verified_replacements(conn).items():
         old=dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(old_id,)).fetchone())
         new=dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(new_id,)).fetchone())
-        fields=('source_item_code','source_unit','qty','unit_price','amount')
+        fields=('source_item_code','source_unit','qty')
         old_items=[dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(old_id,))]
         new_items=[dict(r) for r in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(new_id,))]
+        # An empty source code is not evidence of the same physical goods.
+        import math
+        if any(not str(r['source_item_code'] or '').strip() or
+               not math.isfinite(float(r['qty'])) or float(r['qty']) <= 0
+               for r in old_items + new_items): continue
         if not old_items or Counter(tuple(r[k] for k in fields) for r in old_items)!=Counter(tuple(r[k] for k in fields) for r in new_items):continue
         ledger=[dict(r) for r in conn.execute("SELECT * FROM invoice_inventory_effective_ledger WHERE source_invoice_table='outgoing_source_invoices' AND source_invoice_id IN (?,?) ORDER BY id",(old_id,new_id))]
         if not ledger or any(r['source_invoice_id']!=old_id or r['event_type']!='POST' or r['status']!='posted' for r in ledger):continue
