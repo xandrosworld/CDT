@@ -399,8 +399,12 @@ def issued_invoice_payment_scope(conn, contractor, date_from, date_to):
     sources = [r for r in sources if r['id'] not in matched_ids]
     # Unissued source drafts do not create a payment obligation. A local invoice
     # claiming issued against a source draft was already rejected above.
-    excluded_drafts = sum(r['source_status_class'] == 'draft' for r in sources)
-    sources = [r for r in sources if r['source_status_class'] != 'draft']
+    try:
+        from .minvoice_portal import unissued_related_document
+    except ImportError:
+        from minvoice_portal import unissued_related_document
+    excluded_drafts = sum(r['source_status_class'] == 'draft' or unissued_related_document(r) for r in sources)
+    sources = [r for r in sources if r['source_status_class'] != 'draft' and not unissued_related_document(r)]
     if not sources:
         if local:
             return local

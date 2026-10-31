@@ -1,7 +1,7 @@
 import sqlite3
 import unittest
 from unittest.mock import patch
-from .invoice_payment_replacements import stock_replacement_reviews,confirm_stock_replacement
+from .invoice_payment_replacements import stock_replacement_reviews,confirm_stock_replacement,replacement_difference_reviews
 
 class ReplacementStockTests(unittest.TestCase):
     def setUp(self):
@@ -31,6 +31,24 @@ class ReplacementStockTests(unittest.TestCase):
     def test_reversed_or_changed_stock_cannot_be_retained(self):
         self.c.execute("UPDATE invoice_inventory_effective_ledger SET qty_delta=-1")
         self.assertEqual(stock_replacement_reviews(self.c),{})
+
+    def test_changed_quantity_is_explained_without_authorizing_stock_changes(self):
+        self.c.executescript('''
+        ALTER TABLE outgoing_source_invoices ADD COLUMN buyer_tax_code TEXT DEFAULT 'TAX';
+        ALTER TABLE outgoing_source_invoices ADD COLUMN invoice_date TEXT DEFAULT '2026-10-31';
+        ALTER TABLE outgoing_source_invoice_items ADD COLUMN source_item_name TEXT DEFAULT 'Product A';
+        CREATE TABLE outgoing_buyer_profiles(contractor TEXT,tax_code TEXT);
+        INSERT INTO outgoing_buyer_profiles VALUES('NT-A','TAX');
+        UPDATE outgoing_source_invoice_items SET qty=1,amount=50 WHERE invoice_id=2;
+        ''')
+        before = self.c.serialize()
+        reviews = replacement_difference_reviews(self.c)
+        self.assertEqual(reviews[1], reviews[2])
+        self.assertEqual(reviews[2]['contractor'], 'NT-A')
+        self.assertEqual(len(reviews[2]['changes']), 1)
+        self.assertEqual((reviews[2]['changes'][0]['old_qty'], reviews[2]['changes'][0]['new_qty']), (2, 1))
+        self.assertEqual(stock_replacement_reviews(self.c), {})
+        self.assertEqual(before, self.c.serialize())
 
     def test_confirmation_survives_reinserted_details_and_download_metadata(self):
         self.c.execute('ALTER TABLE outgoing_source_invoice_items ADD COLUMN id INTEGER')

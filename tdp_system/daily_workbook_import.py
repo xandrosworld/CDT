@@ -283,6 +283,30 @@ def analyze_daily_workbook(path: Path) -> dict[str, Any]:
                     "titleDateMatches": title_date_matches,
                     "confirmAvailable": bool(rows and len(dates) == 1 and title_date_matches),
                 })
+                sheet = day_sheets[-1]
+                if rows and (len(dates) != 1 or not title_date_matches):
+                    sheet['previewIssue'] = 'work_dates_need_review'
+                    sheet['previewMessage'] = (
+                        'Trang ' + ws.title + ' có ngày giao hàng ' +
+                        ', '.join('/'.join(value.split('-')[::-1]) for value in dates) +
+                        '. Mỗi trang đơn cần một ngày khớp tên trang. Kiểm tra các ô Ngày bên dưới: '
+                        'nếu ghi nhầm, sửa đúng ngày thực tế; nếu giao nhiều ngày, tách mỗi ngày thành một trang rồi tải file đã sửa. '
+                        'Ngày làm việc dự phòng không thay ngày đã ghi trong Excel.'
+                    )
+                    sheet['dateIssueDetails'] = []
+                    for row_index in range(header_row + 1, min(ws.max_row, header_row + 2000) + 1):
+                        cell = ws.cell(row_index, mapping['date'])
+                        value = _as_date(cell.value)
+                        if not value:
+                            continue
+                        if title_match and int(value[8:10]) == day and int(value[5:7]) == month:
+                            continue
+                        sheet['dateIssueDetails'].append({
+                            'row': row_index, 'cells': [cell.coordinate], 'workDate': value,
+                            'code': str(ws.cell(row_index, mapping['product_code']).value or '') if 'product_code' in mapping else '',
+                            'kitchen': str(ws.cell(row_index, mapping['kitchen']).value or ''),
+                            'errors': ['Ngày ' + '/'.join(value.split('-')[::-1]) + ' cần kiểm tra với trang ' + ws.title],
+                        })
             elif purchase_required:
                 purchase_sheets.append({
                     "name": ws.title,

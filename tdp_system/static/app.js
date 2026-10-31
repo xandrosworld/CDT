@@ -5159,7 +5159,7 @@
       var warnings = rows.filter(function(row) { return row.warnings && row.warnings.length; });
       var reasons = {
         row_count_mismatch:'Số dòng đọc được khác số dòng trong trang. Kiểm tra hàng tiêu đề và các dòng có số lượng.',
-        customer_scope_must_be_loaded_first:'Cần nhập trang đơn khách trước khi cập nhật trang đặt hàng.',
+        customer_scope_must_be_loaded_first:'Trang đặt hàng sẽ nhập sau khi lưu trang đơn khách. Hãy xử lý phần Trang Excel cần nhập ở trên trước.',
         customer_scope_conflict:'Có dòng đơn đã liên kết chứng từ bị bỏ khỏi file. Giữ lại dòng đó hoặc đối chiếu chứng từ trước khi thay đơn.',
         customer_scope_locked:'Đơn bán/giao đã chốt hoặc đã liên kết chứng từ. Có thể chọn riêng trang đặt hàng bên dưới để bổ sung công nợ phải trả; chứng từ và kho đã ghi được giữ nguyên.',
         workday_finalized:'Ngày này đã chốt. Cần kiểm tra chứng từ đã liên kết trước khi thay dữ liệu.',
@@ -5173,7 +5173,7 @@
       var reason=sheet.previewMessage || reasons[sheet.previewIssue] || '';
       if(!errors.length && !warnings.length && !reason) return '';
       return '<div class="form-field span-4 import-issue-details"><h4>Trang '+esc(sheet.name)+'</h4>'+
-        (reason?'<p class="error-summary">'+esc(reason)+'</p>':'')+
+        (reason?'<p class="'+(sheet.previewIssue==='customer_scope_must_be_loaded_first'?'code-note':'error-summary')+'">'+esc(reason)+'</p>':'')+
         (errors.length?'<p><strong>Sửa '+errors.length+' dòng dưới đây trong file Excel, lưu file rồi tải lại.</strong> Số dòng là số ở mép trái của Excel.</p>'+table(errors,'errors'):'')+
         (warnings.length?'<details><summary>'+warnings.length+' dòng cảnh báo · không chặn nhập</summary>'+table(warnings,'warnings')+'</details>':'')+'</div>';
     }).join('') : '';
@@ -9148,6 +9148,20 @@
       }
     }
     if (action === "view-invoice-receipt-summary") { showInvoiceReceiptSummary(button.dataset.id); return; }
+    if (action === 'review-output-replacement-difference') {
+      var changedInvoice=(state.invoiceListing?.items||[]).find(function(r){return String(r.id)===button.dataset.id;});
+      var difference=changedInvoice?.replacement_difference;if(!difference)return;
+      var differenceDialog=document.createElement('dialog');differenceDialog.className='invoice-identity-dialog';differenceDialog.setAttribute('aria-label','Chênh lệch hóa đơn thay thế');
+      differenceDialog.innerHTML='<h3>Chênh lệch hóa đơn thay thế</h3><p>'+esc(difference.buyer)+'</p><p>Hóa đơn '+esc(difference.new_number)+' thay thế '+esc(difference.old_number)+'. Tổng cũ: '+money(difference.old_total)+' · Tổng mới: '+money(difference.new_total)+'.</p><div class="table-wrap"><table><thead><tr><th>Mặt hàng</th><th>ĐVT</th><th>Lượng cũ</th><th>Lượng mới</th><th>Tiền cũ</th><th>Tiền mới</th></tr></thead><tbody>'+difference.changes.map(function(r){return '<tr><td>'+esc(r.code+' · '+r.name)+'</td><td>'+esc(r.unit)+'</td><td>'+n(r.old_qty)+'</td><td>'+n(r.new_qty)+'</td><td>'+money(r.old_amount)+'</td><td>'+money(r.new_amount)+'</td></tr>';}).join('')+'</tbody></table></div><p><strong>Đề nghị thanh toán:</strong> tính hóa đơn '+esc(difference.new_number)+' một lần, không cộng hóa đơn '+esc(difference.old_number)+'. Có thể lập thanh toán trong khi đối chiếu kho.</p><p><strong>Kho chưa được điều chỉnh.</strong> Cần xác định đây là sửa lượng ghi nhầm, nhận hàng trả lại hay chỉ sửa tiền. Không hoàn tác toàn bộ hóa đơn cũ chỉ để bỏ màu đỏ.</p><button type="button" class="btn btn-primary" data-difference-payment>Mở Đề nghị thanh toán</button> <button type="button" class="btn btn-outline" data-difference-close>Đóng</button>';
+      document.body.appendChild(differenceDialog);differenceDialog.showModal();
+      differenceDialog.querySelector('[data-difference-close]').onclick=function(){differenceDialog.close();};
+      differenceDialog.addEventListener('close',function(){differenceDialog.remove();});
+      differenceDialog.querySelector('[data-difference-payment]').onclick=function(){
+        state.paymentFilters={contractor:difference.contractor,from:state.invoiceListing.date_from||difference.date_from,to:state.invoiceListing.date_to||difference.date_to};
+        state.invoicePaymentScope=null;differenceDialog.close();navigate('payment-request');
+      };
+      return;
+    }
     if (action === 'review-output-replacement') {
       var replacementInvoice=(state.invoiceListing?.items||[]).find(function(r){return String(r.id)===button.dataset.id;});
       var replacement=replacementInvoice?.replacement_review;if(!replacement)return;

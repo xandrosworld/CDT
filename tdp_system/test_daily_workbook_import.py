@@ -399,6 +399,23 @@ class DailyWorkbookImportTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.json)
         self.assertEqual(result.json['orders'][0]['note'], first['orders'][0]['note'])
 
+    def test_mixed_dates_explain_exact_cells_and_preserve_source_dates(self):
+        wb = load_workbook(io.BytesIO(self.workbook_bytes()))
+        wb['01.09']['A4'] = date(2026, 9, 2)
+        stream = io.BytesIO(); wb.save(stream); wb.close()
+        result = self.analyze_api(stream.getvalue())
+        day = next(s for s in result['sheets'] if s['name'] == '01.09')
+        self.assertFalse(day['confirmAvailable'])
+        self.assertEqual(day['previewIssue'], 'work_dates_need_review')
+        self.assertIn('02/09/2026', day['previewMessage'])
+        self.assertEqual(day['dateIssueDetails'][0]['cells'], ['A4'])
+        self.assertEqual(day['dateIssueDetails'][0]['workDate'], '2026-09-02')
+        self.assertGreaterEqual(day['errorRows'], 1)
+        pending = server.PENDING_IMPORTS[result['token']]
+        source = load_workbook(pending['path'], data_only=True)
+        self.assertEqual(source['01.09']['A4'].value.date(), date(2026, 9, 2))
+        source.close()
+
     def test_structure_first_analyzer_never_serializes_reference_values(self):
         secret = "CCCD-DO-NOT-SERIALIZE"
         path = Path(self.temp.name) / "structure.xlsx"

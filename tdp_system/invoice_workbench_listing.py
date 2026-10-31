@@ -39,6 +39,8 @@ LINE_LABELS = {
 
 
 def invoice_state(invoice, direction):
+    if direction == 'output' and invoice.get('unissued_related_document'):
+        return 'draft'
     replacement=invoice.get('replacement_review') or {}
     if direction=='output' and replacement.get('confirmed'):
         return 'posted' if invoice['id']==replacement['old_id'] else 'not_inventory'

@@ -1113,12 +1113,22 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
     except ImportError:
         from invoice_payment_replacements import stock_replacement_reviews
     replacements=stock_replacement_reviews(conn)
+    try:
+        from .invoice_payment_replacements import replacement_difference_reviews
+    except ImportError:
+        from invoice_payment_replacements import replacement_difference_reviews
+    replacement_differences = replacement_difference_reviews(conn)
     adjustments = {tenant:adjustment_reviews(conn,tenant) for tenant in {r['tenant'] for r in rows}}
     missing = {r['invoice_id']: dict(r) for r in conn.execute('SELECT * FROM outgoing_missing_drafts')}
     missing_drafts = []
     items = []
     for row in rows:
         invoice = dict(row)
+        try:
+            from .minvoice_portal import unissued_related_document
+        except ImportError:
+            from minvoice_portal import unissued_related_document
+        invoice['unissued_related_document'] = unissued_related_document(invoice)
         if (row['id'] in missing and row['source_status_class'] == 'draft'
                 and row['stock_status'] == 'blocked' and not row['invoice_number']):
             missing_drafts.append({k: invoice[k] for k in
@@ -1171,6 +1181,7 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
                 invoice['stock_status'] = 'pending_mapping'
         annotate_adjustment(invoice,adjustments[row['tenant']].get(row['id']))
         invoice['replacement_review']=replacements.get(row['id'])
+        invoice['replacement_difference']=replacement_differences.get(row['id'])
         items.append(invoice)
     return {
         "batch_id": int(batch_id) if batch_id is not None else None,

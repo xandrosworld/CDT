@@ -65,6 +65,21 @@ def portal_document_role(remote):
             5:'adjusted_original',6:'replaced_original'}.get(code,'unknown')
 
 
+def unissued_related_document(invoice):
+    """Only an unsigned, unnumbered portal related draft can be excluded."""
+    try:
+        raw = json.loads(invoice['raw_json'])
+        return (invoice['source'] == 'minvoice'
+                and invoice['stock_status'] == 'blocked'
+                and not str(invoice['invoice_number'] or '').strip()
+                and raw.get('_tdp_source_contract') == 'minvoice_portal_v1'
+                and type(raw.get('invoiceStatus')) is int and raw['invoiceStatus'] in (2, 3)
+                and type(raw.get('sendTaxStatus')) is int and raw['sendTaxStatus'] in (0, 1)
+                and not raw.get('invoiceNumber') and not raw.get('dateSign'))
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
 class MinvoicePortalClient(PortalDrafts, MinvoiceClient):
     def __init__(self, config, timeout=25):
         super().__init__(config, timeout)

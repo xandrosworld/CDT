@@ -102,6 +102,41 @@ def stock_replacement_reviews(conn):
     return result
 
 
+def replacement_difference_reviews(conn):
+    """Explain changed goods separately from payment eligibility and stock consent."""
+    result = {}
+    for old_id, new_id in verified_replacements(conn).items():
+        old = dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?', (old_id,)).fetchone())
+        new = dict(conn.execute('SELECT * FROM outgoing_source_invoices WHERE id=?', (new_id,)).fetchone())
+        def grouped(invoice_id):
+            groups = {}
+            for row in conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index', (invoice_id,)):
+                key = (row['source_item_code'], row['source_item_name'], row['source_unit'])
+                item = groups.setdefault(key, {'code': key[0], 'name': key[1], 'unit': key[2], 'qty': 0, 'amount': 0})
+                item['qty'] += row['qty']
+                item['amount'] += row['amount']
+            return groups
+        before, after = grouped(old_id), grouped(new_id)
+        changes = []
+        for key in sorted(before.keys() | after.keys()):
+            a, b = before.get(key), after.get(key)
+            qa, qb = (a or {}).get('qty', 0), (b or {}).get('qty', 0)
+            aa, ab = (a or {}).get('amount', 0), (b or {}).get('amount', 0)
+            if abs(qa - qb) > 1e-8 or abs(aa - ab) > 1e-8:
+                changes.append({**(a or b), 'old_qty': qa, 'new_qty': qb, 'old_amount': aa, 'new_amount': ab})
+        if not changes:
+            continue
+        parties = [r[0] for r in conn.execute('SELECT contractor FROM outgoing_buyer_profiles WHERE tax_code=?', (new['buyer_tax_code'],))]
+        review = {'old_id': old_id, 'new_id': new_id, 'old_number': old['invoice_number'],
+                  'new_number': new['invoice_number'], 'buyer': new['buyer_name'],
+                  'old_total': old['total_amount'], 'new_total': new['total_amount'],
+                  'changes': changes, 'contractor': parties[0] if len(parties) == 1 else '',
+                  'date_from': old['invoice_date'], 'date_to': new['invoice_date']}
+        result[old_id] = review
+        result[new_id] = review
+    return result
+
+
 def confirm_stock_replacement(conn,invoice_id,expected,confirmed,timestamp):
     if confirmed is not True:raise ValueError('Cần xác nhận không giao thêm hoặc nhận trả hàng trước khi giữ nguyên kho.')
     review=stock_replacement_reviews(conn).get(invoice_id)

@@ -1700,6 +1700,9 @@ def strict_daily_preview(path: Path, source_name: str = "", *, continuous=False)
         sheet["errorRows"] = sum(bool(item.get("errors")) for item in orders)
         sheet["warningRows"] = sum(bool(item.get("warnings")) for item in orders)
         sheet["issueDetails"] = issue_details(orders)
+        if sheet.get('dateIssueDetails'):
+            sheet['issueDetails'].extend(sheet['dateIssueDetails'])
+            sheet['errorRows'] = len({r['row'] for r in sheet['issueDetails'] if r.get('errors')})
         sheet["writeScope"] = "customer_orders"
         if skipped or len(orders) != int(sheet.get("rows") or 0):
             sheet["confirmAvailable"] = False

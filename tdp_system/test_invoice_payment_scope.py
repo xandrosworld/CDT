@@ -530,6 +530,26 @@ class InvoicePaymentScopeTests(unittest.TestCase):
         self.assertEqual(scope['totals']['total_amount'], 216)
         self.assertEqual(scope['excluded_draft_count'], 1)
 
+    def test_unsigned_unnumbered_adjustment_does_not_block_payment_but_signed_one_does(self):
+        with server.db() as conn:
+            self.add_direct_source(conn)
+            draft = self.add_direct_source(conn, invoice_number='', status_class='adjusted',
+                                          sync_status='reconcile_required', stock_status='blocked')
+            raw = {'_tdp_source_contract':'minvoice_portal_v1','invoiceStatus':2,
+                   'sendTaxStatus':1,'invoiceNumber':None,'dateSign':None}
+            conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?', (json.dumps(raw), draft))
+            before = conn.serialize()
+        response = self.scope()
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json['excluded_draft_count'], 1)
+        self.assertEqual(response.json['totals']['total_amount'], 216)
+        with server.db() as conn:
+            self.assertEqual(before, conn.serialize())
+        for changes in ({'dateSign':'2026-09-03'}, {'invoiceNumber':12}, {'sendTaxStatus':4}, {'invoiceStatus':5}):
+            with server.db() as conn:
+                conn.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?', (json.dumps({**raw, **changes}), draft))
+            self.assertEqual(self.scope().status_code, 409, changes)
+
     def test_source_scope_blocks_uncertain_status_buyer_and_changed_totals(self):
         with server.db() as conn:
             source_id = self.add_direct_source(conn)
