@@ -9153,7 +9153,27 @@
       var difference=changedInvoice?.replacement_difference;if(!difference)return;
       var differenceDialog=document.createElement('dialog');differenceDialog.className='invoice-identity-dialog';differenceDialog.setAttribute('aria-label','Chênh lệch hóa đơn thay thế');
       differenceDialog.innerHTML='<h3>Chênh lệch hóa đơn thay thế</h3><p>'+esc(difference.buyer)+'</p><p>Hóa đơn '+esc(difference.new_number)+' thay thế '+esc(difference.old_number)+'. Tổng cũ: '+money(difference.old_total)+' · Tổng mới: '+money(difference.new_total)+'.</p><div class="table-wrap"><table><thead><tr><th>Mặt hàng</th><th>ĐVT</th><th>Lượng cũ</th><th>Lượng mới</th><th>Tiền cũ</th><th>Tiền mới</th></tr></thead><tbody>'+difference.changes.map(function(r){return '<tr><td>'+esc(r.code+' · '+r.name)+'</td><td>'+esc(r.unit)+'</td><td>'+n(r.old_qty)+'</td><td>'+n(r.new_qty)+'</td><td>'+money(r.old_amount)+'</td><td>'+money(r.new_amount)+'</td></tr>';}).join('')+'</tbody></table></div><p><strong>Đề nghị thanh toán:</strong> tính hóa đơn '+esc(difference.new_number)+' một lần, không cộng hóa đơn '+esc(difference.old_number)+'. Có thể lập thanh toán trong khi đối chiếu kho.</p><p><strong>Kho chưa được điều chỉnh.</strong> Cần xác định đây là sửa lượng ghi nhầm, nhận hàng trả lại hay chỉ sửa tiền. Không hoàn tác toàn bộ hóa đơn cũ chỉ để bỏ màu đỏ.</p><button type="button" class="btn btn-primary" data-difference-payment>Mở Đề nghị thanh toán</button> <button type="button" class="btn btn-outline" data-difference-close>Đóng</button>';
+      var correction=changedInvoice.quantity_correction;
+      if(correction?.confirmed){
+        differenceDialog.innerHTML=differenceDialog.innerHTML.replace('<strong>Kho chưa được điều chỉnh.</strong> Cần xác định đây là sửa lượng ghi nhầm, nhận hàng trả lại hay chỉ sửa tiền. Không hoàn tác toàn bộ hóa đơn cũ chỉ để bỏ màu đỏ.','<strong>Đã sửa số lượng ghi nhầm.</strong> Kho dùng lượng thực giao trên hóa đơn thay thế tại ngày giao ban đầu. Hóa đơn gốc và lịch sử vẫn giữ nguyên. Không ghi nhận hàng trả lại, không xuất thêm lần nữa.');
+      }else if(correction){
+        differenceDialog.innerHTML+='<hr><h4>Sửa lượng ghi nhầm ban đầu</h4><p>Chỉ dùng khi thực tế giao lượng mới từ đầu. Không dùng nếu đã giao đủ rồi nhận hàng trả lại.</p><p>'+correction.changes.map(function(r){return esc(r.product_code)+': '+n(r.old_qty)+' → '+n(r.new_qty)+' '+esc(r.unit)+' · ngày giao '+esc(dateVN(r.date));}).join('<br>')+'</p><label>Lý do sửa số lượng<textarea data-correction-reason maxlength="500" class="input-date">Hóa đơn cũ ghi thừa số lượng; hóa đơn thay thế ghi đúng lượng thực giao ban đầu.</textarea></label><label><input type="checkbox" data-correction-confirm> Tôi xác nhận lượng mới là lượng thực giao từ đầu, không phải hàng trả lại; đồng ý sửa lượng xuất kho tại ngày giao ban đầu.</label><p role="alert" data-correction-error></p><button type="button" class="btn btn-primary" data-save-correction disabled>Xác nhận sửa lượng xuất ghi nhầm</button>';
+      }
       document.body.appendChild(differenceDialog);differenceDialog.showModal();
+      var correctionCheck=differenceDialog.querySelector('[data-correction-confirm]'),correctionSave=differenceDialog.querySelector('[data-save-correction]');
+      if(correctionCheck){
+        correctionCheck.onchange=function(){correctionSave.disabled=!correctionCheck.checked;};
+        correctionSave.onclick=async function(){
+          var reasonField=differenceDialog.querySelector('[data-correction-reason]');
+          if(!reasonField.value.trim()){differenceDialog.querySelector('[data-correction-error]').textContent='Điền Lý do sửa số lượng.';reasonField.focus();return;}
+          correctionSave.disabled=true;
+          try{
+            await api('/api/invoice-workbench/output-replacements/'+changedInvoice.id+'/correct-original-quantity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected:correction.token,confirmed:correctionCheck.checked,reason:differenceDialog.querySelector('[data-correction-reason]').value})});
+            state.inventoryValuation=null;state.inventoryMonthClose=null;state.outgoingReadiness=null;state.invoicePaymentScope=null;
+            await refreshSavedInvoiceMapping('output','');differenceDialog.close();showToast('Đã sửa lượng xuất ghi nhầm. Giữ lịch sử, không xuất thêm lần nữa.');
+          }catch(error){differenceDialog.querySelector('[data-correction-error]').textContent=error.message;correctionSave.disabled=!correctionCheck.checked;}
+        };
+      }
       differenceDialog.querySelector('[data-difference-close]').onclick=function(){differenceDialog.close();};
       differenceDialog.addEventListener('close',function(){differenceDialog.remove();});
       differenceDialog.querySelector('[data-difference-payment]').onclick=function(){

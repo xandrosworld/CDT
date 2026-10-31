@@ -1118,6 +1118,11 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
     except ImportError:
         from invoice_payment_replacements import replacement_difference_reviews
     replacement_differences = replacement_difference_reviews(conn)
+    try:
+        from .invoice_replacement_correction import quantity_correction_reviews
+    except ImportError:
+        from invoice_replacement_correction import quantity_correction_reviews
+    quantity_corrections = quantity_correction_reviews(conn)
     adjustments = {tenant:adjustment_reviews(conn,tenant) for tenant in {r['tenant'] for r in rows}}
     missing = {r['invoice_id']: dict(r) for r in conn.execute('SELECT * FROM outgoing_missing_drafts')}
     missing_drafts = []
@@ -1182,6 +1187,10 @@ def output_invoice_payload(conn, batch_id: int | None = None, *, invoice_ids=Non
         annotate_adjustment(invoice,adjustments[row['tenant']].get(row['id']))
         invoice['replacement_review']=replacements.get(row['id'])
         invoice['replacement_difference']=replacement_differences.get(row['id'])
+        correction = quantity_corrections.get(row['id'])
+        invoice['quantity_correction'] = correction
+        if correction and correction['confirmed']:
+            invoice['replacement_review'] = correction
         items.append(invoice)
     return {
         "batch_id": int(batch_id) if batch_id is not None else None,
