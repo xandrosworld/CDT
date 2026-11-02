@@ -4,6 +4,9 @@
 .output-stock-web [data-history] .card { margin: 12px 0; padding: 12px; }
 .output-stock-web [data-history] summary { cursor: pointer; }
 .output-stock-web section.card { margin-top: 18px; padding: 18px; }
+.output-stock-web [data-availability] .table-wrap { max-height: 260px; overflow: auto; margin: 12px 0; }
+.output-stock-web [data-availability] summary { cursor: pointer; padding: 10px 0; }
+.output-stock-web [data-availability]:focus { outline: 3px solid #008577; outline-offset: 2px; }
 .output-stock-web [data-edit] { display: grid; gap: 12px; }
 .output-stock-web label { display: block; margin: 10px 0; }
 .output-stock-web label input:not([type=checkbox]),
@@ -17,3 +20,8 @@
 .output-stock-web .stock-cause-totals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .output-stock-web .stock-cause-totals strong { display: block; }
 @media(max-width: 640px) { .output-stock-web .stock-cause-totals { grid-template-columns: repeat(2, 1fr); } }
+
+.output-stock-web .stock-hold-action { border: 2px solid #008577; border-radius: 12px; padding: 16px; margin: 12px 0; background: #f2faf7; }
+.output-stock-web .stock-hold-action h4 { margin: 0 0 10px; }
+.output-stock-web .stock-hold-action [data-release-hold] { min-height: 48px; font-size: 16px; }
+.output-stock-web .stock-hold-help { font-size: 14px; }

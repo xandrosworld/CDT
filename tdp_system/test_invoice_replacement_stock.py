@@ -102,3 +102,40 @@ class ReplacementStockTests(unittest.TestCase):
         confirm_stock_replacement(self.c,2,review['token'],True,'now')
         self.c.execute("UPDATE outgoing_source_invoice_items SET product_code='B' WHERE invoice_id=1")
         self.assertEqual(stock_replacement_reviews(self.c),{})
+
+    def shifted_identity(self):
+        self.c.executescript("""
+        CREATE TABLE products(code TEXT,name TEXT,unit TEXT);
+        INSERT INTO products VALUES('A','Gạo BC','kg');
+        ALTER TABLE outgoing_source_invoice_items ADD COLUMN source_item_name TEXT DEFAULT 'Gạo BC';
+        UPDATE outgoing_source_invoice_items SET source_item_code='I000140',source_item_name='A',source_unit='Gạo BC' WHERE invoice_id=1;
+        UPDATE outgoing_source_invoice_items SET source_unit='kg' WHERE invoice_id=2;
+        """)
+
+    def test_shifted_identity_requires_consent_keeps_posted_stock_and_source(self):
+        self.shifted_identity()
+        before=[tuple(r) for r in self.c.execute('SELECT * FROM outgoing_source_invoice_items')]
+        ledger=[tuple(r) for r in self.c.execute('SELECT * FROM invoice_inventory_effective_ledger')]
+        review=stock_replacement_reviews(self.c)[2]
+        self.assertEqual('A',review['identity_correction'][0]['product_code'])
+        self.assertFalse(review['confirmed'])
+        with self.assertRaises(ValueError):confirm_stock_replacement(self.c,2,review['token'],False,'now')
+        confirm_stock_replacement(self.c,2,review['token'],True,'now')
+        confirm_stock_replacement(self.c,2,review['token'],True,'now')
+        self.assertTrue(stock_replacement_reviews(self.c)[2]['confirmed'])
+        self.assertEqual(1,self.c.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0])
+        self.assertEqual(before,[tuple(r) for r in self.c.execute('SELECT * FROM outgoing_source_invoice_items')])
+        self.assertEqual(ledger,[tuple(r) for r in self.c.execute('SELECT * FROM invoice_inventory_effective_ledger')])
+        self.c.execute("UPDATE products SET unit='Tấn'")
+        self.assertEqual({},stock_replacement_reviews(self.c))
+
+    def test_shifted_identity_does_not_guess_code_quantity_or_conversion(self):
+        self.shifted_identity()
+        for sql in ("UPDATE outgoing_source_invoice_items SET source_item_code='B' WHERE invoice_id=2",
+                    "UPDATE outgoing_source_invoice_items SET qty=3 WHERE invoice_id=2",
+                    "UPDATE outgoing_source_invoice_items SET source_unit='Tấn' WHERE invoice_id=2",
+                    "UPDATE outgoing_source_invoice_items SET stock_qty=3 WHERE invoice_id=1"):
+            self.c.execute('SAVEPOINT scenario')
+            self.c.execute(sql)
+            self.assertEqual({},stock_replacement_reviews(self.c),sql)
+            self.c.execute('ROLLBACK TO scenario');self.c.execute('RELEASE scenario')

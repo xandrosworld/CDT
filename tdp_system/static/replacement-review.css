@@ -12,3 +12,6 @@
 .replacement-dialog [data-correction-error]:empty { display: none; }
 .replacement-dialog [data-correction-error] { color: #a32626; }
 .replacement-dialog [data-save-correction] { margin-top: 14px; }
+
+.invoice-identity-dialog .replacement-identity-table { width: 100%; min-width: 0 !important; table-layout: fixed; }
+.invoice-identity-dialog .replacement-identity-table th, .invoice-identity-dialog .replacement-identity-table td { white-space: normal; overflow-wrap: anywhere; }

@@ -35,7 +35,7 @@ class InvoicePendingViewTests(unittest.TestCase):
             before = conn.serialize()
         data = self.get().get_json()
         self.assertEqual((data['rows'][0]['unissued_qty'],data['rows'][0]['ready_qty'],data['pending_rows'][0]['waiting_qty']), (10,4,6))
-        self.assertIn('Chưa đủ tồn',data['pending_rows'][0]['pending_reason'])
+        self.assertIn('Chưa đủ cho phần còn lại',data['pending_rows'][0]['pending_reason'])
         response = self.get('-template.zip',portion='waiting')
         with zipfile.ZipFile(io.BytesIO(response.data)) as z:
             names = [n for n in z.namelist() if n.startswith('CON_CHO_')]
@@ -44,7 +44,7 @@ class InvoicePendingViewTests(unittest.TestCase):
             self.assertEqual(book.active.max_column,13)
             self.assertEqual(book.active['D2'].value,6)
             self.assertEqual(book['Chi tiet don']['F2'].value,6)
-            self.assertIn('Chưa đủ tồn',book['Chi tiet don']['J2'].value)
+            self.assertEqual(book['Chi tiet don']['J2'].value,data['pending_rows'][0]['pending_reason'])
             self.assertEqual(len([n for n in z.namelist() if n.endswith('.xlsx')]),1)
             book.close()
             self.assertIn('Tải bảng kê để up M-Invoice',z.read('HUONG_DAN.txt').decode('utf-8-sig'))
@@ -95,7 +95,19 @@ class InvoicePendingViewTests(unittest.TestCase):
         with server.db() as conn:
             conn.execute("UPDATE orders SET unit='Kg'")
             refresh_waiting(conn,server.now_iso())
-        self.assertIn('Chưa đủ tồn',self.get().get_json()['pending_rows'][0]['pending_reason'])
+        ready=self.get().get_json()
+        self.assertEqual(ready['pending_rows'],[])
+        self.assertEqual(ready['details'][0]['ready_qty'],2)
+
+    def test_taxable_goods_require_stock_unless_explicitly_bk(self):
+        # Use a fresh taxable order, without an existing KKKNT draft allocation.
+        with server.db() as conn:
+            self.add_batch(conn,'2026-09-01',[{'qty':2}])
+            conn.execute("UPDATE orders SET tax='8%'")
+            refresh_waiting(conn,server.now_iso())
+        pending=self.get().get_json()['pending_rows'][0]
+        self.assertEqual(pending['waiting_qty'],2)
+        self.assertIn('Chưa đủ cho phần còn lại',pending['pending_reason'])
         with server.db() as conn:
             conn.execute('UPDATE orders SET purchase_list=1')
             refresh_waiting(conn,server.now_iso())

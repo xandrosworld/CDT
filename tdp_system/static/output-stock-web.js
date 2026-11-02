@@ -27,6 +27,7 @@ window.TdpOutputStockWeb = function (options) {
     if (name === 'reload') { el('[data-reload]').focus(); return; }
     if (name === 'period') { el('[data-period]')?.click(); return; }
     if (name === 'supplement') { el('[data-supplement]')?.click(); return; }
+    if (name === 'availability') { const box = el('[data-availability]'); if (box) { box.scrollIntoView({block:'center'}); box.focus(); } return; }
     const target = field(name); if (target) { target.scrollIntoView({block:'center'}); target.focus(); }
   }
   function issues(items) {
@@ -35,7 +36,7 @@ window.TdpOutputStockWeb = function (options) {
     const box = (items.some(item => item.field === 'actor' || item.field === 'confirmed') ? el('[data-confirm-issues]') : el('[data-edit-issues]')) || el('[data-issues]');
     box.innerHTML = items.map((item, i) => '<p class="error-summary">' + esc(item.message) +
       ' <button type="button" class="btn btn-outline" data-fix="' + i + '">' +
-      esc(item.field === 'reload' ? 'Cập nhật số liệu' : item.field === 'dates' ? 'Sửa khoảng ngày' : item.field === 'period' ? 'Mở kỳ kho' : 'Sửa tại đây') + '</button></p>').join('');
+      esc(item.field === 'availability' ? 'Xem tồn và dự thảo' : item.field === 'reload' ? 'Cập nhật số liệu' : item.field === 'dates' ? 'Sửa khoảng ngày' : item.field === 'period' ? 'Mở kỳ kho' : 'Sửa tại đây') + '</button></p>').join('');
     items.forEach(item => field(item.field)?.setAttribute('aria-invalid', 'true'));
     box.querySelectorAll('[data-fix]').forEach(button => button.onclick = () => {
       const target = items[Number(button.dataset.fix)].field;
@@ -47,8 +48,74 @@ window.TdpOutputStockWeb = function (options) {
     busy = value;
     dialog.querySelectorAll('button,input,select').forEach(control => { control.disabled = value; });
     if (!value && el('[data-confirm]')) el('[data-confirm]').disabled = !field('confirmed').checked;
+    if (!value && el('[data-release-confirm]')) el('[data-release-confirm]').disabled = !field('release_confirmed').checked;
   }
-  function invalidate() { preview = null; el('[data-preview]').innerHTML = ''; issues([]); }
+  function invalidate() { preview = null; el('[data-preview]').innerHTML = ''; el('[data-availability]')?.remove(); issues([]); }
+  function renderAvailability(info) {
+    if (!info) return;
+    const box = document.createElement('section'); box.className = 'card'; box.dataset.availability = ''; box.tabIndex = -1;
+    const unit = esc(info.unit);
+    box.innerHTML = '<h4>Tồn có thể dùng để sửa · ' + esc(info.product_code) + '</h4><p>Tồn cuối kỳ: <b>' + qty(info.closing_qty) + ' ' + unit + '</b>. Dự thảo đang giữ: <b>' + qty(info.reserved_qty) + ' ' + unit + '</b>.</p>' +
+      '<details class="stock-hold-calculation"><summary>Chi tiết cách tính tồn</summary><p>Tồn thấp nhất từ cuối kỳ trở đi: ' + qty(info.minimum_qty) + ' ' + unit + '. Hóa đơn đã ghi nhận phát hành, chờ đối chiếu vào sổ kho: ' + qty(info.pending_qty) + ' ' + unit + '.</p></details>' +
+      '<p><b>Có thể dùng để sửa tối đa: ' + qty(info.available_qty) + ' ' + unit + '</b> (đồng thời không vượt phần còn âm và lượng của Dòng xuất cần sửa).</p>' +
+      (info.holds_enforced === false ? '<p>Mặt hàng KKKNT áp dụng quy tắc riêng: phần sửa này chỉ giới hạn theo tồn cuối kỳ, không trừ lượng dự thảo đang giữ.</p>' : '') +
+      (info.holds || []).map(hold => '<section class="stock-hold-action" data-hold="' + hold.id + '"><h4>Dự thảo #' + hold.id + ' · ' + esc(hold.contractor) + '</h4>' +
+        '<p>Ngày ' + esc(hold.invoice_date) + ' · Đang giữ <b>' + qty(hold.qty) + ' ' + unit + '</b> của mặt hàng <b>' + esc(info.product_code) + '</b>.</p>' +
+        (hold.can_cancel ? '<p><b>Bước tiếp theo:</b> Nếu dự thảo chưa phát hành và không còn dùng mặt hàng này, bấm nút dưới để xem trước. Các mặt hàng khác được giữ lại.</p><button type="button" class="btn btn-primary" data-release-hold="' + hold.id + '">Bỏ riêng mặt hàng này</button><p class="stock-hold-help">Bấm nút chỉ mở bước xem trước, chưa thay đổi dự thảo hoặc kho.</p>' : '<p>Dự thảo đã gửi hoặc đang đối chiếu với M-Invoice; cần xử lý tại phần hóa đơn, không thể bỏ mặt hàng tại đây.</p>') +
+        '<details><summary>Xem toàn bộ ' + hold.line_count + ' dòng của dự thảo và cách hủy toàn bộ</summary>' +
+        '<div class="table-wrap"><table><thead><tr><th>Mã / tên hàng</th><th>Số lượng</th></tr></thead><tbody>' + hold.lines.map(line => '<tr><td>' + esc(line.product_code + ' · ' + line.product_name) + '</td><td>' + qty(line.qty) + ' ' + esc(line.unit) + '</td></tr>').join('') + '</tbody></table></div>' +
+        (hold.can_cancel ? '<p>Chỉ hủy toàn bộ nếu không còn dùng tất cả ' + hold.line_count + ' dòng. File cũ không được tiếp tục dùng để phát hành.</p><button type="button" class="btn btn-outline" data-cancel-hold="' + hold.id + '">Hủy dự thảo #' + hold.id + ' không còn dùng…</button>' : '') + '</details></section>').join('') + '<div data-release-review></div>';
+    el('[data-edit]').insertBefore(box, el('[data-edit] .stock-save-actions'));
+    box.querySelectorAll('[data-release-hold]').forEach(button => button.onclick = async () => {
+      if (busy) return;
+      working(true);
+      const review = el('[data-release-review]');
+      try {
+        const plan = await api('/api/inventory/output-remap/release-product/preview', post({draft_id:Number(button.dataset.releaseHold),product_code:info.product_code}));
+        const rows = list => list.map(line => '<tr><td>' + esc(line.product_code + ' · ' + line.product_name) + '</td><td>' + qty(line.qty) + ' ' + esc(line.unit) + '</td></tr>').join('');
+        review.innerHTML = '<section class="card" tabindex="-1"><h4>Xem trước: bỏ riêng ' + esc(plan.product_code) + ' khỏi dự thảo #' + plan.draft_id + '</h4>' +
+          '<p><b>Chưa thay đổi dữ liệu.</b> Bỏ các dòng sau và giải phóng lượng đang giữ:</p><table><thead><tr><th>Mặt hàng bỏ khỏi dự thảo</th><th>Số lượng</th></tr></thead><tbody>' + rows(plan.removed) + '</tbody></table>' +
+          '<details><summary>Giữ lại ' + plan.kept.length + ' dòng khác · Bấm để đối chiếu</summary><div class="table-wrap"><table><thead><tr><th>Mặt hàng giữ lại</th><th>Số lượng</th></tr></thead><tbody>' + rows(plan.kept) + '</tbody></table></div></details>' +
+          '<p>Dự thảo cũ được lưu trong lịch sử. ' + (plan.kept.length ? 'Các dòng giữ lại được chuyển sang dự thảo mới, giữ nguyên số lượng, đơn giá, ngày và liên kết đơn gốc. ' : '') +
+          'Không dùng lại file đã tải của dự thảo cũ; cần kiểm tra và tải file mới nếu tiếp tục lập hóa đơn.</p>' +
+          '<p>Thao tác này không xác nhận đã xuất hóa đơn hay đã thanh toán. Đơn gốc vẫn còn; lần lập dự thảo tiếp theo có thể chọn lại mặt hàng này theo tồn khả dụng. Sửa mã xuất kho cần kiểm tra và xác nhận riêng.</p>' +
+          '<label>Người xác nhận<input name="release_actor" maxlength="100" autocomplete="name"></label>' +
+          '<label><input type="checkbox" name="release_confirmed"> Tôi xác nhận dự thảo này chưa phát hành trên M-Invoice, không còn dùng các dòng mặt hàng nêu trên và không dùng lại file cũ.</label>' +
+          '<p data-release-error role="alert"></p><div class="form-actions"><button type="button" class="btn btn-primary" data-release-confirm disabled>Xác nhận bỏ riêng mặt hàng này</button><button type="button" class="btn btn-outline" data-release-back>Quay lại, chưa thay đổi</button></div></section>';
+        field('release_confirmed').onchange = () => { el('[data-release-confirm]').disabled = !field('release_confirmed').checked; };
+        el('[data-release-back]').onclick = () => { review.innerHTML = ''; button.focus(); };
+        el('[data-release-confirm]').onclick = async () => {
+          if (busy || !field('release_confirmed').checked) return;
+          const actor = field('release_actor').value.trim();
+          if (!actor) { el('[data-release-error]').textContent = 'Điền Người xác nhận trước khi bỏ mặt hàng khỏi dự thảo.'; field('release_actor').focus(); return; }
+          remember(); working(true);
+          try {
+            const result = await api('/api/inventory/output-remap/release-product/confirm', post({token:plan.token,actor,confirmed:true}));
+            invalidate(); working(false); await load(true);
+            el('[data-status]').textContent = 'Đã bỏ riêng ' + result.product_code + ' khỏi dự thảo #' + result.draft_id + ', giải phóng ' + qty(result.released_qty) + ' ' + info.unit + '. ' +
+              (result.replacement_draft_id ? 'Đã giữ ' + result.kept_lines + ' dòng khác trong dự thảo #' + result.replacement_draft_id + '. ' : '') +
+              'Mã hàng và Số lượng sửa vẫn còn. Bấm 1. Kiểm tra trước khi lưu để tiếp tục sửa kho; chưa sửa số liệu kho.';
+            focus('new_code');
+          } catch (error) { el('[data-release-error]').textContent = error.message; el('[data-release-error]').scrollIntoView({block:'center'}); }
+          finally { working(false); }
+        };
+        review.firstElementChild.scrollIntoView({block:'center'}); review.firstElementChild.focus();
+      } catch (error) { review.textContent = error.message; review.scrollIntoView({block:'center'}); }
+      finally { working(false); }
+    });
+    box.querySelectorAll('[data-cancel-hold]').forEach(button => button.onclick = async () => {
+      if (busy) return;
+      const id = Number(button.dataset.cancelHold), hold = info.holds.find(row => row.id === id);
+      if (!window.confirm('Chỉ tiếp tục nếu dự thảo #' + id + ' của ' + hold.contractor + ' chưa phát hành trên M-Invoice và không còn sử dụng.\n\nHủy toàn bộ ' + hold.line_count + ' dòng và nhả tồn đang giữ? Không tiếp tục dùng file đã tải của dự thảo này.\n\nSửa mã xuất kho vẫn cần kiểm tra và xác nhận riêng.')) return;
+      remember(); working(true);
+      try {
+        await api('/api/outgoing-invoices/' + id + '/cancel', post({confirmed:true}));
+        invalidate(); working(false); await load(true);
+        el('[data-status]').textContent = 'Đã hủy dự thảo #' + id + ' và nhả tồn đang giữ. Mã hàng và Số lượng sửa đã giữ lại; bấm 1. Kiểm tra trước khi lưu để tiếp tục. Chưa sửa mã xuất kho.';
+      } catch (error) { issues([{field:'availability',message:error.message}]); }
+      finally { working(false); }
+    });
+  }
   function renderHistory() {
     const history = data.history || [];
     el('[data-history]').innerHTML = '<details class="card"><summary><b>Điều chỉnh đã lưu: ' + history.length + ' dòng</b> · Bấm xem phần đã xác nhận trên web hoặc từ Excel</summary>' +
@@ -107,7 +174,7 @@ window.TdpOutputStockWeb = function (options) {
       }
       const targetInfo = () => {
         const target = data.catalog.find(p => p.code === field('new_code').value.trim());
-        el('[data-target]').textContent = target ? target.name + ' · Tồn cuối kỳ: ' + qty(target.closing_qty) + ' ' + target.unit : '';
+        el('[data-target]').textContent = target ? target.name + ' · Tồn cuối kỳ: ' + qty(target.closing_qty) + ' ' + target.unit + '. Chưa trừ dự thảo đang giữ; bấm 1. Kiểm tra trước khi lưu để xem lượng có thể dùng.' : '';
       };
       targetInfo(); field('new_code').addEventListener('input', targetInfo);
       field('ledger_id').onchange = () => {
@@ -134,8 +201,9 @@ window.TdpOutputStockWeb = function (options) {
     working(true); el('[data-status]').textContent = 'Đang kiểm tra trước khi lưu. Kho chưa thay đổi…';
     try {
       preview = await api('/api/inventory/output-remap/web-preview', post({from,to,version:data.version,product_code:activeCode,...values()}));
+      renderAvailability(preview.availability);
       issues(preview.issues);
-      if (!preview.can_confirm) { nextField = preview.issues[0]?.field; el('[data-status]').textContent = 'Chưa lưu vào kho. Bấm Sửa tại đây để sửa; thông tin đang nhập được giữ lại.'; return; }
+      if (!preview.can_confirm) { nextField = preview.issues[0]?.field; el('[data-status]').textContent = 'Chưa lưu vào kho. Xem hướng dẫn xử lý ngay dưới thông báo; thông tin đang nhập được giữ lại.'; return; }
       const c = preview.changes[0];
       el('[data-preview]').innerHTML = '<section class="card"><h3>Bước 2 · Đối chiếu và lưu vào kho</h3><p><b>Kiểm tra hợp lệ, chưa lưu.</b> Điền Người xác nhận, tích ô đã đối chiếu rồi bấm <b>2. Lưu và cập nhật kho</b>.</p><p>Chuyển ' + qty(c.qty) + ' ' + esc(c.unit) + ' từ mã bị trừ nhầm sang mặt hàng thực tế đã xuất.</p>' +
         '<table><thead><tr><th>Mặt hàng</th><th>Tồn cuối kỳ sau khi sửa</th></tr></thead><tbody><tr><td>' + esc(c.old_code + ' · ' + c.old_name) + '</td><td>' + qty(c.old_closing_after) + ' ' + esc(c.old_unit) + '</td></tr><tr><td>' + esc(c.new_code + ' · ' + c.new_name) + '</td><td>' + qty(c.new_closing_after) + ' ' + esc(c.unit) + '</td></tr></tbody></table>' +
@@ -148,7 +216,7 @@ window.TdpOutputStockWeb = function (options) {
       field('confirmed').onchange = () => { el('[data-confirm]').disabled = !field('confirmed').checked; };
       el('[data-preview]').scrollIntoView({block:'start'});
     } catch (error) { el('[data-status]').textContent = 'Chưa ghi nhận.'; issues([{field:'reload',message:error.message}]); }
-    finally { working(false); if (nextField && field(nextField)) focus(nextField); }
+    finally { working(false); if (nextField) focus(nextField); }
   }
   async function confirm(event) {
     event.preventDefault(); if (busy || !preview || !field('confirmed').checked) return;
@@ -181,7 +249,7 @@ window.TdpOutputStockWeb = function (options) {
   el('[data-close]').onclick = () => { if (!busy) dialog.close(); };
   el('[data-reload]').onclick = () => load(true);
   el('[data-excel]').onclick = () => options.onExcel(() => load(true));
-  dialog.addEventListener('input', event => { if (event.target.closest('[data-edit]')) { invalidate(); remember(); } });
+  dialog.addEventListener('input', event => { if (event.target.matches('[name=ledger_id],[name=new_code],[name=qty]')) { invalidate(); remember(); } });
   dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
   dialog.addEventListener('close', () => { remember(); dialog.remove(); });
   load();

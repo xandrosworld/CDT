@@ -87,7 +87,27 @@ def stock_replacement_reviews(conn):
         if any(not str(r['source_item_code'] or '').strip() or
                not math.isfinite(float(r['qty'])) or float(r['qty']) <= 0
                for r in old_items + new_items): continue
-        if not old_items or Counter(tuple(r[k] for k in fields) for r in old_items)!=Counter(tuple(r[k] for k in fields) for r in new_items):continue
+        if not old_items:continue
+        identity_correction = []
+        same_source = Counter(tuple(r[k] for k in fields) for r in old_items)==Counter(tuple(r[k] for k in fields) for r in new_items)
+        if not same_source:
+            # A replacement may repair shifted code/name/unit columns. Require
+            # the new source to name the already-posted internal product and its
+            # catalog unit, with identical quantities and no unit conversion.
+            # This only offers a reviewed keep-stock confirmation, never posting.
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='products'").fetchone():continue
+            products = {r['code']:dict(r) for r in conn.execute('SELECT code,name,unit FROM products')}
+            if any(not r['inventory_eligible'] or r['mapping_status']!='mapped'
+                   or r['product_code'] not in products or not math.isfinite(float(r['stock_qty']))
+                   or abs(float(r['qty'])-float(r['stock_qty']))>1e-8
+                   or float(r.get('conversion_factor') or 1)!=1 for r in old_items):continue
+            if any(r['source_item_code'] not in products or
+                   str(r['source_unit']).strip().casefold()!=str(products[r['source_item_code']]['unit']).strip().casefold()
+                   for r in new_items):continue
+            if Counter((r['product_code'],r['stock_qty']) for r in old_items)!=Counter((r['source_item_code'],r['qty']) for r in new_items):continue
+            identity_correction = [dict(product_code=r['product_code'], product_name=products[r['product_code']]['name'],
+                old_code=r['source_item_code'], old_name=r.get('source_item_name',''), old_unit=r['source_unit'],
+                unit=products[r['product_code']]['unit'], qty=r['stock_qty']) for r in old_items]
         ledger=[dict(r) for r in conn.execute("SELECT * FROM invoice_inventory_effective_ledger WHERE source_invoice_table='outgoing_source_invoices' AND source_invoice_id IN (?,?) ORDER BY id",(old_id,new_id))]
         if not ledger or any(r['source_invoice_id']!=old_id or r['event_type']!='POST' or r['status']!='posted' for r in ledger):continue
         expected=Counter()
@@ -100,9 +120,11 @@ def stock_replacement_reviews(conn):
             for r in ledger:actual[r['product_code']]-=float(r['qty_delta'])
             if set(expected)!=set(actual) or any(abs(expected[k]-actual[k])>1e-8 for k in expected):continue
             basis=replacement_basis(old,new,old_items,new_items,ledger)
+            if identity_correction:basis['identity_correction']=identity_correction
             token=hashlib.sha256(json.dumps(basis,sort_keys=True,default=str).encode()).hexdigest()
             confirmed=conn.execute("SELECT 1 FROM audit_log WHERE event_type='invoice_output.replacement_keep_stock' AND entity_id=? AND status='ok'",(token,)).fetchone() is not None
             review={'token':token,'confirmed':confirmed,'old_id':old_id,'new_id':new_id,'old_number':old['invoice_number'],'new_number':new['invoice_number'],'buyer':new['buyer_name'],'line_count':len(new_items),'old_total':old['total_amount'],'new_total':new['total_amount']}
+            if identity_correction:review['identity_correction']=identity_correction
             result[old_id]=review;result[new_id]=review
     return result
 

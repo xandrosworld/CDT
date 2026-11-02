@@ -6,7 +6,7 @@ KHỞI ĐỘNG
 3. Mặc định hệ thống chỉ mở trên máy đang chạy để bảo vệ dữ liệu. Chỉ khi cần dùng qua Wi-Fi/LAN, kỹ thuật mới bật TDP_ALLOW_LAN=1 và cấu hình TDP_TRUSTED_HOSTS; sau đó máy khác dùng địa chỉ hiện trong cửa sổ khởi động.
 
 LUỒNG ĐƠN HÀNG
-1. Vào “Công việc hằng ngày” → chọn Từ ngày/Đến ngày → “Chọn file Excel”. Khi cần sửa tay, vào “Nhập & sửa đơn”.
+1. Vào “Đơn hàng - bảng kê” → chọn Từ ngày/Đến ngày → “Chọn file Excel”. Khi cần sửa tay, vào “Nhập & sửa đơn”.
 2. Ở lần nhập đầu, chỉ chọn đúng sheet ngày cần nhập; không nhập sheet gộp/lịch sử.
 3. Sửa các dòng được tô báo thiếu, bổ sung giá và lượng thực nhận/thực giao. File hợp lệ được tải sau cùng của ngày là bản hệ thống đang dùng.
 4. Vào “Đặt hàng nhà cung cấp” → tải trang `đặt hàng` chuẩn. Người dùng tự kiểm tra hàng thật còn trong tủ/kho rồi sửa Số lượng, Hỏng/Thêm/Giảm/Thiếu, Nhà cung cấp và Giá mua; lưu file, chọn lại file, xem trước rồi xác nhận.
@@ -25,7 +25,7 @@ BIỂU MẪU EXCEL CỐ ĐỊNH
 - Dữ liệu hệ thống được ghi dưới dạng giá trị; chuỗi có thể trở thành công thức và số không hữu hạn bị chặn. Trước khi tải, workbook được mở lại để kiểm tra không còn external link/công thức nguy hiểm; luồng PDF tiếp tục kiểm tra riêng khổ A4/A5.
 
 PHIẾU GIAO HÀNG
-- Vào “Công việc hằng ngày” → “Xem phiếu giao”, hoặc “In giấy tờ” → chọn Đơn hàng đi giao. Bản xem mở ngay trong phần mềm; chọn phiếu rồi mới tải Excel hoặc in. File tạo một sheet riêng cho từng mã bếp có số thực giao ròng dương; số thực giao ròng bằng Số thực giao trừ Khách trả. Dòng trả hết không tạo dòng giao trống. Bản in có thông tin nhà cung cấp in đậm, tiêu đề–dòng kiêm xuất kho–ngày nằm ba dòng căn giữa, hình thức thanh toán TM/CK, bảng chữ lớn và bốn vị trí ký thẳng hàng.
+- Vào “Đơn hàng - bảng kê” → “Xem phiếu giao”, hoặc “In giấy tờ” → chọn Đơn hàng đi giao. Bản xem mở ngay trong phần mềm; chọn phiếu rồi mới tải Excel hoặc in. File tạo một sheet riêng cho từng mã bếp có số thực giao ròng dương; số thực giao ròng bằng Số thực giao trừ Khách trả. Dòng trả hết không tạo dòng giao trống. Bản in có thông tin nhà cung cấp in đậm, tiêu đề–dòng kiêm xuất kho–ngày nằm ba dòng căn giữa, hình thức thanh toán TM/CK, bảng chữ lớn và bốn vị trí ký thẳng hàng.
 - Mỗi sheet lấy mẫu `đơn hàng đi giao` đã được duyệt trong `Em Thành.xlsx`: đúng thông tin bên bán, tên đơn vị mua/địa chỉ theo danh mục `T.chiếu`, ngày phiên và bảng hàng. Phần cuối là chữ và ô Excel thật cho bốn vùng ký Trực ban – Bảo vệ – Người giao hàng – Người nhận hàng, không còn chèn ảnh chụp. Có thể cấu hình lại tên pháp nhân/địa chỉ theo đúng mã bếp nếu hợp đồng thay đổi; không dò tên gần đúng.
 - Chỉ đúng cặp mã bếp `NHUAHP` và nhà thầu `NHUAHAIPHONG` được hiện Đơn giá, Thành tiền và Tổng tiền. Mọi bếp khác bị xóa toàn bộ dữ liệu giá rồi mới ẩn hai cột giá; cờ cũ hoặc tên có chữ “Nhựa” không thể tự bật giá. Cột giá mua nội bộ luôn để trống và ẩn trên mọi phiếu.
 - Phiếu chỉ giữ đúng số dòng có giao, không in các dòng trắng của mẫu. Ngày nằm ở góc phải; Tên hàng, SL và ĐVT đặt gần nhau với chữ lớn, đều hàng. Bảng dùng hết chiều ngang A4 dọc, không còn màu cảnh báo nội bộ. Phiếu dài được chia đều số dòng giữa các trang, lặp lại tiêu đề cột ở trang sau và chỉ đặt bốn vùng ký tại cuối trang cuối; không ép toàn bộ vào một trang làm chữ bị nhỏ.

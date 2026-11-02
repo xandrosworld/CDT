@@ -75,6 +75,40 @@ class OutputStockWebTests(unittest.TestCase):
             self.assertFalse(result['can_confirm'])
             self.assertIn('đơn vị',result['issues'][0]['message'])
 
+    def test_positive_stock_blocked_by_hold_explained_and_explicit_cancel_recovers(self):
+        with server.db() as conn:
+            conn.execute("UPDATE inventory_transactions SET qty_in=224.1 WHERE product_code='REMAP-B'")
+            batch, orders = fixtures.Seed.add_batch(conn, '2026-08-20', [{'product_code':'REMAP-B','qty':224.8}])
+            draft = fixtures.Seed.add_local_issued_draft(conn, batch, orders[0], number='TEST', product_code='REMAP-B', qty=224.8)
+            conn.execute("UPDATE outgoing_invoice_drafts SET status='draft',minvoice_status='not_sent' WHERE id=?", (draft,))
+            conn.execute("""INSERT INTO inventory_transactions(txn_date,product_code,qty_in,qty_out,unit_cost,
+                source_type,source_id,source_line,status,note,created_at,updated_at)
+                VALUES('2026-08-20','REMAP-B',0,224.8,30,'OUTGOING_DRAFT',?,'1','reserved','test',?,?)""",
+                (str(draft),server.now_iso(),server.now_iso()))
+            result = preview_web(conn, self.body(conn,qty=1.9))
+            self.assertFalse(result['can_confirm'])
+            info = result['availability']
+            self.assertEqual((224.1,224.8,0), (info['closing_qty'],info['reserved_qty'],info['available_qty']))
+            self.assertEqual('availability',result['issues'][0]['field'])
+            self.assertIn('224,8',result['issues'][0]['message'])
+            self.assertTrue(info['holds'][0]['can_cancel'])
+            self.assertEqual(draft,info['holds'][0]['id'])
+            self.assertEqual(1,len(info['holds'][0]['lines']))
+            self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM output_stock_remaps').fetchone()[0])
+            conn.execute("UPDATE outgoing_invoice_drafts SET minvoice_status='saved' WHERE id=?",(draft,))
+            protected = preview_web(conn,self.body(conn,qty=1.9))
+            self.assertFalse(protected['availability']['holds'][0]['can_cancel'])
+        self.assertEqual(400,self.client.post(f'/api/outgoing-invoices/{draft}/cancel',json={}).status_code)
+        self.assertEqual(409,self.client.post(f'/api/outgoing-invoices/{draft}/cancel',json={'confirmed':True}).status_code)
+        with server.db() as conn:
+            conn.execute("UPDATE outgoing_invoice_drafts SET minvoice_status='not_sent' WHERE id=?",(draft,))
+        self.assertEqual(200,self.client.post(f'/api/outgoing-invoices/{draft}/cancel',json={'confirmed':True}).status_code)
+        with server.db() as conn:
+            result = preview_web(conn,self.body(conn,qty=1.9))
+            self.assertTrue(result['can_confirm'],result)
+            self.assertAlmostEqual(222.2,result['changes'][0]['new_closing_after'])
+            self.assertEqual(0,conn.execute('SELECT COUNT(*) FROM output_stock_remaps').fetchone()[0])
+
     def test_insufficient_recipient_rejected_with_edit_button_target(self):
         with server.db() as conn:
             conn.execute("UPDATE inventory_transactions SET qty_in=1 WHERE product_code='REMAP-B'")
@@ -82,6 +116,16 @@ class OutputStockWebTests(unittest.TestCase):
             self.assertFalse(result['can_confirm'])
             self.assertEqual('new_code', result['issues'][0]['field'])
             self.assertNotIn('Excel',result['issues'][0]['message'])
+
+    def test_kkknt_recipient_explains_existing_exception_without_allowing_negative_target(self):
+        with server.db() as conn:
+            conn.execute("UPDATE products SET tax='KKKNT' WHERE code='REMAP-B'")
+            result = preview_web(conn,self.body(conn))
+            self.assertTrue(result['can_confirm'],result)
+            self.assertFalse(result['availability']['holds_enforced'])
+            self.assertEqual(10,result['availability']['available_qty'])
+            conn.execute("UPDATE inventory_transactions SET qty_in=1 WHERE product_code='REMAP-B'")
+            self.assertFalse(preview_web(conn,self.body(conn))['can_confirm'])
 
     def test_stale_preview_and_confirmation(self):
         with server.db() as conn:

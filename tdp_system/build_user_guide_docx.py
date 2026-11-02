@@ -380,7 +380,7 @@ doc.add_heading("LÀM VIỆC HẰNG NGÀY – CHỈ CẦN NHỚ 7 VIỆC", level
 steps([
     "Mở file Thanh_Dat_Phat.exe và chờ trình duyệt hiện ra. Chỉ mở một lần.",
     "Chọn đúng ngày hoặc đúng đơn ở ô phía trên bên phải.",
-    "Vào Công việc hằng ngày, chọn Từ ngày – Đến ngày rồi nạp file Excel.",
+    "Vào Đơn hàng - bảng kê, chọn Từ ngày – Đến ngày rồi nạp file Excel.",
     "Vào Nhập & sửa đơn, sửa hết những dòng hệ thống báo thiếu hoặc sai.",
     "Vào Đặt hàng nhà cung cấp để gửi đơn; vào Phiếu giao để tải phiếu giao hàng.",
     "Khi cần giấy tờ, vào In giấy tờ, chọn đúng loại và đúng ngày rồi tải file.",
@@ -456,7 +456,7 @@ callout(
 
 # Screen 1
 screen_page(
-    "2. CÔNG VIỆC HẰNG NGÀY",
+    "2. ĐƠN HÀNG - BẢNG KÊ",
     "01_cong_viec_hang_ngay.png",
     "Màn hình tổng quan: bốn việc chính trong ngày và khoảng ngày đang chọn.",
     "Đây là trang nên mở đầu tiên mỗi ngày. Bốn ô lớn dẫn thẳng tới bốn việc chính.",
