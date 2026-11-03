@@ -140,6 +140,17 @@
       if(!history.length)return '';
       return '<details><summary>Nguồn mua đã ghi bảng kê ('+history.length+')</summary><p>Chỉ tra cứu; không gợi ý nhập lại nguồn đã ghi kho. Lượng âm hiện tại cần đối chiếu nguồn nhập, xuất và mã hàng.</p>'+history.map(function(s){return '<p>'+esc(s.document_date+' · '+s.source_party+' · '+s.cccd+' · '+s.address+' · Ngày cấp: '+(s.issue_date||'chưa có')+' · Nơi cấp: '+(s.issue_place||'chưa có')+' · Đã ghi: '+s.posted_qty+' '+s.unit+' · '+s.source_description)+'</p>';}).join('')+'</details>';
     }
+    // Generated quantities follow the stock API's six-decimal precision.
+    // Keep user-entered strings untouched when collecting and re-rendering.
+    function stockQuantity(value) { return Number(Number(value).toFixed(6)); }
+    function quantityHint(r) {
+      if(r.total_suggested_qty == null)return '';
+      var total=options.quantity(r.total_suggested_qty), unit=r.unit||'';
+      var text='Tổng lượng gợi ý cho mã này: '+total+' '+unit+'. Dòng này: '+options.quantity(r.suggested_qty)+' '+unit+'.';
+      if(r.total_suggested_qty!==r.suggested_qty)text+=' Phần còn lại nằm ở các dòng cùng mã theo nguồn mua; không nhập lại tổng lượng vào từng dòng.';
+      if(r.month_closing_qty!=null&&Number(r.total_suggested_qty)<-Number(r.closing_qty)-0.000001)text+=' Lượng gợi ý đã giới hạn theo phần còn thiếu cuối tháng; không có nghĩa tồn tại ngày đang chọn sẽ hết âm.';
+      return '<small class="bk-quantity-explanation">'+esc(text)+'</small>';
+    }
     function render() {
       syncCommonDate();
       var empty=loadedPeriod&&!rows.length;
@@ -153,7 +164,7 @@
       dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Ngày mua thực tế</th><th>Tồn cuối ngày '+esc(loadedPeriod ? loadedPeriod.to.split('-').reverse().join('/') : '')+'</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
         return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'<br><button type="button" class="btn btn-outline" data-bk-source="'+i+'">Xem / chọn nguồn mua</button>'+purchaseHistoryHtml(r)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" '+(r.common_date?'readonly ':'')+'aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small data-date-hint="'+i+'"></small><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'<small class="bk-stock-explanation">'+esc(r.stock_explanation||'')+'</small></td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
-          return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':r[key])+'" aria-label="'+esc(key+' '+r.product_code)+'">'+(key==='source_party'?'<small>'+esc(r.source_party_original ? 'Người bán nguồn: '+r.source_party_original : '')+'</small><div class="bk-seller-details" data-seller-details="'+i+'"></div><button type="button" data-bk-split="'+i+'" class="btn btn-outline">Thêm người bán thực tế cùng ngày</button>':'')+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
+          return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':key==='qty'&&typeof r[key]==='number'?stockQuantity(r[key]):r[key])+'" aria-label="'+esc(({qty:'Lượng mua bổ sung',unit_cost:'Đơn giá',source_party:'Người bán / NCC',note:'Ghi chú'})[key]+' '+r.product_code)+'">'+(key==='qty'?quantityHint(r):'')+(key==='source_party'?'<small>'+esc(r.source_party_original ? 'Người bán nguồn: '+r.source_party_original : '')+'</small><div class="bk-seller-details" data-seller-details="'+i+'"></div><button type="button" data-bk-split="'+i+'" class="btn btn-outline">Thêm người bán thực tế cùng ngày</button>':'')+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
         }).join('')+'</tr>';
       }).join('')+'</tbody></table>';
       syncCommonDate();
@@ -202,11 +213,11 @@
           loadedPeriod={from:result.from,to:result.to,tax:field('tax').value,month_end:result.month_end};
           var kept=periodDrafts[result.from+'|'+result.to+'|'+loadedPeriod.tax], fresh=[];
           result.items.forEach(function(item){
-            var left=Number(item.suggested_qty),sources=(item.purchase_sources||[]).filter(function(s){return !s.already_posted;});
-            sources.forEach(function(source){var qty=Math.min(left,Number(source.purchase_qty));left=Math.max(0,left-qty);if(qty<=0.000001)return;fresh.push(Object.assign({},item,source,{row_key:source.source_key,source_party_original:source.source_party,suggested_qty:qty,price_source:'Giá mua từ '+source.source_description}));});
+            item.total_suggested_qty=stockQuantity(item.suggested_qty);var left=item.total_suggested_qty,sources=(item.purchase_sources||[]).filter(function(s){return !s.already_posted;});
+            sources.forEach(function(source){var qty=stockQuantity(Math.min(left,Number(source.purchase_qty)));left=stockQuantity(Math.max(0,left-qty));if(qty<=0.000001)return;fresh.push(Object.assign({},item,source,{row_key:source.source_key,source_party_original:source.source_party,suggested_qty:qty,price_source:'Giá mua từ '+source.source_description}));});
             if(!sources.length||left>0.000001)fresh.push(Object.assign({},item,{row_key:item.product_code+':unmatched',suggested_qty:left,source_description:'Chưa có nguồn mua chưa ghi kho phù hợp. Kiểm tra nguồn và ngày mua thực tế; chọn người bán từ danh mục đã lưu.'}));
           });
-          rows=fresh.map(function(r){var old=kept&&kept.rows.find(function(k){return (k.row_key||k.product_code)===(r.row_key||r.product_code);}),merged=Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:r.source_party||'',note:''},old||{},{closing_qty:r.closing_qty,suggested_qty:r.suggested_qty,stock_explanation:r.stock_explanation});if(old&&Number(old.qty)===Number(old.suggested_qty))merged.qty=r.suggested_qty;return merged;});
+          rows=fresh.map(function(r){var old=kept&&kept.rows.find(function(k){return (k.row_key||k.product_code)===(r.row_key||r.product_code);}),merged=Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:r.source_party||'',note:''},old||{},{closing_qty:r.closing_qty,suggested_qty:r.suggested_qty,stock_explanation:r.stock_explanation,total_suggested_qty:r.total_suggested_qty,month_closing_qty:r.month_closing_qty});if(old&&Number(old.qty)===Number(old.suggested_qty))merged.qty=r.suggested_qty;return merged;});
           if(kept){kept.rows.forEach(function(r){if(!fresh.some(function(f){return (f.row_key||f.product_code)===(r.row_key||r.product_code);}))rows.push(Object.assign({},r,{closing_qty:null,selected:false}));});}
           field('document_date').value=kept?kept.date:(result.from===result.to?result.from:'');field('reference').value=kept?kept.reference:('BKBS-'+result.to.slice(0,7).replace('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase());field('source_party').value=kept?kept.seller:'';
           field('document_date').dispatchEvent(new Event('change'));
