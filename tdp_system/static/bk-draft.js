@@ -20,7 +20,7 @@
       '<details><summary>Thêm hàng ngoài danh sách tồn âm</summary><div class="bk-draft-controls"><label>Thêm hàng ngoài danh sách tồn âm<input name="search" placeholder="Tìm theo mã hoặc tên hàng"></label>' +
       '<button class="btn btn-outline" data-bk="search">Tìm hàng</button><select name="product" aria-label="Kết quả tìm hàng"></select>' +
       '<button class="btn btn-outline" data-bk="add">Thêm dòng</button></div></details>' +
-      '<div class="bk-row-summary" role="status"></div><div class="bk-source-panel" hidden></div>' +
+      '<div class="bk-daily-reconciliation" role="status"></div><div class="bk-row-summary" role="status"></div><div class="bk-source-panel" hidden></div>' +
       '<p class="bk-draft-status" role="status"></p><div class="bk-draft-issues" role="alert" hidden></div><div class="bk-daily-warning" role="status"></div><div class="bk-draft-table"></div>' +
       '<div class="bk-draft-controls"><button class="btn btn-outline" data-bk="all">Chọn tất cả</button>' +
       '<button class="btn btn-outline" data-bk="none">Bỏ chọn</button>' +
@@ -151,7 +151,14 @@
       if(r.month_closing_qty!=null&&Number(r.total_suggested_qty)<-Number(r.closing_qty)-0.000001)text+=' Lượng gợi ý đã giới hạn theo phần còn thiếu cuối tháng; không có nghĩa tồn tại ngày đang chọn sẽ hết âm.';
       return '<small class="bk-quantity-explanation">'+esc(text)+'</small>';
     }
+    function renderDailyReconciliation() {
+      var entries=loadedPeriod&&loadedPeriod.daily_reconciliations||[],box=dialog.querySelector('.bk-daily-reconciliation');
+      if(!entries.length){box.innerHTML='';return;}
+      var day=loadedPeriod.to.split('-').reverse().join('/'),end=loadedPeriod.month_end.split('-').reverse().join('/');
+      box.innerHTML='<div class="bk-quick-fill"><strong>'+entries.length+' mã còn âm ngày '+esc(day)+' nhưng đã giảm thiếu hoặc hết âm khi đối chiếu đến '+esc(end)+'.</strong><p>Tồn âm này đã có trên sổ trước khi mở bảng kê; mở hoặc xem bản in không làm thay đổi kho. Các khoản nhập ghi ngày sau không đổi tồn của ngày trước. Không lập thêm bảng kê cho hàng đã ghi kho chỉ để xóa số âm ngày trước.</p><details><summary>Xem mã hàng và các ngày nhập đã ghi kho</summary><table><thead><tr><th>Mã / tên hàng</th><th>Tồn cuối ngày '+esc(day)+'</th><th>Nhập đã ghi sau ngày này</th><th>Tồn cuối tháng</th><th>Lượng còn gợi ý bổ sung</th></tr></thead><tbody>'+entries.map(function(r){return '<tr><td>'+esc(r.product_code+' · '+r.product_name)+'</td><td>'+esc(options.quantity(r.closing_qty)+' '+r.unit)+'</td><td>'+esc((r.later_inputs||[]).map(function(x){return x.date.split('-').reverse().join('/')+': '+options.quantity(x.qty)+' '+r.unit;}).join(' · ')||'Cần đối chiếu sổ kho và các điều chỉnh')+'</td><td>'+esc(options.quantity(r.month_closing_qty)+' '+r.unit)+'</td><td>'+esc(options.quantity(r.suggested_qty)+' '+r.unit)+'</td></tr>';}).join('')+'</tbody></table><p>Nếu hàng thực tế đã nhận trước ngày xuất, cần đối chiếu ngày nhận hàng với chứng từ nhập. Không tự đổi ngày hóa đơn hoặc ghi thêm một lần mua. Các dòng cần lập bổ sung tiếp vẫn nằm trong danh sách bên dưới.</p></details></div>';
+    }
     function render() {
+      renderDailyReconciliation();
       syncCommonDate();
       var empty=loadedPeriod&&!rows.length;
       [field('reference').parentElement.parentElement,field('document_date').closest('.bk-quick-fill'),
@@ -210,7 +217,7 @@
           status('Đang đối chiếu sổ kho…');
           var result=await options.api('/api/bk-import/shortages?'+new URLSearchParams({from:field('from').value,to:field('to').value,tax:field('tax').value,remaining_month:'1'}));
           if(!dialog.isConnected)return;
-          loadedPeriod={from:result.from,to:result.to,tax:field('tax').value,month_end:result.month_end};
+          loadedPeriod={from:result.from,to:result.to,tax:field('tax').value,month_end:result.month_end,daily_reconciliations:result.daily_reconciliations||[]};
           var kept=periodDrafts[result.from+'|'+result.to+'|'+loadedPeriod.tax], fresh=[];
           result.items.forEach(function(item){
             item.total_suggested_qty=stockQuantity(item.suggested_qty);var left=item.total_suggested_qty,sources=(item.purchase_sources||[]).filter(function(s){return !s.already_posted;});

@@ -123,12 +123,20 @@ class BkDraftTests(unittest.TestCase):
         self.assertEqual(result['month_end'],'2026-08-31')
         self.assertEqual([(r['product_code'],r['closing_qty'],r['suggested_qty']) for r in result['items']],
                          [('BK-P1',-5,2)])
+        explained = {r['product_code']: r for r in result['daily_reconciliations']}
+        self.assertEqual(set(explained), {'BK-P1', 'BK-P2'})
+        self.assertEqual(explained['BK-P1']['month_closing_qty'], -2)
+        self.assertEqual(explained['BK-P2']['suggested_qty'], 0)
+        self.assertEqual(explained['BK-P2']['closing_qty'], -3)
+        self.assertEqual(explained['BK-P2']['month_closing_qty'], 0)
+        self.assertEqual(explained['BK-P2']['later_inputs'], [{'date':'2026-08-02','qty':3}])
         self.assertEqual(before,self.counts())
         body=self.body(True);body['document_date']='2026-08-01'
         blob=self.client.post('/api/bk-import/draft/excel',json=body)
         self.assertEqual(self.confirm(self.preview(blob.data).get_json()).status_code,200)
         after=self.client.get(url+'&remaining_month=1').get_json()
         self.assertEqual(after['items'],[])
+        self.assertEqual(len(after['daily_reconciliations']), 2)
 
     def test_reject_bad_dates_numbers_codes_without_writes(self):
         before=self.counts()

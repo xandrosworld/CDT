@@ -111,6 +111,7 @@ def shortage_rows(conn, start, end, tax='KKKNT', day=None, remaining_month=False
                    (report if cutoff == month_end else invoice_stock_rows(conn, as_of=month_end))} if remaining_month else {}
     products = {r['code']: dict(r) for r in conn.execute('SELECT code,name,unit,tax FROM products')}
     items = []
+    daily_reconciliations = []
     for row in report:
         product = products.get(row['product_code'], {})
         if row['closing_qty'] >= -0.000001 or (tax == 'KKKNT' and not is_kkknt(product.get('tax'))):
@@ -118,6 +119,21 @@ def shortage_rows(conn, start, end, tax='KKKNT', day=None, remaining_month=False
         suggested = -row['closing_qty']
         if remaining_month:
             suggested = min(suggested, max(0, -month_stock.get(row['product_code'], 0)))
+            if suggested < -row['closing_qty'] - 0.000001:
+                later_inputs = conn.execute("""SELECT txn_date, SUM(qty_delta) qty
+                    FROM invoice_inventory_ledger WHERE product_code=? AND status='posted'
+                    AND direction='input' AND txn_date>? AND txn_date<=?
+                    GROUP BY txn_date HAVING SUM(qty_delta)>0.000001 ORDER BY txn_date""",
+                    (row['product_code'], cutoff, month_end)).fetchall()
+                daily_reconciliations.append({
+                    'product_code': row['product_code'],
+                    'product_name': product.get('name', row['product_name']),
+                    'unit': product.get('unit', row['unit']),
+                    'closing_qty': round(row['closing_qty'], 6),
+                    'month_closing_qty': round(month_stock.get(row['product_code'], 0), 6),
+                    'suggested_qty': round(suggested, 6),
+                    'later_inputs': [{'date': r['txn_date'], 'qty': round(r['qty'], 6)} for r in later_inputs],
+                })
             if suggested <= 0.000001:
                 continue
         items.append({'product_code': row['product_code'], 'product_name': product.get('name', row['product_name']),
@@ -138,7 +154,8 @@ def shortage_rows(conn, start, end, tax='KKKNT', day=None, remaining_month=False
         item['purchase_sources'] = [r for r in sources[item['product_code']] if mapping_key(r['unit']) == mapping_key(item['unit'])]
     return {'ok': True, 'from': start, 'to': end, 'day': cutoff,
             'remaining_month': bool(remaining_month), 'month_end': month_end,
-            'items': items, 'source_warnings': warnings, 'writesInventory': False}
+            'items': items, 'daily_reconciliations': daily_reconciliations,
+            'source_warnings': warnings, 'writesInventory': False}
 
 
 def _number(value, label):
