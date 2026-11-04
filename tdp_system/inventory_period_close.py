@@ -286,8 +286,8 @@ def inventory_period_close_preview(
            AND invoice_type='INPUT_ELECTRONIC_INVOICE' AND receipt_status NOT IN ('posted','not_inventory')""",
         (date_from, date_to),
     ).fetchone()[0])
-    unposted_output_count = int(conn.execute(
-        """SELECT COUNT(*) FROM outgoing_source_invoices i WHERE i.source='minvoice' AND i.invoice_date>=? AND i.invoice_date<=?
+    pending_outputs = list(conn.execute(
+        """SELECT i.id,i.invoice_number,i.buyer_name,i.stock_status FROM outgoing_source_invoices i WHERE i.source='minvoice' AND i.invoice_date>=? AND i.invoice_date<=?
            AND i.stock_status NOT IN ('posted','reversed','not_inventory')
            AND NOT (i.source_status_class='draft' AND i.stock_status='blocked'
                     AND COALESCE(i.invoice_number,'')=''
@@ -295,7 +295,24 @@ def inventory_period_close_preview(
            AND EXISTS (SELECT 1 FROM outgoing_source_invoice_items li
                        WHERE li.invoice_id=i.id AND li.inventory_eligible=1)""",
         (date_from, date_to),
-    ).fetchone()[0])
+    ).fetchall())
+    if pending_outputs:
+        try:
+            from .invoice_payment_replacements import stock_replacement_reviews
+            from .invoice_replacement_correction import quantity_correction_reviews
+        except ImportError:
+            from invoice_payment_replacements import stock_replacement_reviews
+            from invoice_replacement_correction import quantity_correction_reviews
+        reviewed = stock_replacement_reviews(conn)
+        corrected = quantity_correction_reviews(conn)
+        pending_outputs = [r for r in pending_outputs
+                           if not reviewed.get(r['id'], {}).get('confirmed')
+                           and not corrected.get(r['id'], {}).get('confirmed')]
+    reconciliation_outputs = [dict(r) for r in pending_outputs if r['stock_status']=='reversal_required']
+    unposted_output_count = len(pending_outputs) - len(reconciliation_outputs)
+    if reconciliation_outputs:
+        issues.append('Cần đối chiếu kho hóa đơn đầu ra ' + ', '.join(r['invoice_number'] or str(r['id']) for r in reconciliation_outputs)
+                      + ' trước khi chốt tháng. Các hóa đơn này đã ghi kho nhưng nguồn đã thay đổi; không ghi xuất thêm lần nữa.')
     return {
         "period": safe_period,
         "period_label": _period_label(safe_period),
@@ -325,6 +342,8 @@ def inventory_period_close_preview(
         "total_value": float(total_value),
         "unposted_input_count": unposted_input_count,
         "unposted_output_count": unposted_output_count,
+        "reconciliation_output_count": len(reconciliation_outputs),
+        "reconciliation_outputs": reconciliation_outputs,
         "issues": issues,
         "blocking_items": [{key: item.get(key) for key in ('product_code', 'product_name', 'unit', 'closing_qty', 'closing_value', 'valuation_status')}
                            for item in report['items'] if item in invalid_items or item in blocked_negative_items],

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from unittest.mock import patch
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
@@ -97,6 +98,27 @@ class InventoryPeriodCloseTests(unittest.TestCase):
             timestamp=NOW,
             today=TODAY,
         )
+
+    def test_replacement_review_is_distinct_from_unposted_and_blocks_close(self):
+        for ident, number, status in [(901,'984','reversal_required'),(902,'996','reversal_required'),(903,'998','ready')]:
+            self.conn.execute("""INSERT INTO outgoing_source_invoices
+                (id,tenant,source,identity_key,invoice_number,invoice_date,stock_status,synced_at,created_at,updated_at)
+                VALUES(?,'test','minvoice',?,?,'2026-08-20',?,?,?,?)""",(ident,str(ident),number,status,NOW,NOW,NOW))
+            self.conn.execute('INSERT INTO outgoing_source_invoice_items(invoice_id,line_index) VALUES(?,1)',(ident,))
+        before=self.conn.serialize()
+        with patch('tdp_system.invoice_payment_replacements.stock_replacement_reviews',return_value={902:{'confirmed':True}}), patch('tdp_system.invoice_replacement_correction.quantity_correction_reviews',return_value={}):
+            preview=inventory_period_close_preview(self.conn,'2026-08',today=TODAY)
+            self.assertEqual(preview['unposted_output_count'],1)
+            self.assertEqual(preview['reconciliation_output_count'],1)
+            self.assertEqual(preview['reconciliation_outputs'][0]['invoice_number'],'984')
+            self.assertFalse(preview['can_close'])
+            with self.assertRaises(InventoryPeriodCloseError):self._close(preview)
+        self.assertEqual(before,self.conn.serialize())
+        with patch('tdp_system.invoice_payment_replacements.stock_replacement_reviews',return_value={902:{'confirmed':True}}), patch('tdp_system.invoice_replacement_correction.quantity_correction_reviews',return_value={901:{'confirmed':True}}):
+            preview=inventory_period_close_preview(self.conn,'2026-08',today=TODAY)
+            self.assertEqual(preview['reconciliation_output_count'],0)
+            self.assertEqual(preview['unposted_output_count'],1)
+            self.assertTrue(preview['can_close'])
 
     def test_close_transfers_quantity_value_and_is_idempotent(self):
         self._event("IN-1", "input", "2026-08-05", 10, 200)
