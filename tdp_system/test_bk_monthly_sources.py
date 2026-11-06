@@ -77,6 +77,27 @@ class MonthlySourcesTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Người bán BK, ngày 2026-09-03'):
                 bk_supplement.prepare(c,response.data,body['from'],body['to'])
 
+    def test_split_source_overage_returns_one_actionable_group_without_writes(self):
+        body=self.body();body['rows']=body['rows'][:1]
+        body['rows'].append(dict(body['rows'][0]))
+        with server.db() as c:before=c.serialize()
+        response=self.client.post('/api/bk-import/draft/preview',json=body)
+        self.assertEqual(response.status_code,400,response.json)
+        conflicts=response.json['purchase_conflicts']
+        self.assertEqual(len(conflicts),1)
+        self.assertEqual(conflicts[0]['product_code'],'BK-P1')
+        self.assertEqual(conflicts[0]['selected_qty'],4)
+        self.assertEqual(conflicts[0]['available_qty'],2)
+        self.assertTrue(conflicts[0]['source_key'])
+        with server.db() as c:self.assertEqual(before,c.serialize())
+        body['rows'][0]['qty']=1;body['rows'][1]['qty']=1
+        response=self.client.post('/api/bk-import/draft/excel',json=body)
+        self.assertEqual(response.status_code,200)
+        with server.db() as c:
+            prepared=bk_supplement.prepare(c,response.data,body['from'],body['to'])
+            self.assertEqual(len(prepared['parsed']['rows']),2)
+        with server.db() as c:self.assertEqual(before,c.serialize())
+
     def test_partial_source_is_reduced_and_cannot_be_reused_under_new_reference(self):
         body=self.body();body['rows']=body['rows'][:1];body['rows'][0]['qty']=1
         response=self.client.post('/api/bk-import/draft/excel',json=body)

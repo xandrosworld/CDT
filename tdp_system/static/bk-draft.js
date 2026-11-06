@@ -66,8 +66,8 @@
       clearIssues();issues=items;
       var box=dialog.querySelector('.bk-draft-issues');box.hidden=false;
       box.innerHTML='<strong>Cần bổ sung hoặc sửa '+items.length+' mục:</strong><ul>'+items.map(function(item,i){
-        if(item.target)item.target.setAttribute('aria-invalid','true');
-        return '<li><span>'+esc(item.message)+'</span><button type="button" class="btn btn-outline" data-bk-fix="'+i+'">'+esc(item.label)+'</button></li>';
+        var targets=item.targets||[{target:item.target,label:item.label}];
+        return '<li><span>'+esc(item.message)+'</span>'+targets.map(function(t,j){if(t.target)t.target.setAttribute('aria-invalid','true');return '<button type="button" class="btn btn-outline" data-bk-fix="'+i+'" data-bk-fix-target="'+j+'">'+esc(t.label)+'</button>';}).join('')+'</li>';
       }).join('')+'</ul>';
       focusAfterAction=items[0].target;
     }
@@ -98,6 +98,20 @@
       });
       dailyWarnings().forEach(function(g){add(g.seller+' · '+g.day+': vượt 5.000.000đ/người/ngày. Kiểm tra đúng người bán và lượng thực mua.',rowField(g.index,'source_party'),'Kiểm tra người bán thực tế');});
       if(missing.length){var error=new Error('Chưa thể xem bảng kê. Bấm nút bên dưới để đến đúng ô cần sửa.');error.issues=missing;throw error;}
+    }
+    function purchaseConflictIssues(conflicts) {
+      var result=[];
+      conflicts.forEach(function(c){
+        var indices=[];rows.forEach(function(r,i){
+          var source=r.source_key||(String(r.note||'').match(/\[TDP-SOURCE:([^\]]+)\]/)||[])[1];
+          if(r.selected&&r.product_code===c.product_code&&(c.kind==='stock'||source===c.source_key))indices.push(i);
+        });
+        var message=c.product_code+' · '+c.product_name+': đã chọn tổng '+options.quantity(c.selected_qty)+' '+c.unit+'; '+(c.kind==='stock'?'còn thiếu cuối kỳ':'nguồn mua còn lại')+' '+options.quantity(c.available_qty)+' '+c.unit+'. ';
+        message+=Number(c.available_qty)<=0?'Bỏ chọn các dòng '+(c.kind==='stock'?'cùng mã này':'của nguồn này')+'; không nhập kho thêm.':'Sửa Lượng mua bổ sung để tổng các dòng '+(c.kind==='stock'?'cùng mã':'cùng nguồn')+' không vượt '+options.quantity(c.available_qty)+' '+c.unit+'.';
+        if(c.source_description)message+=' '+c.source_description+'.';
+        if(indices.length)result.push({message:message,target:rowField(indices[0],Number(c.available_qty)<=0?'selected':'qty'),label:Number(c.available_qty)<=0?'Đến ô bỏ chọn':'Sửa lượng mua',targets:indices.map(function(i){return {target:rowField(i,Number(c.available_qty)<=0?'selected':'qty'),label:(Number(c.available_qty)<=0?'Bỏ chọn dòng ':'Sửa lượng dòng ')+(i+1)};})});
+      });
+      return result;
     }
     function errorIssues(message) {
       var target=null,label='Đến chỗ cần sửa';
@@ -224,7 +238,7 @@
             sources.forEach(function(source){var qty=stockQuantity(Math.min(left,Number(source.purchase_qty)));left=stockQuantity(Math.max(0,left-qty));if(qty<=0.000001)return;fresh.push(Object.assign({},item,source,{row_key:source.source_key,source_party_original:source.source_party,suggested_qty:qty,price_source:'Giá mua từ '+source.source_description}));});
             if(!sources.length||left>0.000001)fresh.push(Object.assign({},item,{row_key:item.product_code+':unmatched',suggested_qty:left,source_description:'Chưa có nguồn mua chưa ghi kho phù hợp. Kiểm tra nguồn và ngày mua thực tế; chọn người bán từ danh mục đã lưu.'}));
           });
-          rows=fresh.map(function(r){var old=kept&&kept.rows.find(function(k){return (k.row_key||k.product_code)===(r.row_key||r.product_code);}),merged=Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:r.source_party||'',note:''},old||{},{closing_qty:r.closing_qty,suggested_qty:r.suggested_qty,stock_explanation:r.stock_explanation,total_suggested_qty:r.total_suggested_qty,month_closing_qty:r.month_closing_qty});if(old&&Number(old.qty)===Number(old.suggested_qty))merged.qty=r.suggested_qty;return merged;});
+          rows=fresh.map(function(r){var old=kept&&kept.rows.find(function(k){return (k.row_key||k.product_code)===(r.row_key||r.product_code);}),merged=Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:r.source_party||'',note:''},old||{},{purchase_sources:r.purchase_sources,purchase_qty:r.purchase_qty,source_description:r.source_description,closing_qty:r.closing_qty,suggested_qty:r.suggested_qty,stock_explanation:r.stock_explanation,total_suggested_qty:r.total_suggested_qty,month_closing_qty:r.month_closing_qty});if(old&&Number(old.qty)===Number(old.suggested_qty))merged.qty=r.suggested_qty;return merged;});
           if(kept){kept.rows.forEach(function(r){if(!fresh.some(function(f){return (f.row_key||f.product_code)===(r.row_key||r.product_code);}))rows.push(Object.assign({},r,{closing_qty:null,selected:false}));});}
           field('document_date').value=kept?kept.date:(result.from===result.to?result.from:'');field('reference').value=kept?kept.reference:('BKBS-'+result.to.slice(0,7).replace('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase());field('source_party').value=kept?kept.seller:'';
           field('document_date').dispatchEvent(new Event('change'));
@@ -305,7 +319,7 @@
       } catch(error) {
         var message=error.message.replace(/Số tham chiếu/gi,'Số bảng kê');
         if(message.indexOf('đã thuộc một bộ BK khác')>=0)message='Số bảng kê này có dòng đã được ghi trong bộ khác. Kiểm tra lại bộ đã nhập; chỉ dùng số mới khi lập bộ khác cho hàng chưa nhập.';
-        status(message,true);var items=error.issues||errorIssues(message);if(items.length)showIssues(items);
+        status(message,true);var items=error.payload?.purchase_conflicts?purchaseConflictIssues(error.payload.purchase_conflicts):(error.issues||errorIssues(message));if(items.length)showIssues(items);
         if(error.payload&&error.payload.stock_review){
           var stockReview=error.payload.stock_review,box=dialog.querySelector('.bk-draft-issues');
           box.hidden=false;box.innerHTML='<strong>Chưa nhập kho. Kiểm tra tồn chuyển kỳ:</strong><ul>'+stockReview.items.map(function(r){return '<li>'+esc(r.product_code+' · '+r.product_name)+': tồn '+options.quantity(r.closing_qty)+' '+esc(r.unit)+', giá trị '+Number(r.closing_value).toLocaleString('vi-VN')+'đ.</li>';}).join('')+'</ul><button type="button" class="btn btn-outline" data-bk-stock-review>Mở đối chiếu tháng '+esc(stockReview.period)+'</button><p>Các ô đang nhập được giữ lại. Đối chiếu xong, quay lại xem bộ bảng kê rồi xác nhận.</p>';
@@ -322,7 +336,7 @@
       var sourceRow=e.target.closest('[data-bk-source-row]');if(sourceRow){collect();var i=Number(sourceRow.dataset.bkSourceRow);rows[i].selected=true;review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();focusIssue(rowField(i,'qty'));return;}
       var manual=e.target.closest('[data-bk-manual]');if(manual){focusIssue(rowField(Number(manual.dataset.bkManual),'document_date'));return;}
       if(e.target.closest('[data-bk-source-close]')){dialog.querySelector('.bk-source-panel').hidden=true;return;}
-      var split=e.target.closest('[data-bk-split]');if(split){if(busy)return;collect();var source=rows[Number(split.dataset.bkSplit)];rows.push(Object.assign({},source,{row_key:(source.row_key||source.product_code)+':split:'+rows.length,qty:'',source_party:'',source_line:undefined,selected:true}));review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã thêm dòng trống cho người bán thực tế khác. Dòng ban đầu giữ nguyên. Điền đúng lượng mua của từng người và kiểm tra tổng lượng; hệ thống không tự chia tiền.');focusIssue(rowField(rows.length-1,'source_party'));return;}var fix=e.target.closest('[data-bk-fix]');if(fix){focusIssue(issues[Number(fix.dataset.bkFix)].target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
+      var split=e.target.closest('[data-bk-split]');if(split){if(busy)return;collect();var source=rows[Number(split.dataset.bkSplit)];rows.push(Object.assign({},source,{row_key:(source.row_key||source.product_code)+':split:'+rows.length,qty:'',source_party:'',source_line:undefined,selected:true}));review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã thêm dòng trống cho người bán thực tế khác. Dòng ban đầu giữ nguyên. Điền đúng lượng mua của từng người và kiểm tra tổng lượng; hệ thống không tự chia tiền.');focusIssue(rowField(rows.length-1,'source_party'));return;}var fix=e.target.closest('[data-bk-fix]');if(fix){var issue=issues[Number(fix.dataset.bkFix)];focusIssue(issue.targets?issue.targets[Number(fix.dataset.bkFixTarget)].target:issue.target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
     dialog.addEventListener('input',function(e){
       if(e.target.name==='confirm_actor'||e.target.name==='confirm_actual'){var button=dialog.querySelector('[data-bk="confirm"]');if(button)button.disabled=!field('confirm_actual').checked||!field('confirm_actor').value.trim();return;}
       if(issues.length){clearIssues();status('Đã thay đổi thông tin. Bấm Xem bảng kê tổng & biên nhận để kiểm tra lại.');}

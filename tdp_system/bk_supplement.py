@@ -92,20 +92,35 @@ def prepare(conn, blob, start, end):
         available,_=purchase_sources(conn,start,end,{r['productCode'] for r in parsed['rows']})
         bykey={r['source_key']:(code,r) for code,items in available.items() for r in items}
         quantities=defaultdict(float)
+        source_rows=defaultdict(list)
         for r in parsed['rows']:
             match=re.search(r'\[TDP-SOURCE:([^\]]+)\]',r['note'])
             if not match:continue
-            key=match.group(1);quantities[key]+=float(r['qty'])
+            key=match.group(1);quantities[key]+=float(r['qty']);source_rows[key].append(r)
+        conflicts=[]
+        for key, selected in source_rows.items():
             source=bykey.get(key)
-            if not source or source[0]!=r['productCode'] or quantities[key]>float(source[1]['purchase_qty'])+0.000001:
-                raise ValueError('Nguồn mua đã bổ sung hoặc lượng chọn vượt lượng mua còn lại. Bấm Xem hàng tồn âm để đối chiếu lại; thông tin đang nhập được giữ lại.')
+            r=selected[0]
+            available_qty=float(source[1]['purchase_qty']) if source and all(x['productCode']==source[0] for x in selected) else 0
+            if not source or any(x['productCode']!=source[0] for x in selected) or quantities[key]>available_qty+0.000001:
+                conflicts.append({'source_key':key,'product_code':r['productCode'],'product_name':r['productName'],
+                    'unit':r['unit'],'selected_qty':quantities[key],'available_qty':available_qty,
+                    'kind':'source','source_description':source[1]['source_description'] if source else 'Nguồn mua không còn phù hợp trong kỳ đã chọn'})
             source_state[key]=source
+        if conflicts:
+            error=ValueError('Nguồn mua đã bổ sung hoặc lượng chọn vượt lượng mua còn lại. Xem các mặt hàng cần sửa bên dưới; thông tin đang nhập được giữ lại.')
+            error.purchase_conflicts=conflicts
+            raise error
         stock={r['product_code']:r['closing_qty'] for r in invoice_stock_rows(conn,as_of=end,include_zero=True)}
         totals=defaultdict(float)
         for r in parsed['rows']:totals[r['productCode']]+=float(r['qty'])
         for code,qty in totals.items():
             if qty>max(0,-stock.get(code,0))+0.000001:
-                raise ValueError(f'{code}: Lượng mua bổ sung vượt lượng còn thiếu cuối kỳ. Bấm Xem hàng tồn âm để đối chiếu lại; thông tin đang nhập được giữ lại.')
+                r=next(x for x in parsed['rows'] if x['productCode']==code)
+                error=ValueError(f'{code}: Lượng mua bổ sung vượt lượng còn thiếu cuối kỳ. Sửa tổng lượng của các dòng cùng mã; thông tin đang nhập được giữ lại.')
+                error.purchase_conflicts=[{'kind':'stock','product_code':code,'product_name':r['productName'],'unit':r['unit'],
+                    'selected_qty':qty,'available_qty':max(0,-stock.get(code,0))}]
+                raise error
     receipts=receipt_rows(conn,parsed)
     daily_check(conn,receipts,parsed['existingDocumentId'])
     group_receipt_rows(receipts)
