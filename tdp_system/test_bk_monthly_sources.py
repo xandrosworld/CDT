@@ -98,6 +98,21 @@ class MonthlySourcesTests(unittest.TestCase):
             self.assertEqual(len(prepared['parsed']['rows']),2)
         with server.db() as c:self.assertEqual(before,c.serialize())
 
+    def test_separate_purchase_checks_stock_even_without_a_linked_row(self):
+        body=self.body();body['rows']=body['rows'][:1]
+        body['rows'][0].update(note='[TDP-SEPARATE:manual]',qty=6)
+        with server.db() as c: before=c.serialize()
+        response=self.client.post('/api/bk-import/draft/preview',json=body)
+        self.assertEqual(response.status_code,400)
+        self.assertEqual(response.json['purchase_conflicts'][0]['kind'],'stock')
+        self.assertEqual(response.json['purchase_conflicts'][0]['available_qty'],5)
+        body['rows'][0]['qty']=3
+        blob=self.client.post('/api/bk-import/draft/excel',json=body)
+        with server.db() as c:
+            prepared=bk_supplement.prepare(c,blob.data,body['from'],body['to'])
+            self.assertEqual(prepared['parsed']['rows'][0]['qty'],3)
+            self.assertEqual(before,c.serialize())
+
     def test_partial_source_is_reduced_and_cannot_be_reused_under_new_reference(self):
         body=self.body();body['rows']=body['rows'][:1];body['rows'][0]['qty']=1
         response=self.client.post('/api/bk-import/draft/excel',json=body)

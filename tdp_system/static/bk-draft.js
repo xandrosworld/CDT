@@ -99,6 +99,17 @@
       dailyWarnings().forEach(function(g){add(g.seller+' · '+g.day+': vượt 5.000.000đ/người/ngày. Kiểm tra đúng người bán và lượng thực mua.',rowField(g.index,'source_party'),'Kiểm tra người bán thực tế');});
       if(missing.length){var error=new Error('Chưa thể xem bảng kê. Bấm nút bên dưới để đến đúng ô cần sửa.');error.issues=missing;throw error;}
     }
+    function sourceKey(r) {
+      return r.source_key||(String(r.note||'').match(/\[TDP-SOURCE:([^\]]+)\]/)||[])[1]||'';
+    }
+    function separatePurchase(r) {
+      var key=sourceKey(r);
+      var note=String(r.note||'').replace(/\s*\[TDP-SOURCE:[^\]]+\]/g,'').trim();
+      return Object.assign({},r,{row_key:'separate:'+crypto.randomUUID(),source_key:'',source_party_original:'',
+        note:note,separate_purchase:true,source_description:'Lần mua riêng: kiểm tra theo chứng từ thực tế.',
+        total_suggested_qty:null,suggested_qty:null,price_source:'Kiểm tra đơn giá của lần mua riêng.',
+        separate_origin:key||r.separate_origin||''});
+    }
     function purchaseConflictIssues(conflicts) {
       var result=[];
       conflicts.forEach(function(c){
@@ -109,6 +120,7 @@
         var message=c.product_code+' · '+c.product_name+': đã chọn tổng '+options.quantity(c.selected_qty)+' '+c.unit+'; '+(c.kind==='stock'?'còn thiếu cuối kỳ':'nguồn mua còn lại')+' '+options.quantity(c.available_qty)+' '+c.unit+'. ';
         message+=Number(c.available_qty)<=0?'Bỏ chọn các dòng '+(c.kind==='stock'?'cùng mã này':'của nguồn này')+'; không nhập kho thêm.':'Sửa Lượng mua bổ sung để tổng các dòng '+(c.kind==='stock'?'cùng mã':'cùng nguồn')+' không vượt '+options.quantity(c.available_qty)+' '+c.unit+'.';
         if(c.source_description)message+=' '+c.source_description+'.';
+        if(c.kind==='source')message+=' Nếu một dòng thuộc lần mua khác, bấm Sửa lượng dòng rồi chọn Đây là lần mua riêng tại dòng đó.';
         if(indices.length)result.push({message:message,target:rowField(indices[0],Number(c.available_qty)<=0?'selected':'qty'),label:Number(c.available_qty)<=0?'Đến ô bỏ chọn':'Sửa lượng mua',targets:indices.map(function(i){return {target:rowField(i,Number(c.available_qty)<=0?'selected':'qty'),label:(Number(c.available_qty)<=0?'Bỏ chọn dòng ':'Sửa lượng dòng ')+(i+1)};})});
       });
       return result;
@@ -185,7 +197,7 @@
       dialog.querySelector('.bk-draft-table').innerHTML='<table><thead><tr><th>Chọn</th><th>Mã / tên hàng</th><th>ĐVT</th><th>Ngày mua thực tế</th><th>Tồn cuối ngày '+esc(loadedPeriod ? loadedPeriod.to.split('-').reverse().join('/') : '')+'</th><th>Lượng mua bổ sung</th><th>Đơn giá</th><th>Người bán / NCC</th><th>Ghi chú</th></tr></thead><tbody>'+rows.map(function(r,i){
         return '<tr data-row="'+i+'"><td><input data-field="selected" type="checkbox" '+(r.selected?'checked':'')+' aria-label="Chọn '+esc(r.product_code)+'"></td><td>'+esc(r.product_code)+'<br>'+esc(r.product_name)+'<br><button type="button" class="btn btn-outline" data-bk-source="'+i+'">Xem / chọn nguồn mua</button>'+purchaseHistoryHtml(r)+'</td><td>'+esc(r.unit)+'</td><td><input type="date" data-field="document_date" value="'+esc(r.document_date||'')+'" '+(r.common_date?'readonly ':'')+'aria-label="Ngày mua thực tế '+esc(r.product_code)+'"><small data-date-hint="'+i+'"></small><small>'+esc(r.source_description||'')+'</small></td><td>'+esc(r.closing_qty == null?'—':options.quantity(r.closing_qty))+'<small class="bk-stock-explanation">'+esc(r.stock_explanation||'')+'</small></td>'+['qty','unit_cost','source_party','note'].map(function(key){
           var numeric=key==='qty'||key==='unit_cost';
-          return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':key==='qty'&&typeof r[key]==='number'?stockQuantity(r[key]):r[key])+'" aria-label="'+esc(({qty:'Lượng mua bổ sung',unit_cost:'Đơn giá',source_party:'Người bán / NCC',note:'Ghi chú'})[key]+' '+r.product_code)+'">'+(key==='qty'?quantityHint(r):'')+(key==='source_party'?'<small>'+esc(r.source_party_original ? 'Người bán nguồn: '+r.source_party_original : '')+'</small><div class="bk-seller-details" data-seller-details="'+i+'"></div><button type="button" data-bk-split="'+i+'" class="btn btn-outline">Thêm người bán thực tế cùng ngày</button>':'')+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
+          return '<td><input data-field="'+key+'" '+(numeric?'type="number" min="0" step="any"':'type="text" maxlength="'+(key==='note'?500:150)+'"')+(key==='source_party'?' list="bk-supplement-sellers"':'')+' value="'+esc(r[key] == null?'':key==='qty'&&typeof r[key]==='number'?stockQuantity(r[key]):r[key])+'" aria-label="'+esc(({qty:'Lượng mua bổ sung',unit_cost:'Đơn giá',source_party:'Người bán / NCC',note:'Ghi chú'})[key]+' '+r.product_code)+'">' + (key==='qty'?quantityHint(r)+(sourceKey(r)?'<button type="button" class="btn btn-outline" data-bk-separate="'+i+'">Đây là lần mua riêng</button>':''):'')+(key==='source_party'?'<small>'+esc(r.source_party_original ? 'Người bán nguồn: '+r.source_party_original : '')+'</small><div class="bk-seller-details" data-seller-details="'+i+'"></div><button type="button" data-bk-split="'+i+'" class="btn btn-outline">Thêm người bán thực tế cùng ngày</button>':'')+(key==='unit_cost'?'<div class="muted bk-price-source">'+esc(r.price_source || '')+'</div>':'')+'</td>';
         }).join('')+'</tr>';
       }).join('')+'</tbody></table>';
       syncCommonDate();
@@ -208,7 +220,7 @@
       if (!selected.length) throw new Error('Chọn ít nhất một dòng để lập bảng kê.');
       var nextLine=selected.reduce(function(max,r){return Math.max(max,Number(r.source_line)||0);},0);
       return {from:loadedPeriod.from,to:loadedPeriod.to,document_date:'',reference:field('reference').value,
-        rows:selected.map(function(r){return {document_date:r.document_date||'',product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||'',note:(r.note||'')+(r.source_key?' [TDP-SOURCE:'+r.source_key+']':''),source_line:r.source_line||++nextLine};})};
+        rows:selected.map(function(r){return {document_date:r.document_date||'',product_code:r.product_code,qty:r.qty,unit_cost:r.unit_cost,source_party:r.source_party||'',note:(r.note||'')+(r.source_key?' [TDP-SOURCE:'+r.source_key+']':r.separate_purchase?' [TDP-SEPARATE:'+ (r.separate_origin||'manual') +']':''),source_line:r.source_line||++nextLine};})};
     }
     function post(body) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}; }
     async function action(name) {
@@ -239,7 +251,7 @@
             if(!sources.length||left>0.000001)fresh.push(Object.assign({},item,{row_key:item.product_code+':unmatched',suggested_qty:left,source_description:'Chưa có nguồn mua chưa ghi kho phù hợp. Kiểm tra nguồn và ngày mua thực tế; chọn người bán từ danh mục đã lưu.'}));
           });
           rows=fresh.map(function(r){var old=kept&&kept.rows.find(function(k){return (k.row_key||k.product_code)===(r.row_key||r.product_code);}),merged=Object.assign({},r,{qty:r.suggested_qty,selected:false,unit_cost:r.unit_cost == null?'':r.unit_cost,source_party:r.source_party||'',note:''},old||{},{purchase_sources:r.purchase_sources,purchase_qty:r.purchase_qty,source_description:r.source_description,closing_qty:r.closing_qty,suggested_qty:r.suggested_qty,stock_explanation:r.stock_explanation,total_suggested_qty:r.total_suggested_qty,month_closing_qty:r.month_closing_qty});if(old&&Number(old.qty)===Number(old.suggested_qty))merged.qty=r.suggested_qty;return merged;});
-          if(kept){kept.rows.forEach(function(r){if(!fresh.some(function(f){return (f.row_key||f.product_code)===(r.row_key||r.product_code);}))rows.push(Object.assign({},r,{closing_qty:null,selected:false}));});}
+          if(kept){kept.rows.forEach(function(r){if(!fresh.some(function(f){return (f.row_key||f.product_code)===(r.row_key||r.product_code);}))rows.push(r.separate_purchase?Object.assign({},r):Object.assign({},r,{closing_qty:null,selected:false}));});}
           field('document_date').value=kept?kept.date:(result.from===result.to?result.from:'');field('reference').value=kept?kept.reference:('BKBS-'+result.to.slice(0,7).replace('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase());field('source_party').value=kept?kept.seller:'';
           field('document_date').dispatchEvent(new Event('change'));
           render(); status(result.items.length+' mã hàng còn thiếu trong phạm vi đã chọn, sau đối chiếu cuối tháng. Tồn kiểm tra đến '+result.to.split('-').reverse().join('/')+'. Lượng thiếu được phân gợi ý theo nguồn mua, không cộng lặp giữa các ngày. Dòng lượng 0 chưa cần bổ sung. Bấm Chọn tất cả hoặc chọn từng dòng đã mua cần bổ sung chứng từ.'+(kept?' Đã giữ thông tin đang nhập; kiểm tra lại lượng mua với tồn mới.':''));
@@ -336,7 +348,8 @@
       var sourceRow=e.target.closest('[data-bk-source-row]');if(sourceRow){collect();var i=Number(sourceRow.dataset.bkSourceRow);rows[i].selected=true;review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();focusIssue(rowField(i,'qty'));return;}
       var manual=e.target.closest('[data-bk-manual]');if(manual){focusIssue(rowField(Number(manual.dataset.bkManual),'document_date'));return;}
       if(e.target.closest('[data-bk-source-close]')){dialog.querySelector('.bk-source-panel').hidden=true;return;}
-      var split=e.target.closest('[data-bk-split]');if(split){if(busy)return;collect();var source=rows[Number(split.dataset.bkSplit)];rows.push(Object.assign({},source,{row_key:(source.row_key||source.product_code)+':split:'+rows.length,qty:'',source_party:'',source_line:undefined,selected:true}));review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã thêm dòng trống cho người bán thực tế khác. Dòng ban đầu giữ nguyên. Điền đúng lượng mua của từng người và kiểm tra tổng lượng; hệ thống không tự chia tiền.');focusIssue(rowField(rows.length-1,'source_party'));return;}var fix=e.target.closest('[data-bk-fix]');if(fix){var issue=issues[Number(fix.dataset.bkFix)];focusIssue(issue.targets?issue.targets[Number(fix.dataset.bkFixTarget)].target:issue.target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
+      var own=e.target.closest('[data-bk-separate]');if(own){if(busy)return;collect();var ix=Number(own.dataset.bkSeparate),old=rows[ix];if(!window.confirm('Dòng '+(ix+1)+' · '+old.product_code+': đây là lần mua thực tế khác với nguồn đang chọn? Chỉ tách nếu có chứng từ riêng; giữ nguyên lượng, ngày, giá và người bán. Chưa ghi kho.'))return;rows[ix]=separatePurchase(old);clearIssues();review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã tách riêng dòng '+(ix+1)+'. Kiểm tra theo chứng từ thực tế rồi xem lại bảng kê. Kho chưa thay đổi.');focusIssue(rowField(ix,'qty'));return;}
+      var split=e.target.closest('[data-bk-split]');if(split){if(busy)return;collect();var source=rows[Number(split.dataset.bkSplit)];rows.push(Object.assign(separatePurchase(source),{qty:'',unit_cost:'',source_party:'',source_line:undefined,note:'',selected:true}));review=null;dialog.querySelector('.bk-draft-preview').innerHTML='';render();status('Đã thêm dòng trống cho người bán thực tế khác. Dòng ban đầu giữ nguyên. Điền đúng lượng mua của từng người và kiểm tra tổng lượng; hệ thống không tự chia tiền.');focusIssue(rowField(rows.length-1,'source_party'));return;}var fix=e.target.closest('[data-bk-fix]');if(fix){var issue=issues[Number(fix.dataset.bkFix)];focusIssue(issue.targets?issue.targets[Number(fix.dataset.bkFixTarget)].target:issue.target);return;}var button=e.target.closest('[data-bk]');if(button)action(button.dataset.bk);});
     dialog.addEventListener('input',function(e){
       if(e.target.name==='confirm_actor'||e.target.name==='confirm_actual'){var button=dialog.querySelector('[data-bk="confirm"]');if(button)button.disabled=!field('confirm_actual').checked||!field('confirm_actor').value.trim();return;}
       if(issues.length){clearIssues();status('Đã thay đổi thông tin. Bấm Xem bảng kê tổng & biên nhận để kiểm tra lại.');}

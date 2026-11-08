@@ -84,7 +84,7 @@ def prepare(conn, blob, start, end):
     dates={r['documentDate'] for r in parsed['rows']}
     source_state={}
     if any(not start<=day<=end for day in dates):raise ValueError('Ngày mua thực tế phải nằm trong kỳ đang chọn.')
-    if not parsed['alreadyPosted'] and any('[TDP-SOURCE:' in r['note'] for r in parsed['rows']):
+    if not parsed['alreadyPosted'] and any('[TDP-SOURCE:' in r['note'] or '[TDP-SEPARATE:' in r['note'] for r in parsed['rows']):
         try:
             from .bk_purchase_sources import purchase_sources
         except ImportError:

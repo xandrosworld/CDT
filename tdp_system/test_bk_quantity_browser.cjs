@@ -6,6 +6,7 @@ await page.addScriptTag({path:require('node:path').join(__dirname,'static','bk-d
 await page.evaluate(()=>{window.sent=[];window.TdpBkDraft({from:'2026-10-16',to:'2026-10-16',esc:v=>String(v).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;'),quantity:v=>Number(v).toLocaleString('vi-VN',{maximumFractionDigits:6}),api:async(url,opts)=>{
  if(url.includes('/sellers'))return {names:['Người bán thử'],items:[]};
  if(url.includes('/shortages')&&url.includes('to=2026-10-28'))return {from:'2026-10-28',to:'2026-10-28',month_end:'2026-10-31',items:[],daily_reconciliations:[{product_code:'TEST-DAILY',product_name:'Hàng đã ghi nhập sau',unit:'Kg',closing_qty:-3,month_closing_qty:0,suggested_qty:0,later_inputs:[{date:'2026-10-29',qty:3}]}]};
+ if(url.includes('/shortages')&&url.includes('to=2026-11-05'))return {from:'2026-11-05',to:'2026-11-05',month_end:'2026-11-30',items:[{product_code:'D000054',product_name:'Tôm sống',unit:'Kg',closing_qty:-39.3,suggested_qty:39.3,unit_cost:155000,purchase_sources:[{source_key:'orders:192',purchase_qty:2,source_party:'Người bán thử',document_date:'2026-11-05',unit_cost:155000}]}]};
  if(url.includes('/shortages'))return {from:'2026-10-16',to:'2026-10-16',month_end:'2026-10-31',items:[{product_code:'I000137',product_name:'Rau kinh giới',unit:'Kg',closing_qty:-1.8,month_closing_qty:-15,suggested_qty:1.8,unit_cost:42750,purchase_sources:[{source_key:'a',purchase_qty:.4,source_party:'Người bán thử',document_date:'2026-10-16'},{source_key:'b',purchase_qty:.1,source_party:'Người bán thử',document_date:'2026-10-16'}]}]};
  if(url.includes('/preview')){window.sent.push(JSON.parse(opts.body));throw new Error('Kiểm tra thử: giữ nguyên dữ liệu');}throw new Error(url);
  }});});
@@ -25,5 +26,17 @@ await page.getByText('Xem mã hàng và các ngày nhập đã ghi kho',{exact:t
 assert((await page.locator('.bk-daily-reconciliation').innerText()).includes('29/10/2026: 3 Kg'));
 assert((await page.locator('.bk-daily-reconciliation').innerText()).includes('Không lập thêm bảng kê'));
 assert.equal(await page.locator('.bk-daily-reconciliation table').isVisible(),true);
+await page.locator('[name=from]').fill('2026-11-05');await page.locator('[name=to]').fill('2026-11-05');await page.locator('[data-bk=load]').click();
+await page.waitForFunction(()=>document.querySelectorAll('[data-field=qty]').length===2);
+assert.deepEqual(await page.locator('[data-field=qty]').evaluateAll(xs=>xs.map(x=>x.value)),['2','37.3']);
+await page.locator('[data-bk-split]').first().click();
+await page.locator('[data-field=qty]').last().fill('15');await page.locator('[data-field=unit_cost]').last().fill('155000');await page.locator('[data-field=source_party]').last().fill('B');await page.locator('[data-field=selected]').first().check();
+await page.locator('[data-bk=preview]').click();await page.waitForFunction(()=>window.sent.length===2);
+let lines=await page.evaluate(()=>window.sent.at(-1).rows);assert.equal(lines.length,2);assert.match(lines[0].note,/TDP-SOURCE:orders:192/);assert.equal(lines[0].qty,'2');assert.doesNotMatch(lines[1].note,/TDP-SOURCE/);assert.equal(lines[1].qty,'15');assert.match(lines[1].note,/TDP-SEPARATE/);
+await page.locator('[data-field=qty]').first().fill('15');await page.locator('[data-field=source_party]').first().fill('B');
+page.once('dialog',d=>d.dismiss());await page.locator('[data-bk-separate]').first().click();assert.equal(await page.locator('[data-bk-separate]').count(),1);
+page.once('dialog',d=>d.accept());await page.locator('[data-bk-separate]').first().click();assert.equal(await page.locator('[data-bk-separate]').count(),0);
+await page.locator('[data-bk=preview]').click();await page.waitForFunction(()=>window.sent.length===3);
+lines=await page.evaluate(()=>window.sent.at(-1).rows);assert.equal(lines[0].qty,'15');assert.equal(lines[0].document_date,'2026-11-05');assert.equal(lines[0].source_party,'B');assert.equal(lines[0].unit_cost,'155000');assert.match(lines[0].note,/TDP-SEPARATE/);assert.doesNotMatch(lines[0].note,/TDP-SOURCE/);
 console.log('PASS browser: 0.4+0.1+1.3, Vietnamese explanation, edits retained across render/reload/preview error; no posting.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
