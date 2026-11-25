@@ -245,6 +245,8 @@ def issued_allocations(conn,asof='9999-12-31',*,external_quantities=None,source_
             else:
                 export=found[0];expected=defaultdict(float)
                 for r in export['rows']:expected[r['product_code']]+=r['qty']
+                if export.get('rounded_stock'):
+                    expected=export['rounded_stock']
                 posted={r['product_code']:r['qty'] for r in conn.execute("SELECT product_code,-SUM(qty_delta) qty FROM invoice_inventory_effective_ledger WHERE direction='output' AND status='posted' AND source_invoice_table='outgoing_source_invoices' AND source_invoice_id=? GROUP BY product_code",(s['id'],))}
                 current={o['id']:o for o in orders}
                 if not orders_unchanged(conn,export):

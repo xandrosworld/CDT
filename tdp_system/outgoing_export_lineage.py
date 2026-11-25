@@ -57,6 +57,41 @@ def catalog(conn, *, weights=None):
     return result
 
 
+def rounded_stock_quantities(actual, expected, export, invoice):
+    """Recognize only a whole immutable receipt with provider-rounded kg lines."""
+    original = export['signature']
+    if (export.get('legacy_basis') or expected.keys() != original.keys()
+            or len(actual) != len(expected) or len(export['source_basis']['lines']) != len(original)):
+        return None
+    try:
+        from .minvoice_precision import matches as precision_matches
+    except ImportError:
+        from minvoice_precision import matches as precision_matches
+    document = json.loads(invoice['raw_json'] or '{}')
+    if document.get('_tdp_source_contract') != 'minvoice_portal_v1':
+        return None
+    stock = defaultdict(float)
+    exported = defaultdict(Decimal)
+    ordered = defaultdict(Decimal)
+    for row in export['rows']:
+        ordered[(row['product_code'], row['unit'].strip().casefold())] += Decimal(str(row['qty']))
+    for key, (qty, amount) in original.items():
+        code, unit, price, _, _ = key
+        signed_qty, signed_amount = expected[key]
+        if signed_amount != amount:
+            return None
+        if signed_qty != qty and (unit != 'kg' or price <= 0 or signed_qty <= 0
+                or document.get('_tdp_currency_precision', {}).get('quantity') != 2
+                or abs(qty * price - amount) > Decimal('0.5')
+                or not precision_matches(signed_qty, qty, document, 'quantity')):
+            return None
+        exported[(code, unit)] += qty
+        stock[code] += float(signed_qty)
+    if ordered.keys() != exported.keys() or any(abs(ordered[k]-v)>Decimal('.000001') for k,v in exported.items()):
+        return None
+    return dict(stock)
+
+
 def matches(conn, invoice, party, exports=None):
     actual=list(conn.execute('SELECT * FROM outgoing_source_invoice_items WHERE invoice_id=? ORDER BY line_index',(invoice['id'],)))
     try:expected=signature(actual,True)
@@ -79,14 +114,18 @@ def matches(conn, invoice, party, exports=None):
         if basis['contractor']!=party or export['created_at']>invoice['created_at']:continue
         if not (basis['buyer_tax_code'] or '').strip() or basis['buyer_tax_code'].strip().upper()!=invoice['buyer_tax_code'].strip().upper():continue
         if (abs(basis['subtotal']-invoice['subtotal'])>1e-6 or
-                abs(basis['total_amount']-invoice['total_amount'])>1e-6 or export['signature']!=expected):continue
+                abs(basis['total_amount']-invoice['total_amount'])>1e-6):continue
+        rounded = None
+        if export['signature'] != expected:
+            rounded = rounded_stock_quantities(actual, expected, export, invoice)
+            if rounded is None:continue
         rows=export['rows']
         if any(r['contractor']!=party or r['work_date']>invoice['invoice_date'] or
                (period and not period['date_from']<=r['work_date']<=period['date_to']) for r in rows):continue
         links=defaultdict(float)
         for r in rows:links[r['order_id']]+=r['qty']
         key=tuple(sorted(links.items()))
-        (legacy if export.get('legacy_basis') else found)[key]={**export,'allocations':dict(links)}
+        (legacy if export.get('legacy_basis') else found)[key]={**export,'allocations':dict(links),'rounded_stock':rounded}
     return list({**legacy,**found}.values()) if found else []
 
 

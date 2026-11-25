@@ -52,6 +52,23 @@ class ExportLineageTests(unittest.TestCase):
             self.assertEqual(issued_allocations(c),(q,w))
             for t,v in before.items():self.assertEqual(v,list(map(tuple,c.execute('SELECT * FROM '+t))))
 
+    def test_rounded_kg_still_requires_exact_line_amount(self):
+        _,oid,_=self.export(qty=4.004)
+        sid=self.source(qty=4)
+        raw={'_tdp_source_contract':'minvoice_portal_v1','currencyId':'VND',
+             'creationTime':'2026-10-07','_tdp_currency_precision':{
+                 'currency_id':'VND','quantity':2,'effective_at':'2026-09-01'}}
+        with server.db() as c:
+            c.execute('UPDATE outgoing_source_invoices SET raw_json=? WHERE id=?',(json.dumps(raw),sid))
+            c.execute('UPDATE outgoing_source_invoice_items SET qty=4 WHERE invoice_id=?',(sid,))
+            invoice=c.execute('SELECT * FROM outgoing_source_invoices WHERE id=?',(sid,)).fetchone()
+            result=matches(c,invoice,'NT-A')
+            self.assertEqual(len(result),1)
+            self.assertEqual(result[0]['allocations'],{oid:4.004})
+            self.assertEqual(result[0]['rounded_stock'],{'HH-01':4})
+            c.execute('UPDATE outgoing_source_invoice_items SET amount=amount+1 WHERE invoice_id=?',(sid,))
+            self.assertFalse(matches(c,invoice,'NT-A'))
+
     def test_frozen_file_survives_draft_edits_and_cancellation(self):
         did,oid,_=self.export();sid=self.source()
         with server.db() as c:
